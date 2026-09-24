@@ -31,7 +31,7 @@ namespace OC {
     "O.R.N.8", // pioneered by ALA Ornate Criminal
     "Calsynth XLOC2",
     "NLM Xenomorpher",
-    "NLM Xenomorpher",
+    "NLM XENOMORPHER 2X0e",
   };
 #elif defined(NORTHERNLIGHT)
   const char * const NAME = "NLM cOC/hOC/2OC";

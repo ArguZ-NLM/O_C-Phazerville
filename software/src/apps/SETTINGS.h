@@ -23,6 +23,8 @@
 #ifdef PEWPEWPEW
 #include "../util/pewpewsplash.h"
 #endif
+#include "../PresetBus.h"
+#include "../PhzConfig.h"
 
 extern "C" void _reboot_Teensyduino_();
 void BootMenu(const bool show);
@@ -35,6 +37,7 @@ public:
 
   bool reflash = false;
   bool boot_menu = false;
+  bool bus_addr_dirty = false;
   bool calibration_mode = false;
   bool calibration_complete = true;
   bool cal_save_q = false;
@@ -64,6 +67,12 @@ public:
     if (cal_save_q) {
       OC::calibration_save();
       cal_save_q = false;
+    }
+    if (bus_addr_dirty) {
+      PhzConfig::load_config();
+      OC::PresetBus::SetModuleAddress(OC::PresetBus::ModuleAddress());
+      PhzConfig::save_config();
+      bus_addr_dirty = false;
     }
   }
 
@@ -326,7 +335,20 @@ public:
       gfxIcon(0, 35, PhzIcons::runglBook);
       gfxPrint(10, 35, OC::Strings::BUILD_TAG);
       gfxIcon(0, 45, PhzIcons::frontBack);
-      gfxPrint(10, 45, "github.com/djphazer");
+      if (OC::PresetBus::Enabled()) {
+        gfxPrint(10, 45, "Bus");
+        graphics.setPrintPos(34, 45);
+        graphics.printf("%02X", OC::PresetBus::ModuleAddress());
+        graphics.invertRect(32, 44, 16, 10);
+        graphics.setPrintPos(58, 45);
+        gfxPrint(OC::PresetBus::RemoteEnabled() ? "REM" : "rem");
+        graphics.drawCircle(94, 49, 2);
+        if (OC::PresetBus::WpmPresent()) graphics.drawRect(93, 48, 3, 3);
+        graphics.setPrintPos(100, 45);
+        gfxPrint(OC::PresetBus::WpmPresent() ? "WPM" : "wpm");
+      } else {
+        gfxPrint(10, 45, "github.com/djphazer");
+      }
 #ifdef MULTIBOOT
       gfxPrint(0, 55, reflash ? "[Reflash]  [BootMenu]"
                               : "[CALIBRATE]   [RESET]");
@@ -477,6 +499,13 @@ public:
           } else
 #endif
             FactoryReset();
+        }
+
+        if (event.control == OC::CONTROL_ENCODER_R && OC::PresetBus::Enabled()) {
+          int a = (int)OC::PresetBus::ModuleAddress() + event.value;
+          CONSTRAIN(a, 0x01, 0x77);
+          OC::PresetBus::SetModuleAddressRuntime((uint8_t)a);
+          bus_addr_dirty = true;
         }
 
         // dual-press UP+DOWN / A+B to flip screen
@@ -632,7 +661,7 @@ public:
     }
 };
 
-void AppSettings::Init() {
+FLASHMEM void AppSettings::Init() {
     BaseStart();
 }
 
@@ -644,7 +673,7 @@ void AppSettings::Process(OC::IOFrame *ioframe) {
   BaseController(ioframe);
 }
 
-void AppSettings::HandleAppEvent(OC::AppEvent event) {
+FLASHMEM void AppSettings::HandleAppEvent(OC::AppEvent event) {
   if (event == OC::APP_EVENT_RESUME) {
     Resume();
   }
@@ -664,11 +693,11 @@ void AppSettings::GetIOConfig(OC::IOConfig &ioconfig) const
 }
 void AppSettings::DrawDebugInfo() const { }
 
-void AppSettings::DrawMenu() const {
+FLASHMEM void AppSettings::DrawMenu() const {
     BaseView();
 }
 
-void AppSettings::DrawScreensaver() const {
+FLASHMEM void AppSettings::DrawScreensaver() const {
 #ifdef PEWPEWPEW
     for (int i = 0; i < (pewpew_width * pewpew_height / 64); ++i) {
       // TODO: the problem here is that one byte in XBM is a row of 8 pixels,
@@ -679,10 +708,10 @@ void AppSettings::DrawScreensaver() const {
   ZapScreensaver();
 }
 
-void AppSettings::HandleButtonEvent(const UI::Event &event) {
+FLASHMEM void AppSettings::HandleButtonEvent(const UI::Event &event) {
   HandleUiEvent(event);
 }
 
-void AppSettings::HandleEncoderEvent(const UI::Event &event) {
+FLASHMEM void AppSettings::HandleEncoderEvent(const UI::Event &event) {
   HandleUiEvent(event);
 }
