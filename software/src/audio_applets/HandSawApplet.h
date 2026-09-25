@@ -1,4 +1,5 @@
 #include "synth_waveform.h"
+#include "analyze_rms.h"
 
 // Per-oscillator detune and phase scale factors.
 // 12 oscillators split into 4 voices of 3 each.
@@ -26,6 +27,7 @@ class HandSawApplet : public HemisphereAudioApplet {
             }
 
             PatchCable(outputMixer,   0, vca,         0);
+            PatchCable(outputMixer,   0, level_meter, 0);
             PatchCable(vca_level,     0, vca,         1);
 
             PatchCable(vca,           0, final_out, 0);
@@ -62,21 +64,26 @@ class HandSawApplet : public HemisphereAudioApplet {
                 for (int o = 0; o < 3; o++) {
                     int idx = v * 3 + o;
                     synths[idx].frequency(freq + HANDSAW_DETUNE[idx] * detuneValue / detuneFactor);
-                    synths[idx].phase(HANDSAW_PHASE[idx] * phaseValue / phaseFactor);
+                    synths[idx].phase(WrapDegrees(HANDSAW_PHASE[idx] * phaseValue / phaseFactor));
                 }
             }
 
             float m = amp < LVL_MIN_DB ? 0.0f : dbToScalar(amp);
             m += (amp_cv.InF() * amp_cv.InF());
-            vca_level.Push(float_to_q15(m));
+            UpdateNormGain();
+            vca_level.Push(float_to_q15(m * norm_gain));
         }
 
         void View() override {
 
-            gfxPrint(1, 25, "Wave: ");
+            gfxPrint(1, 25, "Wave:");
             gfxStartCursor();
             gfxPrint(WAVEFORM_NAMES[waveform]);
             gfxEndCursor(cursor == WAVEFORM);
+
+            gfxStartCursor(56, 25);
+            gfxPrintIcon(norm ? CHECK_ON_ICON : CHECK_OFF_ICON);
+            gfxEndCursor(cursor == NORM, false, norm ? "Norm on" : "Norm off");
 
             gfxPrint(1, 35, "DT: ");
             gfxStartCursor();
@@ -128,19 +135,17 @@ class HandSawApplet : public HemisphereAudioApplet {
         pitch[0], pitch[1], pitch[2], pitch[3]
 
         void OnDataRequest(std::array<uint64_t, CONFIG_SIZE>& data) override {
-            int8_t dummy = 0;
             data[0] = PackPackables(SWARM_OSC_PARAMS);
             data[1] = PackPackables(pitch_cv[0], pitch_cv[1], pitch_cv[2], pitch_cv[3]);
             data[2] = PackPackables(detune_cv, phase_cv, amp_cv);
-            data[3] = PackPackables(waveform, detune, phase, dummy, amp);
+            data[3] = PackPackables(waveform, detune, phase, norm, amp);
         }
 
         void OnDataReceive(const std::array<uint64_t, CONFIG_SIZE>& data) override {
-            int8_t dummy;
             UnpackPackables(data[0], SWARM_OSC_PARAMS);
             UnpackPackables(data[1], pitch_cv[0], pitch_cv[1], pitch_cv[2], pitch_cv[3]);
             UnpackPackables(data[2], detune_cv, phase_cv, amp_cv);
-            UnpackPackables(data[3], waveform, detune, phase, dummy, amp);
+            UnpackPackables(data[3], waveform, detune, phase, norm, amp);
             SetWaveform(waveform);
         }
 
@@ -151,7 +156,7 @@ class HandSawApplet : public HemisphereAudioApplet {
                 case PITCH3:
                 case PITCH4: {
                     // shortcut to snap to closest semitone
-                    auto& p = pitch[(cursor - PITCH1) / 2];
+                    auto& p = pitch[cursor - PITCH1];
                     p = (((p + 63) >> 7) << 7);
                     break;
                 }
@@ -160,7 +165,7 @@ class HandSawApplet : public HemisphereAudioApplet {
                 case PITCH_CV3:
                 case PITCH_CV4: {
                     // shortcut for auto-learn
-                    auto& p = pitch_cv[(cursor - PITCH_CV1) / 2];
+                    auto& p = pitch_cv[cursor - PITCH_CV1];
                     p.AutoLearn();
                     break;
                 }
@@ -174,7 +179,35 @@ class HandSawApplet : public HemisphereAudioApplet {
                 IndexedInput(AMP_CV,    amp_cv)
             ))
                 return;
+            if (cursor == NORM) {
+                norm = !norm;
+                return;
+            }
             CursorToggle();
+        }
+
+        static float WrapDegrees(float deg) {
+            deg = fmodf(deg, 360.0f);
+            return deg < 0.0f ? deg + 360.0f : deg;
+        }
+
+        void UpdateNormGain() {
+            if (!level_meter.available()) return;
+            const float rms = level_meter.read();
+            const float dt = norm_timer * 1e-6f;
+            norm_timer = 0;
+
+            const float power = rms * rms;
+            const float tau = power > norm_power ? NORM_RISE_S : NORM_FALL_S;
+            ONE_POLE(norm_power, power, 1.0f - expf(-dt / tau));
+
+            float target = 1.0f;
+            if (norm) {
+                const float limit = NORM_HEADROOM * WAVEFORM_RMS[waveform] / sqrtf(12.0f);
+                const float level = sqrtf(norm_power);
+                if (level > limit) target = limit / level;
+            }
+            ONE_POLE(norm_gain, target, 1.0f - expf(-dt / NORM_GAIN_S));
         }
 
         void SetWaveform(int wf) {
@@ -267,6 +300,7 @@ class HandSawApplet : public HemisphereAudioApplet {
             PITCH_CV3,
             PITCH_CV4,
             WAVEFORM,
+            NORM,
             DETUNE,
             DETUNE_CV,
             PHASE,
@@ -283,6 +317,7 @@ class HandSawApplet : public HemisphereAudioApplet {
             WAVEFORM_TRIANGLE_VARIABLE, // reverse saw
         };
         static constexpr char const* WAVEFORM_NAMES[5] = {"SIN", "TRI", "SAW", "PLS", "SAWR"};
+        static constexpr float WAVEFORM_RMS[5] = {0.7071f, 0.5774f, 0.5774f, 1.0f, 0.5774f};
 
         uint8_t  waveform = WAVEFORM_SINE;
         int8_t   cursor   = PITCH1;
@@ -296,6 +331,7 @@ class HandSawApplet : public HemisphereAudioApplet {
         int16_t detune = 0;
         int16_t phase  = 0;
         int8_t  amp    = 0;
+        int8_t  norm   = 1;
 
         int8_t detuneFactor = 50;
         int8_t phaseFactor  = 1;
@@ -313,4 +349,13 @@ class HandSawApplet : public HemisphereAudioApplet {
         AudioVCA                vca;
         InterpolatingStream<>   vca_level;
         AudioMixer<2>           final_out;
+        AudioAnalyzeRMS         level_meter;
+
+        static constexpr float NORM_HEADROOM = 1.4f;
+        static constexpr float NORM_RISE_S   = 0.05f;
+        static constexpr float NORM_FALL_S   = 0.5f;
+        static constexpr float NORM_GAIN_S   = 0.05f;
+        float norm_power = 0.0f;
+        float norm_gain  = 1.0f;
+        elapsedMicros norm_timer;
 };
