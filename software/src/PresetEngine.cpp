@@ -591,7 +591,7 @@ FLASHMEM static bool build_slot_from_bank_preset(uint8_t bank, uint8_t slot) {
     return false;
   }
 
-  if (!SlotName(slot)[0]) SetSlotName(slot, label);
+  SetSlotName(slot, label);
 
   AppData quad_chunk;
   const bool have_quad_chunk = BuildSingleAppData(kQuadrantsAppId, quad_chunk);
@@ -785,7 +785,7 @@ FLASHMEM bool SaveSlot(uint8_t slot) {
     uint64_t p = 0;
     if (PhzConfig::getValue(kQuadLivePresetKey, p) && p < 32) {
       extract_preset = (uint8_t)p;
-      if (!SlotName(slot)[0]) {
+      {
         char label[kNameLen + 1];
         if (QuadrantsPresetLabel((uint8_t)p, label, sizeof(label)))
           SetSlotName(slot, label);
