@@ -1,12 +1,16 @@
 #include "synth_waveform.h"
 
-// Per-oscillator detune and phase scale factors.
+// Per-oscillator detune scale factors.
 // 12 oscillators split into 4 voices of 3 each.
-// Detune: signed multiplier applied to detuneValue/detuneFactor.
-// Phase:  multiplier applied to phaseValue/phaseFactor.
+// Detune: signed multiplier applied to the detune amount in Hz.
 // Per-oscillator scale factors — file-scope constexpr, no linkage issues
-static constexpr float HANDSAW_DETUNE[12] = {  0,  3, -2,   1,  4, -5,  -1,  2, -3,   6,  5, -4 };
-static constexpr float HANDSAW_PHASE[12]  = {  1,  3,  2,   1,  4,  5,   1,  2,  3,   6,  5,  4 };
+static constexpr float HANDSAW_DETUNE[12] PROGMEM = {  0,  3, -2,   1,  4, -5,  -1,  2, -3,   6,  5, -4 };
+static constexpr float HANDSAW_SWARM_HZ[12] PROGMEM = {
+     0.31f, -0.07f, -0.24f,
+    -0.29f,  0.13f,  0.16f,
+     0.43f, -0.17f, -0.26f,
+    -0.41f,  0.19f,  0.22f,
+};
 
 class HandSawApplet : public HemisphereAudioApplet {
     public:
@@ -17,6 +21,7 @@ class HandSawApplet : public HemisphereAudioApplet {
         void Start() override {
             vca_level.Acquire();
             vca_level.Method(INTERPOLATION_LINEAR);
+            swarm_timer = 0;
 
             // Making audio connections...
             // Call order follows signal flow: sources before sinks,
@@ -51,8 +56,14 @@ class HandSawApplet : public HemisphereAudioApplet {
         }
 
         void Controller() override {
-            float detuneValue = detune + (detune_cv.In() * 0.01f);
-            float phaseValue  = phase  + (phase_cv.In()  * 0.01f);
+            const float dt = swarm_timer * 1e-6f;
+            swarm_timer = 0;
+            const float realign = 1.0f - expf(-dt / REALIGN_S);
+
+            float detuneValue = constrain(detune + detune_cv.In() * 0.01f, -DETUNE_MAX, DETUNE_MAX);
+            float detuneHz = DetuneHz(detuneValue);
+            float amount = constrain((swarm + swarm_cv.In() * SWARM_MAX / 7680.0f) / SWARM_MAX, 0.0f, 1.0f);
+            amount *= amount;
 
             for (int v = 0; v < 4; v++) {
                 int cvmod = pitch_cv[v].In();
@@ -61,8 +72,15 @@ class HandSawApplet : public HemisphereAudioApplet {
                 float freq = PitchToRatio(pitch[v] + cvmod) * C3;
                 for (int o = 0; o < 3; o++) {
                     int idx = v * 3 + o;
-                    synths[idx].frequency(freq + HANDSAW_DETUNE[idx] * detuneValue / detuneFactor);
-                    synths[idx].phase(HANDSAW_PHASE[idx] * phaseValue / phaseFactor);
+                    float offset = 0.0f;
+                    if (amount > 0.0f) {
+                        offset = HANDSAW_SWARM_HZ[idx] * amount;
+                        drift[idx] = WrapCycles(drift[idx] + offset * dt);
+                    } else {
+                        correction[idx] = WrapCycles(correction[idx] + WrapCycles(-drift[idx] - correction[idx]) * realign);
+                    }
+                    synths[idx].frequency(freq + offset + HANDSAW_DETUNE[idx] * detuneHz);
+                    synths[idx].phase(WrapDegrees(correction[idx] * 360.0f));
                 }
             }
 
@@ -71,37 +89,55 @@ class HandSawApplet : public HemisphereAudioApplet {
             vca_level.Push(float_to_q15(m));
         }
 
-        void View() override {
+        FLASHMEM void View() override {
 
-            gfxPrint(1, 25, "Wave: ");
+            gfxPrint(0, 25, "Wave:");
             gfxStartCursor();
             gfxPrint(WAVEFORM_NAMES[waveform]);
             gfxEndCursor(cursor == WAVEFORM);
 
-            gfxPrint(1, 35, "DT: ");
-            gfxStartCursor();
-            graphics.printf("%d", detune);
+            // voices 2-4 follow voice 1, keeping their intervals
+            gfxStartCursor(54, 25);
+            if (link) gfxIcon(54, 25, LINK_ICON);
+            else gfxPrint("-");
+            gfxPos(62, 25);
+            gfxEndCursor(cursor == LINK, false, link ? "Linked" : "Unlinked");
+
+            // right-aligned so the hundredths digit stays put
+            char hz[8];
+            const float hz100 = DetuneHz(detune) * 100.0f;
+            const int cents = int(hz100 < 0.0f ? hz100 - 0.5f : hz100 + 0.5f);
+            snprintf(hz, sizeof(hz), "%d.%02d", abs(cents) / 100, abs(cents) % 100);
+            gfxPrint(0, 35, "DT");
+            gfxIcon(12, 35, HZ_ICON);
+            gfxPrint(19, 35, ":");
+            // numbers end 2px into the CV icon's blank left margin
+            const int hz_x = 58 - 6 * strlen(hz);
+            gfxStartCursor(cents < 0 ? hz_x - 3 : hz_x, 35);
+            if (cents < 0) gfxLine(hz_x - 3, 38, hz_x - 1, 38); // half-width minus
+            gfxPos(hz_x, 35);
+            gfxPrint(hz);
             gfxEndCursor(cursor == DETUNE);
 
-            gfxStartCursor();
+            gfxStartCursor(56, 35);
             gfxPrint(detune_cv);
             gfxEndCursor(cursor == DETUNE_CV, false, detune_cv.InputName());
 
-            gfxPrint(1, 45, "Ph: ");
-            gfxStartCursor();
-            graphics.printf("%d", phase);
-            gfxEndCursor(cursor == PHASE);
+            gfxPrint(1, 45, "Swarm:");
+            gfxStartCursor(swarm < 10 ? 52 : 46, 45);
+            graphics.printf("%d", swarm);
+            gfxEndCursor(cursor == SWARM);
 
-            gfxStartCursor();
-            gfxPrint(phase_cv);
-            gfxEndCursor(cursor == PHASE_CV, false, phase_cv.InputName());
+            gfxStartCursor(56, 45);
+            gfxPrint(swarm_cv);
+            gfxEndCursor(cursor == SWARM_CV, false, swarm_cv.InputName());
 
             gfxPrint(1, 55, "Amp:");
-            gfxStartCursor();
+            gfxStartCursor(28, 55);
             gfxPrintDb(amp);
             gfxEndCursor(cursor == AMP);
 
-            gfxStartCursor();
+            gfxStartCursor(56, 55);
             gfxPrint(amp_cv);
             gfxEndCursor(cursor == AMP_CV, false, amp_cv.InputName());
 
@@ -127,32 +163,34 @@ class HandSawApplet : public HemisphereAudioApplet {
     #define SWARM_OSC_PARAMS \
         pitch[0], pitch[1], pitch[2], pitch[3]
 
-        void OnDataRequest(std::array<uint64_t, CONFIG_SIZE>& data) override {
-            int8_t dummy = 0;
+        FLASHMEM void OnDataRequest(std::array<uint64_t, CONFIG_SIZE>& data) override {
             data[0] = PackPackables(SWARM_OSC_PARAMS);
             data[1] = PackPackables(pitch_cv[0], pitch_cv[1], pitch_cv[2], pitch_cv[3]);
-            data[2] = PackPackables(detune_cv, phase_cv, amp_cv);
-            data[3] = PackPackables(waveform, detune, phase, dummy, amp);
+            data[2] = PackPackables(detune_cv, swarm_cv, amp_cv);
+            data[3] = PackPackables(waveform, detune, swarm, link, amp);
         }
 
-        void OnDataReceive(const std::array<uint64_t, CONFIG_SIZE>& data) override {
-            int8_t dummy;
+        FLASHMEM void OnDataReceive(const std::array<uint64_t, CONFIG_SIZE>& data) override {
             UnpackPackables(data[0], SWARM_OSC_PARAMS);
             UnpackPackables(data[1], pitch_cv[0], pitch_cv[1], pitch_cv[2], pitch_cv[3]);
-            UnpackPackables(data[2], detune_cv, phase_cv, amp_cv);
-            UnpackPackables(data[3], waveform, detune, phase, dummy, amp);
+            UnpackPackables(data[2], detune_cv, swarm_cv, amp_cv);
+            UnpackPackables(data[3], waveform, detune, swarm, link, amp);
+            detune = constrain(detune, -DETUNE_MAX, DETUNE_MAX);
+            swarm = constrain(swarm, 0, SWARM_MAX);
             SetWaveform(waveform);
         }
 
-        void AuxButton() override {
+        FLASHMEM void AuxButton() override {
             switch (cursor) {
                 case PITCH1:
                 case PITCH2:
                 case PITCH3:
                 case PITCH4: {
                     // shortcut to snap to closest semitone
-                    auto& p = pitch[(cursor - PITCH1) / 2];
+                    auto& p = pitch[cursor - PITCH1];
+                    int old = p;
                     p = (((p + 63) >> 7) << 7);
+                    if (link && cursor == PITCH1) ShiftLinked(p - old);
                     break;
                 }
                 case PITCH_CV1:
@@ -160,21 +198,58 @@ class HandSawApplet : public HemisphereAudioApplet {
                 case PITCH_CV3:
                 case PITCH_CV4: {
                     // shortcut for auto-learn
-                    auto& p = pitch_cv[(cursor - PITCH_CV1) / 2];
+                    auto& p = pitch_cv[cursor - PITCH_CV1];
                     p.AutoLearn();
                     break;
                 }
             }
         }
 
-        void OnButtonPress() override {
+        FLASHMEM void OnButtonLongPress() override {
+            if (cursor < PITCH1 || cursor > PITCH4) return;
+            auto& p = pitch[cursor - PITCH1];
+            int old = p;
+            p = DEFAULT_PITCH;
+            if (link && cursor == PITCH1) ShiftLinked(p - old);
+        }
+
+        FLASHMEM void OnButtonPress() override {
             if (CheckEditInputMapPress(cursor,
                 IndexedInput(DETUNE_CV, detune_cv),
-                IndexedInput(PHASE_CV,  phase_cv),
+                IndexedInput(SWARM_CV,  swarm_cv),
                 IndexedInput(AMP_CV,    amp_cv)
             ))
                 return;
+            if (cursor == LINK) {
+                link = !link;
+                return;
+            }
             CursorToggle();
+        }
+
+        static constexpr int max_pitch =  7 * 12 * 128;
+        static constexpr int min_pitch = -3 * 12 * 128;
+
+        // move voices 2-4 along with voice 1
+        void ShiftLinked(int delta) {
+            for (int v = 1; v < 4; v++) {
+                pitch[v] = constrain(pitch[v] + delta, min_pitch, max_pitch);
+            }
+        }
+
+        static float DetuneHz(float value) {
+            float hz = DETUNE_MAX_HZ * (expf(DETUNE_TAPER * fabsf(value) / DETUNE_MAX) - 1.0f)
+                                     / (expf(DETUNE_TAPER) - 1.0f);
+            return value < 0.0f ? -hz : hz;
+        }
+
+        // wrap into -0.5 .. +0.5 cycles
+        static double WrapCycles(double c) {
+            return c - floor(c + 0.5);
+        }
+
+        static float WrapDegrees(float deg) {
+            return deg < 0.0f ? deg + 360.0f : deg;
         }
 
         void SetWaveform(int wf) {
@@ -190,19 +265,20 @@ class HandSawApplet : public HemisphereAudioApplet {
             }
         }
 
-        void OnEncoderMove(int direction) override {
+        FLASHMEM void OnEncoderMove(int direction) override {
             if (!EditMode()) {
                 MoveCursor(cursor, direction, AMP_CV);
                 return;
             }
             if (EditSelectedInputMap(direction)) return;
 
-            const int max_pitch =  7 * 12 * 128;
-            const int min_pitch = -3 * 12 * 128;
             switch (cursor) {
-                case PITCH1:
+                case PITCH1: {
+                    int old = pitch[0];
                     pitch[0] = constrain(pitch[0] + direction * 4, min_pitch, max_pitch);
+                    if (link) ShiftLinked(pitch[0] - old);
                     break;
+                }
                 case PITCH_CV1:
                     pitch_cv[0].ChangeSource(direction);
                     break;
@@ -228,16 +304,16 @@ class HandSawApplet : public HemisphereAudioApplet {
                     SetWaveform(waveform + direction);
                     break;
                 case DETUNE:
-                    detune = constrain(detune + direction, -2000, 2000);
+                    detune = constrain(detune + direction, -DETUNE_MAX, DETUNE_MAX);
                     break;
                 case DETUNE_CV:
                     detune_cv.ChangeSource(direction);
                     break;
-                case PHASE:
-                    phase = constrain(phase + direction, 0, 360);
+                case SWARM:
+                    swarm = constrain(swarm + direction, 0, SWARM_MAX);
                     break;
-                case PHASE_CV:
-                    phase_cv.ChangeSource(direction);
+                case SWARM_CV:
+                    swarm_cv.ChangeSource(direction);
                     break;
                 case AMP:
                     amp = constrain(amp + direction, LVL_MIN_DB - 1, 0);
@@ -267,10 +343,11 @@ class HandSawApplet : public HemisphereAudioApplet {
             PITCH_CV3,
             PITCH_CV4,
             WAVEFORM,
+            LINK,
             DETUNE,
             DETUNE_CV,
-            PHASE,
-            PHASE_CV,
+            SWARM,
+            SWARM_CV,
             AMP,
             AMP_CV
         };
@@ -286,25 +363,20 @@ class HandSawApplet : public HemisphereAudioApplet {
 
         uint8_t  waveform = WAVEFORM_SINE;
         int8_t   cursor   = PITCH1;
-        int16_t  pitch[4] = {
-            -1 * 12 * 128, // C2
-            -1 * 12 * 128,
-            -1 * 12 * 128,
-            -1 * 12 * 128,
-        };
+        static constexpr int16_t DEFAULT_PITCH = -1 * 12 * 128; // C2
+        int16_t  pitch[4] = { DEFAULT_PITCH, DEFAULT_PITCH, DEFAULT_PITCH, DEFAULT_PITCH };
 
         int16_t detune = 0;
-        int16_t phase  = 0;
+        int16_t swarm  = 0;
         int8_t  amp    = 0;
+        int8_t  link   = 0;
 
-        int8_t detuneFactor = 50;
-        int8_t phaseFactor  = 1;
         // TODO:
         // uint8_t pw = 50;
 
         CVInputMap pitch_cv[4];
         CVInputMap detune_cv;
-        CVInputMap phase_cv;
+        CVInputMap swarm_cv;
         CVInputMap amp_cv;
 
         AudioPassthrough<MONO>  input_stream;
@@ -313,4 +385,13 @@ class HandSawApplet : public HemisphereAudioApplet {
         AudioVCA                vca;
         InterpolatingStream<>   vca_level;
         AudioMixer<2>           final_out;
+
+        static constexpr int   DETUNE_MAX    = 99;
+        static constexpr float DETUNE_MAX_HZ = 40.0f; // per unit of HANDSAW_DETUNE
+        static constexpr float DETUNE_TAPER  = 4.4f;  // half knob = 1/10 of full detune
+        static constexpr int   SWARM_MAX = 50;
+        static constexpr float REALIGN_S = 0.2f;
+        double drift[12] = {};
+        double correction[12] = {};
+        elapsedMicros swarm_timer;
 };

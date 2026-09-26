@@ -276,6 +276,11 @@ public:
         HandleEncoderPress(LEFT_HEMISPHERE);
       if (event.control == OC::CONTROL_BUTTON_R)
         HandleEncoderPress(RIGHT_HEMISPHERE);
+    } else if (event.type == UI::EVENT_BUTTON_LONG_PRESS && ready_for_press) {
+      if (event.control == OC::CONTROL_BUTTON_L && state[LEFT_HEMISPHERE] == EDIT_APPLET)
+        get_selected_applet(LEFT_HEMISPHERE).OnButtonLongPress();
+      if (event.control == OC::CONTROL_BUTTON_R && state[RIGHT_HEMISPHERE] == EDIT_APPLET)
+        get_selected_applet(RIGHT_HEMISPHERE).OnButtonLongPress();
     } else if (event.type == UI::EVENT_BUTTON_DOWN) {
       ready_for_press = true;
     }
