@@ -368,8 +368,12 @@ FLASHMEM __attribute__((noinline)) void Draw() {
   graphics.drawFrame(43, 13, 42, 28);
   if (page == PAGE_PRESETS) {
     const uint8_t shown = (edit_mode ? edit_slot : sel) + 1;
-    draw_7seg(50, 16, shown / 10);
-    draw_7seg(66, 16, shown % 10);
+    // unsaved changes: number blinks slowly
+    const bool modified = !edit_mode && app_switcher.current_app()->PresetModified();
+    if (!modified || (millis() / 700) % 2 == 0) {
+      draw_7seg(50, 16, shown / 10);
+      draw_7seg(66, 16, shown % 10);
+    }
   } else if (page == PAGE_BANKS) {
     draw_7seg(50, 16, link_bank_edit / 10);
     draw_7seg(66, 16, link_bank_edit % 10);
@@ -407,11 +411,17 @@ FLASHMEM __attribute__((noinline)) void Draw() {
     graphics.setPrintPos(91, 26);
     graphics.print(r_hint);
   }
-
-  if (page == PAGE_PRESETS && !edit_mode &&
-      app_switcher.current_app()->PresetModified()) {
+  // which encoder does it
+  auto is_action = [](const char *h) {
+    return !strcmp(h, "hold") || !strcmp(h, "click") || !strcmp(h, "turn");
+  };
+  if (is_action(l_hint)) {
     graphics.setPrintPos(4, 35);
-    graphics.print("EDITED");
+    graphics.print("L enc");
+  }
+  if (is_action(r_hint)) {
+    graphics.setPrintPos(88, 35);
+    graphics.print("R enc");
   }
 
   if (edit_mode) {
