@@ -41,6 +41,7 @@ public:
   virtual AudioStream* InputStream() = 0;
   virtual AudioStream* OutputStream() = 0;
   virtual void mainloop() {}
+  virtual void OnButtonLongPress() {}
 
   virtual void OnDataReceive(uint64_t data) {
     Serial.println(
