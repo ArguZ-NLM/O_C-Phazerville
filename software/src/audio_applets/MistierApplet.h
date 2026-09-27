@@ -73,8 +73,8 @@ public:
         grain().setTexture(eff_texture);
         grain().setFeedback(eff_feedback);
         grain().setFreeze(frozen);
-        grain().setGrainSource(0.01f * lr);
-        grain().setStereoSpread(0.01f * sspread);
+        grain().setGrainSource(constrain(0.01f * lr + lr_cv.InF(), -1.0f, 1.0f));
+        grain().setStereoSpread(constrain(0.01f * sspread + sspread_cv.InF(), 0.0f, 1.0f));
         SetMixGains(dry_gain, wet_gain);
     }
 
@@ -150,6 +150,8 @@ public:
                 IndexedInput(FDB_CV,      fdb_cv),
                 IndexedInput(TEXTURE_CV,  texture_cv),
                 IndexedInput(MIX_CV,      mix_cv),
+                IndexedInput(LR_CV,       lr_cv),
+                IndexedInput(SSPREAD_CV,  sspread_cv),
                 IndexedInput(FREEZE,      freeze_input)
             ))
             return;
@@ -191,6 +193,8 @@ public:
             case FREEZE:     freeze_input.ChangeSource(direction);                break;
             case LR:         lr      = constrain(lr      + direction, -99,  99); break;
             case SSPREAD:    sspread = constrain(sspread + direction,   0,  99); break;
+            case LR_CV:      lr_cv.ChangeSource(direction);                       break;
+            case SSPREAD_CV: sspread_cv.ChangeSource(direction);                  break;
             case BUFLEN:     buf_idx = constrain(buf_idx + direction,   0, MAX_BUF_IDX); break;
             default: break;
         }
@@ -202,7 +206,7 @@ public:
         data[1] = PackPackables(pos_cv, density_cv, size_cv, spray_cv);
         data[2] = PackPackables(pitch_cv, fdb_cv, texture_cv, mix_cv);
         data[3] = PackPackables(freeze_input, spray, psprd_cv);
-        extra_   = PackPackables(lr, sspread, buf_idx);
+        extra_   = PackPackables(lr, sspread, buf_idx, lr_cv, sspread_cv);
     }
 
     FLASHMEM void OnDataReceive(const std::array<uint64_t, CONFIG_SIZE>& data) override {
@@ -210,7 +214,7 @@ public:
         UnpackPackables(data[1], pos_cv, density_cv, size_cv, spray_cv);
         UnpackPackables(data[2], pitch_cv, fdb_cv, texture_cv, mix_cv);
         UnpackPackables(data[3], freeze_input, spray, psprd_cv);
-        UnpackPackables(extra_, lr, sspread, buf_idx);
+        UnpackPackables(extra_, lr, sspread, buf_idx, lr_cv, sspread_cv);
         buf_idx = constrain(buf_idx, 0, MAX_BUF_IDX);
         lr      = constrain(lr, -99, 99);
         sspread = constrain(sspread, 0, 99);
@@ -311,6 +315,8 @@ public:
             case PITCH_CV:   return &pitch_cv;
             case TEXTURE_CV: return &texture_cv;
             case FDB_CV:     return &fdb_cv;
+            case LR_CV:      return &lr_cv;
+            case SSPREAD_CV: return &sspread_cv;
             default:         return &mix_cv;
         }
     }
@@ -342,8 +348,8 @@ private:
         FDB, FDB_CV,
         FREEZE_LATCH,
         FREEZE,
-        LR,
-        SSPREAD,
+        LR, LR_CV,
+        SSPREAD, SSPREAD_CV,
         BUFLEN,
         CURSOR_LENGTH,
     };
@@ -356,8 +362,8 @@ private:
     static constexpr Row kRows[ROW_COUNT] = {
         { "Mix:", MIX,          MIX_CV,     false },
         { "Den:", DENSITY,      DENSITY_CV, false },
-        { "L+R:", LR,           -1,         true  },
-        { "SSp:", SSPREAD,      -1,         true  },
+        { "L+R:", LR,           LR_CV,      true  },
+        { "SSp:", SSPREAD,      SSPREAD_CV, true  },
         { "Pos:", POS,          POS_CV,     false },
         { "Siz:", SIZE,         SIZE_CV,    false },
         { "Spr:", SPRAY,        SPRAY_CV,   false },
@@ -414,6 +420,8 @@ private:
 
     int8_t  lr       = 0;   // grain source odds: L99 (left) .. 0 (50/50) .. R99 (right)
     int8_t  sspread  = 0;   // 0–99% stereo spread of grains, stereo
+    CVInputMap lr_cv;
+    CVInputMap sspread_cv;
     int8_t  buf_idx  = 0;   // buffer length 1 << buf_idx seconds (1, 2, 4, 8)
     // free-PSRAM readout: counting it walks the whole pool (slow), so it is
     // only refreshed when the Buf page opens or the buffer changes
@@ -421,7 +429,7 @@ private:
     bool    free_dirty_ = false;
     bool    buf_page_shown_ = false;
     static constexpr int MAX_BUF_IDX = 3;
-    uint64_t extra_  = 0;   // 5th preset word: lr, sspread, buf_idx
+    uint64_t extra_  = 0;   // 5th preset word: lr, sspread, buf_idx, lr_cv, sspread_cv
     bool manual_freeze_ = false;  // latched by encoder press on Frz or AuxButton
 };
 
