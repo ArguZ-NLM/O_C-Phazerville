@@ -582,8 +582,8 @@ bool AppSwitcher::Init(bool reset_settings) {
     char filename[] = "000.SCL";
     uint8_t scala_loaded_mask = 0;
     for (size_t i = 0; i < Scales::SCALE_USER_COUNT; ++i) {
+      filename[2] = char('0' + i);
       if (SDcard_Ready && SD.exists(filename)) {
-        filename[2] = char('0' + i);
         File file = SD.open(filename);
         if (file) {
           Scales::LoadScala(user_scales[i], file);
