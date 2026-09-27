@@ -386,6 +386,8 @@ public:
     STEREO_APPLETS = 3,
     MONO_APPLET_PARAMS = 4,
     STEREO_APPLET_PARAMS = 5,
+    MONO_APPLET_EXTRA = 6,
+    STEREO_APPLET_EXTRA = 7,
   };
 
   enum AudioConfigMainKeys : uint8_t { STEREO_MODE_FLAGS };
@@ -427,7 +429,8 @@ public:
           LoadAppletData(
             preset_key | key(STEREO_APPLET_PARAMS, slot * APPLET_CONFIG_SIZE),
             get_selected_stereo_applet(slot),
-            slot
+            slot,
+            preset_key | key(STEREO_APPLET_EXTRA, slot)
           );
         }
       } else {
@@ -449,7 +452,8 @@ public:
             LoadAppletData(
               preset_key | key(MONO_APPLET_PARAMS, slot_key * APPLET_CONFIG_SIZE),
               get_selected_mono_applet(ch, slot),
-              slot
+              slot,
+              preset_key | key(MONO_APPLET_EXTRA, slot_key)
             );
           }
         }
@@ -477,7 +481,8 @@ public:
       SaveAppletData(
         preset_key | key(STEREO_APPLET_PARAMS, slot * APPLET_CONFIG_SIZE),
         stereo_applet,
-        slot
+        slot,
+        preset_key | key(STEREO_APPLET_EXTRA, slot)
       );
 
       ForEachSide(ch) {
@@ -491,7 +496,8 @@ public:
         SaveAppletData(
           preset_key | key(MONO_APPLET_PARAMS, slot_key * APPLET_CONFIG_SIZE),
           mono_applet,
-          slot
+          slot,
+          preset_key | key(MONO_APPLET_EXTRA, slot_key)
         );
       }
     }
@@ -518,9 +524,10 @@ public:
     applet.SetSlot(slot);
     applet.OnDataRequest(data);
     for (uint_fast8_t i = 0; i < APPLET_CONFIG_SIZE; ++i) put(data[i]);
+    if (uint64_t *extra = applet.ExtraData()) put(*extra);
   }
 
-  void LoadAppletData(uint16_t key, HemisphereAudioApplet& applet, size_t slot) {
+  void LoadAppletData(uint16_t key, HemisphereAudioApplet& applet, size_t slot, uint16_t extra_key) {
     array<uint64_t, APPLET_CONFIG_SIZE> data;
     for (uint_fast8_t i = 0; i < APPLET_CONFIG_SIZE; ++i) {
       if (PhzConfig::getValue(key + i, data[i])) {
@@ -531,11 +538,16 @@ public:
         data[i] = 0;
       }
     }
+    if (uint64_t *extra = applet.ExtraData()) {
+      uint64_t v = 0;
+      PhzConfig::getValue(extra_key, v);
+      *extra = v;
+    }
     applet.SetSlot(slot);
     applet.OnDataReceive(data);
   }
 
-  void SaveAppletData(uint16_t key, HemisphereAudioApplet& applet, size_t slot) {
+  void SaveAppletData(uint16_t key, HemisphereAudioApplet& applet, size_t slot, uint16_t extra_key) {
     array<uint64_t, APPLET_CONFIG_SIZE> data = {0};
     applet.SetSlot(slot);
     applet.OnDataRequest(data);
@@ -546,6 +558,9 @@ public:
       Serial.printf(" | data[%u]=", i);
       Serial.print(data[i], HEX);
     }
+    uint64_t *extra = applet.ExtraData();
+    if (extra && *extra) PhzConfig::setValue(extra_key, *extra);
+    else PhzConfig::deleteKey(extra_key);
   }
 
 protected:
