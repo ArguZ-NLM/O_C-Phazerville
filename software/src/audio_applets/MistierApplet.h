@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../Audio/AudioEffectClouds.h"
+#include <smalloc.h>
 
 extern "C" uint8_t external_psram_size;
 
@@ -24,7 +25,7 @@ extern "C" uint8_t external_psram_size;
 //   Latch and gate OR together.
 //
 // Parameters:
-//   Mix, Den, [L+R, SSp — stereo only], Pos, Siz, Spr, PSp, Pit, Tex, Fdb, Frz
+//   Mix, Den, [L+R, SSp — stereo only], Pos, Siz, Spr, PSp, Pit, Tex, Fdb, Frz, Buf
 //   (5 rows per page)
 //
 // Everything shared by the mono and stereo versions lives in this non-template
@@ -79,7 +80,8 @@ public:
 
     FLASHMEM void View() override {
         if (!grain().IsReady()) {
-            gfxPrint(1, 15, "No PSRAM");
+            // allocation failed: PSRAM full, or (without PSRAM) RAM full
+            gfxPrint(1, 15, external_psram_size ? "PSRAM full" : "no memory");
             return;
         }
 
@@ -99,6 +101,8 @@ public:
         const int last_page = (nrows - 1) / ROWS_PER_PAGE;
 
         char v[8];
+        const bool buf_was_shown = buf_page_shown_;
+        buf_page_shown_ = false;
         for (int r = page * ROWS_PER_PAGE; r < nrows && r < (page + 1) * ROWS_PER_PAGE; r++) {
             const Row &row = kRows[rows[r]];
             const int y = 15 + 10 * (r - page * ROWS_PER_PAGE);
@@ -111,6 +115,11 @@ public:
                 gfxEndCursor(id == FREEZE, true, freeze_input.InputName());
             } else if (row.cv >= 0) {
                 DrawCV(y, *CvMap(row.cv), id == row.cv);
+            }
+            if (row.val == BUFLEN) {
+                if (!buf_was_shown) free_dirty_ = true; // page just opened: refresh
+                buf_page_shown_ = true;
+                DrawBufferInfo(y + 10);
             }
         }
 
@@ -182,6 +191,7 @@ public:
             case FREEZE:     freeze_input.ChangeSource(direction);                break;
             case LR:         lr      = constrain(lr      + direction, -99,  99); break;
             case SSPREAD:    sspread = constrain(sspread + direction,   0,  99); break;
+            case BUFLEN:     buf_idx = constrain(buf_idx + direction,   0, MAX_BUF_IDX); break;
             default: break;
         }
     }
@@ -192,7 +202,7 @@ public:
         data[1] = PackPackables(pos_cv, density_cv, size_cv, spray_cv);
         data[2] = PackPackables(pitch_cv, fdb_cv, texture_cv, mix_cv);
         data[3] = PackPackables(freeze_input, spray, psprd_cv);
-        extra_   = PackPackables(lr, sspread);
+        extra_   = PackPackables(lr, sspread, buf_idx);
     }
 
     FLASHMEM void OnDataReceive(const std::array<uint64_t, CONFIG_SIZE>& data) override {
@@ -200,7 +210,8 @@ public:
         UnpackPackables(data[1], pos_cv, density_cv, size_cv, spray_cv);
         UnpackPackables(data[2], pitch_cv, fdb_cv, texture_cv, mix_cv);
         UnpackPackables(data[3], freeze_input, spray, psprd_cv);
-        UnpackPackables(extra_, lr, sspread);
+        UnpackPackables(extra_, lr, sspread, buf_idx);
+        buf_idx = constrain(buf_idx, 0, MAX_BUF_IDX);
         lr      = constrain(lr, -99, 99);
         sspread = constrain(sspread, 0, 99);
     }
@@ -256,7 +267,36 @@ public:
             case TEXTURE: snprintf(v, n, "%d%%", texture); break;
             case FDB:     snprintf(v, n, "%d%%", fdb); break;
             case FREEZE_LATCH: snprintf(v, n, manual_freeze_ ? "on" : "off"); break;
+            case BUFLEN:
+                if (external_psram_size) snprintf(v, n, "%ds", 1 << buf_idx);
+                else snprintf(v, n, "0.5s"); // fixed small buffer in RAM
+                break;
             default:      v[0] = 0; break;
+        }
+    }
+
+    // line under Buf: memory the buffers really use, or that PSRAM is missing
+    // lines under Buf: memory these buffers use and PSRAM still free,
+    // or that there is no PSRAM
+    FLASHMEM void DrawBufferInfo(int y) {
+        if (!external_psram_size) {
+            gfxPrint(1, y, "no PSRAM");
+            return;
+        }
+        char t[16];
+        const uint32_t bytes = grain().BufferSamples() * sizeof(int16_t) * (stereo_ ? 2 : 1);
+        FormatBytes(t, sizeof(t), bytes, "used");
+        gfxPrint(1, y, t);
+        if (psram_free_ < 0) snprintf(t, sizeof(t), "? free");
+        else FormatBytes(t, sizeof(t), (uint32_t)psram_free_, "free");
+        gfxPrint(1, y + 10, t);
+    }
+    static void FormatBytes(char *t, size_t n, uint32_t bytes, const char *what) {
+        if (bytes < 1000000) {
+            snprintf(t, n, "%lukB %s", (unsigned long)((bytes + 500) / 1000), what);
+        } else {
+            const uint32_t tenths = (bytes + 50000) / 100000; // MB with one decimal
+            snprintf(t, n, "%lu.%luMB %s", (unsigned long)(tenths / 10), (unsigned long)(tenths % 10), what);
         }
     }
 
@@ -276,6 +316,10 @@ public:
     }
 
     uint64_t *ExtraData() override { return &extra_; }
+
+    // Buffer length changes happen here, in the main loop: allocating and
+    // zeroing PSRAM must not run inside the audio or controller interrupts.
+    void mainloop() override;
 
 protected:
     void SetHelp() override {}
@@ -300,12 +344,13 @@ private:
         FREEZE,
         LR,
         SSPREAD,
+        BUFLEN,
         CURSOR_LENGTH,
     };
 
     // Screen rows in display order; stereo-only rows are skipped in mono.
     struct Row { const char *label; int8_t val; int8_t cv; bool stereo_only; };
-    static constexpr int ROW_COUNT = 12;
+    static constexpr int ROW_COUNT = 13;
     static constexpr int ROWS_PER_PAGE = 5;
     static constexpr int MAX_ITEMS = ROW_COUNT * 2;
     static constexpr Row kRows[ROW_COUNT] = {
@@ -321,6 +366,7 @@ private:
         { "Tex:", TEXTURE,      TEXTURE_CV, false },
         { "Fdb:", FDB,          FDB_CV,     false },
         { "Frz:", FREEZE_LATCH, FREEZE,     false },
+        { "Buf:", BUFLEN,       -1,         false },
     };
 
     int VisibleRows(int8_t *rows) const {
@@ -368,9 +414,37 @@ private:
 
     int8_t  lr       = 0;   // grain source odds: L99 (left) .. 0 (50/50) .. R99 (right)
     int8_t  sspread  = 0;   // 0–99% stereo spread of grains, stereo
-    uint64_t extra_  = 0;   // 5th preset word: lr, sspread
+    int8_t  buf_idx  = 0;   // buffer length 1 << buf_idx seconds (1, 2, 4, 8)
+    // free-PSRAM readout: counting it walks the whole pool (slow), so it is
+    // only refreshed when the Buf page opens or the buffer changes
+    int32_t psram_free_ = -1;
+    bool    free_dirty_ = false;
+    bool    buf_page_shown_ = false;
+    static constexpr int MAX_BUF_IDX = 3;
+    uint64_t extra_  = 0;   // 5th preset word: lr, sspread, buf_idx
     bool manual_freeze_ = false;  // latched by encoder press on Frz or AuxButton
 };
+
+FLASHMEM void MistierBase::mainloop() {
+    if (!external_psram_size) return; // without PSRAM stay at the small buffer
+    const size_t want = AudioEffectClouds::CLOUDS_BUFFER_SAMPLES << buf_idx;
+    if (grain().BufferSamples() != want) {
+        if (!grain().Resize(want)) {
+            // not enough memory: go back to the length that is actually in use
+            for (int i = 0; i <= MAX_BUF_IDX; i++)
+                if ((AudioEffectClouds::CLOUDS_BUFFER_SAMPLES << i) == grain().BufferSamples())
+                    buf_idx = i;
+        }
+        free_dirty_ = true;
+    }
+    if (free_dirty_ && buf_page_shown_) {
+        size_t total = 0, user = 0, free_bytes = 0;
+        int blocks = 0;
+        sm_malloc_stats_pool(&extmem_smalloc_pool, &total, &user, &free_bytes, &blocks);
+        psram_free_ = (int32_t)free_bytes;
+        free_dirty_ = false;
+    }
+}
 
 template <AudioChannels Channels>
 class MistierApplet : public MistierBase {

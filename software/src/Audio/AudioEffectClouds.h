@@ -15,6 +15,14 @@ public:
     size_t GetWriteIx() const { return this->write_ix; }
     T*     RawBuffer()  const { return this->buffer; }
     bool   IsReady()    const { return this->buffer != nullptr; }
+    // Install a new (zeroed) buffer of n samples; returns the old one to free.
+    T* Swap(T* p, size_t n) {
+        T* old = this->buffer;
+        this->buffer = p;
+        this->NumSamples = n;
+        this->write_ix = 0;
+        return old;
+    }
 };
 
 // Clouds-inspired live granular processor.
@@ -50,6 +58,10 @@ public:
         for (int c = 0; c < nch_; c++) if (!g_buffer[c].IsReady()) return false;
         return true;
     }
+    size_t BufferSamples() const { return g_buffer[0].NumSamples; }
+    // Change the buffer length (main loop only, never from an interrupt).
+    // Returns false and keeps the old buffer if memory runs out.
+    bool Resize(size_t samples);
 
     // Setters — called from Controller() at ISR rate (~16.6 kHz).
     // update() snapshots them once per block.
@@ -197,8 +209,9 @@ public:
                 t += t_step;
 
                 // ── Hermite interpolated read ──────────────────────────────────
-                size_t idx  = (size_t)g.read_ptr;
-                float  frac = g.read_ptr - (float)idx;
+                // position = whole sample idx + fraction: exact for any buffer length
+                const size_t idx  = g.idx;
+                const float  frac = g.frac;
                 size_t im1  = (idx == 0)             ? buf_size - 1       : idx - 1;
                 size_t i1   = (idx + 1 >= buf_size)  ? 0                  : idx + 1;
                 size_t i2   = (idx + 2 >= buf_size)  ? idx + 2 - buf_size : idx + 2;
@@ -214,9 +227,10 @@ public:
                                                   (float)buf[0][i1],  (float)buf[0][i2], frac) * w;
                 }
 
-                g.read_ptr += g.pitch;
-                if (g.read_ptr >= (float)buf_size) g.read_ptr -= (float)buf_size;
-                if (g.read_ptr < 0.0f)             g.read_ptr += (float)buf_size;
+                g.frac += g.inc_frac;
+                if (g.frac >= 1.0f) { g.frac -= 1.0f; g.idx++; }
+                g.idx += g.inc_int;
+                if (g.idx >= buf_size) g.idx -= buf_size;
                 if (++g.phase >= g.grain_len) { g.active = false; break; }
             }
         }
@@ -258,8 +272,10 @@ private:
 
     struct Grain {
         bool   active        = false;
-        float  read_ptr      = 0.0f;
-        float  pitch         = 1.0f;
+        size_t idx           = 0;    // read position: whole samples
+        float  frac          = 0.0f; //                + fraction 0..1
+        size_t inc_int       = 1;    // pitch: whole samples per step
+        float  inc_frac      = 0.0f; //        + fraction
         size_t grain_len     = 0;
         size_t phase         = 0;
         float  inv_grain_len = 0.0f;
@@ -347,8 +363,10 @@ FLASHMEM void AudioEffectClouds::spawnGrain(float cur_pos, float cur_size, float
     const float eaten_by_play_head = grain_size * grain_pitch;
     float available = (float)buf_size - eaten_by_play_head - grain_size;
     if (available < 0.0f) available = 0.0f;
-    float rptr = (float)head - (eff_pos * available + eaten_by_play_head);
-    while (rptr < 0.0f) rptr += (float)buf_size;
+    // double: a float can't hold a sample position of a long buffer exactly
+    double rptr = (double)head - (eff_pos * available + eaten_by_play_head);
+    while (rptr < 0.0) rptr += (double)buf_size;
+    if (rptr >= (double)buf_size) rptr -= (double)buf_size;
 
     // Window: texture 0 = short fades both sides (never a hard edge),
     // 0 → 0.5 lengthens only the fade-out, 0.5 → 1 then the fade-in,
@@ -364,8 +382,10 @@ FLASHMEM void AudioEffectClouds::spawnGrain(float cur_pos, float cur_size, float
     if (release_len < min_len) release_len = min_len;
     if (attack_len  < min_len) attack_len  = min_len;
 
-    g->read_ptr      = rptr;
-    g->pitch         = grain_pitch;
+    g->idx           = (size_t)rptr;
+    g->frac          = (float)(rptr - (double)g->idx);
+    g->inc_int       = (size_t)grain_pitch;
+    g->inc_frac      = grain_pitch - (float)g->inc_int;
     g->grain_len     = glen;
     g->phase         = 0;
     g->inv_grain_len = 1.0f / (float)(glen - 1);
@@ -380,6 +400,26 @@ FLASHMEM void AudioEffectClouds::spawnGrain(float cur_pos, float cur_size, float
     const float p_left = 0.5f - 0.5f * source_;
     g->source = (stmlib::Random::GetFloat() < p_left) ? 0 : 1;
     g->active        = true;
+}
+
+FLASHMEM bool AudioEffectClouds::Resize(size_t samples) {
+    if (samples == g_buffer[0].NumSamples && IsReady()) return true;
+    // allocate first, so the old buffer keeps playing meanwhile
+    int16_t *fresh[MAX_CHANNELS] = {};
+    for (int c = 0; c < nch_; c++) {
+        fresh[c] = static_cast<int16_t*>(extmem_calloc(samples, sizeof(int16_t)));
+        if (!fresh[c]) {
+            for (int k = 0; k < c; k++) extmem_free(fresh[k]);
+            return false;
+        }
+    }
+    int16_t *old[MAX_CHANNELS] = {};
+    AudioNoInterrupts();
+    for (int c = 0; c < nch_; c++) old[c] = g_buffer[c].Swap(fresh[c], samples);
+    for (auto &g : grains) g.active = false;
+    AudioInterrupts();
+    for (int c = 0; c < nch_; c++) if (old[c]) extmem_free(old[c]);
+    return true;
 }
 
 // ── Hann LUT ──────────────────────────────────────────────────────────────────
