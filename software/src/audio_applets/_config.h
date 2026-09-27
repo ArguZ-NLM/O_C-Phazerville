@@ -106,6 +106,7 @@ constexpr Registry stereo_applets = Registry<HemisphereAudioApplet, NUM_SLOTS
   , DeclareFancyApplet<DynamicsApplet<STEREO>>
   , DeclareFancyApplet<ThreeBandzApplet<STEREO>>
   , DeclareFancyApplet<DelayApplet<STEREO>>
+  , DeclareFancyApplet<MistierApplet<STEREO>>
   , DeclareFancyApplet<AbyssApplet<STEREO>>
   , DeclareFancyApplet<AnimorfApplet<STEREO>>
   , DeclareFancyApplet<LadderApplet<STEREO>>

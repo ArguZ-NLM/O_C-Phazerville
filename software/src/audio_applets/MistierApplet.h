@@ -8,7 +8,7 @@ extern "C" uint8_t external_psram_size;
 //
 // Records audio into a 1-second PSRAM circular buffer and plays it back as a
 // cloud of overlapping grains. Differences from MistApplet:
-//   • Texture — continuous window morph: rect → triangle → Hann
+//   • Texture — 0: short fades; up to 50 the fade-out grows, above 50 the fade-in
 //   • Density — centred at 0 (silence). CCW → regular periodic. CW → stochastic.
 //   • Feedback (Fdb) — grain output fed back into the record buffer
 //   • No fixed grain shapes — shape driven by Texture
@@ -18,35 +18,29 @@ extern "C" uint8_t external_psram_size;
 //   Input →                     → dry ─────────────────────────────┤ AudioMixer<2> → Output
 //
 // Freeze:
-//   • AuxButton: latches/unlatches manual freeze (performance use, no cable needed)
-//   • Frz input: assign a hardware gate via input map editor (cursor on Frz row → press button)
-//   Both OR together. Frz row label inverts while latched.
+//   • Frz on/off: cursor on the value, press the encoder to toggle
+//   • AuxButton: toggles the same latch (performance use, no cable needed)
+//   • Frz input: assign a hardware gate via input map editor (cursor on the icon → press button)
+//   Latch and gate OR together.
 //
 // Parameters:
-//   Page 1: Pos, Den, Sz, Spr, PSp
-//   Page 2: Pitch, Fdb, Tex, Mix, Frz
+//   Mix, Den, [L+R, SSp — stereo only], Pos, Siz, Spr, PSp, Pit, Tex, Fdb, Frz
+//   (5 rows per page)
 //
-template <AudioChannels Channels>
-class MistierApplet : public HemisphereAudioApplet {
+// Everything shared by the mono and stereo versions lives in this non-template
+// base, so it exists once and its UI code can sit in flash (FLASHMEM has no
+// effect on template member functions).
+class MistierBase : public HemisphereAudioApplet {
 public:
+    explicit MistierBase(bool stereo) : stereo_(stereo) {}
+
     const char* applet_name() { return "Misty"; }
-
-    void Start() override {
-        for (int ch = 0; ch < Channels; ch++) {
-            channels[ch].Start(this, ch, input_stream, output_stream);
-        }
-    }
-
-    void Unload() override {
-        for (auto& ch : channels) ch.Stop();
-        AllowRestart();
-    }
 
     void Controller() override {
         // ── CV-modulated effective parameters ──────────────────────────────────
         float eff_pos     = constrain(0.01f * pos     + pos_cv.InF(),              0.0f, 1.0f);
-        // density UI 0–100: map to −20..+20 Hz (50=silence, >50=stochastic, <50=periodic)
-        float eff_density = constrain(0.4f * (density - 50) + density_cv.InF() * 20.0f, -20.0f, 20.0f);
+        // density: −20..+20 Hz in 1 Hz steps (0=silence, >0=stochastic, <0=periodic)
+        float eff_density = constrain(DensityHz() + density_cv.InF() * 20.0f, -20.0f, 20.0f);
         float eff_size    = constrain(0.01f * size    + size_cv.InF() * 0.49f,     0.01f, 0.5f);
         float eff_texture = constrain(0.01f * texture + texture_cv.InF(),           0.0f, 1.0f);
         float eff_spray   = constrain(0.01f * spray   + spray_cv.InF(),             0.0f, 1.0f);
@@ -69,108 +63,75 @@ public:
         float dry_gain, wet_gain;
         EqualPowerFade(dry_gain, wet_gain, eff_mix);
 
-        for (int ch = 0; ch < Channels; ch++) {
-            channels[ch].grain_stream.setPosition(eff_pos);
-            channels[ch].grain_stream.setDensity(eff_density);
-            channels[ch].grain_stream.setSize(eff_size);
-            channels[ch].grain_stream.setSpray(eff_spray);
-            channels[ch].grain_stream.setPitch(eff_pitch);
-            channels[ch].grain_stream.setPitchSpread(eff_psprd_semis);
-            channels[ch].grain_stream.setTexture(eff_texture);
-            channels[ch].grain_stream.setFeedback(eff_feedback);
-            channels[ch].grain_stream.setFreeze(frozen);
-            channels[ch].mixer.gain(MistierChannel::DRY_CH, dry_gain);
-            channels[ch].mixer.gain(MistierChannel::WET_CH, wet_gain);
-        }
+        grain().setPosition(eff_pos);
+        grain().setDensity(eff_density);
+        grain().setSize(eff_size);
+        grain().setSpray(eff_spray);
+        grain().setPitch(eff_pitch);
+        grain().setPitchSpread(eff_psprd_semis);
+        grain().setTexture(eff_texture);
+        grain().setFeedback(eff_feedback);
+        grain().setFreeze(frozen);
+        grain().setGrainSource(0.01f * lr);
+        grain().setStereoSpread(0.01f * sspread);
+        SetMixGains(dry_gain, wet_gain);
     }
 
-    void View() override {
-        if (!channels[0].grain_stream.IsReady()) {
+    FLASHMEM void View() override {
+        if (!grain().IsReady()) {
             gfxPrint(1, 15, "No PSRAM");
             return;
         }
 
         // ── Grain activity bar (y=7) ──────────────────────────────────────────
-        uint8_t active = channels[0].grain_stream.ActiveGrainCount();
+        uint8_t active = grain().ActiveGrainCount();
         for (uint8_t i = 0; i < AudioEffectClouds::MAX_GRAINS; i++) {
             if (i < active) gfxPixel(1 + i, 7);
         }
 
-        // ── Two pages ────────────────────────────────────────────────────────
-        const bool pg2 = (cursor >= PITCH);
+        // ── Rows, 5 per page ─────────────────────────────────────────────────
+        int8_t items[MAX_ITEMS], item_row[MAX_ITEMS];
+        int8_t rows[ROW_COUNT];
+        const int nrows = VisibleRows(rows);
+        BuildItems(items, item_row);
+        const int8_t id = items[cursor];
+        const int page = item_row[cursor] / ROWS_PER_PAGE;
+        const int last_page = (nrows - 1) / ROWS_PER_PAGE;
 
-        if (!pg2) {
-            // ── Page 1: Pos, Den, Sz, Spr, PSp (y=15/25/35/45/55) ──────────
-            gfxPrint(1, 15, "Pos:");
-            gfxStartCursor(); graphics.printf("%3d%%", pos); gfxEndCursor(cursor == POS);
-            gfxStartCursor(); gfxPrint(pos_cv); gfxEndCursor(cursor == POS_CV, false, pos_cv.InputName());
-
-            gfxPrint(1, 25, "Den:");
-            gfxStartCursor();
-            int8_t d_hz = (int8_t)(0.4f * (density - 50));
-            if (d_hz >= 0) graphics.printf("+%2d", d_hz);
-            else           graphics.printf("%3d", d_hz);
-            gfxEndCursor(cursor == DENSITY);
-            gfxStartCursor(); gfxPrint(density_cv); gfxEndCursor(cursor == DENSITY_CV, false, density_cv.InputName());
-
-            gfxPrint(1, 35, "Sz:");
-            gfxStartCursor(); graphics.printf("%3dms", size * 10); gfxEndCursor(cursor == SIZE);
-            gfxStartCursor(); gfxPrint(size_cv); gfxEndCursor(cursor == SIZE_CV, false, size_cv.InputName());
-
-            gfxPrint(1, 45, "Spr:");
-            gfxStartCursor(); graphics.printf("%3d%%", spray); gfxEndCursor(cursor == SPRAY);
-            gfxStartCursor(); gfxPrint(spray_cv); gfxEndCursor(cursor == SPRAY_CV, false, spray_cv.InputName());
-
-            gfxPrint(1, 55, "PSp:");
-            gfxStartCursor(); graphics.printf("%3d%%", psprd); gfxEndCursor(cursor == PSPRD);
-            gfxStartCursor(); gfxPrint(psprd_cv); gfxEndCursor(cursor == PSPRD_CV, false, psprd_cv.InputName());
-        } else {
-            // ── Page 2: Pitch, Fdb, Tex, Mix, Frz (y=15/25/35/45/55) ────────
-
-            // Pitch
-            gfxPrint(1, 15, "Pt:");
-            gfxStartCursor();
-            if (pitch >= 0) graphics.printf("+%2d", pitch);
-            else            graphics.printf("%3d", pitch);
-            gfxEndCursor(cursor == PITCH);
-            gfxStartCursor(); gfxPrint(pitch_cv); gfxEndCursor(cursor == PITCH_CV, false, pitch_cv.InputName());
-
-            // Feedback
-            gfxPrint(1, 25, "Fdb:");
-            gfxStartCursor(); graphics.printf("%3d%%", fdb); gfxEndCursor(cursor == FDB);
-            gfxStartCursor(); gfxPrint(fdb_cv); gfxEndCursor(cursor == FDB_CV, false, fdb_cv.InputName());
-
-            // Texture
-            gfxPrint(1, 35, "Tex:");
-            gfxStartCursor(); graphics.printf("%3d%%", texture); gfxEndCursor(cursor == TEXTURE);
-            gfxStartCursor(); gfxPrint(texture_cv); gfxEndCursor(cursor == TEXTURE_CV, false, texture_cv.InputName());
-
-            // Mix
-            gfxPrint(1, 45, "Mix:");
-            gfxStartCursor(); graphics.printf("%3d%%", mix); gfxEndCursor(cursor == MIX);
-            gfxStartCursor(); gfxPrint(mix_cv); gfxEndCursor(cursor == MIX_CV, false, mix_cv.InputName());
-
-            // Freeze — label inverts while manual latch is active (print first, then invert)
-            gfxPrint(1, 55, "Frz:");
-            if (manual_freeze_) gfxInvert(1, 55, 20, 8);
-            gfxStartCursor(); gfxPrint(freeze_input); gfxEndCursor(cursor == FREEZE, true, freeze_input.InputName());
+        char v[8];
+        for (int r = page * ROWS_PER_PAGE; r < nrows && r < (page + 1) * ROWS_PER_PAGE; r++) {
+            const Row &row = kRows[rows[r]];
+            const int y = 15 + 10 * (r - page * ROWS_PER_PAGE);
+            gfxPrint(1, y, row.label);
+            FormatValue(row.val, v, sizeof(v));
+            DrawValue(y, v, id == row.val);
+            if (row.cv == FREEZE) {
+                gfxStartCursor(VAL_END, y);
+                gfxPrint(freeze_input);
+                gfxEndCursor(id == FREEZE, true, freeze_input.InputName());
+            } else if (row.cv >= 0) {
+                DrawCV(y, *CvMap(row.cv), id == row.cv);
+            }
         }
 
         // Page indicator
-        gfxPrint(58, 56, pg2 ? "<" : ">");
+        gfxPrint(58, 56, page < last_page ? ">" : "<");
 
         gfxDisplayInputMapEditor();
     }
 
     // AuxButton: latch/unlatch manual freeze (live performance, no cable needed).
-    void AuxButton() override {
+    FLASHMEM void AuxButton() override {
         manual_freeze_ ^= 1;
         CancelEdit();
     }
 
-    void OnButtonPress() override {
+    FLASHMEM void OnButtonPress() override {
+        int8_t items[MAX_ITEMS], item_row[MAX_ITEMS];
+        BuildItems(items, item_row);
+        const int8_t id = items[cursor];
         if (CheckEditInputMapPress(
-                cursor,
+                id,
                 IndexedInput(POS_CV,      pos_cv),
                 IndexedInput(DENSITY_CV,  density_cv),
                 IndexedInput(SIZE_CV,     size_cv),
@@ -183,20 +144,26 @@ public:
                 IndexedInput(FREEZE,      freeze_input)
             ))
             return;
+        if (id == FREEZE_LATCH) {
+            manual_freeze_ ^= 1;
+            return;
+        }
         CursorToggle();
     }
 
-    void OnEncoderMove(int direction) override {
+    FLASHMEM void OnEncoderMove(int direction) override {
+        int8_t items[MAX_ITEMS], item_row[MAX_ITEMS];
+        const int nitems = BuildItems(items, item_row);
         if (!EditMode()) {
-            MoveCursor(cursor, direction, CURSOR_LENGTH - 1);
+            MoveCursor(cursor, direction, nitems - 1);
             return;
         }
         if (EditSelectedInputMap(direction)) return;
 
-        switch (cursor) {
+        switch (items[cursor]) {
             case POS:        pos     = constrain(pos     + direction,   0, 100); break;
             case POS_CV:     pos_cv.ChangeSource(direction);                      break;
-            case DENSITY:    density = constrain(density + direction,   0, 100); break;
+            case DENSITY:    SetDensityHz(DensityHz() + direction);             break;
             case DENSITY_CV: density_cv.ChangeSource(direction);                  break;
             case SIZE:       size    = constrain(size    + direction,   1,  50); break;
             case SIZE_CV:    size_cv.ChangeSource(direction);                     break;
@@ -204,7 +171,7 @@ public:
             case SPRAY_CV:   spray_cv.ChangeSource(direction);                    break;
             case PSPRD:      psprd   = constrain(psprd   + direction,   0, 100); break;
             case PSPRD_CV:   psprd_cv.ChangeSource(direction);                    break;
-            case PITCH:      pitch   = constrain(pitch   + direction, -12,  12); break;
+            case PITCH:      pitch   = constrain(pitch   + direction, -24,  24); break;
             case PITCH_CV:   pitch_cv.ChangeSource(direction);                    break;
             case FDB:        fdb     = constrain(fdb     + direction,   0, 100); break;
             case FDB_CV:     fdb_cv.ChangeSource(direction);                      break;
@@ -213,50 +180,170 @@ public:
             case MIX:        mix     = constrain(mix     + direction,   0, 100); break;
             case MIX_CV:     mix_cv.ChangeSource(direction);                      break;
             case FREEZE:     freeze_input.ChangeSource(direction);                break;
+            case LR:         lr      = constrain(lr      + direction, -99,  99); break;
+            case SSPREAD:    sspread = constrain(sspread + direction,   0,  99); break;
             default: break;
         }
     }
 
 #define MISTIER_PARAMS  pos, density, size, texture, pitch, psprd, fdb, mix
-    void OnDataRequest(std::array<uint64_t, CONFIG_SIZE>& data) override {
+    FLASHMEM void OnDataRequest(std::array<uint64_t, CONFIG_SIZE>& data) override {
         data[0] = PackPackables(MISTIER_PARAMS);
         data[1] = PackPackables(pos_cv, density_cv, size_cv, spray_cv);
         data[2] = PackPackables(pitch_cv, fdb_cv, texture_cv, mix_cv);
         data[3] = PackPackables(freeze_input, spray, psprd_cv);
+        extra_   = PackPackables(lr, sspread);
     }
 
-    void OnDataReceive(const std::array<uint64_t, CONFIG_SIZE>& data) override {
+    FLASHMEM void OnDataReceive(const std::array<uint64_t, CONFIG_SIZE>& data) override {
         UnpackPackables(data[0], MISTIER_PARAMS);
         UnpackPackables(data[1], pos_cv, density_cv, size_cv, spray_cv);
         UnpackPackables(data[2], pitch_cv, fdb_cv, texture_cv, mix_cv);
         UnpackPackables(data[3], freeze_input, spray, psprd_cv);
+        UnpackPackables(extra_, lr, sspread);
+        lr      = constrain(lr, -99, 99);
+        sspread = constrain(sspread, 0, 99);
     }
 #undef MISTIER_PARAMS
 
-    AudioStream* InputStream()  override { return &input_stream; }
-    AudioStream* OutputStream() override { return &output_stream; }
+    // density is stored as 0–100 (50 = silence) for preset compatibility,
+    // but edited and used in whole Hz: −20..+20, 41 steps
+    int DensityHz() const {
+        const float f = (density - 50) * 0.4f;
+        return (int)(f < 0.0f ? f - 0.5f : f + 0.5f);
+    }
+    FLASHMEM void SetDensityHz(int hz) {
+        hz = constrain(hz, -20, 20);
+        const float f = hz * 2.5f;
+        density = 50 + (int)(f < 0.0f ? f - 0.5f : f + 0.5f);
+    }
+
+    static constexpr int VAL_END = 49; // x where the CV icons start
+    // values end 2px into the CV icon's blank left margin
+    static constexpr int VAL_SHIFT = 2;
+
+    FLASHMEM void DrawValue(int y, const char *text, bool selected) {
+        gfxStartCursor(VAL_END + VAL_SHIFT - 6 * (int)strlen(text), y);
+        gfxPrint(text);
+        gfxEndCursor(selected);
+    }
+    FLASHMEM void DrawCV(int y, CVInputMap &map, bool selected) {
+        gfxStartCursor(VAL_END, y);
+        gfxPrint(map);
+        gfxEndCursor(selected, false, map.InputName());
+    }
+
+    FLASHMEM void FormatValue(int8_t id, char *v, size_t n) {
+        switch (id) {
+            case MIX:     snprintf(v, n, "%d%%", mix); break;
+            case DENSITY: {
+                // P = periodic, S = stochastic; letter stays in place: "S20", "P 4"
+                const int d = DensityHz();
+                snprintf(v, n, "%c%2d", d > 0 ? 'S' : (d < 0 ? 'P' : ' '), d < 0 ? -d : d);
+                break;
+            }
+            case LR:
+                // grain source odds: L99 .. O/O (50/50) .. R99
+                if (lr == 0) snprintf(v, n, "O/O");
+                else snprintf(v, n, "%c%2d", lr < 0 ? 'L' : 'R', lr < 0 ? -lr : lr);
+                break;
+            case SSPREAD: snprintf(v, n, "%d%%", sspread); break;
+            case POS:     snprintf(v, n, "%d%%", pos); break;
+            case SIZE:    snprintf(v, n, "%d", size * 10); break; // ms
+            case SPRAY:   snprintf(v, n, "%d%%", spray); break;
+            case PSPRD:   snprintf(v, n, "%d%%", psprd); break;
+            case PITCH:   snprintf(v, n, pitch > 0 ? "+%d" : "%d", pitch); break;
+            case TEXTURE: snprintf(v, n, "%d%%", texture); break;
+            case FDB:     snprintf(v, n, "%d%%", fdb); break;
+            case FREEZE_LATCH: snprintf(v, n, manual_freeze_ ? "on" : "off"); break;
+            default:      v[0] = 0; break;
+        }
+    }
+
+    CVInputMap *CvMap(int8_t id) {
+        switch (id) {
+            case MIX_CV:     return &mix_cv;
+            case DENSITY_CV: return &density_cv;
+            case POS_CV:     return &pos_cv;
+            case SIZE_CV:    return &size_cv;
+            case SPRAY_CV:   return &spray_cv;
+            case PSPRD_CV:   return &psprd_cv;
+            case PITCH_CV:   return &pitch_cv;
+            case TEXTURE_CV: return &texture_cv;
+            case FDB_CV:     return &fdb_cv;
+            default:         return &mix_cv;
+        }
+    }
+
+    uint64_t *ExtraData() override { return &extra_; }
 
 protected:
     void SetHelp() override {}
 
+    virtual AudioEffectClouds& grain() = 0;
+    virtual void SetMixGains(float dry, float wet) = 0;
+
 private:
     enum Cursor : int8_t {
         // Page 1
-        POS = 0, POS_CV,
+        MIX = 0, MIX_CV,
         DENSITY, DENSITY_CV,
+        POS, POS_CV,
         SIZE, SIZE_CV,
         SPRAY, SPRAY_CV,
-        PSPRD, PSPRD_CV,
         // Page 2
+        PSPRD, PSPRD_CV,
         PITCH, PITCH_CV,
-        FDB, FDB_CV,
         TEXTURE, TEXTURE_CV,
-        MIX, MIX_CV,
+        FDB, FDB_CV,
+        FREEZE_LATCH,
         FREEZE,
+        LR,
+        SSPREAD,
         CURSOR_LENGTH,
     };
 
-    int8_t cursor = POS;
+    // Screen rows in display order; stereo-only rows are skipped in mono.
+    struct Row { const char *label; int8_t val; int8_t cv; bool stereo_only; };
+    static constexpr int ROW_COUNT = 12;
+    static constexpr int ROWS_PER_PAGE = 5;
+    static constexpr int MAX_ITEMS = ROW_COUNT * 2;
+    static constexpr Row kRows[ROW_COUNT] = {
+        { "Mix:", MIX,          MIX_CV,     false },
+        { "Den:", DENSITY,      DENSITY_CV, false },
+        { "L+R:", LR,           -1,         true  },
+        { "SSp:", SSPREAD,      -1,         true  },
+        { "Pos:", POS,          POS_CV,     false },
+        { "Siz:", SIZE,         SIZE_CV,    false },
+        { "Spr:", SPRAY,        SPRAY_CV,   false },
+        { "PSp:", PSPRD,        PSPRD_CV,   false },
+        { "Pit:", PITCH,        PITCH_CV,   false },
+        { "Tex:", TEXTURE,      TEXTURE_CV, false },
+        { "Fdb:", FDB,          FDB_CV,     false },
+        { "Frz:", FREEZE_LATCH, FREEZE,     false },
+    };
+
+    int VisibleRows(int8_t *rows) const {
+        int n = 0;
+        for (int r = 0; r < ROW_COUNT; r++)
+            if (stereo_ || !kRows[r].stereo_only) rows[n++] = r;
+        return n;
+    }
+    // cursor = index into the list of selectable items (value, then CV icon)
+    int BuildItems(int8_t *items, int8_t *item_row) const {
+        int8_t rows[ROW_COUNT];
+        const int nrows = VisibleRows(rows);
+        int n = 0;
+        for (int r = 0; r < nrows; r++) {
+            const Row &row = kRows[rows[r]];
+            items[n] = row.val; item_row[n++] = r;
+            if (row.cv >= 0) { items[n] = row.cv; item_row[n++] = r; }
+        }
+        return n;
+    }
+
+    const bool stereo_;
+    int8_t cursor = 0;
 
     // Parameters
     int8_t  pos      = 50;  // 0–100%
@@ -269,44 +356,65 @@ private:
     CVInputMap spray_cv;
     int8_t  psprd    = 0;   // 0–100% pitch spread
     CVInputMap psprd_cv;
-    int8_t  pitch    = 0;   // −12 to +12 semitones
+    int8_t  pitch    = 0;   // −24 to +24 semitones
     CVInputMap pitch_cv;
     int8_t  fdb      = 0;   // 0–100% grain feedback
     CVInputMap fdb_cv;
-    int8_t  texture  = 50;  // 0–100% (0=rect, 50=tri, 100=Hann)
+    int8_t  texture  = 50;  // 0–100% (0=short fades, 50=long fade-out, 100=Hann)
     CVInputMap texture_cv;
     int8_t  mix      = 80;  // 0–100% wet/dry
     CVInputMap mix_cv;
     DigitalInputMap freeze_input;
 
-    bool manual_freeze_ = false;  // latched by AuxButton
+    int8_t  lr       = 0;   // grain source odds: L99 (left) .. 0 (50/50) .. R99 (right)
+    int8_t  sspread  = 0;   // 0–99% stereo spread of grains, stereo
+    uint64_t extra_  = 0;   // 5th preset word: lr, sspread
+    bool manual_freeze_ = false;  // latched by encoder press on Frz or AuxButton
+};
 
-    // Per-channel DSP struct.
-    struct MistierChannel {
-        static const uint8_t DRY_CH = 0;
-        static const uint8_t WET_CH = 1;
+template <AudioChannels Channels>
+class MistierApplet : public MistierBase {
+public:
+    MistierApplet() : MistierBase(Channels > 1) {}
 
-        AudioEffectClouds grain_stream;
-        AudioMixer<2>     mixer;
-
-        MistierChannel()
-            : grain_stream(
-                external_psram_size
-                    ? AudioEffectClouds::CLOUDS_BUFFER_SAMPLES
-                    : AudioEffectClouds::CLOUDS_BUFFER_SAMPLES / 2)
-        {}
-
-        void Start(HemisphereAudioApplet* owner, int ch,
-                   AudioStream& input, AudioStream& output) {
-            grain_stream.Acquire();
-            owner->PatchCable(input,       ch, grain_stream, 0);
-            owner->PatchCable(input,       ch, mixer,        DRY_CH);
-            owner->PatchCable(grain_stream, 0, mixer,        WET_CH);
-            owner->PatchCable(mixer,        0, output,       ch);
+    void Start() override {
+        grain_stream.Acquire();
+        for (int ch = 0; ch < Channels; ch++) {
+            PatchCable(input_stream, ch, grain_stream, ch);
+            PatchCable(input_stream, ch, mixer[ch],    DRY_CH);
+            PatchCable(grain_stream, ch, mixer[ch],    WET_CH);
+            PatchCable(mixer[ch],    0,  output_stream, ch);
         }
+    }
 
-        void Stop() { grain_stream.Release(); }
-    } channels[Channels];
+    void Unload() override {
+        grain_stream.Release();
+        AllowRestart();
+    }
+
+    AudioStream* InputStream()  override { return &input_stream; }
+    AudioStream* OutputStream() override { return &output_stream; }
+
+protected:
+    AudioEffectClouds& grain() override { return grain_stream; }
+    void SetMixGains(float dry, float wet) override {
+        for (int ch = 0; ch < Channels; ch++) {
+            mixer[ch].gain(DRY_CH, dry);
+            mixer[ch].gain(WET_CH, wet);
+        }
+    }
+
+private:
+    // DSP: one grain engine for all channels, plus a dry/wet mixer per channel.
+    static const uint8_t DRY_CH = 0;
+    static const uint8_t WET_CH = 1;
+
+    AudioEffectClouds grain_stream{
+        external_psram_size
+            ? AudioEffectClouds::CLOUDS_BUFFER_SAMPLES
+            : AudioEffectClouds::CLOUDS_BUFFER_SAMPLES / 2,
+        Channels };
+    AudioMixer<2> mixer[Channels];
 
     AudioPassthrough<Channels> input_stream;
     AudioPassthrough<Channels> output_stream;

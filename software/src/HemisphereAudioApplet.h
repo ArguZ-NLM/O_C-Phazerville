@@ -42,6 +42,9 @@ public:
   virtual AudioStream* OutputStream() = 0;
   virtual void mainloop() {}
   virtual void OnButtonLongPress() {}
+  // Optional 5th data word for applets that outgrow CONFIG_SIZE: return a
+  // member to fill in OnDataRequest() and read in OnDataReceive().
+  virtual uint64_t *ExtraData() { return nullptr; }
 
   virtual void OnDataReceive(uint64_t data) {
     Serial.println(
