@@ -27,6 +27,15 @@ static uint8_t sel = 0;
 static int8_t cursor = 0;
 static constexpr int8_t kLastCursor = 5;
 
+// MANAGER page stays hidden until A+B+X+Y are held for 3 s; not saved
+static bool manager_unlocked = false;
+static constexpr uint16_t kUnlockButtons =
+    CONTROL_BUTTON_A | CONTROL_BUTTON_B | CONTROL_BUTTON_X | CONTROL_BUTTON_Y;
+static constexpr uint32_t kUnlockHoldMs = 3000;
+static uint32_t unlock_hold_ms = 0;
+static bool unlock_fired = false;
+FLASHMEM static int8_t last_cursor() { return manager_unlocked ? kLastCursor : kLastCursor - 1; }
+
 static bool active_mode = false;
 static bool mode_dirty = false;
 
@@ -102,8 +111,8 @@ FLASHMEM void Init() {
   if (PhzConfig::getValue(kNextTrigKey, v) && v <= 4) next_trig = (uint8_t)v;
   v = 0;
   if (PhzConfig::getValue(kLastTrigKey, v) && v <= 4) last_trig = (uint8_t)v;
-  v = 0;
-  active_mode = PhzConfig::getValue(kActiveModeKey, v) && v == 1;
+  // always boot passive
+  active_mode = false;
   const int last = PresetEngine::BusSlot();
   if (last >= 0) sel = (uint8_t)last;
   link_bank_edit = PresetEngine::QuadLinkBank();
@@ -221,13 +230,20 @@ FLASHMEM __attribute__((noinline)) bool HandleEvent(const UI::Event &event) {
     return true;
   }
 
+  // all four held: swallow their releases so A/B don't close the screen
+  if (event.type == UI::EVENT_BUTTON_DOWN &&
+      (event.mask & kUnlockButtons) == kUnlockButtons) {
+    ui.IgnoreUntilRelease(kUnlockButtons);
+    return true;
+  }
+
   if (event.control == CONTROL_BUTTON_UP || event.control == CONTROL_BUTTON_DOWN) {
     if (event.type == UI::EVENT_BUTTON_PRESS) Exit();
     return true;
   }
 
   if (event.control == CONTROL_ENCODER_L) {
-    cursor = constrain(cursor + (event.value > 0 ? 1 : -1), 0, kLastCursor);
+    cursor = constrain(cursor + (event.value > 0 ? 1 : -1), 0, last_cursor());
     return true;
   }
   if (event.control == CONTROL_ENCODER_R) {
@@ -358,7 +374,7 @@ FLASHMEM void Draw() {
   graphics.setPrintPos(4, 2);
   static const char *const kTitles[] = { "P R E S E T S", "B A N K S", "M A N A G E R" };
   graphics.print(kTitles[page]);
-  for (int i = 0; i < 3; ++i) {
+  for (int i = 0; i < (manager_unlocked ? 3 : 2); ++i) {
     graphics.drawCircle(110 + 6 * i, 5, 2);
     if (i == page) graphics.drawRect(109 + 6 * i, 4, 3, 3);
   }
@@ -551,8 +567,35 @@ FLASHMEM static void cancel_recall_hold() {
   ui.IgnoreUntilRelease(CONTROL_BUTTON_R);
 }
 
+FLASHMEM __attribute__((noinline)) static void toggle_manager_page() {
+  manager_unlocked = !manager_unlocked;
+  if (!manager_unlocked) {
+    if (active_mode) { active_mode = false; mode_dirty = true; }
+    if (cursor > last_cursor()) cursor = last_cursor();
+  }
+  set_banner(manager_unlocked ? "MANAGER UNLOCKED" : "MANAGER HIDDEN", 0);
+}
+
+FLASHMEM __attribute__((noinline)) static void poll_unlock_combo() {
+  const bool held = active &&
+      ui.read_immediate(CONTROL_BUTTON_A) && ui.read_immediate(CONTROL_BUTTON_B) &&
+      ui.read_immediate(CONTROL_BUTTON_X) && ui.read_immediate(CONTROL_BUTTON_Y);
+  if (!held) {
+    unlock_hold_ms = 0;
+    unlock_fired = false;
+    return;
+  }
+  touch_activity();
+  if (!unlock_hold_ms) unlock_hold_ms = millis();
+  else if (!unlock_fired && millis() - unlock_hold_ms >= kUnlockHoldMs) {
+    unlock_fired = true;
+    toggle_manager_page();
+  }
+}
+
 void Task() {
   if (!Buchla200eHardware()) return;
+  poll_unlock_combo();
 
   if (active_mode && PresetBus::WpmPresent()) {
     active_mode = false;
