@@ -23,7 +23,8 @@
 // #define OFFSET_QUANT_MAX_CV_INPUT (9216 + NorthernLightModular*(4*12<<7)) // 6V or 10V
 
 // just 20/24 simplifies to 5/6, but we want _just_ over 5v. 
-#define OFFSET_QUANT_MAX_CV_INPUT (HEMISPHERE_MAX_INPUT_CV * 40 / 48)
+// Buchla: the full 10V spans the range
+#define OFFSET_QUANT_MAX_CV_INPUT (NorthernLightModular ? HEMISPHERE_MAX_INPUT_CV : (HEMISPHERE_MAX_INPUT_CV * 40 / 48))
 
 enum RangeMode : uint8_t {
     RANGE_FULL,   // Full passthrough

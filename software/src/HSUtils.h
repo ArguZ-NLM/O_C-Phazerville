@@ -20,7 +20,8 @@
 #define HEMISPHERE_CENTER_CV ((HEMISPHERE_MAX_CV-HEMISPHERE_MIN_CV)/2)
 #define HEMISPHERE_3V_CV (3 * ONE_OCTAVE)
 #define HEMISPHERE_CENTER_INPUT_CV (NorthernLightModular*HEMISPHERE_MAX_CV/2)
-#define HEMISPHERE_MAX_INPUT_CV (6*ONE_OCTAVE + NorthernLightModular*(4*ONE_OCTAVE)) // 6V or 10V
+// Buchla inputs are scaled 1.2V per octave, so 10V reads as 10/1.2 octaves
+#define HEMISPHERE_MAX_INPUT_CV (NorthernLightModular ? (10*ONE_OCTAVE*10/12) : (6*ONE_OCTAVE)) // 6V or 10V
 #define HEMISPHERE_CENTER_DETENT 80
 #define HEMISPHERE_CLOCK_TICKS 17 // one millisecond
 #define HEMISPHERE_CURSOR_TICKS 5000
