@@ -82,6 +82,7 @@ public:
         const int hint = OC::PresetEngine::ConsumeQuadrantsRecallHint();
         if (hint >= 0) {
             bank_num = (uint8_t)hint;
+            scratch_bank = 0;
             preset_id = -1;
             queued_preset = -1;
         }
@@ -89,13 +90,16 @@ public:
 
         if (preset_id < 0)
           LoadFromPreset(0);
+        if (config_page == LOADSAVE_POPUP) leave_scratch_bank();
 
         for (auto& env : HS::env_) env.reset();
     }
     void Suspend() {
         if (preset_id >= 0) {
-            if (HS::auto_save_enabled)
+            if (HS::auto_save_enabled) {
+              return_to_scratch();
               StoreToPreset(preset_id);
+            }
             // TODO
             //OnSendSysEx();
         }
@@ -208,6 +212,7 @@ public:
     void LoadFromPreset(int id);
     FLASHMEM void load_from_preset(int id) {
         preset_id = id;
+        scratch_bank = 0;
         note_preset_synced();
 
         uint16_t preset_key = id << 11;
@@ -951,8 +956,11 @@ public:
       } else {
         SetConfigPageFromCursor();
         if (config_page == LOADSAVE_POPUP && bank_num != 0) {
-          bank_num = 0;
-          SetBank(0);
+          leave_scratch_bank();
+          if (bank_num != 0) {
+            bank_num = 0;
+            SetBank(0);
+          }
         }
       }
     }
@@ -961,10 +969,19 @@ public:
       config_cursor = LOAD_PRESET;
       preset_cursor = preset_id + 1;
     }
+    // browsing away from a recalled slot: the live state still belongs to the
+    // scratch bank, so automatic saves must go back there, not into bank 0
     void leave_scratch_bank() {
       if (bank_num < 100) return;
+      scratch_bank = bank_num;
       bank_num = 0;
       SetBank(0);
+    }
+    void return_to_scratch() {
+      if (!scratch_bank) return;
+      bank_num = scratch_bank;
+      scratch_bank = 0;
+      SetBank(bank_num);
     }
 
     // this toggles the view on a given side
@@ -1049,6 +1066,7 @@ protected:
 private:
     char bank_filename[16] = "BANK_000.DAT";
     uint8_t bank_num = 0;
+    uint8_t scratch_bank = 0; // set while browsing away from the scratch bank
     int queued_preset = -1;
     int preset_cursor = 0;
     HemisphereApplet *active_applet[4]; // Pointers to actual applets
@@ -2152,6 +2170,7 @@ FLASHMEM void AppQuadrants::HandleAppEvent(OC::AppEvent event) {
 
     case OC::APP_EVENT_FLUSH:
         if (preset_id >= 0) {
+            return_to_scratch();
             StoreToPreset(preset_id);
             PhzConfig::setValue(253, (uint64_t)preset_id);
         }
@@ -2501,6 +2520,7 @@ void AppQuadrants::HandleEncoderEvent(const UI::Event &event) {
 
 FLASHMEM void AppQuadrants::store_to_preset(int id) {
     preset_id = id;
+    scratch_bank = 0;
     // preset id is upper 5 bits - 32 presets per bank
     const uint16_t preset_key = id << 11;
 
