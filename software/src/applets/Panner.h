@@ -82,8 +82,14 @@ void Panner::Controller() {
         else pos = left_gate ? 0 : PANNER_MAX_VALUE;
     } else {
         pos = base_position;
-        // modify pos with CV2 using standard method
-        Modulate(pos, 1, 0, PANNER_MAX_VALUE);
+        if (NLMSerge) {
+            // Serge: the whole -5..+5V span sweeps the full pan range
+            pos = constrain(pos + Proportion(DetentedIn(1), 10 * ONE_OCTAVE, PANNER_MAX_VALUE),
+                            0, PANNER_MAX_VALUE);
+        } else {
+            // modify pos with CV2 using standard method
+            Modulate(pos, 1, 0, PANNER_MAX_VALUE);
+        }
     }
 
     Out(0, Proportion(PANNER_MAX_VALUE - pos, PANNER_MAX_VALUE, signal));  // OUT1 = left
