@@ -34,6 +34,8 @@ typedef enum {
   BUS200E_OP_QUERY_REPLY,
   BUS200E_OP_XFER_DONE,
   BUS200E_OP_LOAD_ACK,
+  BUS200E_OP_I2C_DIS,
+  BUS200E_OP_I2C_EN,
 } Bus200eOp;
 
 typedef struct {
@@ -79,6 +81,8 @@ void Bus200eSuppressFrame(const uint8_t *bytes, uint8_t n);
 void Bus200eTask(void);
 
 int Bus200eRemoteEnabled(void);
+int Bus200eI2CAccessEnabled(void);
+int Bus200eManagerSeen(void);
 int Bus200eJobActive(void);
 const Bus200eStats *Bus200eGetStats(void);
 

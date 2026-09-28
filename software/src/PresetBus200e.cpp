@@ -27,6 +27,9 @@ static uint8_t  suppress_buf[FRAME_MAX];
 static uint32_t suppress_at_ms;
 static uint8_t  module_addr = BUS200E_DEFAULT_MODULE_ADDR;
 static uint8_t  query_pending;
+static uint8_t  i2c_access;
+static uint32_t i2c_dis_ms;
+static uint8_t  manager_seen;
 
 static struct {
   uint8_t  active;
@@ -54,6 +57,13 @@ BUS_CODE int Bus200eLogRead(uint32_t n_back, Bus200eCmd *out) {
 }
 
 int Bus200eRemoteEnabled(void) { return remote_enabled; }
+int Bus200eManagerSeen(void) { return manager_seen; }
+
+// 225e asked everyone to stay off the bus; give up waiting after 30 s
+BUS_CODE int Bus200eI2CAccessEnabled(void) {
+  if (!i2c_access && now_ms - i2c_dis_ms > 30000) i2c_access = 1;
+  return i2c_access;
+}
 uint32_t Bus200eLastTransferMs(void) { return last_transfer_ms; }
 void Bus200eSetNow(uint32_t ms) { now_ms = ms; }
 
@@ -81,6 +91,8 @@ BUS_CODE void Bus200eInit(const Bus200eOps *ops) {
   last_transfer_ms = 0;
   suppress_len = 0;
   query_pending = 0;
+  i2c_access = 1;
+  manager_seen = 0;
   memset(&job, 0, sizeof(job));
   memset(&stats, 0, sizeof(stats));
   memset(log_ring, 0, sizeof(log_ring));
@@ -93,6 +105,8 @@ BUS_CODE static void dispatch(Bus200eCmd *c) {
   switch (c->op) {
     case BUS200E_OP_REMOTE_EN:  remote_enabled = 1; break;
     case BUS200E_OP_REMOTE_DIS: remote_enabled = 0; break;
+    case BUS200E_OP_I2C_DIS: i2c_access = 0; i2c_dis_ms = now_ms; break;
+    case BUS200E_OP_I2C_EN:  i2c_access = 1; break;
 
     case BUS200E_OP_RECALL:
       if (remote_enabled && c->arg < BUS200E_BUS_PRESETS &&
@@ -183,6 +197,7 @@ BUS_CODE static void parse_frame(void) {
 
   if (n >= 4 && f[2] == 0x22 && f[0] == n - 1) {
     stats.frames_long++;
+    manager_seen = 1;
     c.mod_addr = f[1];
     switch (f[3]) {
       case 0x01: c.op = BUS200E_OP_RECALL; c.arg = (n > 4) ? f[4] : 0; break;
@@ -191,6 +206,8 @@ BUS_CODE static void parse_frame(void) {
       case 0x16: c.op = BUS200E_OP_REMOTE_EN;  break;
       case 0x17: c.op = BUS200E_OP_REMOTE_DIS; break;
       case 0x1A: c.op = BUS200E_OP_QUERY;      break;
+      case 0x1D: c.op = BUS200E_OP_I2C_DIS;    break;
+      case 0x1E: c.op = BUS200E_OP_I2C_EN;     break;
       case 0x0F:
         if (n >= 8) {
           c.op = (f[4] >= 0xF8) ? BUS200E_OP_CLOCK : BUS200E_OP_MIDI;

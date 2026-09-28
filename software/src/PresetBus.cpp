@@ -293,7 +293,7 @@ static uint8_t wpm_misses = 0;
 static uint32_t wpm_last_probe_ms = 0;
 static uint32_t wpm_probes = 0;
 
-bool WpmPresent() { return wpm_present; }
+bool WpmPresent() { return wpm_present || Bus200eManagerSeen(); }
 
 FLASHMEM static void probe_wpm() {
   if (card_serving && card_addr7 == BUS200E_CARD_BASE) return;
@@ -833,6 +833,7 @@ FLASHMEM static bool tx_gate_open() {
       && now - last_bbf_ms < FOREIGN_XFER_GAP_MS)
     return false;
   if (LPI2C1_MSR & LPI2C_MSR_BBF) return false;
+  if (!Bus200eI2CAccessEnabled()) return false;
   return true;
 }
 
@@ -898,8 +899,9 @@ FLASHMEM void DebugDump() {
     const char *dialect = (d->frames_long || d->frames_short)
         ? (d->frames_long >= d->frames_short ? "v1/long" : "v2/short")
         : "unknown";
-    Serial.printf("wpm=%s owner_0x50=%s dialect=%s (long=%lu short=%lu) probes=%lu\n",
+    Serial.printf("wpm=%s 225e_seen=%d i2c_access=%d owner_0x50=%s dialect=%s (long=%lu short=%lu) probes=%lu\n",
                   wpm_present ? "present" : "absent",
+                  Bus200eManagerSeen(), Bus200eI2CAccessEnabled(),
                   wpm_present ? "WPM"
                   : (card_serving && card_addr7 == BUS200E_CARD_BASE) ? "US(card)"
                   : "none",
@@ -973,14 +975,14 @@ FLASHMEM void DebugDump() {
   static const char *const opnames[] = {
     "none", "RECALL", "SAVE", "REMOTE_EN", "REMOTE_DIS", "POLL_DONE",
     "QUERY", "BACKUP", "RESTORE", "MIDI", "CLOCK", "UNKNOWN", "DROPPED",
-    "QRY_REPLY", "XFER_DONE", "LOAD_ACK",
+    "QRY_REPLY", "XFER_DONE", "LOAD_ACK", "I2C_DIS", "I2C_EN",
   };
   const uint32_t total = Bus200eLogTotal();
   Serial.printf("decoded commands (%lu total, newest first):\n", total);
   Bus200eCmd c;
   for (uint32_t i = 0; i < 10 && Bus200eLogRead(i, &c); ++i) {
     Serial.printf("  %-10s arg=%u mod=%02X card=%02X off=%04X\n",
-                  c.op <= BUS200E_OP_XFER_DONE ? opnames[c.op] : "?",
+                  c.op < sizeof(opnames) / sizeof(opnames[0]) ? opnames[c.op] : "?",
                   c.arg, c.mod_addr,
                   c.card_lo, c.mem_off);
   }
