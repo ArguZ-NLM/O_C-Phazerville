@@ -20,6 +20,7 @@ static uint8_t  in_frame;
 static uint8_t  frame_poisoned;
 
 static uint8_t  remote_enabled;
+static uint8_t  follow = 1;  // our own remote switch, on top of the 225e's
 static uint32_t now_ms;
 static uint32_t last_transfer_ms;
 static uint8_t  suppress_len;
@@ -30,6 +31,7 @@ static uint8_t  query_pending;
 static uint8_t  i2c_access;
 static uint32_t i2c_dis_ms;
 static uint8_t  manager_seen;
+static uint32_t xpm_ms;  // last hello from another Xeno in manager mode
 
 static struct {
   uint8_t  active;
@@ -57,7 +59,10 @@ BUS_CODE int Bus200eLogRead(uint32_t n_back, Bus200eCmd *out) {
 }
 
 int Bus200eRemoteEnabled(void) { return remote_enabled; }
+void Bus200eSetFollow(int on) { follow = on ? 1 : 0; }
+int Bus200eFollow(void) { return follow; }
 int Bus200eManagerSeen(void) { return manager_seen; }
+int Bus200eXpmSeen(void) { return xpm_ms && now_ms - xpm_ms < 6000; }
 
 // 225e asked everyone to stay off the bus; give up waiting after 30 s
 BUS_CODE int Bus200eI2CAccessEnabled(void) {
@@ -93,6 +98,7 @@ BUS_CODE void Bus200eInit(const Bus200eOps *ops) {
   query_pending = 0;
   i2c_access = 1;
   manager_seen = 0;
+  xpm_ms = 0;
   memset(&job, 0, sizeof(job));
   memset(&stats, 0, sizeof(stats));
   memset(log_ring, 0, sizeof(log_ring));
@@ -109,13 +115,13 @@ BUS_CODE static void dispatch(Bus200eCmd *c) {
     case BUS200E_OP_I2C_EN:  i2c_access = 1; break;
 
     case BUS200E_OP_RECALL:
-      if (remote_enabled && c->arg < BUS200E_BUS_PRESETS &&
+      if (remote_enabled && follow && c->arg < BUS200E_BUS_PRESETS &&
           bus_ops && bus_ops->recall_preset)
         bus_ops->recall_preset(c->arg);
       break;
 
     case BUS200E_OP_SAVE:
-      if (remote_enabled && c->arg < BUS200E_BUS_PRESETS &&
+      if (remote_enabled && follow && c->arg < BUS200E_BUS_PRESETS &&
           bus_ops && bus_ops->save_preset)
         bus_ops->save_preset(c->arg);
       break;
@@ -195,9 +201,28 @@ BUS_CODE static void parse_frame(void) {
     return;
   }
 
+  if (n == 5 && f[0] == 4 && f[1] == BUS200E_XPM_ADDR && f[2] == BUS200E_XPM_ADDR &&
+      f[3] == BUS200E_XPM_HELLO) {
+    xpm_ms = now_ms ? now_ms : 1;
+    return;
+  }
+
+  // MIDI packets from other senders (e.g. 218e at 0x70)
+  if (n >= 8 && f[0] == n - 1 && f[1] == 0x00 && f[2] != 0x22 && f[3] == 0x0F) {
+    c.mod_addr = f[2];
+    c.op = (f[4] >= 0xF8) ? BUS200E_OP_CLOCK : BUS200E_OP_MIDI;
+    c.arg = f[4];
+    c.card_lo = f[6];
+    c.mem_off = f[7];
+    if (bus_ops && bus_ops->midi_rx) bus_ops->midi_rx(f[4], f[6], f[7]);
+    dispatch(&c);
+    return;
+  }
+
   if (n >= 4 && f[2] == 0x22 && f[0] == n - 1) {
     stats.frames_long++;
-    manager_seen = 1;
+    // a Xeno manager also sends as 0x22; only count it as a 225e without its hello
+    if (!xpm_ms || now_ms - xpm_ms > 10000) manager_seen = 1;
     c.mod_addr = f[1];
     switch (f[3]) {
       case 0x01: c.op = BUS200E_OP_RECALL; c.arg = (n > 4) ? f[4] : 0; break;

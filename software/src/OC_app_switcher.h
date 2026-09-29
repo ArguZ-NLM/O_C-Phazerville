@@ -52,6 +52,7 @@ public:
   ~AppSwitcher() { }
 
   bool Init(bool reset_settings);
+  void FactoryReset();
 
   void set_current_app(size_t index);
   inline AppBase *current_app() const { return static_cast<AppBase *>(current_app_.instance); }

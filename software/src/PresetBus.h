@@ -42,6 +42,9 @@ void BroadcastRecall(uint8_t slot);
 bool BroadcastQueued();
 
 bool WpmPresent();
+const char *ManagerName();
+void SetFollow(bool on);
+bool Follow();
 
 int CardServeEnable(bool on);
 bool CardServing();
@@ -89,6 +92,9 @@ inline void BroadcastSave(uint8_t) {}
 inline void BroadcastRecall(uint8_t) {}
 inline bool BroadcastQueued() { return false; }
 inline bool WpmPresent() { return false; }
+inline const char *ManagerName() { return nullptr; }
+inline void SetFollow(bool) {}
+inline bool Follow() { return false; }
 inline int CardServeEnable(bool) { return -1; }
 inline bool CardServing() { return false; }
 inline int MasterBackup(uint8_t) { return -1; }
