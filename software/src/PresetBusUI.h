@@ -10,6 +10,7 @@ namespace PresetBusUI {
 
 void Init();
 bool Active();
+bool ActiveMode();
 void Enter();
 void Exit();
 bool HandleEvent(const UI::Event &);
@@ -20,6 +21,7 @@ void Task();
 
 inline void Init() {}
 inline bool Active() { return false; }
+inline bool ActiveMode() { return false; }
 inline void Enter() {}
 inline void Exit() {}
 inline bool HandleEvent(const UI::Event &) { return false; }

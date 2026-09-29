@@ -14,6 +14,7 @@
 #include "PresetBusCard.h"
 #include "CardSectors.h"
 #include "PresetEngine.h"
+#include "PresetBusUI.h"
 #include "OC_gpio.h"
 #include "OC_core.h"
 #include "PhzConfig.h"
@@ -25,6 +26,7 @@ namespace OC {
 namespace PresetBus {
 
 static constexpr uint16_t kAddrKey = (8 << 8) | 0x10;
+static constexpr uint16_t kFollowKey = (8 << 8) | 0x16;
 
 static constexpr uint16_t kRingSize = 256;
 static volatile uint16_t ring[kRingSize];
@@ -293,7 +295,25 @@ static uint8_t wpm_misses = 0;
 static uint32_t wpm_last_probe_ms = 0;
 static uint32_t wpm_probes = 0;
 
-bool WpmPresent() { return wpm_present || Bus200eManagerSeen(); }
+bool WpmPresent() { return wpm_present || Bus200eManagerSeen() || Bus200eXpmSeen(); }
+
+// nullptr when no manager has been seen
+const char *ManagerName() {
+  if (wpm_present) return "WPM";
+  if (Bus200eXpmSeen()) return "2X0";
+  if (Bus200eManagerSeen()) return "225e";
+  return nullptr;
+}
+
+bool Follow() { return Bus200eFollow(); }
+
+FLASHMEM void SetFollow(bool on) {
+  if (on == Follow()) return;
+  Bus200eSetFollow(on);
+  PhzConfig::load_config();
+  PhzConfig::setValue(kFollowKey, on ? 1 : 0);
+  PhzConfig::save_config();
+}
 
 FLASHMEM static void probe_wpm() {
   if (card_serving && card_addr7 == BUS200E_CARD_BASE) return;
@@ -691,7 +711,8 @@ static inline void bus_stuck_check() {
 }
 
 void QueueMidiTx(uint8_t type, uint8_t channel, uint8_t d1, uint8_t d2) {
-  if (!enabled) return;
+  // passive: listen only, never put MIDI on the bus
+  if (!enabled || !PresetBusUI::ActiveMode()) return;
   uint8_t status;
   if (type >= 0xF8) {
     status = type;
@@ -761,6 +782,22 @@ FLASHMEM static void pump_midi_tx() {
 
 static uint8_t query_tries = 0;
 
+// in manager mode, tell other Xenos every 2 s
+FLASHMEM static void pump_xpm_hello() {
+  static uint32_t last_ms = 0;
+  if (!PresetBusUI::ActiveMode()) { last_ms = 0; return; }
+  if (last_ms && millis() - last_ms < 2000) return;
+  if (!tx_gate_open()) return;
+  uint8_t f[5] = { 0x04, BUS200E_XPM_ADDR, BUS200E_XPM_ADDR, BUS200E_XPM_HELLO, 0xFF };
+  Wire.beginTransmission(0);
+  Wire.write(f, sizeof(f));
+  if (Wire.endTransmission() == 0) {
+    Bus200eSuppressFrame(f, sizeof(f));
+    drain_ring();
+  }
+  last_ms = millis() ? millis() : 1;
+}
+
 FLASHMEM static void try_query_reply() {
   if (!tx_gate_open()) return;
 
@@ -799,6 +836,9 @@ FLASHMEM void Init() {
   uint64_t addr = 0;
   if (PhzConfig::getValue(kAddrKey, addr) && addr > 0 && addr < 0x78)
     Bus200eSetModuleAddress((uint8_t)addr);
+  uint64_t fol = 1;
+  PhzConfig::getValue(kFollowKey, fol);
+  Bus200eSetFollow(fol != 0);
 
   LPI2C1_SCR = LPI2C_SCR_RST;
   LPI2C1_SCR = 0;
@@ -854,13 +894,18 @@ void Task() {
   if (LPI2C1_MSR & LPI2C_MSR_BBF) last_bbf_ms = millis() ? millis() : 1;
   card_task();
 
-  if (Bus200eQueryPending()) try_query_reply();
+  // passive: stay out of the 225e roll call
+  if (Bus200eQueryPending()) {
+    if (PresetBusUI::ActiveMode()) try_query_reply();
+    else Bus200eClearQueryPending();
+  }
   Bus200eTask();
   Bus200eMasterTask();
   Bus200eMasterQueryTask();
   report_query();
   pump_broadcast();
   pump_midi_tx();
+  pump_xpm_hello();
   probe_wpm();
   bus_stuck_check();
 }

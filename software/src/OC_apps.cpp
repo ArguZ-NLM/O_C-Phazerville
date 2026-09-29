@@ -669,6 +669,27 @@ bool AppSwitcher::Init(bool reset_settings) {
   return gs_restored;
 }
 
+// Reset from the Setup menu while running. Init() is boot-only: re-running it
+// re-initialises every app even when cancelled. Cancel now leaves everything
+// alone; confirm erases the settings and restarts the module.
+FLASHMEM
+void AppSwitcher::FactoryReset() {
+  if (!ui.ConfirmReset()) return;
+  EEPtr d = EEPROM_GLOBALSETTINGS_START;
+  size_t len = EEPROMStorage::LENGTH - EEPROM_GLOBALSETTINGS_START;
+  while (len--)
+    *d++ = 0;
+#ifdef __IMXRT1062__
+  PhzConfig::eraseFiles();
+#else
+  global_settings_storage.Init();
+#endif
+  app_data_storage.Init();
+  delay(100);
+  SCB_AIRCR = 0x05FA0004; // restart; boot then starts from defaults
+  while (true) {}
+}
+
 FLASHMEM
 void draw_save_message(uint8_t c) {
   GRAPHICS_BEGIN_FRAME(true);

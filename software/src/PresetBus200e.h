@@ -81,8 +81,15 @@ void Bus200eSuppressFrame(const uint8_t *bytes, uint8_t n);
 void Bus200eTask(void);
 
 int Bus200eRemoteEnabled(void);
+void Bus200eSetFollow(int on);
+int Bus200eFollow(void);
 int Bus200eI2CAccessEnabled(void);
 int Bus200eManagerSeen(void);
+int Bus200eXpmSeen(void);
+
+// "a Xeno is the manager": dest and src 0x75 (third-party), type 0x7A
+#define BUS200E_XPM_ADDR  0x75
+#define BUS200E_XPM_HELLO 0x7A
 int Bus200eJobActive(void);
 const Bus200eStats *Bus200eGetStats(void);
 

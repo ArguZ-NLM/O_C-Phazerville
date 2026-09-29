@@ -58,6 +58,7 @@ static uint32_t hold_start_ms = 0;
 static const uint32_t kStoreHoldMs = OC::Ui::kLongPressTicks;
 static const uint32_t kRecallHoldMs = OC::Ui::kLongPressTicks / 2;
 static const uint32_t kBankHoldMs = kStoreHoldMs * 3;
+static const uint32_t kManagerHoldMs = 3000;
 static uint32_t recall_hold_ms = 0;
 static bool recall_fired = false;
 static bool store_fired = false;
@@ -105,14 +106,17 @@ static uint32_t last_activity_ms = 0;
 FLASHMEM static void touch_activity() { last_activity_ms = millis(); }
 
 bool Active() { return active; }
+bool ActiveMode() { return active_mode; }
 
 FLASHMEM void Init() {
   uint64_t v = 0;
   if (PhzConfig::getValue(kNextTrigKey, v) && v <= 4) next_trig = (uint8_t)v;
   v = 0;
   if (PhzConfig::getValue(kLastTrigKey, v) && v <= 4) last_trig = (uint8_t)v;
-  // always boot passive
-  active_mode = false;
+  // passive unless active mode was chosen and saved; active keeps MANAGER visible
+  v = 0;
+  active_mode = PhzConfig::getValue(kActiveModeKey, v) && v == 1;
+  manager_unlocked = active_mode;
   const int last = PresetEngine::BusSlot();
   if (last >= 0) sel = (uint8_t)last;
   link_bank_edit = PresetEngine::QuadLinkBank();
@@ -281,27 +285,13 @@ FLASHMEM __attribute__((noinline)) bool HandleEvent(const UI::Event &event) {
       edit_mode = true;
     } else if (cursor == 4) {
       PresetEngine::SetQuadLinkEnabled(!PresetEngine::QuadLinkEnabled());
-    } else if (cursor == 5 && active_mode) {
-      active_mode = false;
-      mode_dirty = true;
-      set_banner("MODE PASSIVE", 0);
     }
     return true;
   }
   if (event.control == CONTROL_BUTTON_R) return true;
   if (event.control == CONTROL_BUTTON_L && event.type == UI::EVENT_BUTTON_LONG_PRESS) {
     if (cursor == 1 && sel_stored == 1) return true;
-    if (cursor == 5) {
-      if (!active_mode && PresetBus::WpmPresent()) {
-        set_banner2("MANAGER FOUND", "STAYING PASSIVE");
-      } else if (!active_mode) {
-        active_mode = true;
-        mode_dirty = true;
-        set_banner("MODE ACTIVE", 0);
-      }
-      store_fired = true;
-      return true;
-    }
+    if (cursor == 5) return true;
     if (cursor == 4) return true;
     store_selected();
     store_fired = true;
@@ -328,14 +318,16 @@ static const uint8_t kSeg[10] = {
   0b1111011,
 };
 
-FLASHMEM static void draw_7seg_mask(int dx, int dy, uint8_t m) {
-  if (m & 0b1000000) graphics.drawRect(dx + 2, dy,      8, 2);
-  if (m & 0b0100000) graphics.drawRect(dx + 10, dy + 2, 2, 8);
-  if (m & 0b0010000) graphics.drawRect(dx + 10, dy + 12, 2, 8);
-  if (m & 0b0001000) graphics.drawRect(dx + 2, dy + 20, 8, 2);
+// w = digit width in pixels (12 normal, narrower to fit three letters)
+FLASHMEM static void draw_7seg_mask(int dx, int dy, uint8_t m, int w = 12) {
+  const int h = w - 4, r = dx + w - 2;
+  if (m & 0b1000000) graphics.drawRect(dx + 2, dy,      h, 2);
+  if (m & 0b0100000) graphics.drawRect(r, dy + 2, 2, 8);
+  if (m & 0b0010000) graphics.drawRect(r, dy + 12, 2, 8);
+  if (m & 0b0001000) graphics.drawRect(dx + 2, dy + 20, h, 2);
   if (m & 0b0000100) graphics.drawRect(dx,     dy + 12, 2, 8);
   if (m & 0b0000010) graphics.drawRect(dx,     dy + 2,  2, 8);
-  if (m & 0b0000001) graphics.drawRect(dx + 2, dy + 10, 8, 2);
+  if (m & 0b0000001) graphics.drawRect(dx + 2, dy + 10, h, 2);
 }
 
 FLASHMEM static void draw_7seg(int dx, int dy, uint8_t digit) {
@@ -353,14 +345,10 @@ FLASHMEM static Page page_of(int8_t c) {
   return c <= 3 ? PAGE_PRESETS : (c == 4 ? PAGE_BANKS : PAGE_MANAGER);
 }
 
-static constexpr uint8_t kSegP = 0b1100111;
-static constexpr uint8_t kSegA = 0b1110111;
+static constexpr uint8_t kSegO = 0b1111110;
+static constexpr uint8_t kSegN = 0b1110110;
+static constexpr uint8_t kSegF = 0b1000111;
 
-FLASHMEM static const char *mode_row_label(int &sx) {
-  const char *lbl = active_mode ? "MODE ACTIVE" : "MODE PASSIVE";
-  sx = 64 - 3 * (int)strlen(lbl);
-  return lbl;
-}
 
 FLASHMEM static void draw_jack(int cx, int cy, bool active) {
   graphics.drawCircle(cx, cy, 3);
@@ -394,7 +382,14 @@ FLASHMEM __attribute__((noinline)) void Draw() {
     draw_7seg(50, 16, link_bank_edit / 10);
     draw_7seg(66, 16, link_bank_edit % 10);
   } else {
-    draw_7seg_mask(58, 16, active_mode ? kSegA : kSegP);
+    if (active_mode) {
+      draw_7seg_mask(50, 16, kSegO);
+      draw_7seg_mask(66, 16, kSegN);
+    } else {
+      draw_7seg_mask(48, 16, kSegO, 9);
+      draw_7seg_mask(60, 16, kSegF, 9);
+      draw_7seg_mask(72, 16, kSegF, 9);
+    }
   }
 
   const char *l_top = "STORE", *l_hint = "hold";
@@ -406,38 +401,37 @@ FLASHMEM __attribute__((noinline)) void Draw() {
     l_top = "EDIT"; l_hint = "click";
   } else if (page == PAGE_BANKS) {
     l_top = "EXPORT"; r_top = "IMPORT";
-  } else if (page == PAGE_MANAGER) {
-    if (!active_mode && PresetBus::WpmPresent()) {
-      l_top = "LOCKED"; l_hint = "";
-    } else {
-      l_top = "SWITCH"; l_hint = active_mode ? "click" : "hold";
+  }
+  // every page: three lines centered in the columns left and right of the box;
+  // the middle line gives way to the progress bar while holding
+  auto column = [](int cx, const char *const *lines, bool holding) {
+    static const int ys[] = { 16, 26, 35 };
+    for (int i = 0; i < 3; ++i) {
+      if (!lines[i] || !lines[i][0] || (holding && i == 1)) continue;
+      graphics.setPrintPos(cx - 3 * (int)strlen(lines[i]), ys[i]);
+      graphics.print(lines[i]);
     }
-    r_top = active_mode ? "WHOLE" : "LOCAL";
-    r_hint = active_mode ? "case" : "only";
-  }
-  graphics.setPrintPos(4, 16);
-  graphics.print(l_top);
-  graphics.setPrintPos(88, 16);
-  graphics.print(r_top);
-  if (!(hold_start_ms && !edit_mode)) {
-    graphics.setPrintPos(7, 26);
-    graphics.print(l_hint);
-  }
-  if (!(recall_hold_ms && !edit_mode)) {
-    graphics.setPrintPos(91, 26);
-    graphics.print(r_hint);
-  }
-  // which encoder does it
+  };
   auto is_action = [](const char *h) {
     return !strcmp(h, "hold") || !strcmp(h, "click") || !strcmp(h, "turn");
   };
-  if (is_action(l_hint)) {
-    graphics.setPrintPos(4, 35);
-    graphics.print("L enc");
-  }
-  if (is_action(r_hint)) {
-    graphics.setPrintPos(88, 35);
-    graphics.print("R enc");
+  const bool l_holding = hold_start_ms && !edit_mode;
+  const bool r_holding = recall_hold_ms && !edit_mode;
+  if (page == PAGE_MANAGER && !edit_mode) {
+    static const char *const kLeft[] = { "MODE", "hold", "L enc" };
+    static const char *const kRight[] = { "EXIT", "hold", "R enc" };
+    column(22, kLeft, l_holding);
+    column(106, kRight, r_holding);
+    const char *l_line = active_mode ? "L to deactivate" : "L to activate";
+    graphics.setPrintPos(64 - 3 * (int)strlen(l_line), 44);
+    graphics.print(l_line);
+    graphics.setPrintPos(64 - 3 * 13, 54);
+    graphics.print("R to exit XPM");
+  } else {
+    const char *const left[] = { l_top, l_hint, is_action(l_hint) ? "L enc" : nullptr };
+    const char *const right[] = { r_top, r_hint, is_action(r_hint) ? "R enc" : nullptr };
+    column(22, left, l_holding);
+    column(106, right, r_holding);
   }
 
   if (edit_mode) {
@@ -452,10 +446,6 @@ FLASHMEM __attribute__((noinline)) void Draw() {
     graphics.setPrintPos(sx, 44);
     graphics.print(lbl);
   } else if (page == PAGE_MANAGER) {
-    int sx;
-    const char *lbl = mode_row_label(sx);
-    graphics.setPrintPos(sx, 44);
-    graphics.print(lbl);
   } else {
     const char *nm = PresetEngine::SlotName(sel);
     if (!sel_stored) {
@@ -488,28 +478,23 @@ FLASHMEM __attribute__((noinline)) void Draw() {
     const char *hint = PresetEngine::QuadLinkEnabled() ? "click to unlink" : "click to link";
     graphics.setPrintPos(64 - 3 * (int)strlen(hint), 54);
     graphics.print(hint);
-  } else if (page == PAGE_MANAGER) {
-    const bool mgr = PresetBus::WpmPresent();
-    const char *txt = mgr ? "MANAGER FOUND" : "NO MANAGER";
-    const int sx = 64 - 3 * (int)strlen(txt);
-    draw_jack(sx - 6, 57, mgr);
-    graphics.setPrintPos(sx, 54);
-    graphics.print(txt);
   }
 
   if (hold_start_ms && !edit_mode) {
     const uint32_t held = millis() - hold_start_ms;
-    const uint32_t full = (page == PAGE_BANKS) ? kBankHoldMs : kStoreHoldMs;
-    graphics.drawFrame(4, 26, 34, 5);
+    const uint32_t full = (page == PAGE_BANKS) ? kBankHoldMs
+                        : (page == PAGE_MANAGER) ? kManagerHoldMs : kStoreHoldMs;
+    graphics.drawFrame(5, 26, 34, 5);
     const uint32_t w = (held >= full) ? 32 : (held * 32) / full;
-    if (w) graphics.drawRect(5, 27, w, 3);
+    if (w) graphics.drawRect(6, 27, w, 3);
   }
   if (recall_hold_ms && !edit_mode) {
     const uint32_t held = millis() - recall_hold_ms;
-    graphics.drawFrame(90, 26, 34, 5);
-    const uint32_t full = (page == PAGE_BANKS) ? kBankHoldMs : kRecallHoldMs;
+    graphics.drawFrame(89, 26, 34, 5);
+    const uint32_t full = (page == PAGE_BANKS) ? kBankHoldMs
+                        : (page == PAGE_MANAGER) ? kManagerHoldMs : kRecallHoldMs;
     const uint32_t w = (held >= full) ? 32 : (held * 32) / full;
-    if (w) graphics.drawRect(91, 27, w, 3);
+    if (w) graphics.drawRect(90, 27, w, 3);
   }
 
   if (edit_mode) {
@@ -567,8 +552,37 @@ FLASHMEM static void cancel_recall_hold() {
   ui.IgnoreUntilRelease(CONTROL_BUTTON_R);
 }
 
+FLASHMEM __attribute__((noinline)) static void toggle_active_mode() {
+  if (active_mode) {
+    active_mode = false;
+    set_banner("MANAGER OFF", 0);
+  } else {
+    active_mode = true;
+    set_banner("MANAGER ON", 0);
+  }
+  mode_dirty = true;
+  persist_assignments();
+}
+
+// right hold on MANAGER: passive, hide the page, save, back to presets
+FLASHMEM __attribute__((noinline)) static void exit_manager() {
+  active_mode = false;
+  manager_unlocked = false;
+  mode_dirty = true;
+  persist_assignments();
+  cursor = 0;
+  sel_stored = -1;
+  set_banner("MANAGER OFF", 0);
+}
+
 FLASHMEM __attribute__((noinline)) static void toggle_manager_page() {
+  // another manager on the bus: the page stays hidden
+  if (!manager_unlocked && PresetBus::WpmPresent()) {
+    set_banner("MANAGER FOUND", 0);
+    return;
+  }
   manager_unlocked = !manager_unlocked;
+  if (manager_unlocked) cursor = kLastCursor;  // straight to the MANAGER page
   if (!manager_unlocked) {
     if (active_mode) { active_mode = false; mode_dirty = true; }
     if (cursor > last_cursor()) cursor = last_cursor();
@@ -593,13 +607,21 @@ FLASHMEM __attribute__((noinline)) static void poll_unlock_combo() {
   }
 }
 
-void Task() {
+FLASHMEM __attribute__((noinline)) void Task() {
   if (!Buchla200eHardware()) return;
+  // bus address: 22 (the manager's) when active, default when passive
+  static int8_t addr_mode = -1;
+  if (addr_mode != (int8_t)active_mode) {
+    addr_mode = active_mode;
+    PresetBus::SetModuleAddressRuntime(active_mode ? 0x22 : 0x3C);
+  }
   poll_unlock_combo();
 
-  if (active_mode && PresetBus::WpmPresent()) {
+  if ((active_mode || manager_unlocked) && PresetBus::WpmPresent()) {
+    if (active_mode) mode_dirty = true;
     active_mode = false;
-    mode_dirty = true;
+    manager_unlocked = false;
+    if (cursor > last_cursor()) cursor = 0;
     if (active) set_banner2("MANAGER FOUND", "NOW PASSIVE");
   }
   static uint32_t seen_opcount = 0;
@@ -641,8 +663,7 @@ void Task() {
   }
 
   if (active) {
-    const bool store_context = !edit_mode && !(cursor == 1 && sel_stored == 1) &&
-                               !(cursor == 5 && (active_mode || PresetBus::WpmPresent()));
+    const bool store_context = !edit_mode && !(cursor == 1 && sel_stored == 1);
     if (store_context && ui.read_deliberate(CONTROL_BUTTON_L)) {
       if (!hold_start_ms) {
         hold_start_ms = PresetEngine::StampMs();
@@ -651,21 +672,28 @@ void Task() {
         store_fired = true;
         const int n = PresetEngine::CopySlotsToBank(link_bank_edit);
         bank_copy_banner(false, n, link_bank_edit);
+      } else if (cursor == 5 && !store_fired &&
+                 millis() - hold_start_ms >= kManagerHoldMs) {
+        store_fired = true;
+        toggle_active_mode();
       }
     } else {
       hold_start_ms = 0;
       store_fired = false;
     }
 
-    if (!edit_mode && cursor != 5 && ui.read_deliberate(CONTROL_BUTTON_R)) {
-      const uint32_t threshold = (cursor == 4) ? kBankHoldMs : kRecallHoldMs;
+    if (!edit_mode && ui.read_deliberate(CONTROL_BUTTON_R)) {
+      const uint32_t threshold = (cursor == 5) ? kManagerHoldMs
+                               : (cursor == 4) ? kBankHoldMs : kRecallHoldMs;
       if (!recall_hold_ms) {
         recall_hold_ms = PresetEngine::StampMs();
         recall_fired = false;
       } else if (!recall_fired &&
                  (millis() - recall_hold_ms) >= threshold) {
         recall_fired = true;
-        if (cursor == 4) {
+        if (cursor == 5) {
+          exit_manager();
+        } else if (cursor == 4) {
           const int n = PresetEngine::CopyBankToSlots(link_bank_edit);
           bank_copy_banner(true, n, link_bank_edit);
           if (n >= 0) {
