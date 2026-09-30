@@ -24,7 +24,8 @@ public:
 
   static constexpr int VOLTAGE_INCREMENTS = 128;
   #define VOLTAGE_MIN (HEMISPHERE_MIN_CV / VOLTAGE_INCREMENTS)
-  #define VOLTAGE_MAX (HEMISPHERE_MAX_CV / VOLTAGE_INCREMENTS)
+  // 2X0 outputs top out at 10V (HEMISPHERE_MAX_INPUT_CV), not the 12V MAX_CV would show
+  #define VOLTAGE_MAX ((NorthernLightModular ? HEMISPHERE_MAX_INPUT_CV : HEMISPHERE_MAX_CV) / VOLTAGE_INCREMENTS)
 
     const char* applet_name() {
         return "Voltage";
