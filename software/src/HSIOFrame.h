@@ -488,8 +488,19 @@ struct alignas(32) MIDIFrame {
 
     NoteBuffer note_buffer[16]; // array of buffers to track all held notes on all channels
 
+    // Default maps: M10..M27 = CC10..CC27 on MIDI channel 1.
+    // Applied only when no map is set up at all, so user maps are never overwritten.
+    void DefaultMapsIfEmpty() {
+      for (int m = 0; m < MIDIMAP_MAX; ++m)
+        if (mapping[m].enabled()) return;
+      for (int cc = 10; cc <= 27 && cc <= MIDIMAP_MAX; ++cc) {
+        mapping[cc - 1].SetCC(cc);
+        mapping[cc - 1].SetChannel(0);
+      }
+      UpdateMidiChannelFilter();
+    }
+
     void Init() {
-      // TODO: populate with some sensible defaults
       for (int ch = 0; ch < MIDIMAP_MAX; ++ch) {
         mapping[ch].Init();
         mapping[ch].AdjustVoice(ch / 2 % DAC_CHANNEL_COUNT); // each quad is a unique voice

@@ -343,6 +343,7 @@ public:
           UnpackPackables(data, frame.MIDIState.mapping[midx]);
         }
         frame.MIDIState.UpdateMidiChannelFilter();
+        frame.MIDIState.DefaultMapsIfEmpty();
         frame.MIDIState.UpdateMaxPolyphony();
 
 #ifdef USB_GAMEPAD
