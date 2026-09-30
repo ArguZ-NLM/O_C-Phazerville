@@ -463,7 +463,7 @@ FLASHMEM void setup() {
     }
     cl = PhzConfig::myfs.open("CRASH.LOG", FILE_WRITE);
     if (cl) {
-      cl.printf("--- boot @ %lu ms ---\n", millis());
+      cl.printf("--- boot @ %lu ms, SRSR=0x%08lX ---\n", millis(), (unsigned long)boot_srsr);
       cl.write((const uint8_t *)crash_capture.buf, crash_capture.len);
       cl.close();
       Serial.println("CrashReport appended to CRASH.LOG");
@@ -562,7 +562,37 @@ static void RemoteControl(int sel) {
 }
 #endif // QUAD_CAPTURE
 
-void SerialHandler() {
+#if defined(__IMXRT1062__)
+// crash log + reset reason of this boot
+FLASHMEM __attribute__((noinline)) static void DumpCrashLog() {
+  Serial.printf(PSTR("SRSR=0x%08lX\n"), (unsigned long)boot_srsr);
+  File cl = PhzConfig::myfs.open(PSTR("CRASH.LOG"), FILE_READ);
+  if (cl) {
+    while (cl.available()) Serial.write(cl.read());
+    cl.close();
+  } else {
+    Serial.println(F("no CRASH.LOG"));
+  }
+  Serial.println(F("ENDLOG"));
+  Serial.flush();
+}
+#endif
+
+#if defined(__IMXRT1062__)
+FLASHMEM __attribute__((noinline)) static void ListAllFiles() {
+  Serial.printf(PSTR("SD card: %d\n"), SDcard_Ready ? 1 : 0);
+  Serial.println(F("-- LittleFS --"));
+  PhzConfig::listFiles();
+  if (SDcard_Ready) {
+    Serial.println(F("-- SD --"));
+    PhzConfig::listFiles(SD);
+  }
+  Serial.println(F("ENDLIST"));
+  Serial.flush();
+}
+#endif
+
+FLASHMEM __attribute__((noinline)) void SerialHandler() {
   static size_t cap_idx = 0;
   static elapsedMicros cap_send_time = 0;
   // check for request from PC to capture the screen
@@ -664,6 +694,14 @@ void SerialHandler() {
         case 'v':
           OC::PresetBus::SetVerbose(!OC::PresetBus::Verbose());
           Serial.printf("PresetBus verbose = %d\n", OC::PresetBus::Verbose());
+          break;
+#endif
+#if defined(__IMXRT1062__)
+        case 'X':
+          DumpCrashLog();
+          break;
+        case 'Y':
+          ListAllFiles();
           break;
 #endif
 #ifdef QUAD_CAPTURE
