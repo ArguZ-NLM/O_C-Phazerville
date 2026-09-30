@@ -34,6 +34,8 @@
 #define CV_MODE_FM    3
 #define CV_MODE_DROP_OR_BLEND  4
 
+#define BNC_MAX_LEVEL 15
+
 class BugCrack : public HemisphereApplet {
 public:
 
@@ -43,15 +45,18 @@ public:
     const uint8_t* applet_icon() { return PhzIcons::bugCrack; }
 
     void Start() {
-        tone_kick = 32;
+        tone_kick = 22;
         decay_kick = 60;
         punch = 50;
         decay_punch = 32;
 
-        tone_snare = 6;
-        decay_snare = 50; // Snare decay
-        snap = 55;
-        blend_snare = 31;
+        tone_snare = 14;
+        decay_snare = 54; // Snare decay
+        snap = 58;
+        blend_snare = 36;
+
+        level_kick = BNC_MAX_LEVEL;
+        level_snare = BNC_MAX_LEVEL;
 
         noise = random(0, (1<<12));
 
@@ -122,6 +127,10 @@ public:
         } else {
             _decay_punch = decay_punch;
         }
+        _level_kick = Proportion(level_kick, BNC_MAX_LEVEL, BNC_MAX_PARAM); // 0 = mute
+        if (cv_mode_kick == CV_MODE_ATTEN) {
+            _level_kick = constrain(_level_kick - cv_kick, 0, BNC_MAX_PARAM);
+        }
         if (Clock(CH_KICK, 0)) {
             SetEnvDecayKick(_decay_kick);
             SetEnvDecayPunch(_decay_punch);
@@ -140,9 +149,7 @@ public:
             }
             kick.SetFrequency(freq_kick);
             levels[0] = env_kick.Next();
-            if (cv_mode_kick == CV_MODE_ATTEN) {
-                levels[0] = Proportion(BNC_MAX_PARAM - cv_kick, BNC_MAX_PARAM, levels[0]);
-            }
+            levels[0] = Proportion(_level_kick, BNC_MAX_PARAM, levels[0]);
             bd_signal = Proportion(levels[0], HEMISPHERE_MAX_CV, kick.Next());
             // Because of overtones induced by the linear interpolation of the
             // sine wave vector oscilator, we have to low-pass filter the signal
@@ -171,6 +178,10 @@ public:
         } else {
             _blend_snare = blend_snare;
         }
+        _level_snare = Proportion(level_snare, BNC_MAX_LEVEL, BNC_MAX_PARAM); // 0 = mute
+        if (cv_mode_snare == CV_MODE_ATTEN) {
+            _level_snare = constrain(_level_snare - cv_snare, 0, BNC_MAX_PARAM);
+        }
         if (Clock(CH_SNARE, 0)) {
             SetEnvDecaySnare(_decay_snare);
             SetEnvDecaySnap(_decay_snare);
@@ -192,18 +203,17 @@ public:
 
             // noise levels
             levels[1] = env_noise.Next();
-            if (cv_mode_snare == CV_MODE_ATTEN) {
-                levels[1] = Proportion(BNC_MAX_PARAM - cv_snare, BNC_MAX_PARAM, levels[1]);
-            }
-            ns_signal = Proportion(levels[1], HEMISPHERE_3V_CV, noise);
+            levels[1] = Proportion(_level_snare, BNC_MAX_PARAM, levels[1]);
+            // same level as level*noise/3V on 5V hardware; on 10V hardware the
+            // old formula overflowed the 16-bit filter and the snare crackled
+            ns_signal = Proportion(levels[1], HEMISPHERE_MAX_CV, noise) * 5 / 3;
+            ns_signal = constrain(ns_signal, -32767, 32767);
             filter_sv.feed(ns_signal, (Proportion(_tone_snare, BNC_MAX_PARAM, 60000) + 100000), 500);
             ns_signal = filter_sv.get_bp();
 
             // osc levels
             levels[2] = env_snare.Next();
-            if (cv_mode_snare == CV_MODE_ATTEN) {
-                levels[2] = Proportion(BNC_MAX_PARAM - cv_snare, BNC_MAX_PARAM, levels[2]);
-            }
+            levels[2] = Proportion(_level_snare, BNC_MAX_PARAM, levels[2]);
             sd_signal = Proportion(levels[2], HEMISPHERE_3V_CV, snare.Next());
             sd_signal = filter_lp2.filter(sd_signal, freq_snare);
 
@@ -222,14 +232,14 @@ public:
     void View() final;
 
     void OnButtonPress() {
-      if (cursor == 10) mix_outs = !mix_outs;
+      if (cursor == 12) mix_outs = !mix_outs;
       else
         CursorToggle();
     }
 
     void OnEncoderMove(int direction) {
         if (!EditMode()) {
-            MoveCursor(cursor, direction, 10);
+            MoveCursor(cursor, direction, 12);
             return;
         }
 
@@ -248,23 +258,29 @@ public:
             decay_punch = constrain(decay_punch + direction, 0, BNC_MAX_PARAM);
             break;
         case 4:
+            level_kick = constrain(level_kick + direction, 0, BNC_MAX_LEVEL);
+            break;
+        case 5:
             cv_mode_kick = constrain(cv_mode_kick + direction, 0, 4);
             break;
 
         // Snare drum
-        case 5:
+        case 6:
             tone_snare = constrain(tone_snare + direction, 0, BNC_MAX_PARAM);
             break;
-        case 6:
+        case 7:
             decay_snare = constrain(decay_snare + direction, 0, BNC_MAX_PARAM);
             break;
-        case 7:
+        case 8:
             snap = constrain(snap + direction, 0, BNC_MAX_PARAM);
             break;
-        case 8:
+        case 9:
             blend_snare = constrain(blend_snare + direction, 0, BNC_MAX_PARAM);
             break;
-        case 9:
+        case 10:
+            level_snare = constrain(level_snare + direction, 0, BNC_MAX_LEVEL);
+            break;
+        case 11:
             cv_mode_snare = constrain(cv_mode_snare + direction, 0, 4);
             break;
         }
@@ -288,6 +304,14 @@ public:
         Pack(data, PackLocation {52,4}, cv_mode_snare);
 
         Pack(data, PackLocation {56, 1}, mix_outs);
+
+        // Levels were added later and squeezed into the free bits. They are
+        // stored as attenuation so older presets (all zeros there) load at full level.
+        const int atten_kick = BNC_MAX_LEVEL - level_kick;
+        const int atten_snare = BNC_MAX_LEVEL - level_snare;
+        Pack(data, PackLocation {57,4}, atten_kick);
+        Pack(data, PackLocation {61,3}, atten_snare & 0x7);
+        Pack(data, PackLocation {55,1}, atten_snare >> 3);
         return data;
     }
 
@@ -302,10 +326,14 @@ public:
         snap = Unpack(data, PackLocation {36,6});
         blend_snare = Unpack(data, PackLocation {42,6});
 
-        cv_mode_kick = constrain(Unpack(data, PackLocation {48,4}), 0, 4);
-        cv_mode_snare = constrain(Unpack(data, PackLocation {52,4}), 0, 4);
+        cv_mode_kick = constrain(Unpack(data, PackLocation {48,3}), 0, 4);
+        cv_mode_snare = constrain(Unpack(data, PackLocation {52,3}), 0, 4);
 
         mix_outs = Unpack(data, PackLocation {56,1});
+
+        level_kick = BNC_MAX_LEVEL - Unpack(data, PackLocation {57,4});
+        level_snare = BNC_MAX_LEVEL - (Unpack(data, PackLocation {61,3})
+                                       | (Unpack(data, PackLocation {55,1}) << 3));
     }
 
 protected:
@@ -362,10 +390,20 @@ private:
     int blend_snare;
     int _blend_snare;
 
+    int level_kick;
+    int _level_kick;
+    int level_snare;
+    int _level_snare;
+
     bool mix_outs = true;
 
     const char *CV_MODE_NAMES_BD[5] = {"atn", "ton", "dec", "FM", "dro"};
     const char *CV_MODE_NAMES_SN[5] = {"atn", "ton", "dec", "FM", "bln"};
+
+    const char *PARAM_LABELS[13] = {
+        "Kik Tone", "Kik Decay", "Kik Punch", "Kik Drop", "Kik Level", "Kik CV",
+        "Snr Tone", "Snr Decay", "Snr Snap", "Snr Blend", "Snr Level", "Snr CV",
+        "MixOut"};
 
     uint8_t cv_mode_kick;
     uint8_t cv_mode_snare;
@@ -373,6 +411,10 @@ private:
     void DrawInterface() {
         DrawDrumBody(1, _tone_kick, _decay_kick, _punch, _decay_punch, 0);
         DrawDrumBody(32, _tone_snare, _decay_snare, _snap, _blend_snare, 1);
+
+        // name shown in the header while editing
+        SetLabel(PARAM_LABELS[cursor]);
+        SetAux(false);
 
         switch (cursor) {
             // Kick drum
@@ -386,33 +428,49 @@ private:
                 gfxPrint(1, 55, "punch"); break;
             case 3:
                 gfxPrint(1, 55, "drop"); break;
-            case 4: // CV modes
+            case 4:
+                if (level_kick) {
+                    gfxPrint(1, 55, "lv");
+                    gfxPrint(level_kick);
+                } else {
+                    gfxPrint(1, 55, "mute");
+                }
+                break;
+            case 5: // CV modes
                 gfxIcon(1, 57, CV_ICON);
                 gfxPrint(10, 55, CV_MODE_NAMES_BD[cv_mode_kick]);
                 break;
 
             // Snare drum
-            case 5:
+            case 6:
                 gfxPrint(35, 55, Proportion(_tone_snare, BNC_MAX_PARAM, 600) + 100);
                 gfxIcon(54, 54, HERTZ_ICON);
                 break;
-            case 6:
-                gfxPrint(32, 55, "decay"); break;
             case 7:
-                gfxPrint(32, 55, "snap"); break;
+                gfxPrint(32, 55, "decay"); break;
             case 8:
+                gfxPrint(32, 55, "snap"); break;
+            case 9:
                 gfxPrint(32, 55, "blend"); break;
-            case 9: // CV modes
+            case 10:
+                if (level_snare) {
+                    gfxPrint(32, 55, "lv");
+                    gfxPrint(level_snare);
+                } else {
+                    gfxPrint(32, 55, "mute");
+                }
+                break;
+            case 11: // CV modes
                 gfxIcon(32, 57, CV_ICON);
                 gfxPrint(41, 55, CV_MODE_NAMES_SN[cv_mode_snare]);
                 break;
 
-            case 10: // mix outs @ B/D
+            case 12: // mix outs @ B/D
                 gfxPrint(1, 55, "MixOut:");
                 gfxIcon(50, 55, mix_outs ? CHECK_ON_ICON : CHECK_OFF_ICON);
                 break;
         }
-        if (EditMode()) gfxInvert(1 + (cursor<5?0:31), 54, 31, 9);
+        if (EditMode()) gfxInvert(1 + (cursor<6?0:31), 54, 31, 9);
 
         // Level indicators
         ForEachChannel(ch)
