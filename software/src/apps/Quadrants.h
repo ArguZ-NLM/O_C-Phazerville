@@ -76,6 +76,7 @@ public:
             scratch_bank = 0;
             preset_id = -1;
             queued_preset = -1;
+            preset_cursor = 0; // don't leave the selector open on the scratch bank
         }
         SetBank(bank_num);
 
