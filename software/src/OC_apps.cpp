@@ -624,6 +624,7 @@ bool AppSwitcher::Init(bool reset_settings) {
         HS::frame.MIDIState.mapping[i].apply_settings(global_settings.midi_maps[i]);
       }
       HS::frame.MIDIState.UpdateMidiChannelFilter();
+      HS::frame.MIDIState.DefaultMapsIfEmpty();
       HS::frame.MIDIState.UpdateMaxPolyphony();
     }
 #endif

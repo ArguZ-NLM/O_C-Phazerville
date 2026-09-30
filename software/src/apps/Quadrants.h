@@ -332,6 +332,7 @@ public:
           UnpackPackables(data, frame.MIDIState.mapping[midx]);
         }
         frame.MIDIState.UpdateMidiChannelFilter();
+        frame.MIDIState.DefaultMapsIfEmpty();
         frame.MIDIState.UpdateMaxPolyphony();
 
         // User Patterns aka Sequences
