@@ -74,9 +74,14 @@ public:
 
                 for (int n = 0; n < 2; n++) {
                   int sample = In(n);
-                  if (!NorthernLightModular)
-                    sample = (sample + HEMISPHERE_MAX_INPUT_CV) / 2;
-                  sample = constrain(Proportion(sample, HEMISPHERE_MAX_INPUT_CV, 255), 0, 255);
+                  if (NLMSerge) // -5V..+5V
+                    sample = Proportion(sample + 5 * ONE_OCTAVE, 10 * ONE_OCTAVE, 255);
+                  else {
+                    if (!NorthernLightModular)
+                      sample = (sample + HEMISPHERE_MAX_INPUT_CV) / 2;
+                    sample = Proportion(sample, HEMISPHERE_MAX_INPUT_CV, 255);
+                  }
+                  sample = constrain(sample, 0, 255);
                   snapshot[n][sample_num] = (uint8_t)sample;
                 }
             }
@@ -228,6 +233,8 @@ private:
           px = n % width;
           py = Proportion(snapshot[input][n], 255, height);
           py = constrain((height - py) + (63 - height)/2 + 10, 0, 63);
+          if (NorthernLightModular || NLMSerge) // full range between the two lines
+            py = 25 + (27 - Proportion(snapshot[input][n], 255, 27));
         }
         gfxPixel(px, py);
       }
