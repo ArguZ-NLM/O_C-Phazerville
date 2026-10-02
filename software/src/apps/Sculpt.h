@@ -27,9 +27,9 @@
 //   L enc  move between the 12 boxes      R enc  change the slot's device
 //   L push bypass on/off                  R push open the device
 //   UP / DOWN  the device's two actions (e.g. VAST freeze / clear)
-//   UP + DOWN  link / unlink the tracks. Linked = one stereo chain (IN1 left,
-//              IN2 right) through track 1, track 2 switched off. Unlinking
-//              copies track 1's settings to track 2.
+//   UP + DOWN  link / unlink the tracks' controls. Linking copies the track
+//              you are on to the other one; while linked every edit goes to
+//              both tracks (except input source and pan). Both keep running.
 // Device view:
 //   L enc  choose parameter (2 pages of 4) R enc  change value
 //   hold L + R enc  parameter mode        R push next page
@@ -100,13 +100,14 @@ private:
   uint8_t chord_releases = 0; // UP/DOWN releases to swallow after UP+DOWN
   bool active = false;
   bool linked = false;
-  uint8_t pre_link_source = 0;
   int cpu = 0;
   elapsedMillis stats_timer;
 
   sculpt::Device* Focused() const { return sculpt::tracks[track].at(col); }
-  bool TrackOn(int t) const { return !(linked && t == 1); }
   void SetChoice(int t, int s, int option);
+  void SetChoiceLinked(int s, int option);
+  sculpt::Device* Twin(sculpt::Device* d) const;
+  void Mirror(sculpt::Device* d, int p) const;
   void Repatch(int t);
   void ConnectTrack(int t);
   void DisconnectTrack(int t);
@@ -157,7 +158,7 @@ FLASHMEM void AppSculpt::Start() {
 
 FLASHMEM void AppSculpt::Repatch(int t) {
   using namespace sculpt;
-  if (!active || !TrackOn(t)) return;
+  if (!active) return;
   Track& tr = tracks[t];
   auto& link = patch->link[t];
   AudioNoInterrupts();
@@ -183,7 +184,7 @@ FLASHMEM void AppSculpt::SetChoice(int t, int s, int option) {
   Device* old = tr.current(s);
   tr.choice[s] = option;
   if (option) tr.last_choice[s] = option;
-  if (!active || !TrackOn(t)) return;
+  if (!active) return;
   Device* now = tr.current(s);
   if (now) now->Activate();
   Repatch(t);
@@ -214,26 +215,41 @@ FLASHMEM void AppSculpt::DisconnectTrack(int t) {
   }
 }
 
+// the same device on the other track (only meaningful while linked)
+FLASHMEM sculpt::Device* AppSculpt::Twin(sculpt::Device* d) const {
+  using namespace sculpt;
+  if (!linked || !d) return nullptr;
+  const Track& other = tracks[1 - track];
+  Device* tw = other.at(col);
+  return (tw && &tw->def == &d->def) ? tw : nullptr;
+}
+
+// copy one parameter to the twin; input source and pan stay per track
+FLASHMEM void AppSculpt::Mirror(sculpt::Device* d, int p) const {
+  using namespace sculpt;
+  Device* tw = Twin(d);
+  if (!tw) return;
+  if (col == MATERIAL && p == 0) return;
+  if (col == MIX_COL && p == 1) return;
+  tw->val[p] = d->val[p];
+  tw->mode[p] = d->mode[p];
+  tw->Apply(p);
+}
+
+FLASHMEM void AppSculpt::SetChoiceLinked(int s, int option) {
+  SetChoice(track, s, option);
+  if (linked) SetChoice(1 - track, s, sculpt::tracks[track].choice[s]);
+}
+
 FLASHMEM void AppSculpt::ToggleLink() {
   using namespace sculpt;
-  Track& a = tracks[0];
-  Track& b = tracks[1];
-  if (!linked) {
-    pre_link_source = a.input->val[0];
-    a.input->val[0] = InputDevice::STEREO;
-    a.input->Apply(0);
-    if (active) DisconnectTrack(1);
-    linked = true;
-    track = 0;
-    if (view == DEVICE) view = CHAIN;
-    return;
-  }
-
-  a.input->val[0] = pre_link_source;
-  a.input->Apply(0);
-  // track 2 starts as a copy of track 1 (its own input source and pan stay)
+  linked = !linked;
+  if (!linked) return;
+  // the track under the cursor is the master: copy it to the other one
+  Track& a = tracks[track];
+  Track& b = tracks[1 - track];
   for (int s = MATERIAL + 1; s < SLOT_COUNT; s++) {
-    b.choice[s] = a.choice[s];
+    SetChoice(1 - track, s, a.choice[s]);
     b.last_choice[s] = a.last_choice[s];
     for (int o = 0; o < MAX_OPTIONS; o++) {
       Device* from = a.inst[s][o];
@@ -249,8 +265,6 @@ FLASHMEM void AppSculpt::ToggleLink() {
   b.mix->val[0] = a.mix->val[0]; // level
   b.mix->val[2] = a.mix->val[2]; // mute
   b.mix->ApplyAll();
-  linked = false;
-  if (active) ConnectTrack(1);
 }
 
 FLASHMEM void AppSculpt::Resume() {
@@ -258,9 +272,7 @@ FLASHMEM void AppSculpt::Resume() {
   if (!audio_hw() || active) return;
   if (!patch) patch = new Patch;
   active = true;
-  for (int t = 0; t < NUM_TRACKS; t++) {
-    if (TrackOn(t)) ConnectTrack(t);
-  }
+  for (int t = 0; t < NUM_TRACKS; t++) ConnectTrack(t);
   OC::AudioIO::ClaimOutput(*mixer);
   AudioProcessorUsageMaxReset();
   AudioMemoryUsageMaxReset();
@@ -306,7 +318,7 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
       } else if (col > MATERIAL && col < MIX_COL) {
         // bypass toggle
         Track& tr = tracks[track];
-        SetChoice(track, col, tr.choice[col] ? 0 : tr.last_choice[col]);
+        SetChoiceLinked(col, tr.choice[col] ? 0 : tr.last_choice[col]);
       }
     }
     return;
@@ -342,10 +354,17 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
       }
       break;
     case OC::CONTROL_BUTTON_UP:
-      if (d) d->Action(0);
-      break;
     case OC::CONTROL_BUTTON_DOWN:
-      if (d) d->Action(1);
+      if (d) {
+        const int a = event.control == OC::CONTROL_BUTTON_UP ? 0 : 1;
+        const bool was = d->ActionLit(a);
+        d->Action(a);
+        // linked: toggles end up in the same state, one-shots fire on both
+        if (Device* tw = Twin(d)) {
+          const bool now = d->ActionLit(a);
+          if (was == now || tw->ActionLit(a) != now) tw->Action(a);
+        }
+      }
       break;
     default: break;
   }
@@ -357,14 +376,14 @@ FLASHMEM void AppSculpt::OnEncoder(const UI::Event &event) {
   const bool left = event.control == OC::CONTROL_ENCODER_L;
   if (view == CHAIN) {
     if (left) {
-      const int rows = linked ? 1 : NUM_TRACKS;
-      const int idx = constrain(track * COLS + col + dir, 0, rows * COLS - 1);
+      const int idx = constrain(track * COLS + col + dir, 0, NUM_TRACKS * COLS - 1);
       track = idx / COLS;
       col = idx % COLS;
     } else if (col == MIX_COL) {
       tracks[track].mix->Nudge(0, dir); // level
+      Mirror(tracks[track].mix, 0);
     } else if (col > MATERIAL) {
-      SetChoice(track, col, tracks[track].choice[col] + dir);
+      SetChoiceLinked(col, tracks[track].choice[col] + dir);
     }
     return;
   }
@@ -375,9 +394,11 @@ FLASHMEM void AppSculpt::OnEncoder(const UI::Event &event) {
     cursor = constrain(cursor + dir, 0, d->num_params() - 1);
   } else if (l_held && d->param(cursor).nmodes) {
     d->NudgeMode(cursor, dir);
+    Mirror(d, cursor);
     l_used = true;
   } else {
     d->Nudge(cursor, dir);
+    Mirror(d, cursor);
   }
 }
 
@@ -403,14 +424,6 @@ FLASHMEM void AppSculpt::DrawChain() const {
   }
   for (int t = 0; t < NUM_TRACKS; t++) {
     const int y = 9 + t * (bh + 2);
-    if (!TrackOn(t)) {
-      // linked: track 2 is folded into track 1
-      gfxCircle(9, y + 10, 4);
-      gfxCircle(15, y + 10, 4);
-      gfxPrint(26, y + 2, PSTR("LINKED stereo"));
-      gfxPrint(26, y + 11, PSTR("IN1 L + IN2 R"));
-      continue;
-    }
     gfxPrint(1, y + 6, t + 1);
     for (int c = 0; c < COLS; c++) {
       const int x = x0 + c * bw;
@@ -426,6 +439,12 @@ FLASHMEM void AppSculpt::DrawChain() const {
       }
       if (t == track && c == col) gfxInvert(x + 1, y + 1, bw - 2, bh - 2);
     }
+  }
+
+  if (linked) {
+    // chain link between the track numbers
+    gfxFrame(1, 24, 5, 6);
+    gfxFrame(1, 28, 5, 6);
   }
 
   // status line: what is under the cursor, CPU load
@@ -450,9 +469,15 @@ FLASHMEM void AppSculpt::DrawDevice() const {
   const int n = d->num_params();
 
   // header: track, device, action labels, page
-  gfxPrint(1, 0, track + 1);
-  gfxInvert(0, 0, 7, 8);
-  gfxPrint(10, 0, d->def.name);
+  if (linked) {
+    gfxPrint(1, 0, PSTR("1+2"));
+    gfxInvert(0, 0, 19, 8);
+    gfxPrint(22, 0, d->def.name);
+  } else {
+    gfxPrint(1, 0, track + 1);
+    gfxInvert(0, 0, 7, 8);
+    gfxPrint(10, 0, d->def.name);
+  }
   for (int a = 0; a < 2; a++) {
     if (!d->def.actions[a][0]) continue;
     const int x = 64 + a * 22;
