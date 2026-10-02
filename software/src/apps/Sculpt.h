@@ -33,8 +33,9 @@
 // Device view:
 //   R enc  scroll through the 8 settings  R push  grab / let go of a setting
 //   (grabbed) R enc  change the value     hold L + R enc  the setting's mode
-//   L push modulation for the setting:    L enc amount, R enc source (CV1-8),
-//          R push unipolar / bipolar,     L push again to leave
+//   L push modulation for the setting:    L enc amount, R enc source (CV in,
+//          CV out, MIDI map, noise),      R push unipolar / bipolar,
+//          X  MIDI learn (move a knob),   L push again to leave
 //   Y      back to the chain              UP / DOWN  actions
 //
 // While Sculpt is the active app it claims the audio outputs from AudioIO.
@@ -44,6 +45,7 @@
 #include "../HSApplication.h"
 #include "../AudioIO.h"
 #include "../OC_gpio.h"
+#include "../HSMIDI.h"
 #include "SculptDevices.h"
 
 namespace sculpt {
@@ -90,6 +92,8 @@ public:
   void Controller() {}
   void MainLoop();
   void ModulateAll();
+  void ReadMIDI();
+  void MidiLearn(sculpt::Device* d);
   void View() const;
 
   void OnButton(const UI::Event &event);
@@ -240,7 +244,7 @@ FLASHMEM void AppSculpt::Mirror(sculpt::Device* d, int p) const {
   tw->val[p] = d->val[p];
   tw->mode[p] = d->mode[p];
   tw->mod_amt[p] = d->mod_amt[p];
-  tw->mod_src[p] = d->mod_src[p];
+  tw->mod_in[p] = d->mod_in[p];
   tw->mod_bi = (tw->mod_bi & ~(1 << p)) | (d->mod_bi & (1 << p));
   tw->Refresh(p);
 }
@@ -295,11 +299,49 @@ FLASHMEM void AppSculpt::Suspend() {
   l_held = false;
 }
 
+// MIDI is normally read by Quadrants; while Sculpt runs it feeds the same
+// shared MIDI maps itself (no thru, no SysEx, no program changes)
+template <typename T>
+FLASHMEM static void SculptReadMIDI(T& device) {
+  for (int n = 0; n < 32 && device.read(); n++) {
+    const HS::MIDIMessage msg = {
+      device.getChannel(), device.getType(), device.getData1(), device.getData2()
+    };
+    if (msg.message == midi::SystemExclusive || msg.message == midi::ProgramChange) continue;
+    const bool realtime = msg.message == midi::Clock || msg.message == midi::Start
+      || msg.message == midi::Stop;
+    if (realtime || (msg.message >> 4) != 0xF) HS::frame.MIDIState.ProcessMIDIMsg(msg);
+  }
+}
+
+FLASHMEM void AppSculpt::ReadMIDI() {
+  SculptReadMIDI(usbMIDI);
+  SculptReadMIDI(usbHostMIDI[0]);
+  SculptReadMIDI(usbHostMIDI[1]);
+  SculptReadMIDI(MIDI1);
+}
+
+// point the setting at a free MIDI map (or its current one) and let the next
+// CC or note teach it
+FLASHMEM void AppSculpt::MidiLearn(sculpt::Device* d) {
+  HS::CVInputMap& in = d->mod_in[cursor];
+  auto& maps = HS::frame.MIDIState.mapping;
+  if (in.source_type() != HS::CVInputMap::TYPE_MIDI) {
+    int free_map = -1;
+    for (int i = 0; i < MIDIMAP_MAX && free_map < 0; i++) {
+      if (!maps[i].enabled() && !maps[i].learning()) free_map = i;
+    }
+    if (free_map < 0) return;
+    in.SetMidiMap(free_map);
+  }
+  in.AutoLearn();
+  if (!d->mod_amt[cursor]) d->mod_amt[cursor] = 50;
+  d->Refresh(cursor);
+  Mirror(d, cursor);
+}
+
 FLASHMEM void AppSculpt::ModulateAll() {
   using namespace sculpt;
-  for (int i = 0; i < NUM_CV; i++) {
-    cv_in[i] = constrain(In(i) / float(HEMISPHERE_MAX_INPUT_CV), -1.0f, 1.0f);
-  }
   for (auto& tr : tracks) {
     for (int s = MATERIAL; s < SLOT_COUNT; s++) {
       if (Device* d = tr.current(s)) d->Modulate();
@@ -309,7 +351,8 @@ FLASHMEM void AppSculpt::ModulateAll() {
 }
 
 FLASHMEM void AppSculpt::MainLoop() {
-  if (active && mod_timer >= 1000) { // follow the CVs about once per ms
+  if (active) ReadMIDI();
+  if (active && mod_timer >= 1000) { // follow the sources about once per ms
     mod_timer = 0;
     ModulateAll();
   }
@@ -404,6 +447,9 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
       view = CHAIN;
       editing = mod_mode = false;
       break;
+    case OC::CONTROL_BUTTON_X:
+      if (view == DEVICE && mod_mode && d) MidiLearn(d);
+      break;
     case OC::CONTROL_BUTTON_UP:
     case OC::CONTROL_BUTTON_DOWN:
       if (d) {
@@ -443,7 +489,7 @@ FLASHMEM void AppSculpt::OnEncoder(const UI::Event &event) {
   if (!d) { view = CHAIN; return; }
   if (mod_mode) {
     if (left) d->mod_amt[cursor] = constrain(d->mod_amt[cursor] + dir, -100, 100);
-    else d->mod_src[cursor] = constrain(d->mod_src[cursor] + dir, 0, NUM_CV - 1);
+    else d->mod_in[cursor].ChangeSource(dir);
     d->Refresh(cursor);
     Mirror(d, cursor);
   } else if (left) {
@@ -567,7 +613,11 @@ FLASHMEM void AppSculpt::DrawDevice() const {
 
     // name row (in modulation mode: the source for the selected setting)
     if (sel && mod_mode) {
-      snprintf(buf, sizeof(buf), "CV%d %c", d->mod_src[p] + 1, d->Bipolar(p) ? 'B' : 'U');
+      const HS::CVInputMap& in = d->mod_in[p];
+      const bool learn = in.source_type() == HS::CVInputMap::TYPE_MIDI
+        && HS::frame.MIDIState.mapping[in.index()].learning();
+      if (learn) snprintf(buf, sizeof(buf), "learn");
+      else snprintf(buf, sizeof(buf), "%s %c", in.InputName(), d->Bipolar(p) ? 'B' : 'U');
       gfxPrint(x + 1, 43, buf);
     } else {
       gfxPrint(x + 1, 43, pd.name);

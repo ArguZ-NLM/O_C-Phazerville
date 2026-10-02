@@ -55,11 +55,6 @@ struct DeviceDef {
 };
 
 constexpr int MAX_PARAMS = 8;
-constexpr int NUM_CV = 8;
-
-// latest CV inputs, normalised (0..1 for 0..10 V on Buchla hardware),
-// written by the app from the main loop
-float cv_in[NUM_CV] = {};
 
 class Device {
 public:
@@ -68,7 +63,9 @@ public:
   int16_t cur[MAX_PARAMS] = {};      // after modulation; Apply() uses this
   uint8_t mode[MAX_PARAMS] = {};
   int8_t mod_amt[MAX_PARAMS] = {};   // -100..100 % of the range, 0 = off
-  uint8_t mod_src[MAX_PARAMS] = {};  // CV input 0..7
+  // modulation source: the same picker the Quadrants applets use (CV inputs,
+  // CV outputs, MIDI maps, noise)
+  HS::CVInputMap mod_in[MAX_PARAMS];
   uint8_t mod_bi = 0;                // bit per param: bipolar around val
   bool active = false;
 
@@ -112,15 +109,15 @@ FLASHMEM void Device::Defaults() {
     val[p] = cur[p] = param(p).def;
     mode[p] = param(p).defmode;
     mod_amt[p] = 0;
-    mod_src[p] = p; // setting n listens to CV n by default
+    mod_in[p].SetInput(p); // setting n listens to CV n by default
   }
   mod_bi = 0;
 }
 
 FLASHMEM int Device::Modulated(int p) const {
   const ParamDef& d = param(p);
-  if (!mod_amt[p]) return val[p];
-  float c = cv_in[mod_src[p]];
+  if (!mod_amt[p] || !mod_in[p].enabled()) return val[p];
+  float c = constrain(mod_in[p].InF(), -1.0f, 1.0f);
   if (Bipolar(p)) c = 2.0f * c - 1.0f;
   const int v = val[p] + int(mod_amt[p] * 0.01f * c * (d.max - d.min));
   return constrain(v, d.min, d.max);
@@ -150,7 +147,7 @@ FLASHMEM void Device::CopyFrom(const Device& d) {
   memcpy(val, d.val, sizeof(val));
   memcpy(mode, d.mode, sizeof(mode));
   memcpy(mod_amt, d.mod_amt, sizeof(mod_amt));
-  memcpy(mod_src, d.mod_src, sizeof(mod_src));
+  for (int p = 0; p < MAX_PARAMS; p++) mod_in[p] = d.mod_in[p];
   mod_bi = d.mod_bi;
   ApplyAll();
 }
