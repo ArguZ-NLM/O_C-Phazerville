@@ -18,38 +18,57 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Sculpt: full-screen stereo audio app. Step 1 is the VAST page: a long
-// extmem delay with a tone filter in the feedback loop, ping-pong spread,
-// diffusion and freeze, followed by a reverb.
+// Sculpt: a full-screen take on the Torso S4 device chain.
 //
-// While Sculpt is the active app it claims the audio outputs from AudioIO
-// (Input -> Vast -> Output). The Quadrants audio applet chain is left intact
-// and comes back as soon as Sculpt is suspended.
+// Two stereo tracks, each a fixed chain MATERIAL > GRANULAR > FILTER > COLOR
+// > SPACE, mixed to the stereo output. Every effect slot can be bypassed.
+//
+// Chain view (home):
+//   L enc  move between the 12 boxes      R enc  change the slot's device
+//   L push bypass on/off                  R push open the device
+//   UP / DOWN  the device's two actions (e.g. VAST freeze / clear)
+// Device view:
+//   L enc  choose parameter (2 pages of 4) R enc  change value
+//   hold L + R enc  parameter mode        R push next page
+//   L push back to chain                  UP / DOWN  actions
+//
+// While Sculpt is the active app it claims the audio outputs from AudioIO.
+// The Quadrants audio applet chain is left intact and comes back as soon as
+// Sculpt is suspended (e.g. when the app menu opens).
 
 #include "../HSApplication.h"
 #include "../AudioIO.h"
 #include "../OC_gpio.h"
-#include "../Audio/AudioDelayExt.h"
-#include "../Audio/AudioEffectVast.h"
+#include "SculptDevices.h"
 
 namespace sculpt {
-  // same template args as the Delay applet, so the code is shared
-  using DelayStream = AudioDelayExt<9>;
-  constexpr float MAX_DELAY_SECS = 8.0f;
-  constexpr size_t DELAY_SAMPLES
-    = static_cast<size_t>(MAX_DELAY_SECS * AUDIO_SAMPLE_RATE_EXACT) + 512;
-  constexpr int TAPS = AudioEffectVast::TAPS;
+  constexpr int NUM_TRACKS = 2;
+  constexpr int COLS = SLOT_COUNT + 1; // + MIX
+  constexpr int MIX_COL = SLOT_COUNT;
 
-  // order matters: Vast updates before the delays it feeds
-  AudioEffectVast vast;
-  DelayStream delays[2] = {DelayStream(DELAY_SAMPLES), DelayStream(DELAY_SAMPLES)};
+  struct Track {
+    InputDevice* input = nullptr;
+    MixDevice* mix = nullptr;
+    uint8_t choice[SLOT_COUNT] = {};
+    uint8_t last_choice[SLOT_COUNT] = {}; // for the bypass toggle
+    Device* inst[SLOT_COUNT][MAX_OPTIONS] = {};
+
+    Device* current(int s) const {
+      return s == MATERIAL ? static_cast<Device*>(input) : inst[s][choice[s]];
+    }
+    Device* at(int col) const {
+      return col == MIX_COL ? mix : current(col);
+    }
+  };
 
   // patch cords live on the heap: no RAM1 until Sculpt is first opened
   struct Patch {
-    AudioConnection in[2];
-    AudioConnection write[2];
-    AudioConnection taps[2][TAPS];
+    AudioConnection in[NUM_TRACKS][2];
+    AudioConnection link[NUM_TRACKS][SLOT_COUNT][2];
   };
+
+  Track tracks[NUM_TRACKS];
+  SculptMixer* mixer = nullptr;
   Patch* patch = nullptr;
 
   bool audio_hw() { return I2S2_Audio_ADC && I2S2_Audio_DAC; }
@@ -60,247 +79,363 @@ OC_APP_CLASS(AppSculpt, TWOCCS("SP"), "Sculpt", "Sculpt"),
 public:
   OC_APP_INTERFACE_DECLARE(AppSculpt, 0);
 
-  enum Param : uint8_t {
-    TIME, FEEDBACK, TONE, SPREAD, DIFFUSE, REVERB, DECAY, MIX, FREEZE,
-    PARAM_COUNT
-  };
-
   void Start();
   void Resume();
   void Suspend();
   void Controller() {}
   void MainLoop();
-
   void View() const;
-  void DrawVast() const;
 
-  /////////////////////////////////////////////////////////////////
-  // Control handlers
-  /////////////////////////////////////////////////////////////////
-  void OnLeftEncoderMove(int direction);
-  void OnRightEncoderMove(int direction);
-  void OnRightButtonPress();
+  void OnButton(const UI::Event &event);
+  void OnEncoder(const UI::Event &event);
 
 private:
-  int8_t cursor = TIME;
+  enum ViewMode : uint8_t { CHAIN, DEVICE };
+  ViewMode view = CHAIN;
+  int8_t track = 0, col = sculpt::SPACE, cursor = 0;
+  bool l_held = false, l_used = false;
   bool active = false;
-  bool vast_mem = false, delay_mem = false;
+  int cpu = 0;
   elapsedMillis stats_timer;
 
-  // parameter values, in UI units
-  int time_ms = 600;
-  int8_t feedback = 45;
-  int8_t tone = -10;   // <0 darker, >0 thinner
-  int8_t spread = 30;  // ping-pong amount
-  int8_t diffuse = 20;
-  int8_t reverb = 35;
-  uint8_t decay = 40;  // tenths of a second
-  int8_t mix = 50;
-  bool freeze = false;
-
-  // decaying display copies of the viz levels
-  mutable float disp_tap[2][sculpt::TAPS] = {};
-  mutable float disp_tail = 0.0f;
-
-  void ApplyAll();
-  void Apply(int p);
-
-  void PrintValue(int p, int x, int y) const;
+  sculpt::Device* Focused() const { return sculpt::tracks[track].at(col); }
+  void SetChoice(int t, int s, int option);
+  void Repatch(int t);
+  void UpdateMixLevels() const;
+  void DrawChain() const;
+  void DrawDevice() const;
 };
 
 FLASHMEM void AppSculpt::Start() {
-  ApplyAll();
+  using namespace sculpt;
+  // Create every device up front in chain order, so the audio update order
+  // follows the signal flow (no extra block of latency per hop). Devices only
+  // hold their big buffers while they are in use.
+  for (int t = 0; t < NUM_TRACKS; t++) {
+    Track& tr = tracks[t];
+    tr.input = new InputDevice;
+    tr.input->Defaults();
+    tr.input->val[0] = t ? InputDevice::IN2 : InputDevice::IN1;
+    tr.input->ApplyAll();
+    for (int s = MATERIAL + 1; s < SLOT_COUNT; s++) {
+      for (int o = 0; o < SLOT_DEFS[s].noptions; o++) {
+        Device* d = MakeDevice(s, o);
+        if (d) {
+          d->Defaults();
+          d->ApplyAll();
+        }
+        tr.inst[s][o] = d;
+      }
+      tr.last_choice[s] = SLOT_DEFS[s].noptions > 1 ? 1 : 0;
+    }
+  }
+  mixer = new SculptMixer;
+  for (int t = 0; t < NUM_TRACKS; t++) {
+    Track& tr = tracks[t];
+    tr.mix = new MixDevice(*mixer, t);
+    tr.mix->Defaults();
+    tr.mix->val[1] = t ? 25 : -25; // pan the tracks apart a little
+    tr.mix->ApplyAll();
+    // start with VAST on both tracks, a bit different on track 2
+    tr.choice[SPACE] = 1;
+  }
+  Device* v2 = tracks[1].inst[SPACE][1];
+  v2->val[VastDevice::TIME] = 680;
+  v2->val[VastDevice::TONE] = 15;
+  v2->mode[VastDevice::SPREAD] = VastDevice::DIFFUSE;
+}
+
+FLASHMEM void AppSculpt::Repatch(int t) {
+  using namespace sculpt;
+  if (!active) return;
+  Track& tr = tracks[t];
+  auto& link = patch->link[t];
+  AudioNoInterrupts();
+  for (auto& hop : link) for (auto& c : hop) c.disconnect();
+  AudioStream* prev = tr.input;
+  int hop = 0;
+  for (int s = MATERIAL + 1; s < SLOT_COUNT; s++) {
+    Device* d = tr.current(s);
+    if (!d || !d->in()) continue;
+    for (int c = 0; c < 2; c++) link[hop][c].connect(*prev, c, *d->in(), c);
+    prev = d->out();
+    hop++;
+  }
+  for (int c = 0; c < 2; c++) link[hop][c].connect(*prev, c, *mixer, t * 2 + c);
+  AudioInterrupts();
+}
+
+FLASHMEM void AppSculpt::SetChoice(int t, int s, int option) {
+  using namespace sculpt;
+  Track& tr = tracks[t];
+  option = constrain(option, 0, SLOT_DEFS[s].noptions - 1);
+  if (option == tr.choice[s]) return;
+  Device* old = tr.current(s);
+  tr.choice[s] = option;
+  if (option) tr.last_choice[s] = option;
+  if (!active) return;
+  Device* now = tr.current(s);
+  if (now) now->Activate();
+  Repatch(t);
+  if (old) old->Deactivate();
 }
 
 FLASHMEM void AppSculpt::Resume() {
-  if (!sculpt::audio_hw() || active) return;
   using namespace sculpt;
+  if (!audio_hw() || active) return;
   if (!patch) patch = new Patch;
   AudioNoInterrupts();
-  vast_mem = vast.Acquire();
-  for (auto& d : delays) d.Acquire();
-  delay_mem = delays[0].ready() && delays[1].ready();
-  for (int c = 0; c < 2; c++) {
-    delays[c].taps(TAPS);
-    patch->in[c].connect(OC::AudioIO::InputStream(), c, vast, c);
-    patch->write[c].connect(vast, 2 + c, delays[c], 0);
-    for (int t = 0; t < TAPS; t++) {
-      patch->taps[c][t].connect(delays[c], t, vast, 2 + c * TAPS + t);
+  for (int t = 0; t < NUM_TRACKS; t++)
+    for (int c = 0; c < 2; c++)
+      patch->in[t][c].connect(OC::AudioIO::InputStream(), c, *tracks[t].input, c);
+  AudioInterrupts();
+  active = true;
+  for (int t = 0; t < NUM_TRACKS; t++) {
+    for (int s = MATERIAL + 1; s < SLOT_COUNT; s++) {
+      if (Device* d = tracks[t].current(s)) d->Activate();
     }
+    Repatch(t);
+  }
+  OC::AudioIO::ClaimOutput(*mixer);
+  AudioProcessorUsageMaxReset();
+  AudioMemoryUsageMaxReset();
+  stats_timer = 0;
+}
+
+FLASHMEM void AppSculpt::Suspend() {
+  using namespace sculpt;
+  if (!active) return;
+  OC::AudioIO::ReleaseOutput();
+  AudioNoInterrupts();
+  for (int t = 0; t < NUM_TRACKS; t++) {
+    for (auto& c : patch->in[t]) c.disconnect();
+    for (auto& hop : patch->link[t]) for (auto& c : hop) c.disconnect();
   }
   AudioInterrupts();
-  ApplyAll();
-  OC::AudioIO::ClaimOutput(vast);
-  active = true;
+  for (auto& tr : tracks) {
+    for (int s = MATERIAL + 1; s < SLOT_COUNT; s++) {
+      if (Device* d = tr.current(s)) d->Deactivate();
+    }
+  }
+  active = false;
+  l_held = false;
+}
+
+FLASHMEM void AppSculpt::MainLoop() {
+  if (!active || stats_timer < 1000) return;
+  stats_timer = 0;
+  const float usage = AudioProcessorUsageMax();
+  cpu = int(usage + 0.5f);
+  Serial.printf("Sculpt: AudioProcessorUsageMax %d.%d%%  mem %u/%d blocks\n",
+    int(usage), int(usage * 10) % 10, AudioMemoryUsageMax(), OC::AudioIO::AUDIO_MEMORY);
   AudioProcessorUsageMaxReset();
   AudioMemoryUsageMaxReset();
 }
 
-FLASHMEM void AppSculpt::Suspend() {
-  if (!active) return;
+/////////////////////////////////////////////////////////////////
+// Controls
+/////////////////////////////////////////////////////////////////
+FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
   using namespace sculpt;
-  OC::AudioIO::ReleaseOutput();
-  AudioNoInterrupts();
-  for (int c = 0; c < 2; c++) {
-    patch->in[c].disconnect();
-    patch->write[c].disconnect();
-    for (auto& tc : patch->taps[c]) tc.disconnect();
+  if (event.control == OC::CONTROL_BUTTON_L) {
+    if (event.type == UI::EVENT_BUTTON_DOWN) {
+      l_held = true;
+      l_used = false;
+    } else if (event.type == UI::EVENT_BUTTON_LONG_RELEASE) {
+      l_held = false;
+    } else if (event.type == UI::EVENT_BUTTON_PRESS) {
+      l_held = false;
+      if (l_used) return;
+      if (view == DEVICE) {
+        view = CHAIN;
+      } else if (col > MATERIAL && col < MIX_COL) {
+        // bypass toggle
+        Track& tr = tracks[track];
+        SetChoice(track, col, tr.choice[col] ? 0 : tr.last_choice[col]);
+      }
+    }
+    return;
   }
-  AudioInterrupts();
-  // disconnected streams no longer update, so freeing is safe now
-  for (auto& d : delays) d.Release();
-  vast.Release();
-  active = false;
-}
+  if (event.type != UI::EVENT_BUTTON_PRESS) return;
 
-FLASHMEM void AppSculpt::MainLoop() {
-  if (!active) return;
-  if (stats_timer >= 1000) {
-    stats_timer = 0;
-    const float cpu = AudioProcessorUsageMax();
-    Serial.printf("Sculpt: AudioProcessorUsageMax %d.%d%%  mem %u/%d blocks\n",
-      int(cpu), int(cpu * 10) % 10, AudioMemoryUsageMax(), OC::AudioIO::AUDIO_MEMORY);
-    AudioProcessorUsageMaxReset();
-    AudioMemoryUsageMaxReset();
-  }
-}
-
-FLASHMEM void AppSculpt::OnLeftEncoderMove(int direction) {
-  cursor = constrain(cursor + direction, 0, PARAM_COUNT - 1);
-}
-
-FLASHMEM void AppSculpt::OnRightEncoderMove(int direction) {
-  switch (cursor) {
-    case TIME: {
-      // ~3% per detent, so the whole 20 ms..8 s range is reachable
-      const int step = std::max(1, time_ms / 32);
-      time_ms = constrain(time_ms + direction * step, 20, 8000);
-    } break;
-    case FEEDBACK: feedback = constrain(feedback + direction, 0, 100); break;
-    case TONE:     tone = constrain(tone + direction, -50, 50); break;
-    case SPREAD:   spread = constrain(spread + direction, 0, 100); break;
-    case DIFFUSE:  diffuse = constrain(diffuse + direction, 0, 100); break;
-    case REVERB:   reverb = constrain(reverb + direction, 0, 100); break;
-    case DECAY:    decay = constrain(decay + direction, 3, 200); break;
-    case MIX:      mix = constrain(mix + direction, 0, 100); break;
-    case FREEZE:   freeze = direction > 0; break;
-  }
-  Apply(cursor);
-}
-
-FLASHMEM void AppSculpt::OnRightButtonPress() {
-  freeze = !freeze;
-  Apply(FREEZE);
-}
-
-FLASHMEM void AppSculpt::ApplyAll() {
-  for (int p = 0; p < PARAM_COUNT; p++) Apply(p);
-}
-
-FLASHMEM void AppSculpt::Apply(int p) {
-  using namespace sculpt;
-  switch (p) {
-    case TIME: {
-      const float secs = time_ms * 0.001f;
-      for (int c = 0; c < 2; c++) {
-        for (int t = 0; t < TAPS; t++) {
-          delays[c].delay(t, secs * AudioEffectVast::TAP_POS[c][t]
-                             - AudioEffectVast::LOOP_LATENCY_SECS);
+  Device* d = Focused();
+  switch (event.control) {
+    case OC::CONTROL_BUTTON_R:
+      if (view == CHAIN) {
+        if (d) {
+          view = DEVICE;
+          cursor = 0;
         }
+      } else if (d && d->num_params() > 4) {
+        // next page, like tapping a DEVICE button again on the S4
+        cursor = (cursor + 4) % 8;
+        if (cursor >= d->num_params()) cursor = d->num_params() - 1;
       }
-    } break;
-    case FEEDBACK: vast.feedback(feedback * 0.01f); break;
-    case TONE:     vast.tone(tone * 0.02f); break;
-    case SPREAD:   vast.spread(spread * 0.01f); break;
-    case DIFFUSE:  vast.diffuse(diffuse * 0.01f); break;
-    case REVERB:   vast.reverb(reverb * 0.01f); break;
-    case DECAY:    vast.decay(decay * 0.1f); break;
-    case MIX:      vast.mix(mix * 0.01f); break;
-    case FREEZE:   vast.set_freeze(freeze); break;
+      break;
+    case OC::CONTROL_BUTTON_UP:
+      if (d) d->Action(0);
+      break;
+    case OC::CONTROL_BUTTON_DOWN:
+      if (d) d->Action(1);
+      break;
+    default: break;
   }
 }
 
-FLASHMEM void AppSculpt::PrintValue(int p, int x, int y) const {
-  char buf[12];
-  switch (p) {
-    case TIME:
-      if (time_ms < 1000) snprintf(buf, sizeof(buf), "%dms", time_ms);
-      else snprintf(buf, sizeof(buf), "%d.%02ds", time_ms / 1000, (time_ms % 1000) / 10);
-      break;
-    case TONE:
-      if (tone == 0) snprintf(buf, sizeof(buf), "flat");
-      else snprintf(buf, sizeof(buf), "%s%d", tone < 0 ? "LP" : "HP", abs(tone));
-      break;
-    case DECAY:
-      snprintf(buf, sizeof(buf), "%d.%ds", decay / 10, decay % 10);
-      break;
-    case FREEZE:
-      snprintf(buf, sizeof(buf), "%s", freeze ? "ON" : "off");
-      break;
-    default: {
-      const int8_t v[] = {0, feedback, 0, spread, diffuse, reverb, 0, mix};
-      snprintf(buf, sizeof(buf), "%d%%", v[p]);
-    } break;
-  }
-  gfxPrint(x - 6 * int(strlen(buf)), y, buf);
-}
-
-FLASHMEM void AppSculpt::DrawVast() const {
+FLASHMEM void AppSculpt::OnEncoder(const UI::Event &event) {
   using namespace sculpt;
-  static const char* const names[PARAM_COUNT] = {
-    "Time", "Feedback", "Tone", "Spread", "Diffuse", "Reverb", "Decay", "Mix", "Freeze"
-  };
-
-  AudioEffectVast::Viz v;
-  vast.ReadViz(v);
-
-  gfxHeader("Sculpt: VAST");
-  if (freeze) {
-    gfxPrint(104, 1, "FRZ");
-    gfxInvert(103, 0, 21, 9);
+  const int dir = event.value;
+  const bool left = event.control == OC::CONTROL_ENCODER_L;
+  if (view == CHAIN) {
+    if (left) {
+      const int idx = constrain(track * COLS + col + dir, 0, NUM_TRACKS * COLS - 1);
+      track = idx / COLS;
+      col = idx % COLS;
+    } else if (col == MIX_COL) {
+      tracks[track].mix->Nudge(0, dir); // level
+    } else if (col > MATERIAL) {
+      SetChoice(track, col, tracks[track].choice[col] + dir);
+    }
+    return;
   }
 
-  // tap timeline: bar position = tap time, height = level (sqrt for a
-  // rough dB feel), L filled, R outlined
-  constexpr int base = 46, h_max = 32, x0 = 2, w = 92;
-  gfxDottedLine(x0, base, x0 + w + 4, base, 2);
-  if (!active) {
-    gfxPrint(x0 + 10, 26, "no audio I/O");
-  } else if (!vast_mem || !delay_mem) {
-    gfxPrint(x0 + 10, 26, "out of memory");
+  Device* d = Focused();
+  if (!d) { view = CHAIN; return; }
+  if (left) {
+    cursor = constrain(cursor + dir, 0, d->num_params() - 1);
+  } else if (l_held && d->param(cursor).nmodes) {
+    d->NudgeMode(cursor, dir);
+    l_used = true;
+  } else {
+    d->Nudge(cursor, dir);
   }
-  for (int c = 0; c < 2; c++) {
-    for (int t = 0; t < TAPS; t++) {
-      float& d = disp_tap[c][t];
-      d = std::max(sqrtf(v.tap[c][t]), d * 0.88f);
-      const int h = constrain(int(d * h_max), 0, h_max);
-      const int x = x0 + int(AudioEffectVast::TAP_POS[c][t] * w) - 3 + c * 4;
-      if (h > 0) {
-        if (c == 0) gfxRect(x, base - h, 3, h);
-        else gfxFrame(x, base - h, 3, h);
+}
+
+/////////////////////////////////////////////////////////////////
+// Screens
+/////////////////////////////////////////////////////////////////
+FLASHMEM void AppSculpt::UpdateMixLevels() const {
+  using namespace sculpt;
+  if (!mixer) return;
+  float pk[2][2];
+  mixer->ReadPeaks(pk);
+  for (int t = 0; t < NUM_TRACKS; t++) {
+    tracks[t].mix->level[0] = pk[t][0];
+    tracks[t].mix->level[1] = pk[t][1];
+  }
+}
+
+FLASHMEM void AppSculpt::DrawChain() const {
+  using namespace sculpt;
+  constexpr int bw = 20, bh = 20, x0 = 8;
+  for (int c = 0; c < COLS; c++) {
+    gfxPrint(x0 + c * bw + 1, 0, c == MIX_COL ? PSTR("MIX") : SLOT_DEFS[c].tag);
+  }
+  for (int t = 0; t < NUM_TRACKS; t++) {
+    const int y = 9 + t * (bh + 2);
+    gfxPrint(1, y + 6, t + 1);
+    for (int c = 0; c < COLS; c++) {
+      const int x = x0 + c * bw;
+      Device* d = tracks[t].at(c);
+      if (d) {
+        gfxFrame(x, y, bw, bh);
+        gfxPrint(x + 2, y + 2, d->def.tag);
+        if (d->ok()) d->DrawMini(x + 2, y + 12, bw - 4, 5);
+        else gfxPrint(x + 2, y + 11, PSTR("!!"));
+      } else {
+        gfxFrame(x, y, bw, bh, true);
+        gfxLine(x + 6, y + bh / 2, x + bw - 7, y + bh / 2); // bypass: wire
       }
+      if (t == track && c == col) gfxInvert(x + 1, y + 1, bw - 2, bh - 2);
     }
   }
 
-  // tail meter
-  disp_tail = std::max(sqrtf(v.tail), disp_tail * 0.94f);
-  const int th = constrain(int(disp_tail * h_max), 0, h_max);
-  gfxFrame(108, base - h_max - 1, 14, h_max + 2);
-  if (th > 0) gfxRect(110, base - th, 10, th);
-  gfxPrint(103, base + 1, "tail");
-
-  // parameter line
-  gfxPrint(1, 55, names[cursor]);
-  PrintValue(cursor, 98, 55);
-  // position dots
-  for (int p = 0; p < PARAM_COUNT; p++) {
-    if (p == cursor) gfxRect(1 + p * 4, 63, 3, 1);
-    else gfxPixel(2 + p * 4, 63);
+  // status line: what is under the cursor, CPU load
+  const Track& tr = tracks[track];
+  Device* d = tr.at(col);
+  gfxPrint(0, 56, track + 1);
+  gfxPrint(8, 56, col == MIX_COL ? PSTR("MIX") : SLOT_DEFS[col].name);
+  gfxPrint(62, 56, d ? d->def.name : PSTR("bypass"));
+  if (!audio_hw()) {
+    gfxPrint(104, 56, PSTR("noIO"));
+  } else {
+    char buf[6];
+    snprintf(buf, sizeof(buf), "%d%%", cpu);
+    gfxPrint(128 - 6 * int(strlen(buf)), 56, buf);
   }
 }
 
-FLASHMEM void AppSculpt::View() const { DrawVast(); }
+FLASHMEM void AppSculpt::DrawDevice() const {
+  using namespace sculpt;
+  Device* d = Focused();
+  if (!d) return;
+  const int n = d->num_params();
 
+  // header: track, device, action labels, page
+  gfxPrint(1, 0, track + 1);
+  gfxInvert(0, 0, 7, 8);
+  gfxPrint(10, 0, d->def.name);
+  for (int a = 0; a < 2; a++) {
+    if (!d->def.actions[a][0]) continue;
+    const int x = 64 + a * 22;
+    gfxPrint(x, 0, d->def.actions[a]);
+    if (d->ActionLit(a)) gfxInvert(x - 1, 0, 20, 8);
+  }
+  if (n > 4) {
+    gfxPrint(110, 0, cursor / 4 + 1);
+    gfxPrint(116, 0, PSTR("/2"));
+  }
+  gfxLine(0, 9, 127, 9);
+
+  // the device's picture
+  d->DrawViz(0, 11, 128, 30);
+
+  // parameter grid, one page of 4
+  const int page = cursor / 4;
+  for (int i = 0; i < 4; i++) {
+    const int p = page * 4 + i;
+    if (p >= n) break;
+    const ParamDef& pd = d->param(p);
+    const int x = i * 32;
+    gfxPrint(x + 1, 43, pd.name);
+    if (pd.nmodes) gfxRect(x + 29, 43, 2, 2); // has modes (hold L + turn R)
+
+    char buf[8];
+    const bool show_mode = p == cursor && l_held && pd.nmodes;
+    if (show_mode) snprintf(buf, sizeof(buf), "%s", pd.modes[d->mode[p]]);
+    else d->Format(p, buf, sizeof(buf));
+    gfxPrint(x + 1, 52, buf);
+    if (show_mode) gfxInvert(x, 51, 32, 9);
+
+    // value bar
+    const int span = pd.max - pd.min;
+    if (pd.kind == BI) {
+      const int c = x + 15, len = d->val[p] * 15 / std::max(1, (int)pd.max);
+      gfxPixel(c, 60);
+      if (len > 0) gfxRect(c, 61, len, 2);
+      else if (len < 0) gfxRect(c + len, 61, -len, 2);
+    } else if (pd.kind == LIST) {
+      for (int k = 0; k < pd.nlabels; k++) {
+        const int bx = x + 1 + k * 7;
+        if (k == d->val[p]) gfxRect(bx, 61, 5, 2);
+        else gfxPixel(bx + 2, 62);
+      }
+    } else {
+      gfxRect(x + 1, 61, (d->val[p] - pd.min) * 29 / std::max(1, span), 2);
+    }
+    if (p == cursor) gfxInvert(x, 42, 32, 9);
+  }
+}
+
+FLASHMEM void AppSculpt::View() const {
+  UpdateMixLevels();
+  if (view == DEVICE && Focused()) DrawDevice();
+  else DrawChain();
+}
+
+/////////////////////////////////////////////////////////////////
+// App glue
+/////////////////////////////////////////////////////////////////
 FLASHMEM void AppSculpt::Init() {
   BaseStart();
 }
@@ -329,16 +464,9 @@ FLASHMEM void AppSculpt::DrawMenu() const { BaseView(); }
 FLASHMEM void AppSculpt::DrawScreensaver() const { BaseView(); }
 
 FLASHMEM void AppSculpt::HandleButtonEvent(const UI::Event &event) {
-  if (UI::EVENT_BUTTON_PRESS != event.type) return;
-  switch (event.control) {
-    case OC::CONTROL_BUTTON_R:
-      OnRightButtonPress();
-      break;
-    default: break;
-  }
+  OnButton(event);
 }
 
 FLASHMEM void AppSculpt::HandleEncoderEvent(const UI::Event &event) {
-  if (event.control == OC::CONTROL_ENCODER_L) OnLeftEncoderMove(event.value);
-  if (event.control == OC::CONTROL_ENCODER_R) OnRightEncoderMove(event.value);
+  OnEncoder(event);
 }

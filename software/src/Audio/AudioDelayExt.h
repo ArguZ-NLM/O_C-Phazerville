@@ -77,6 +77,10 @@ public:
     return buffer.IsReady();
   }
 
+  void clear() {
+    buffer.Clear();
+  }
+
   void taps(size_t num) {
     taps_ = num;
   }

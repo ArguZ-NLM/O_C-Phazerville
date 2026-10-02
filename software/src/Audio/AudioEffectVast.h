@@ -5,19 +5,20 @@
 #include <cmath>
 #include <cstdlib>
 
-// Delay + reverb core for the Sculpt app.
+// Delay + reverb core for the Sculpt VAST device.
 //
 // The delay lines are two AudioDelayExt streams (buffers in extmem) that are
 // patched around this object. Vast builds the signal written into them (input
-// plus filtered, diffused feedback) and mixes their taps with a small FDN
-// reverb into the stereo output. AudioDelayExt's own feedback stays at 0, so
-// the tone filter and the L/R cross-feed can sit inside the loop.
+// plus filtered, diffused feedback), crossfades the taps against the dry
+// signal (DELAY), then sends that through a 4-line FDN reverb (REVERB).
+// AudioDelayExt's own feedback stays at 0, so the tone filter and the L/R
+// cross-feed can sit inside the loop.
 //
 // Inputs:  0,1 = dry L/R, 2..2+TAPS-1 = L taps, then TAPS R taps
 // Outputs: 0,1 = out L/R, 2,3 = delay write L/R
 //
 // The loop runs through the audio graph, so it is one block longer than the
-// tap time. The app subtracts LOOP_LATENCY_SECS when setting tap times.
+// tap time. The owner subtracts LOOP_LATENCY_SECS when setting tap times.
 class AudioEffectVast : public AudioStream {
 public:
   static constexpr int TAPS = 4;
@@ -30,6 +31,7 @@ public:
     float tap[2][TAPS];
     float tail;
     float in;
+    float out;
     uint32_t blocks;
   };
 
@@ -54,15 +56,14 @@ public:
     for (auto& i : ix) i = 0;
     for (int c = 0; c < 2; c++) lp_z[c] = hp_z[c] = 0.0f;
     for (auto& z : damp_z) z = 0.0f;
-    freeze_amt = freeze ? 1.0f : 0.0f;
   }
 
   // --- parameters, set from the UI thread ---
   void feedback(float f) { fb_target = constrain(f, 0.0f, 1.05f); }
-  void mix(float m) { mix_target = constrain(m, 0.0f, 1.0f); }
-  void spread(float s) { spread_target = constrain(s, 0.0f, 1.0f); }
+  void delay_mix(float m) { dmix_target = constrain(m, 0.0f, 1.0f); }
+  void reverb_mix(float m) { rmix_target = constrain(m, 0.0f, 1.0f); }
+  void pingpong(float s) { spread_target = constrain(s, 0.0f, 1.0f); }
   void diffuse(float d) { ap_g = 0.7f * constrain(d, 0.0f, 1.0f); }
-  void reverb(float r) { send_target = constrain(r, 0.0f, 1.0f); }
   void set_freeze(bool f) { freeze = f; }
   bool frozen() const { return freeze; }
 
@@ -75,11 +76,20 @@ public:
     hp_a = OnePoleCoeff(hp_hz);
   }
 
+  // 0..1, scales the reverb line lengths
+  void size(float s) {
+    s = constrain(s, 0.0f, 1.0f);
+    for (int i = 0; i < LINES; i++) {
+      line_len[i] = static_cast<int>(LINE_LEN[i] * (0.3f + 0.7f * s));
+    }
+    decay(decay_secs);
+  }
+
   // approximate RT60 of the reverb tail in seconds
   void decay(float secs) {
-    secs = constrain(secs, 0.2f, 30.0f);
+    decay_secs = constrain(secs, 0.2f, 30.0f);
     for (int i = 0; i < LINES; i++) {
-      line_g[i] = powf(10.0f, -3.0f * LINE_LEN[i] / (secs * AUDIO_SAMPLE_RATE_EXACT));
+      line_g[i] = powf(10.0f, -3.0f * line_len[i] / (decay_secs * AUDIO_SAMPLE_RATE_EXACT));
     }
   }
 
@@ -94,12 +104,6 @@ public:
   bool ready() const { return mem != nullptr; }
 
   void update() override;
-
-  // where the taps sit, as a fraction of the delay time (last = feedback tap)
-  static constexpr float TAP_POS[2][TAPS] = {
-    {0.25f, 0.50f, 0.75f, 1.0f},
-    {0.33f, 0.58f, 0.83f, 1.0f},
-  };
 
 private:
   static constexpr float TAP_GAIN[TAPS] = {0.30f, 0.40f, 0.55f, 0.80f};
@@ -131,14 +135,16 @@ private:
   audio_block_t* input_queue_array[NUM_INPUTS];
   float* mem = nullptr;
   int ix[LINES + NUM_AP] = {};
+  int line_len[LINES] = {LINE_LEN[0], LINE_LEN[1], LINE_LEN[2], LINE_LEN[3]};
 
-  volatile float fb_target = 0.0f, mix_target = 0.5f, spread_target = 0.0f;
-  volatile float send_target = 0.0f, ap_g = 0.0f;
+  volatile float fb_target = 0.0f, dmix_target = 0.4f, rmix_target = 0.3f;
+  volatile float spread_target = 0.0f, ap_g = 0.0f;
   volatile float lp_a = 1.0f, hp_a = 0.0f;
   volatile bool freeze = false;
   float line_g[LINES] = {0.8f, 0.8f, 0.8f, 0.8f};
+  float decay_secs = 3.0f;
 
-  float fb = 0.0f, mix_ = 0.5f, spread_ = 0.0f, send = 0.0f, freeze_amt = 0.0f;
+  float fb = 0.0f, dmix = 0.4f, rmix = 0.3f, spread_ = 0.0f, freeze_amt = 0.0f;
   float lp_z[2] = {}, hp_z[2] = {}, damp_z[LINES] = {};
 
   Viz viz = {};
@@ -200,9 +206,9 @@ FLASHMEM void AudioEffectVast::update() {
   // per-block parameter smoothing
   constexpr float k = 0.15f;
   fb += k * (fb_target - fb);
-  mix_ += k * (mix_target - mix_);
+  dmix += k * (dmix_target - dmix);
+  rmix += k * (rmix_target - rmix);
   spread_ += k * (spread_target - spread_);
-  send += k * (send_target - send);
   freeze_amt += 0.06f * ((freeze ? 1.0f : 0.0f) - freeze_amt);
 
   const float frz = freeze_amt;
@@ -211,10 +217,15 @@ FLASHMEM void AudioEffectVast::update() {
   const float g = ap_g * live;
   const float damp = REV_DAMP * live;
   float lg[LINES];
-  for (int i = 0; i < LINES; i++) lg[i] = line_g[i] + (1.0f - line_g[i]) * frz;
+  int len[LINES];
+  for (int i = 0; i < LINES; i++) {
+    lg[i] = line_g[i] + (1.0f - line_g[i]) * frz;
+    len[i] = line_len[i];
+    if (ix[i] >= len[i]) ix[i] = 0; // SIZE got smaller
+  }
 
   float peak_tap[2][TAPS] = {};
-  float peak_tail = 0.0f, peak_in = 0.0f;
+  float peak_tail = 0.0f, peak_in = 0.0f, peak_out = 0.0f;
 
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
     float dry[2], tap[2][TAPS], tapsum[2];
@@ -230,7 +241,7 @@ FLASHMEM void AudioEffectVast::update() {
     }
 
     // --- delay write: input + processed feedback ---
-    // spread 0 = straight stereo, 1 = full ping-pong (mono into L, L<->R)
+    // ping-pong 0 = straight stereo, 1 = mono into L, L<->R in the loop
     const float mono = 0.5f * (dry[0] + dry[1]);
     const float inj[2] = {
       live * (dry[0] + s * (mono - dry[0])),
@@ -255,10 +266,14 @@ FLASHMEM void AudioEffectVast::update() {
       out[2 + c]->data[n] = ToQ15(w);
     }
 
-    // --- reverb (4-line FDN) on dry + echoes ---
+    // DELAY: crossfade dry -> echoes
+    float x1[2];
+    for (int c = 0; c < 2; c++) x1[c] = dry[c] + dmix * (tapsum[c] - dry[c]);
+
+    // --- REVERB: 4-line FDN fed by the delay stage ---
     float rin[2];
     for (int c = 0; c < 2; c++) {
-      float x = send * live * 0.5f * (dry[c] + tapsum[c]);
+      float x = live * 0.5f * x1[c];
       x = Allpass(x, AP_IN_BASE + c * 2, 0.6f);
       rin[c] = Allpass(x, AP_IN_BASE + c * 2 + 1, 0.6f);
     }
@@ -277,14 +292,15 @@ FLASHMEM void AudioEffectVast::update() {
     const float feed[LINES] = {rin[0], rin[1], rin[0], -rin[1]};
     for (int i = 0; i < LINES; i++) {
       mem[LINE_OFS[i] + ix[i]] = m[i] + feed[i];
-      if (++ix[i] >= LINE_LEN[i]) ix[i] = 0;
+      if (++ix[i] >= len[i]) ix[i] = 0;
     }
-    const float tail[2] = {0.6f * (y[0] + y[2]), 0.6f * (y[1] - y[3])};
+    const float tail[2] = {0.9f * (y[0] + y[2]), 0.9f * (y[1] - y[3])};
 
     for (int c = 0; c < 2; c++) {
       peak_tail = std::max(peak_tail, fabsf(tail[c]));
-      const float wet = tapsum[c] + tail[c];
-      out[c]->data[n] = ToQ15(dry[c] + mix_ * (wet - dry[c]));
+      const float o = x1[c] + rmix * (tail[c] - x1[c]);
+      peak_out = std::max(peak_out, fabsf(o));
+      out[c]->data[n] = ToQ15(o);
     }
   }
 
@@ -299,5 +315,6 @@ FLASHMEM void AudioEffectVast::update() {
       viz.tap[c][t] = std::max(viz.tap[c][t], peak_tap[c][t]);
   viz.tail = std::max(viz.tail, peak_tail);
   viz.in = std::max(viz.in, peak_in);
+  viz.out = std::max(viz.out, peak_out);
   viz.blocks++;
 }

@@ -130,6 +130,10 @@ public:
     );
   }
 
+  void Clear() {
+    if (buffer) std::fill(buffer, buffer + NumSamples, T{});
+  }
+
 protected:
   T* buffer;
   size_t write_ix = 0;
