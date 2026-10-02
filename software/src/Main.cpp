@@ -677,10 +677,6 @@ FLASHMEM __attribute__((noinline)) void SerialHandler() {
         case ')': OC::PresetEngine::RequestRecall(0); break;
         case '{': OC::PresetEngine::RequestSave(1); break;
         case '}': OC::PresetEngine::RequestRecall(1); break;
-        case 'g':
-          Serial.println("Saving global settings + app data...");
-          OC::SaveAppData();
-          break;
         case 'p':
           if (OC::PresetBusUI::Active()) OC::PresetBusUI::Exit();
           else OC::PresetBusUI::Enter();
@@ -696,6 +692,11 @@ FLASHMEM __attribute__((noinline)) void SerialHandler() {
           Serial.printf("PresetBus verbose = %d\n", OC::PresetBus::Verbose());
           break;
 #endif
+        // also in release builds: lets the flash script save state first
+        case 'g':
+          Serial.println("Saving global settings + app data...");
+          OC::SaveAppData();
+          break;
 #if defined(__IMXRT1062__)
         case 'X':
           DumpCrashLog();
