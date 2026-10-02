@@ -62,14 +62,20 @@ public:
         strike_vel_     = 0.0f;
         strike_remain_  = 0;
         noise_seed_     = 0xCAFEBABE;
-        dc_x1_ = dc_y1_ = 0.0f;
+        noise_lp_       = 0.0f;
+        for (int o = 0; o < 2; o++) dc_x1_[o] = dc_y1_[o] = 0.0f;
         updateCoeffs(261.63f, 0.5f, 0.7f, 0.5f, 0.25f);
     }
 
     void Release() {
         for (int k = 0; k < NUM_MODES; k++) lp_[k] = bp_[k] = 0.0f;
-        dc_x1_ = dc_y1_ = 0.0f;
+        for (int o = 0; o < 2; o++) dc_x1_[o] = dc_y1_[o] = 0.0f;
     }
+
+    // Stereo: odd modes on output 0, even modes on output 1 (like Rings)
+    void setSplit(bool split) { split_ = split; }
+    // 0 = both sides get all modes, 1 = full odd/even split
+    void setSpread(float spread) { spread_ = spread; }
 
     // --- Parameter update (call from Controller, ~150 Hz) -------------------
 
@@ -97,6 +103,9 @@ public:
         // structure 0→1 maps to stiffness -0.05→+1.5.
         float stiffness = structure * 1.55f - 0.05f;
         float stretch   = 1.0f;
+
+        // strike noise lowpass: soft mallet at low brightness
+        strike_lp_coef_ = 0.03f + 0.97f * brightness * brightness;
 
         // Accumulate sum of position gains to normalise output level.
         float gain_sum = 0.0f;
@@ -178,8 +187,11 @@ public:
     void update() override {
         audio_block_t* in  = receiveReadOnly(0);
         audio_block_t* out = allocate();
+        audio_block_t* out2 = split_ ? allocate() : nullptr;
 
-        if (!out) {
+        if (!out || (split_ && !out2)) {
+            if (out) release(out);
+            if (out2) release(out2);
             if (in) release(in);
             return;
         }
@@ -190,13 +202,20 @@ public:
         __asm__ volatile("vmsr fpscr, %0" :: "r"(fpscr_save | 0x03000000u));
 
         const int16_t* src = in ? in->data : nullptr;
-        int16_t*       dst = out->data;
+        int16_t*       dst[2] = { out->data, out2 ? out2->data : nullptr };
+        const int      nout = out2 ? 2 : 1;
+        // each side carries about half the modes at full spread
+        const float    spread = spread_;
+        const float    cross = 1.0f - spread;
+        const float    out_gain = out2 ? (1.0f + 0.41f * spread) * 32767.0f : 32767.0f;
+        const float    lp_c = strike_lp_coef_;
 
         bool  do_strike = strike_pending_;
         float vel       = strike_vel_;
         if (do_strike) {
             strike_pending_ = false;
             strike_remain_  = AUDIO_BLOCK_SAMPLES;
+            noise_lp_       = 0.0f;
         }
 
         // Load into locals for register-friendly inner loop
@@ -219,10 +238,12 @@ public:
             bp[k] = bp_v;
         }
         // NaN in the DC blocker would latch forever
-        if (dc_x1_ != dc_x1_ || dc_y1_ != dc_y1_ ||
-            dc_x1_ > 1e10f || dc_x1_ < -1e10f ||
-            dc_y1_ > 1e10f || dc_y1_ < -1e10f) {
-            dc_x1_ = dc_y1_ = 0.0f;
+        for (int o = 0; o < 2; o++) {
+            if (dc_x1_[o] != dc_x1_[o] || dc_y1_[o] != dc_y1_[o] ||
+                dc_x1_[o] > 1e10f || dc_x1_[o] < -1e10f ||
+                dc_y1_[o] > 1e10f || dc_y1_[o] < -1e10f) {
+                dc_x1_[o] = dc_y1_[o] = 0.0f;
+            }
         }
 
         for (int i = 0; i < AUDIO_BLOCK_SAMPLES; i++) {
@@ -238,7 +259,9 @@ public:
                 noise_seed_ ^= noise_seed_ >> 17;
                 noise_seed_ ^= noise_seed_ << 5;
                 // Unscaled: ±1 range, full amplitude strike
-                x += (float)(int32_t)noise_seed_ * (1.0f / 2147483648.0f) * vel;
+                float n = (float)(int32_t)noise_seed_ * (1.0f / 2147483648.0f);
+                noise_lp_ += lp_c * (n - noise_lp_);
+                x += noise_lp_ * vel;
             }
 
             // Track excitation peak — rescale external input back to ±1 range
@@ -250,22 +273,30 @@ public:
             }
 
             // Chamberlin SVF resonator bank — bandpass output
-            float y = 0.0f;
+            // y[0] = odd modes (1st, 3rd...), y[1] = even modes
+            float y[2] = { 0.0f, 0.0f };
             for (int k = 0; k < NUM_MODES; k++) {
                 float notch = x - dk[k] * bp[k];
                 lp[k]      += fk[k] * bp[k];
                 bp[k]      += fk[k] * (notch - lp[k]);
-                y           += mg[k] * bp[k];
+                y[k & 1]    += mg[k] * bp[k];
+            }
+            if (nout == 1) {
+                y[0] += y[1];
+            } else {
+                float odd = y[0];
+                y[0] += cross * y[1];
+                y[1] += cross * odd;
             }
 
-            // DC blocker: y_out = y - x[n-1] + 0.995*y[n-1]
-            float y_out = y - dc_x1_ + 0.995f * dc_y1_;
-            dc_x1_ = y;
-            dc_y1_ = y_out;
-            int16_t s = Clip16(y_out * 32767.0f);
-            dst[i] = s;
-            // Track output peak
-            {
+            for (int o = 0; o < nout; o++) {
+                // DC blocker: y_out = y - x[n-1] + 0.995*y[n-1]
+                float y_out = y[o] - dc_x1_[o] + 0.995f * dc_y1_[o];
+                dc_x1_[o] = y[o];
+                dc_y1_[o] = y_out;
+                int16_t s = Clip16(y_out * out_gain);
+                dst[o][i] = s;
+                // Track output peak
                 uint16_t av = s < 0 ? (uint16_t)(-s) : (uint16_t)s;
                 if (av > output_peak_) output_peak_ = av;
             }
@@ -287,6 +318,10 @@ public:
 
         transmit(out, 0);
         release(out);
+        if (out2) {
+            transmit(out2, 1);
+            release(out2);
+        }
         if (in) release(in);
     }
 
@@ -307,12 +342,17 @@ private:
     volatile float strike_vel_     = 1.0f;
     int            strike_remain_  = 0;
     uint32_t       noise_seed_     = 0xCAFEBABE;
+    float          noise_lp_       = 0.0f;
+    float          strike_lp_coef_ = 1.0f;
+
+    bool split_ = false;
+    volatile float spread_ = 1.0f;
 
     // VU
     volatile uint16_t excite_peak_  = 0;
     volatile uint16_t output_peak_  = 0;
 
     // DC blocker state (single-pole, pole at 0.995)
-    float dc_x1_ = 0.0f;
-    float dc_y1_ = 0.0f;
+    float dc_x1_[2] = { 0.0f, 0.0f };
+    float dc_y1_[2] = { 0.0f, 0.0f };
 };
