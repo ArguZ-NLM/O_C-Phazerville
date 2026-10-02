@@ -57,6 +57,21 @@ protected:
   float Seconds(int v, float lo, float hi) const { // 0..100 -> lo..hi, exp
     return lo * powf(hi / lo, constrain(v, 0, 100) * 0.01f);
   }
+  // RATE setting p in Hz: free (lo..hi) or one cycle per note value
+  float RateHz(int p, float lo, float hi) const {
+    if (mode[p] == SYNC_FREE) return Seconds(cur[p], lo, hi);
+    return 1.0f / DivSeconds(NUM_DIVS - 1 - DivIndex(cur[p], 0, 100), mode[p]);
+  }
+  int Step(int p, int v, int dir) const override {
+    if (param(p).nmodes == 4 && mode[p] != SYNC_FREE) // synced RATE: whole notes
+      return DivValue(DivIndex(v, 0, 100) + dir, 0, 100);
+    return v + dir;
+  }
+  void FormatRate(int p, float hz, char* buf, size_t n) const {
+    if (mode[p] != SYNC_FREE) FormatDiv(NUM_DIVS - 1 - DivIndex(val[p], 0, 100), mode[p], buf, n);
+    else if (hz < 1.0f) snprintf(buf, n, "%ds", int(1.0f / hz + 0.5f));
+    else snprintf(buf, n, "%dHz", int(hz + 0.5f));
+  }
 };
 
 FLASHMEM bool Modulator::Gate(int src) const { return TrigGate(src); }
@@ -117,7 +132,7 @@ FLASHMEM void Modulator::DrawMini(int x, int y, int w, int h) {
 PROGMEM static const DeviceDef WAVE_DEF = {
   "WAVE", "WAV", 7, {"RST", ""},
   {
-    {"RATE", 0, 100, 40, UNI},
+    {"RATE", 0, 100, 40, UNI, 0, 4, 0, {}, {"FREE", "STR", "TRI", "DOT"}},
     {"AMT", 0, 100, 100, UNI},
     {"PHASE", 0, 100, 0, UNI},
     {"OFFS", -50, 50, 0, BI},
@@ -136,7 +151,7 @@ public:
   void Action(int a) override { if (a == 0) { ph = 0.0f; flash = 0.1f; } }
 private:
   float ph = 0.0f;
-  float Hz() const { return Seconds(cur[P_RATE], 0.02f, 20.0f); }
+  float Hz() const { return RateHz(P_RATE, 0.02f, 20.0f); }
 };
 
 FLASHMEM void WaveMod::Tick(const ModCtx& ctx) {
@@ -160,9 +175,7 @@ FLASHMEM void WaveMod::Tick(const ModCtx& ctx) {
 
 FLASHMEM void WaveMod::Format(int p, char* buf, size_t n) const {
   if (p == P_RATE) {
-    const float hz = Hz();
-    if (hz < 1.0f) snprintf(buf, n, "%ds", int(1.0f / hz + 0.5f));
-    else snprintf(buf, n, "%dHz", int(hz + 0.5f));
+    FormatRate(p, Hz(), buf, n);
   } else if (p == P_RESET) {
     FormatTrig(val[p], buf, n);
   } else {
@@ -176,7 +189,7 @@ FLASHMEM void WaveMod::Format(int p, char* buf, size_t n) const {
 PROGMEM static const DeviceDef RANDOM_DEF = {
   "RANDOM", "RND", 7, {"STP", ""},
   {
-    {"RATE", 0, 100, 45, UNI},
+    {"RATE", 0, 100, 45, UNI, 0, 4, 0, {}, {"FREE", "STR", "TRI", "DOT"}},
     {"AMT", 0, 100, 100, UNI},
     {"SMTH", 0, 100, 0, UNI},
     {"OFFS", -50, 50, 0, BI},
@@ -199,7 +212,7 @@ private:
   float steps[16];
   uint8_t pos = 0;
   float target = 0.5f, smooth = 0.5f, t = 0.0f;
-  float Hz() const { return Seconds(cur[P_RATE], 0.05f, 30.0f); }
+  float Hz() const { return RateHz(P_RATE, 0.05f, 30.0f); }
   void Step();
 };
 
@@ -231,9 +244,7 @@ FLASHMEM void RandomMod::Tick(const ModCtx& ctx) {
 
 FLASHMEM void RandomMod::Format(int p, char* buf, size_t n) const {
   if (p == P_RATE) {
-    const float hz = Hz();
-    if (hz < 1.0f) snprintf(buf, n, "%ds", int(1.0f / hz + 0.5f));
-    else snprintf(buf, n, "%dHz", int(hz + 0.5f));
+    FormatRate(p, Hz(), buf, n);
   } else if (p == P_LEN) {
     if (val[P_LEN] == 0) snprintf(buf, n, "free");
     else snprintf(buf, n, "%d", val[P_LEN]);
@@ -350,6 +361,125 @@ FLASHMEM void FollowMod::Tick(const ModCtx& ctx) {
   const float tau = lvl > env ? Seconds(cur[P_RISE], 0.001f, 1.0f) : Seconds(cur[P_FALL], 0.005f, 3.0f);
   env += (lvl - env) * std::min(1.0f, ctx.dt / tau);
   out = env * cur[P_AMT] * 0.01f + cur[P_OFFS] * 0.01f;
+}
+
+/////////////////////////////////////////////////////////////////
+// CLOCK: one tempo for the whole app
+/////////////////////////////////////////////////////////////////
+// MIDI clock pulses seen by the app's MIDI reader
+volatile uint32_t midi_clocks = 0;
+
+// source: 0 internal, 1 MIDI clock, 2+ trigger sources (TR, CV, MIDI map)
+PROGMEM static const DeviceDef CLOCK_DEF = {
+  "CLOCK", "CLK", 3, {"TAP", ""},
+  {
+    {"SOURC", 0, TRIG_SOURCES, 0, UNI},
+    {"BPM", 30, 300, 120, UNI},
+    {"PPQN", 0, 3, 0, LIST, 4, 0, 0, {"1", "2", "4", "24"}},
+  }
+};
+
+class ClockDevice : public Modulator {
+public:
+  enum { P_SOURCE, P_BPM, P_PPQN };
+  ClockDevice() : Modulator(CLOCK_DEF) {}
+  void Tick(const ModCtx& ctx) override;
+  void Format(int p, char* buf, size_t n) const override;
+  void Action(int a) override;
+  void DrawViz(int x, int y, int w, int h) override;
+  void DrawMini(int x, int y, int w, int h) override;
+  bool external() const { return cur[P_SOURCE] != 0; }
+private:
+  uint32_t last_edge_us = 0, tap_us = 0;
+  uint32_t midi_mark = 0, midi_mark_us = 0;
+  float beat_ph = 0.0f;
+  float measured = 120.0f;
+  bool have_measure = false;
+  void Measured(float bpm);
+};
+
+FLASHMEM void ClockDevice::Measured(float bpm) {
+  if (bpm < 20.0f || bpm > 400.0f) return;
+  // follow quickly when far off, smooth out jitter when close
+  measured = (have_measure && fabsf(bpm - measured) < measured * 0.1f)
+    ? measured + 0.3f * (bpm - measured) : bpm;
+  have_measure = true;
+}
+
+FLASHMEM void ClockDevice::Tick(const ModCtx& ctx) {
+  const uint32_t now = micros();
+  const int src = cur[P_SOURCE];
+  if (src == 1) {
+    // MIDI clock, 24 per beat: measure over whole beats
+    const uint32_t c = midi_clocks;
+    if (c - midi_mark >= 24) {
+      if (midi_mark_us) Measured(60e6f * (c - midi_mark) / 24.0f / (now - midi_mark_us));
+      midi_mark = c;
+      midi_mark_us = now;
+    }
+  } else if (src >= 2) {
+    if (TrigEdge(src - 1, ctx.edges, prev_gate[0])) {
+      const uint32_t dt = now - last_edge_us;
+      static const uint8_t ppqn[] = {1, 2, 4, 24};
+      if (last_edge_us && dt > 2000 && dt < 4000000)
+        Measured(60e6f / (dt * ppqn[constrain(cur[P_PPQN], 0, 3)]));
+      last_edge_us = now;
+    }
+  }
+  tempo_bpm = (src && have_measure) ? measured : float(cur[P_BPM]);
+
+  // beat blink for the picture, and a 0..1 ramp per beat as output
+  beat_ph += ctx.dt * tempo_bpm / 60.0f;
+  if (beat_ph >= 1.0f) { beat_ph -= floorf(beat_ph); flash = 0.08f; }
+  out = beat_ph;
+}
+
+// TAP: tap the tempo on the UP button (internal clock)
+FLASHMEM void ClockDevice::Action(int a) {
+  if (a != 0) return;
+  const uint32_t now = micros();
+  const uint32_t dt = now - tap_us;
+  tap_us = now;
+  if (dt > 200000 && dt < 2000000) {
+    val[P_BPM] = constrain(int(60e6f / dt + 0.5f), 30, 300);
+    Refresh(P_BPM);
+  }
+}
+
+FLASHMEM void ClockDevice::Format(int p, char* buf, size_t n) const {
+  if (p == P_SOURCE) {
+    if (val[p] == 0) snprintf(buf, n, "INT");
+    else if (val[p] == 1) snprintf(buf, n, "MIDI");
+    else FormatTrig(val[p] - 1, buf, n);
+  } else if (p == P_BPM && external()) {
+    snprintf(buf, n, "%d", int(tempo_bpm + 0.5f));
+  } else {
+    Device::Format(p, buf, n);
+  }
+}
+
+FLASHMEM void ClockDevice::DrawViz(int x, int y, int w, int h) {
+  char buf[8];
+  snprintf(buf, sizeof(buf), "%d", int(tempo_bpm + 0.5f));
+  gfxPrint(x + 4, y + 4, buf);
+  gfxPrint(x + 4 + 6 * int(strlen(buf)) + 2, y + 4, PSTR("BPM"));
+  if (external() && !have_measure) gfxPrint(x + 4, y + 16, PSTR("waiting for clock"));
+  // four beats, the current one filled
+  for (int b = 0; b < 4; b++) {
+    const int bx = x + w - 52 + b * 13;
+    gfxFrame(bx, y + 4, 10, 10);
+  }
+  static uint8_t beat = 0;
+  if (flash > 0.07f) beat = (beat + 1) % 4;
+  gfxRect(x + w - 52 + beat * 13 + 2, y + 6, 6, 6);
+}
+
+FLASHMEM void ClockDevice::DrawMini(int x, int y, int w, int h) {
+  char buf[8];
+  snprintf(buf, sizeof(buf), "%d", int(tempo_bpm + 0.5f));
+  gfxPrint(x + 1, y + 2, buf);
+  if (flash > 0.0f) gfxRect(x + w / 2 - 3, y + h / 2 + 2, 6, 6);
+  else gfxFrame(x + w / 2 - 3, y + h / 2 + 2, 6, 6);
 }
 
 /////////////////////////////////////////////////////////////////

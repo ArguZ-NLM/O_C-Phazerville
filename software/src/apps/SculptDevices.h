@@ -43,7 +43,7 @@ struct ParamDef {
   uint8_t nmodes;    // 0 = no modes
   uint8_t defmode;
   char labels[4][6];
-  char modes[3][6];
+  char modes[4][6];
 };
 
 struct DeviceDef {
@@ -66,6 +66,35 @@ struct ModCtx {
   float in_level;     // the track's input level, 0..1
   float out_level;    // the track's output level, 0..1
 };
+
+// --- tempo ---
+// set by the CLOCK device; synced times and rates follow it
+float tempo_bpm = 120.0f;
+
+// note values for synced times, in beats (quarter notes)
+constexpr int NUM_DIVS = 9;
+PROGMEM static const float DIV_BEATS[NUM_DIVS] = {0.125f, 0.25f, 0.5f, 1, 2, 4, 8, 16, 32};
+PROGMEM static const char DIV_NAMES[NUM_DIVS][5] = {"1/32", "1/16", "1/8", "1/4", "1/2", "1", "2", "4", "8"};
+enum SyncMode : uint8_t { SYNC_FREE, SYNC_STRAIGHT, SYNC_TRIPLET, SYNC_DOTTED };
+
+// map a setting's value range onto the note values (so CV can pick them)
+FLASHMEM static int DivIndex(int v, int lo, int hi) {
+  return constrain((v - lo) * NUM_DIVS / (hi - lo + 1), 0, NUM_DIVS - 1);
+}
+FLASHMEM static int DivValue(int idx, int lo, int hi) {
+  idx = constrain(idx, 0, NUM_DIVS - 1);
+  return lo + ((hi - lo + 1) * (2 * idx + 1)) / (2 * NUM_DIVS);
+}
+FLASHMEM static float DivSeconds(int idx, uint8_t mode) {
+  float beats = DIV_BEATS[constrain(idx, 0, NUM_DIVS - 1)];
+  if (mode == SYNC_TRIPLET) beats *= 2.0f / 3.0f;
+  if (mode == SYNC_DOTTED) beats *= 1.5f;
+  return beats * 60.0f / tempo_bpm;
+}
+FLASHMEM static void FormatDiv(int idx, uint8_t mode, char* buf, size_t n) {
+  snprintf(buf, n, "%s%s", DIV_NAMES[constrain(idx, 0, NUM_DIVS - 1)],
+           mode == SYNC_TRIPLET ? "T" : mode == SYNC_DOTTED ? "D" : "");
+}
 
 // trigger source numbering: 0 off, 1-4 gate in, 5-12 CV in, 13+ MIDI map
 constexpr int TRIG_SOURCES = 1 + 4 + 8 + MIDIMAP_MAX;
@@ -133,6 +162,7 @@ public:
   // peak CPU % of this device's audio streams since the last call: parts[0]
   // is the device's own stream, parts[1] anything it owns (e.g. delay lines)
   virtual void CpuMax(float parts[2]) { parts[0] = parts[1] = 0.0f; }
+  virtual void TempoChanged() {}
 
   void Defaults();
   void ApplyAll();
@@ -523,7 +553,7 @@ PROGMEM static const DeviceDef VAST_DEF = {
   "VAST", "VST", 8, {"FRZ", "CLR"},
   {
     {"DELAY", 0, 100, 40, UNI},
-    {"TIME", 20, 6000, 450, UNI},
+    {"TIME", 20, 6000, 450, UNI, 0, 4, 0, {}, {"FREE", "STR", "TRI", "DOT"}},
     {"REVRB", 0, 100, 30, UNI},
     {"SIZE", 0, 100, 60, UNI},
     {"FDBK", 0, 100, 45, UNI},
@@ -554,6 +584,7 @@ public:
   void DrawViz(int x, int y, int w, int h) override;
   void DrawMini(int x, int y, int w, int h) override;
   void CpuMax(float parts[2]) override;
+  void TempoChanged() override { if (mode[TIME] != SYNC_FREE) SetTimes(); }
 
 private:
   AudioEffectVast vast;
@@ -597,7 +628,8 @@ FLASHMEM void VastDevice::CpuMax(float parts[2]) {
 }
 
 FLASHMEM void VastDevice::SetTimes() {
-  const float secs = cur[TIME] * 0.001f;
+  const float secs = mode[TIME] == SYNC_FREE ? cur[TIME] * 0.001f
+    : DivSeconds(DivIndex(cur[TIME], 20, 6000), mode[TIME]);
   const float phase = mode[SPREAD] == PHASE ? 1.0f + 0.3f * cur[SPREAD] * 0.01f : 1.0f;
   for (int c = 0; c < 2; c++) {
     for (int t = 0; t < TAPS; t++) {
@@ -628,12 +660,16 @@ FLASHMEM void VastDevice::Apply(int p) {
 }
 
 FLASHMEM int VastDevice::Step(int p, int v, int dir) const {
+  if (p == TIME && mode[TIME] != SYNC_FREE)
+    return DivValue(DivIndex(v, 20, 6000) + dir, 20, 6000);
   if (p == TIME) return v + dir * std::max(1, v / 32); // ~3% per detent
   return v + dir;
 }
 
 FLASHMEM void VastDevice::Format(int p, char* buf, size_t n) const {
-  if (p == TIME) {
+  if (p == TIME && mode[TIME] != SYNC_FREE) {
+    FormatDiv(DivIndex(val[TIME], 20, 6000), mode[TIME], buf, n);
+  } else if (p == TIME) {
     const int ms = val[TIME];
     if (ms < 1000) snprintf(buf, n, "%dms", ms);
     else snprintf(buf, n, "%d.%02ds", ms / 1000, (ms % 1000) / 10);

@@ -41,8 +41,14 @@
 //   X      action triggers: L enc source for UP's action, R enc for DOWN's
 //          (gate in, CV in as gate, MIDI map), X / Y to leave
 // MOD view (4 modulators per track, like the S4's):
-//   L enc  choose A-D                     R enc  type: WAVE/RANDOM/ADSR/FOLLOW
+//   L enc  choose A-D or CLK              R enc  type: WAVE/RANDOM/ADSR/FOLLOW
 //   R push open its settings              Y / X  back to the chain
+//   CLK is the app's tempo: internal (UP = tap), MIDI clock or a trigger
+//   input. VAST TIME and the WAVE / RANDOM rates can sync to it (modes STR,
+//   TRI, DOT: hold L + turn R on the setting).
+//
+// Settings are saved to SCULPT.BIN on the internal flash when Sculpt is left
+// (e.g. app menu) and with the global save, and loaded at power-up.
 //
 // While Sculpt is the active app it claims the audio outputs from AudioIO.
 // The Quadrants audio applet chain is left intact and comes back as soon as
@@ -52,6 +58,7 @@
 #include "../AudioIO.h"
 #include "../OC_gpio.h"
 #include "../HSMIDI.h"
+#include "../PhzConfig.h"
 #include "SculptDevices.h"
 #include "SculptMods.h"
 
@@ -88,6 +95,7 @@ namespace sculpt {
 
   Track tracks[NUM_TRACKS];
   SculptMixer* mixer = nullptr;
+  ClockDevice* tempo_clock = nullptr;
   Patch* patch = nullptr;
 
   bool audio_hw() { return I2S2_Audio_ADC && I2S2_Audio_DAC; }
@@ -132,12 +140,18 @@ private:
   uint8_t chord_releases = 0; // UP/DOWN releases to swallow after UP+DOWN
   bool active = false;
   bool linked = false;
+  mutable bool dirty = false; // something changed since the last save
+  float applied_tempo = 120.0f;
   int cpu = 0;
   elapsedMillis stats_timer;
 
   sculpt::Device* FocusOn(int t) const {
+    if (focus_mod && mod_cursor == sculpt::NUM_MODS) return sculpt::tempo_clock;
     return focus_mod ? sculpt::tracks[t].mod(mod_cursor) : sculpt::tracks[t].at(col);
   }
+  void SaveFile() const;
+  void LoadFile();
+  template <typename F> void ForEachDevice(F f) const;
   sculpt::Device* Focused() const { return FocusOn(track); }
   void SetModType(int t, int i, int type);
   void DrawMods() const;
@@ -194,6 +208,12 @@ FLASHMEM void AppSculpt::Start() {
   v2->val[VastDevice::TIME] = 680;
   v2->val[VastDevice::TONE] = 15;
   v2->mode[VastDevice::SPREAD] = VastDevice::DIFFUSE;
+
+  tempo_clock = new ClockDevice;
+  tempo_clock->mod_bus = tracks[0].mod_out;
+  tempo_clock->Defaults();
+
+  LoadFile();
 }
 
 FLASHMEM void AppSculpt::Repatch(int t) {
@@ -352,6 +372,7 @@ FLASHMEM void AppSculpt::Suspend() {
   for (int t = 0; t < NUM_TRACKS; t++) DisconnectTrack(t);
   active = false;
   l_held = false;
+  if (dirty) SaveFile();
 }
 
 // MIDI is normally read by Quadrants; while Sculpt runs it feeds the same
@@ -363,6 +384,7 @@ FLASHMEM static void SculptReadMIDI(T& device) {
       device.getChannel(), device.getType(), device.getData1(), device.getData2()
     };
     if (msg.message == midi::SystemExclusive || msg.message == midi::ProgramChange) continue;
+    if (msg.message == midi::Clock) sculpt::midi_clocks++;
     const bool realtime = msg.message == midi::Clock || msg.message == midi::Start
       || msg.message == midi::Stop;
     if (realtime || (msg.message >> 4) != 0xF) HS::frame.MIDIState.ProcessMIDIMsg(msg);
@@ -404,6 +426,12 @@ FLASHMEM void AppSculpt::ModulateAll() {
   ctx.edges = trig_latch;
   trig_latch = 0;
   __enable_irq();
+  ctx.in_level = ctx.out_level = 0.0f;
+  tempo_clock->Run(ctx);
+  if (fabsf(tempo_bpm - applied_tempo) > applied_tempo * 0.002f) {
+    applied_tempo = tempo_bpm;
+    ForEachDevice([](Device* d) { d->TempoChanged(); });
+  }
   for (int t = 0; t < NUM_TRACKS; t++) {
     Track& tr = tracks[t];
     ctx.in_level = tr.input->level;
@@ -469,6 +497,7 @@ FLASHMEM void AppSculpt::MainLoop() {
 /////////////////////////////////////////////////////////////////
 FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
   using namespace sculpt;
+  dirty = true;
   if (event.control == OC::CONTROL_BUTTON_L) {
     if (event.type == UI::EVENT_BUTTON_DOWN) {
       l_held = true;
@@ -563,12 +592,13 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
 
 FLASHMEM void AppSculpt::OnEncoder(const UI::Event &event) {
   using namespace sculpt;
+  dirty = true;
   const int dir = event.value;
   const bool left = event.control == OC::CONTROL_ENCODER_L;
   if (view == MODS) {
     if (left) {
-      mod_cursor = constrain(mod_cursor + dir, 0, NUM_MODS - 1);
-    } else {
+      mod_cursor = constrain(mod_cursor + dir, 0, NUM_MODS);
+    } else if (mod_cursor < NUM_MODS) {
       const int type = tracks[track].mod_type[mod_cursor] + dir;
       SetModType(track, mod_cursor, type);
       if (linked) SetModType(1 - track, mod_cursor, tracks[track].mod_type[mod_cursor]);
@@ -799,23 +829,168 @@ FLASHMEM void AppSculpt::DrawMods() const {
   else gfxPrint(1, 0, track + 1);
   gfxPrint(linked ? 24 : 12, 0, PSTR("MODULATORS"));
   gfxLine(0, 9, 127, 9);
-  for (int i = 0; i < NUM_MODS; i++) {
-    const int x = i * 32;
-    Modulator* m = tr.mod(i);
+  constexpr int bw = 25;
+  for (int i = 0; i <= NUM_MODS; i++) {
+    const int x = i * bw + 1;
+    Modulator* m = i < NUM_MODS ? tr.mod(i) : tempo_clock;
     char buf[8];
-    snprintf(buf, sizeof(buf), "%c %s", 'A' + i, MOD_TYPE_TAGS[tr.mod_type[i]]);
-    gfxPrint(x + 2, 12, buf);
+    if (i < NUM_MODS) snprintf(buf, sizeof(buf), "%c%s", 'A' + i, MOD_TYPE_TAGS[tr.mod_type[i]]);
+    else snprintf(buf, sizeof(buf), "CLK");
+    gfxPrint(x + 1, 12, buf);
     if (m) {
-      gfxFrame(x + 1, 21, 30, 30);
-      m->DrawMini(x + 2, 22, 28, 28);
+      gfxFrame(x, 21, bw - 1, 30);
+      m->DrawMini(x + 1, 22, bw - 3, 28);
     } else {
-      gfxFrame(x + 1, 21, 30, 30, true);
+      gfxFrame(x, 21, bw - 1, 30, true);
     }
-    if (i == mod_cursor) gfxInvert(x + 1, 11, 30, 9);
+    if (i == mod_cursor) gfxInvert(x, 11, bw - 1, 9);
   }
-  Modulator* m = tr.mod(mod_cursor);
+  Modulator* m = mod_cursor < NUM_MODS ? tr.mod(mod_cursor) : tempo_clock;
   gfxPrint(0, 56, m ? m->def.name : PSTR("off"));
-  gfxPrint(70, 56, PSTR("Y:back"));
+  gfxPrint(80, 56, PSTR("Y:back"));
+}
+
+/////////////////////////////////////////////////////////////////
+// Saving: SCULPT.BIN on the internal flash
+/////////////////////////////////////////////////////////////////
+namespace sculpt {
+  constexpr char SAVE_FILE[] = "SCULPT.BIN";
+  constexpr char SAVE_TMP[] = "SCULPT.TMP";
+  constexpr uint8_t SAVE_VERSION = 1;
+
+  // per device: tag, count, then per setting value/mode/mod amount/
+  // mod source/bus select, then bipolar bits and action triggers
+  FLASHMEM static void WriteDevice(File& f, const Device* d) {
+    uint8_t present = d ? 1 : 0;
+    f.write(&present, 1);
+    if (!d) return;
+    f.write(d->def.tag, 4);
+    const uint8_t n = d->num_params();
+    f.write(&n, 1);
+    for (int p = 0; p < n; p++) {
+      const uint16_t src = d->mod_in[p].Pack();
+      f.write(&d->val[p], 2);
+      f.write(&d->mode[p], 1);
+      f.write(&d->mod_amt[p], 1);
+      f.write(&src, 2);
+      f.write(&d->mod_bus_sel[p], 1);
+    }
+    f.write(&d->mod_bi, 1);
+    f.write(d->act_trig, 2);
+  }
+
+  // reads one record; applies it if d is there and of the same kind
+  FLASHMEM static bool ReadDevice(File& f, Device* d) {
+    uint8_t present = 0;
+    if (f.read(&present, 1) != 1) return false;
+    if (!present) return true;
+    char tag[4];
+    uint8_t n = 0;
+    if (f.read(tag, 4) != 4 || f.read(&n, 1) != 1 || n > MAX_PARAMS) return false;
+    const bool use = d && !memcmp(tag, d->def.tag, 4) && n == d->num_params();
+    for (int p = 0; p < n; p++) {
+      int16_t v; uint8_t md; int8_t amt; uint16_t src; uint8_t bus;
+      if (f.read(&v, 2) != 2 || f.read(&md, 1) != 1 || f.read(&amt, 1) != 1
+          || f.read(&src, 2) != 2 || f.read(&bus, 1) != 1) return false;
+      if (!use) continue;
+      const ParamDef& pd = d->param(p);
+      d->val[p] = constrain(v, pd.min, pd.max);
+      d->mode[p] = pd.nmodes ? constrain(md, 0, pd.nmodes - 1) : 0;
+      d->mod_amt[p] = constrain(amt, -100, 100);
+      d->mod_in[p].Unpack(src);
+      d->mod_bus_sel[p] = bus <= 4 ? bus : 0;
+    }
+    uint8_t bi, trig[2];
+    if (f.read(&bi, 1) != 1 || f.read(trig, 2) != 2) return false;
+    if (use) {
+      d->mod_bi = bi;
+      for (int a = 0; a < 2; a++) d->act_trig[a] = trig[a] < TRIG_SOURCES ? trig[a] : 0;
+    }
+    return true;
+  }
+}
+
+template <typename F>
+FLASHMEM void AppSculpt::ForEachDevice(F f) const {
+  using namespace sculpt;
+  if (tempo_clock) f(tempo_clock);
+  for (auto& tr : tracks) {
+    f(tr.input);
+    f(tr.mix);
+    for (int s = MATERIAL + 1; s < SLOT_COUNT; s++)
+      for (auto d : tr.inst[s]) if (d) f(d);
+    for (auto& slot : tr.mods)
+      for (auto m : slot) if (m) f(m);
+  }
+}
+
+FLASHMEM void AppSculpt::SaveFile() const {
+  using namespace sculpt;
+  auto& fs = PhzConfig::myfs;
+  File f = fs.open(SAVE_TMP, FILE_WRITE_BEGIN);
+  if (!f) return;
+  f.write("SCU", 3);
+  f.write(&SAVE_VERSION, 1);
+  const uint8_t lk = linked;
+  f.write(&lk, 1);
+  WriteDevice(f, tempo_clock);
+  for (auto& tr : tracks) {
+    f.write(tr.choice, SLOT_COUNT);
+    f.write(tr.last_choice, SLOT_COUNT);
+    WriteDevice(f, tr.input);
+    WriteDevice(f, tr.mix);
+    for (int s = MATERIAL + 1; s < SLOT_COUNT; s++)
+      for (int o = 0; o < MAX_OPTIONS; o++) WriteDevice(f, tr.inst[s][o]);
+    f.write(tr.mod_type, NUM_MODS);
+    for (int i = 0; i < NUM_MODS; i++)
+      for (int type = 1; type < MOD_TYPES; type++) WriteDevice(f, tr.mods[i][type]);
+  }
+  f.close();
+  fs.remove(SAVE_FILE);
+  fs.rename(SAVE_TMP, SAVE_FILE);
+  dirty = false;
+  Serial.println("Sculpt: settings saved");
+}
+
+FLASHMEM void AppSculpt::LoadFile() {
+  using namespace sculpt;
+  File f = PhzConfig::myfs.open(SAVE_FILE, FILE_READ);
+  if (!f) return;
+  char magic[3];
+  uint8_t version = 0, lk = 0;
+  if (f.read(magic, 3) != 3 || memcmp(magic, "SCU", 3) || f.read(&version, 1) != 1
+      || version != SAVE_VERSION || f.read(&lk, 1) != 1) {
+    f.close();
+    return;
+  }
+  bool ok = ReadDevice(f, tempo_clock);
+  for (int t = 0; t < NUM_TRACKS && ok; t++) {
+    Track& tr = tracks[t];
+    uint8_t choice[SLOT_COUNT], last[SLOT_COUNT], types[NUM_MODS];
+    ok = f.read(choice, SLOT_COUNT) == SLOT_COUNT && f.read(last, SLOT_COUNT) == SLOT_COUNT;
+    if (!ok) break;
+    for (int s = MATERIAL + 1; s < SLOT_COUNT; s++) {
+      tr.choice[s] = choice[s] < SLOT_DEFS[s].noptions ? choice[s] : 0;
+      tr.last_choice[s] = last[s] < SLOT_DEFS[s].noptions ? last[s] : 0;
+    }
+    ok = ReadDevice(f, tr.input) && ReadDevice(f, tr.mix);
+    for (int s = MATERIAL + 1; s < SLOT_COUNT && ok; s++)
+      for (int o = 0; o < MAX_OPTIONS && ok; o++) ok = ReadDevice(f, tr.inst[s][o]);
+    if (!ok || f.read(types, NUM_MODS) != NUM_MODS) { ok = false; break; }
+    for (int i = 0; i < NUM_MODS && ok; i++) {
+      for (int type = 1; type < MOD_TYPES && ok; type++) {
+        // create the modulator before reading into it
+        if (f.peek() == 1 && !tr.mods[i][type]) SetModType(t, i, type);
+        ok = ReadDevice(f, tr.mods[i][type]);
+      }
+      tr.mod_type[i] = types[i] < MOD_TYPES ? types[i] : 0;
+      if (tr.mod_type[i] && !tr.mod(i)) tr.mod_type[i] = 0;
+    }
+  }
+  f.close();
+  linked = lk;
+  ForEachDevice([](Device* d) { d->ApplyAll(); });
+  Serial.printf("Sculpt: settings loaded%s\n", ok ? "" : " (partly)");
 }
 
 FLASHMEM void AppSculpt::View() const {
@@ -832,7 +1007,11 @@ FLASHMEM void AppSculpt::Init() {
   BaseStart();
 }
 
-size_t AppSculpt::SaveAppData(util::StreamBufferWriter &) const { return 0; }
+// the global save (app menu, USB 'g') also writes Sculpt's own file
+FLASHMEM size_t AppSculpt::SaveAppData(util::StreamBufferWriter &) const {
+  if (dirty) SaveFile();
+  return 0;
+}
 size_t AppSculpt::RestoreAppData(util::StreamBufferReader &) { return 0; }
 
 void AppSculpt::Process(OC::IOFrame *ioframe) {
