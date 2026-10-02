@@ -483,6 +483,18 @@ FLASHMEM void setup() {
 
 /*  ---------    main loop  --------  */
 
+// USB 'g': save before flashing. Quadrants keeps its setup in the loaded
+// preset, so store that too when auto-save is on.
+FLASHMEM static void SaveFromUSB() {
+  if (HS::auto_save_enabled) {
+    OC::app_switcher.current_app()->DispatchAppEvent(OC::APP_EVENT_FLUSH);
+    Serial.println("Auto-save on: preset stored");
+  }
+  Serial.printf("Saving global settings + app data... (build %s%s)\n",
+                OC::Strings::VERSION, OC::Strings::BUILD_TAG);
+  OC::SaveAppData();
+}
+
 void FASTRUN loop() {
   using namespace OC;
   CORE::app_isr_enabled = true;
@@ -670,14 +682,7 @@ void FASTRUN loop() {
 #endif
           // also in release builds: lets the flash script save state first
           case 'g':
-            // Quadrants keeps its setup in the loaded preset: store it like auto-save does
-            if (HS::auto_save_enabled) {
-              OC::app_switcher.current_app()->DispatchAppEvent(OC::APP_EVENT_FLUSH);
-              Serial.println("Auto-save on: preset stored");
-            }
-            Serial.printf("Saving global settings + app data... (build %s%s)\n",
-                          OC::Strings::VERSION, OC::Strings::BUILD_TAG);
-            OC::SaveAppData();
+            SaveFromUSB();
             break;
           default:
             capreq = true;
