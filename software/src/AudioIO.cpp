@@ -43,7 +43,7 @@ namespace OC {
       }
     }
 
-    AudioStream& OutputStream() {
+    FLASHMEM AudioStream& OutputStream() {
       // The output stream should be created after all other streams have been
       // created or we get an extra 3ms of latency. Hence, we initialize it
       // lazily. This is pretty hacky; if someone references this before all
@@ -68,6 +68,65 @@ namespace OC {
 
     void Init() {
       AudioMemory(AUDIO_MEMORY);
+    }
+
+    // used while an app has claimed the outputs; on the heap so they cost
+    // no RAM1 until first used
+    struct ClaimConns {
+      AudioConnection out[2];
+#ifdef AUDIO_INTERFACE
+      AudioConnection usb[2];
+#endif
+    };
+    ClaimConns* claim = nullptr;
+    AudioStream* claimed_by = nullptr;
+
+    FLASHMEM void ClaimOutput(AudioStream& src) {
+      OutputStream(); // make sure the I2S output exists
+      if (!claim) claim = new ClaimConns;
+      AudioNoInterrupts();
+      if (claimed_by) {
+        for (auto& c : claim->out) c.disconnect();
+#ifdef AUDIO_INTERFACE
+        for (auto& c : claim->usb) c.disconnect();
+#endif
+      }
+#ifdef AUDIO_INTERFACE
+      // the applet chain normally feeds the hardware out (via usbmix) and USB
+      in_conn_mixL.disconnect();
+      in_conn_mixR.disconnect();
+      out_conn_usbL.disconnect();
+      out_conn_usbR.disconnect();
+      claim->out[0].connect(src, 0, usbmix[0], 1);
+      claim->out[1].connect(src, 1, usbmix[1], 1);
+      claim->usb[0].connect(src, 0, output_usb, 0);
+      claim->usb[1].connect(src, 1, output_usb, 1);
+#else
+      out_conn[0].disconnect();
+      out_conn[1].disconnect();
+      claim->out[0].connect(src, 0, *output_stream, 0);
+      claim->out[1].connect(src, 1, *output_stream, 1);
+#endif
+      claimed_by = &src;
+      AudioInterrupts();
+    }
+
+    FLASHMEM void ReleaseOutput() {
+      if (!claimed_by) return;
+      AudioNoInterrupts();
+      for (auto& c : claim->out) c.disconnect();
+#ifdef AUDIO_INTERFACE
+      for (auto& c : claim->usb) c.disconnect();
+      in_conn_mixL.connect(output_route, 0, usbmix[0], 1);
+      in_conn_mixR.connect(output_route, 1, usbmix[1], 1);
+      out_conn_usbL.connect(output_route, 0, output_usb, 0);
+      out_conn_usbR.connect(output_route, 1, output_usb, 1);
+#else
+      out_conn[0].connect(output_route, 0, *output_stream, 0);
+      out_conn[1].connect(output_route, 1, *output_stream, 1);
+#endif
+      claimed_by = nullptr;
+      AudioInterrupts();
     }
   }
 }

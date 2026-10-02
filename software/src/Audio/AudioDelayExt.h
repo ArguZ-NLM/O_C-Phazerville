@@ -73,6 +73,10 @@ public:
     }
   }
 
+  bool ready() const {
+    return buffer.IsReady();
+  }
+
   void taps(size_t num) {
     taps_ = num;
   }

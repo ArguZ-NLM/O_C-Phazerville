@@ -42,6 +42,9 @@ namespace menu = OC::menu;
 #include "ScaleEditor.h"
 #include "WaveformEditor.h"
 #include "PongGame.h"
+#if defined(ENABLE_APP_SCULPT) && defined(ARDUINO_TEENSY41)
+#include "Sculpt.h"
+#endif
 #include "Backup.h"
 #include "SETTINGS.h"
 
@@ -130,6 +133,9 @@ static AppContainer<void // this space intentionally left blank
 #endif
 #ifdef ENABLE_APP_PONG
   , AppPong
+#endif
+#if defined(ENABLE_APP_SCULPT) && defined(ARDUINO_TEENSY41)
+  , AppSculpt
 #endif
   , AppScaleEditor
 #ifndef NO_HEMISPHERE
