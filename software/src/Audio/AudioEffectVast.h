@@ -4,27 +4,21 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 
-// Delay + reverb core for the Sculpt VAST device.
+// Delay + reverb core for the Sculpt VAST device. Stereo in, stereo out.
 //
-// The delay lines are two AudioDelayExt streams (buffers in extmem) that are
-// patched around this object. Vast builds the signal written into them (input
-// plus filtered, diffused feedback), crossfades the taps against the dry
-// signal (DELAY), then sends that through a 4-line FDN reverb (REVERB).
-// AudioDelayExt's own feedback stays at 0, so the tone filter and the L/R
-// cross-feed can sit inside the loop.
-//
-// Inputs:  0,1 = dry L/R, 2..2+TAPS-1 = L taps, then TAPS R taps
-// Outputs: 0,1 = out L/R, 2,3 = delay write L/R
-//
-// The loop runs through the audio graph, so it is one block longer than the
-// tap time. The owner subtracts LOOP_LATENCY_SECS when setting tap times.
+// The delay lines live in extmem and are read a whole block at a time (taps
+// are at least one block long), which suits PSRAM far better than reading
+// sample by sample. Changing a tap time crossfades from the old read position
+// to the new one. The write signal is input plus feedback from the last tap,
+// filtered (TONE), diffused / cross-fed (SPREAD) and soft clipped. DELAY
+// crossfades the taps against the dry signal, then REVERB crossfades that
+// against a 4-line FDN fed by it.
 class AudioEffectVast : public AudioStream {
 public:
   static constexpr int TAPS = 4;
-  static constexpr int NUM_INPUTS = 2 + 2 * TAPS;
-  static constexpr float LOOP_LATENCY_SECS
-    = AUDIO_BLOCK_SAMPLES / AUDIO_SAMPLE_RATE_EXACT;
+  static constexpr int MIN_TAP = AUDIO_BLOCK_SAMPLES;
 
   // Peak levels (0..1), held until the UI reads them with ReadViz()
   struct Viz {
@@ -35,30 +29,43 @@ public:
     uint32_t blocks;
   };
 
-  AudioEffectVast() : AudioStream(NUM_INPUTS, input_queue_array) {}
+  explicit AudioEffectVast(size_t delay_samples)
+    : AudioStream(2, input_queue_array), dlen(delay_samples) {}
 
+  // allocate and clear everything; call while the stream is disconnected
   bool Acquire() {
-    if (!mem) {
-      mem = static_cast<float*>(calloc(MEM_TOTAL, sizeof(float)));
+    if (!mem) mem = static_cast<float*>(calloc(MEM_TOTAL, sizeof(float)));
+    for (auto& b : dbuf) {
+      if (!b) b = static_cast<int16_t*>(extmem_malloc(dlen * sizeof(int16_t)));
     }
     Reset();
-    return mem != nullptr;
+    return ready();
   }
 
   void Release() {
-    float* m = mem;
+    free(mem);
     mem = nullptr;
-    free(m);
+    for (auto& b : dbuf) {
+      if (b) extmem_free(b);
+      b = nullptr;
+    }
   }
+
+  bool ready() const { return mem && dbuf[0] && dbuf[1]; }
 
   void Reset() {
     if (mem) std::fill(mem, mem + MEM_TOTAL, 0.0f);
+    for (auto b : dbuf) if (b) memset(b, 0, dlen * sizeof(int16_t));
     for (auto& i : ix) i = 0;
     for (int c = 0; c < 2; c++) lp_z[c] = hp_z[c] = 0.0f;
     for (auto& z : damp_z) z = 0.0f;
   }
 
   // --- parameters, set from the UI thread ---
+  // tap delay in samples, at least MIN_TAP
+  void tap(int ch, int t, int samples) {
+    tap_[ch][t].target = constrain(samples, MIN_TAP, int(dlen) - 1);
+  }
   void feedback(float f) { fb_target = constrain(f, 0.0f, 1.05f); }
   void delay_mix(float m) { dmix_target = constrain(m, 0.0f, 1.0f); }
   void reverb_mix(float m) { rmix_target = constrain(m, 0.0f, 1.0f); }
@@ -101,15 +108,14 @@ public:
     AudioInterrupts();
   }
 
-  bool ready() const { return mem != nullptr; }
-
   void update() override;
 
 private:
   static constexpr float TAP_GAIN[TAPS] = {0.30f, 0.40f, 0.55f, 0.80f};
   static constexpr float REV_DAMP = 0.35f;
+  static constexpr int XFADE = 4 * AUDIO_BLOCK_SAMPLES; // ~10 ms
 
-  // all delay memory lives in one RAM2 allocation
+  // reverb memory: one RAM2 allocation
   static constexpr int LINES = 4;
   static constexpr int NUM_AP = 8; // 4 in the feedback path, 4 at reverb input
   static constexpr int AP_FB_BASE = 0;
@@ -132,7 +138,19 @@ private:
   };
   static constexpr int MEM_TOTAL = AP_OFS[NUM_AP - 1] + 277;
 
-  audio_block_t* input_queue_array[NUM_INPUTS];
+  struct Tap {
+    volatile int target = MIN_TAP;
+    int cur = MIN_TAP;   // read position now
+    int next = MIN_TAP;  // fading towards this one
+    int phase = XFADE;   // XFADE = not fading
+  };
+
+  audio_block_t* input_queue_array[2];
+  const size_t dlen;
+  int16_t* dbuf[2] = {nullptr, nullptr};
+  size_t wpos = 0;
+  Tap tap_[2][TAPS];
+
   float* mem = nullptr;
   int ix[LINES + NUM_AP] = {};
   int line_len[LINES] = {LINE_LEN[0], LINE_LEN[1], LINE_LEN[2], LINE_LEN[3]};
@@ -153,20 +171,14 @@ private:
     return 1.0f - expf(-2.0f * float(M_PI) * hz / AUDIO_SAMPLE_RATE_EXACT);
   }
 
-  static inline float Sample(const audio_block_t* b, int n) {
-    return b ? b->data[n] * (1.0f / 32768.0f) : 0.0f;
-  }
-
   static inline int16_t ToQ15(float x) {
-    int32_t v = static_cast<int32_t>(x * 32767.0f);
-    return static_cast<int16_t>(__SSAT(v, 16));
+    return static_cast<int16_t>(__SSAT(static_cast<int32_t>(x * 32767.0f), 16));
   }
 
-  // tanh-like, unity gain near 0, keeps runaway feedback bounded
+  // cubic soft clip, unity gain near 0, flat at +-1 from +-1.5 on
   static inline float SoftClip(float x) {
-    x = constrain(x, -3.0f, 3.0f);
-    const float x2 = x * x;
-    return x * (27.0f + x2) / (27.0f + 9.0f * x2);
+    x = constrain(x, -1.5f, 1.5f);
+    return x - (4.0f / 27.0f) * x * x * x;
   }
 
   __attribute__((always_inline)) inline float Allpass(float x, int i, float g) {
@@ -178,27 +190,47 @@ private:
     if (++p >= AP_LEN[i]) p = 0;
     return d - g * v;
   }
+
+  // copy one block from `delay` samples back (wrapping around the buffer)
+  void ReadBlock(int ch, int delay, int16_t* out) const {
+    const int16_t* b = dbuf[ch];
+    size_t start = (wpos + dlen - delay) % dlen;
+    const size_t first = std::min<size_t>(AUDIO_BLOCK_SAMPLES, dlen - start);
+    memcpy(out, b + start, first * sizeof(int16_t));
+    if (first < AUDIO_BLOCK_SAMPLES)
+      memcpy(out + first, b, (AUDIO_BLOCK_SAMPLES - first) * sizeof(int16_t));
+  }
+
+  void ReadTap(int ch, int t, int16_t* out);
 };
+
+// Reads one tap's block; crossfades when its time has changed.
+FLASHMEM void AudioEffectVast::ReadTap(int ch, int t, int16_t* out) {
+  Tap& tp = tap_[ch][t];
+  if (tp.phase >= XFADE && tp.target != tp.cur) {
+    tp.next = tp.target;
+    tp.phase = 0;
+  }
+  ReadBlock(ch, tp.cur, out);
+  if (tp.phase >= XFADE) return;
+
+  int16_t other[AUDIO_BLOCK_SAMPLES];
+  ReadBlock(ch, tp.next, other);
+  for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+    const int w = tp.phase + n; // 0..XFADE linear
+    out[n] = static_cast<int16_t>((out[n] * (XFADE - w) + other[n] * w) / XFADE);
+  }
+  tp.phase += AUDIO_BLOCK_SAMPLES;
+  if (tp.phase >= XFADE) tp.cur = tp.next;
+}
 
 // Runs from flash: RAM1 is full in the T41_audio build. It stays in the
 // I-cache while Sculpt is running.
 FLASHMEM void AudioEffectVast::update() {
-  audio_block_t* in[NUM_INPUTS];
-  for (int i = 0; i < NUM_INPUTS; i++) in[i] = receiveReadOnly(i);
-
-  audio_block_t* out[4];
-  for (auto& o : out) o = allocate();
-  if (!out[0] || !out[1] || !out[2] || !out[3] || !mem) {
-    // still keep the delays fed with silence when we can
-    for (int i = 0; i < 4; i++) {
-      if (out[i]) {
-        if (i >= 2) {
-          std::fill(out[i]->data, out[i]->data + AUDIO_BLOCK_SAMPLES, 0);
-          transmit(out[i], i);
-        }
-        release(out[i]);
-      }
-    }
+  audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
+  audio_block_t* out[2] = {allocate(), allocate()};
+  if (!out[0] || !out[1] || !ready()) {
+    for (auto b : out) if (b) release(b);
     for (auto b : in) if (b) release(b);
     return;
   }
@@ -216,6 +248,7 @@ FLASHMEM void AudioEffectVast::update() {
   const float s = spread_;
   const float g = ap_g * live;
   const float damp = REV_DAMP * live;
+  const float la = lp_a, ha = hp_a;
   float lg[LINES];
   int len[LINES];
   for (int i = 0; i < LINES; i++) {
@@ -224,21 +257,47 @@ FLASHMEM void AudioEffectVast::update() {
     if (ix[i] >= len[i]) ix[i] = 0; // SIZE got smaller
   }
 
-  float peak_tap[2][TAPS] = {};
-  float peak_tail = 0.0f, peak_in = 0.0f, peak_out = 0.0f;
+  // --- read the taps a block at a time ---
+  float tsum[2][AUDIO_BLOCK_SAMPLES];
+  int16_t last[2][AUDIO_BLOCK_SAMPLES];
+  int16_t blk[AUDIO_BLOCK_SAMPLES];
+  int peak_tap[2][TAPS] = {};
+  for (int c = 0; c < 2; c++) {
+    float* ts = tsum[c];
+    for (int t = 0; t < TAPS; t++) {
+      int16_t* dst = (t == TAPS - 1) ? last[c] : blk;
+      ReadTap(c, t, dst);
+      const float tg = TAP_GAIN[t] * (1.0f / 32768.0f);
+      int pk = 0;
+      if (t == 0) {
+        for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+          ts[n] = dst[n] * tg;
+          pk = std::max(pk, abs(dst[n]));
+        }
+      } else {
+        for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+          ts[n] += dst[n] * tg;
+          pk = std::max(pk, abs(dst[n]));
+        }
+      }
+      peak_tap[c][t] = pk;
+    }
+  }
+
+  static const int16_t silence[AUDIO_BLOCK_SAMPLES] = {};
+  const int16_t* dry_in[2] = {
+    in[0] ? in[0]->data : silence, in[1] ? in[1]->data : silence
+  };
+  int16_t wr[2][AUDIO_BLOCK_SAMPLES];
+  float peak_tail = 0.0f;
+  int peak_in = 0, peak_out = 0;
+  constexpr float q = 1.0f / 32768.0f;
 
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
-    float dry[2], tap[2][TAPS], tapsum[2];
-    for (int c = 0; c < 2; c++) {
-      dry[c] = Sample(in[c], n);
-      peak_in = std::max(peak_in, fabsf(dry[c]));
-      tapsum[c] = 0.0f;
-      for (int t = 0; t < TAPS; t++) {
-        tap[c][t] = Sample(in[2 + c * TAPS + t], n);
-        tapsum[c] += TAP_GAIN[t] * tap[c][t];
-        peak_tap[c][t] = std::max(peak_tap[c][t], fabsf(tap[c][t]));
-      }
-    }
+    const int16_t d0 = dry_in[0][n], d1 = dry_in[1][n];
+    peak_in = std::max(peak_in, std::max(abs(d0), abs(d1)));
+    const float dry[2] = {d0 * q, d1 * q};
+    const float lst[2] = {last[0][n] * q, last[1][n] * q};
 
     // --- delay write: input + processed feedback ---
     // ping-pong 0 = straight stereo, 1 = mono into L, L<->R in the loop
@@ -247,28 +306,30 @@ FLASHMEM void AudioEffectVast::update() {
       live * (dry[0] + s * (mono - dry[0])),
       live * (dry[1] * (1.0f - s)),
     };
-    const float last[2] = {tap[0][TAPS - 1], tap[1][TAPS - 1]};
     const float fbsrc[2] = {
-      last[0] + s * (last[1] - last[0]),
-      last[1] + s * (last[0] - last[1]),
+      lst[0] + s * (lst[1] - lst[0]),
+      lst[1] + s * (lst[0] - lst[1]),
     };
     for (int c = 0; c < 2; c++) {
       float x = fbsrc[c] * fb;
-      lp_z[c] += lp_a * (x - lp_z[c]);
+      lp_z[c] += la * (x - lp_z[c]);
       x = lp_z[c];
-      hp_z[c] += hp_a * (x - hp_z[c]);
+      hp_z[c] += ha * (x - hp_z[c]);
       x -= hp_z[c];
-      x = Allpass(x, AP_FB_BASE + c * 2, g);
-      x = Allpass(x, AP_FB_BASE + c * 2 + 1, g);
+      if (g > 0.0f) {
+        x = Allpass(x, AP_FB_BASE + c * 2, g);
+        x = Allpass(x, AP_FB_BASE + c * 2 + 1, g);
+      }
       x = SoftClip(x);
       // frozen: loop the last tap untouched
-      const float w = inj[c] + x * live + fbsrc[c] * frz;
-      out[2 + c]->data[n] = ToQ15(w);
+      wr[c][n] = ToQ15(inj[c] + x * live + fbsrc[c] * frz);
     }
 
     // DELAY: crossfade dry -> echoes
-    float x1[2];
-    for (int c = 0; c < 2; c++) x1[c] = dry[c] + dmix * (tapsum[c] - dry[c]);
+    const float x1[2] = {
+      dry[0] + dmix * (tsum[0][n] - dry[0]),
+      dry[1] + dmix * (tsum[1][n] - dry[1]),
+    };
 
     // --- REVERB: 4-line FDN fed by the delay stage ---
     float rin[2];
@@ -286,35 +347,43 @@ FLASHMEM void AudioEffectVast::update() {
     // Hadamard mix keeps the loop lossless when frozen
     const float a = y[0] + y[1], b = y[0] - y[1];
     const float cc = y[2] + y[3], dd = y[2] - y[3];
-    const float m[LINES] = {
-      0.5f * (a + cc), 0.5f * (b + dd), 0.5f * (a - cc), 0.5f * (b - dd)
-    };
-    const float feed[LINES] = {rin[0], rin[1], rin[0], -rin[1]};
+    mem[LINE_OFS[0] + ix[0]] = 0.5f * (a + cc) + rin[0];
+    mem[LINE_OFS[1] + ix[1]] = 0.5f * (b + dd) + rin[1];
+    mem[LINE_OFS[2] + ix[2]] = 0.5f * (a - cc) + rin[0];
+    mem[LINE_OFS[3] + ix[3]] = 0.5f * (b - dd) - rin[1];
     for (int i = 0; i < LINES; i++) {
-      mem[LINE_OFS[i] + ix[i]] = m[i] + feed[i];
       if (++ix[i] >= len[i]) ix[i] = 0;
     }
     const float tail[2] = {0.9f * (y[0] + y[2]), 0.9f * (y[1] - y[3])};
+    peak_tail = std::max(peak_tail, std::max(fabsf(tail[0]), fabsf(tail[1])));
 
     for (int c = 0; c < 2; c++) {
-      peak_tail = std::max(peak_tail, fabsf(tail[c]));
-      const float o = x1[c] + rmix * (tail[c] - x1[c]);
-      peak_out = std::max(peak_out, fabsf(o));
-      out[c]->data[n] = ToQ15(o);
+      const int16_t o = ToQ15(x1[c] + rmix * (tail[c] - x1[c]));
+      out[c]->data[n] = o;
+      peak_out = std::max(peak_out, abs(o));
     }
   }
 
-  for (int i = 0; i < 4; i++) {
-    transmit(out[i], i);
-    release(out[i]);
+  // write this block into the delay lines
+  for (int c = 0; c < 2; c++) {
+    int16_t* b = dbuf[c];
+    const size_t first = std::min<size_t>(AUDIO_BLOCK_SAMPLES, dlen - wpos);
+    memcpy(b + wpos, wr[c], first * sizeof(int16_t));
+    if (first < AUDIO_BLOCK_SAMPLES)
+      memcpy(b, wr[c] + first, (AUDIO_BLOCK_SAMPLES - first) * sizeof(int16_t));
   }
+  wpos = (wpos + AUDIO_BLOCK_SAMPLES) % dlen;
+
+  transmit(out[0], 0);
+  transmit(out[1], 1);
+  for (auto b : out) release(b);
   for (auto b : in) if (b) release(b);
 
   for (int c = 0; c < 2; c++)
     for (int t = 0; t < TAPS; t++)
-      viz.tap[c][t] = std::max(viz.tap[c][t], peak_tap[c][t]);
+      viz.tap[c][t] = std::max(viz.tap[c][t], peak_tap[c][t] * q);
   viz.tail = std::max(viz.tail, peak_tail);
-  viz.in = std::max(viz.in, peak_in);
-  viz.out = std::max(viz.out, peak_out);
+  viz.in = std::max(viz.in, peak_in * q);
+  viz.out = std::max(viz.out, peak_out * q);
   viz.blocks++;
 }

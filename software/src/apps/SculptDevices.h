@@ -29,7 +29,6 @@
 
 #pragma once
 
-#include "../Audio/AudioDelayExt.h"
 #include "../Audio/AudioEffectVast.h"
 
 namespace sculpt {
@@ -173,26 +172,23 @@ FLASHMEM void SculptMixer::update() {
   for (int i = 0; i < 4; i++) in[i] = receiveReadOnly(i);
   audio_block_t* out[2] = {allocate(), allocate()};
   if (out[0] && out[1]) {
-    float g[2][2];
-    for (int t = 0; t < 2; t++)
-      for (int c = 0; c < 2; c++) g[t][c] = gain[t][c];
-    float pk[2][2] = {};
-    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
-      int32_t sum[2] = {0, 0};
-      for (int t = 0; t < 2; t++) {
-        for (int c = 0; c < 2; c++) {
-          const audio_block_t* b = in[t * 2 + c];
-          if (!b) continue;
-          const int32_t s = static_cast<int32_t>(b->data[n] * g[t][c]);
-          sum[c] += s;
-          pk[t][c] = std::max(pk[t][c], fabsf(s * (1.0f / 32768.0f)));
+    int32_t acc[2][AUDIO_BLOCK_SAMPLES] = {};
+    for (int t = 0; t < 2; t++) {
+      for (int c = 0; c < 2; c++) {
+        const audio_block_t* b = in[t * 2 + c];
+        if (!b) continue;
+        const int32_t g = static_cast<int32_t>(gain[t][c] * 32767.0f); // Q15
+        int32_t pk = 0;
+        for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+          const int32_t v = (b->data[n] * g) >> 15;
+          acc[c][n] += v;
+          pk = std::max<int32_t>(pk, abs(v));
         }
+        peak[t][c] = std::max(peak[t][c], pk * (1.0f / 32768.0f));
       }
-      out[0]->data[n] = __SSAT(sum[0], 16);
-      out[1]->data[n] = __SSAT(sum[1], 16);
     }
-    for (int t = 0; t < 2; t++)
-      for (int c = 0; c < 2; c++) peak[t][c] = std::max(peak[t][c], pk[t][c]);
+    for (int c = 0; c < 2; c++)
+      for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) out[c]->data[n] = __SSAT(acc[c][n], 16);
     transmit(out[0], 0);
     transmit(out[1], 1);
   }
@@ -323,29 +319,33 @@ FLASHMEM void InputDevice::update() {
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   audio_block_t* out[2] = {allocate(), allocate()};
   if (out[0] && out[1]) {
+    static const int16_t silence[AUDIO_BLOCK_SAMPLES] = {};
+    const int16_t* a = in[0] ? in[0]->data : silence;
+    const int16_t* b = in[1] ? in[1]->data : silence;
     const uint8_t src = source;
-    const float g = gain, wd = width;
-    float pk[2] = {};
+    const int32_t g = static_cast<int32_t>(gain * 16384.0f);   // Q14, up to 2.0
+    const int32_t wd = static_cast<int32_t>(width * 16384.0f); // Q14
+    int16_t* l = out[0]->data;
+    int16_t* r = out[1]->data;
+    int32_t pk[2] = {0, 0};
     for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
-      const float a = in[0] ? in[0]->data[n] : 0.0f;
-      const float b = in[1] ? in[1]->data[n] : 0.0f;
-      float l, r;
+      int32_t x, y;
       switch (src) {
-        case IN1: l = r = a; break;
-        case IN2: l = r = b; break;
-        case OFF: l = r = 0.0f; break;
+        case IN1: x = y = a[n]; break;
+        case IN2: x = y = b[n]; break;
+        case OFF: x = y = 0; break;
         default: {
-          const float m = 0.5f * (a + b), s = 0.5f * (a - b) * wd;
-          l = m + s;
-          r = m - s;
+          // mid/side width
+          const int32_t m = (a[n] + b[n]) >> 1;
+          const int32_t sd = (((a[n] - b[n]) >> 1) * wd) >> 14;
+          x = m + sd;
+          y = m - sd;
         } break;
       }
-      l *= g;
-      r *= g;
-      pk[0] = std::max(pk[0], fabsf(l));
-      pk[1] = std::max(pk[1], fabsf(r));
-      out[0]->data[n] = __SSAT(static_cast<int32_t>(l), 16);
-      out[1]->data[n] = __SSAT(static_cast<int32_t>(r), 16);
+      l[n] = __SSAT((x * g) >> 14, 16);
+      r[n] = __SSAT((y * g) >> 14, 16);
+      pk[0] = std::max<int32_t>(pk[0], abs(l[n]));
+      pk[1] = std::max<int32_t>(pk[1], abs(r[n]));
     }
     for (int c = 0; c < 2; c++) peak[c] = std::max(peak[c], pk[c] * (1.0f / 32768.0f));
     transmit(out[0], 0);
@@ -404,7 +404,6 @@ class VastDevice : public Device {
 public:
   enum { DELAY, TIME, REVERB, SIZE, FEEDBACK, SPREAD, TONE, DECAY };
   enum { PHASE, PING, DIFFUSE };
-  using DelayStream = AudioDelayExt<9>; // same as the Delay applet: shared code
   static constexpr int TAPS = AudioEffectVast::TAPS;
   static constexpr float MAX_SECS = 6.0f;
 
@@ -424,11 +423,7 @@ public:
   void CpuMax(float parts[2]) override;
 
 private:
-  // order matters: Vast updates before the delays it feeds
   AudioEffectVast vast;
-  DelayStream delays[2];
-  AudioConnection write[2];
-  AudioConnection taps[2][TAPS];
   bool mem_ok = false;
   float tap_secs[2][TAPS] = {};
   Meter tap_m[2][TAPS], tail_m;
@@ -444,48 +439,28 @@ private:
 constexpr size_t VAST_DELAY_SAMPLES
   = static_cast<size_t>(VastDevice::MAX_SECS * AUDIO_SAMPLE_RATE_EXACT) + 512;
 
-FLASHMEM VastDevice::VastDevice()
-  : Device(VAST_DEF)
-  , delays{DelayStream(VAST_DELAY_SAMPLES), DelayStream(VAST_DELAY_SAMPLES)} {}
+FLASHMEM VastDevice::VastDevice() : Device(VAST_DEF), vast(VAST_DELAY_SAMPLES) {}
 
+// called while the stream is not patched in, so it isn't updating
 FLASHMEM bool VastDevice::Activate() {
   if (active) return mem_ok;
-  AudioNoInterrupts();
   mem_ok = vast.Acquire();
-  for (auto& d : delays) d.Acquire();
-  mem_ok = mem_ok && delays[0].ready() && delays[1].ready();
-  for (int c = 0; c < 2; c++) {
-    delays[c].taps(TAPS);
-    write[c].connect(vast, 2 + c, delays[c], 0);
-    for (int t = 0; t < TAPS; t++) {
-      taps[c][t].connect(delays[c], t, vast, 2 + c * TAPS + t);
-    }
-  }
-  AudioInterrupts();
   ApplyAll();
   active = true;
   return mem_ok;
 }
 
+// called after the stream has been unpatched
 FLASHMEM void VastDevice::Deactivate() {
   if (!active) return;
-  AudioNoInterrupts();
-  for (int c = 0; c < 2; c++) {
-    write[c].disconnect();
-    for (auto& t : taps[c]) t.disconnect();
-  }
-  AudioInterrupts();
-  // disconnected streams no longer update, so freeing is safe now
-  for (auto& d : delays) d.Release();
   vast.Release();
   active = false;
 }
 
 FLASHMEM void VastDevice::CpuMax(float parts[2]) {
   parts[0] = vast.processorUsageMax();
-  parts[1] = delays[0].processorUsageMax() + delays[1].processorUsageMax();
+  parts[1] = 0.0f;
   vast.processorUsageMaxReset();
-  for (auto& d : delays) d.processorUsageMaxReset();
 }
 
 FLASHMEM void VastDevice::SetTimes() {
@@ -496,7 +471,7 @@ FLASHMEM void VastDevice::SetTimes() {
       float s = secs * TAP_POS[c][t] * (c ? phase : 1.0f);
       s = std::min(s, MAX_SECS - 0.01f);
       tap_secs[c][t] = s;
-      delays[c].delay(t, s - AudioEffectVast::LOOP_LATENCY_SECS);
+      vast.tap(c, t, int(s * AUDIO_SAMPLE_RATE_EXACT));
     }
   }
 }
@@ -542,10 +517,10 @@ FLASHMEM void VastDevice::Action(int a) {
     vast.set_freeze(!vast.frozen());
   } else if (a == 1) {
     // CLEAR: empty the delay and reverb buffers
+    if (!mem_ok) return;
     AudioNoInterrupts();
     vast.Reset();
     AudioInterrupts();
-    for (auto& d : delays) d.clear();
   }
 }
 
