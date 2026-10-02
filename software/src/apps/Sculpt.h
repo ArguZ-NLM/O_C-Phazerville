@@ -27,6 +27,9 @@
 //   L enc  move between the 12 boxes      R enc  change the slot's device
 //   L push bypass on/off                  R push open the device
 //   UP / DOWN  the device's two actions (e.g. VAST freeze / clear)
+//   UP + DOWN  link / unlink the tracks. Linked = one stereo chain (IN1 left,
+//              IN2 right) through track 1, track 2 switched off. Unlinking
+//              copies track 1's settings to track 2.
 // Device view:
 //   L enc  choose parameter (2 pages of 4) R enc  change value
 //   hold L + R enc  parameter mode        R push next page
@@ -94,13 +97,20 @@ private:
   ViewMode view = CHAIN;
   int8_t track = 0, col = sculpt::SPACE, cursor = 0;
   bool l_held = false, l_used = false;
+  uint8_t chord_releases = 0; // UP/DOWN releases to swallow after UP+DOWN
   bool active = false;
+  bool linked = false;
+  uint8_t pre_link_source = 0;
   int cpu = 0;
   elapsedMillis stats_timer;
 
   sculpt::Device* Focused() const { return sculpt::tracks[track].at(col); }
+  bool TrackOn(int t) const { return !(linked && t == 1); }
   void SetChoice(int t, int s, int option);
   void Repatch(int t);
+  void ConnectTrack(int t);
+  void DisconnectTrack(int t);
+  void ToggleLink();
   void UpdateMixLevels() const;
   void DrawChain() const;
   void DrawDevice() const;
@@ -147,7 +157,7 @@ FLASHMEM void AppSculpt::Start() {
 
 FLASHMEM void AppSculpt::Repatch(int t) {
   using namespace sculpt;
-  if (!active) return;
+  if (!active || !TrackOn(t)) return;
   Track& tr = tracks[t];
   auto& link = patch->link[t];
   AudioNoInterrupts();
@@ -173,28 +183,83 @@ FLASHMEM void AppSculpt::SetChoice(int t, int s, int option) {
   Device* old = tr.current(s);
   tr.choice[s] = option;
   if (option) tr.last_choice[s] = option;
-  if (!active) return;
+  if (!active || !TrackOn(t)) return;
   Device* now = tr.current(s);
   if (now) now->Activate();
   Repatch(t);
   if (old) old->Deactivate();
 }
 
+FLASHMEM void AppSculpt::ConnectTrack(int t) {
+  using namespace sculpt;
+  AudioNoInterrupts();
+  for (int c = 0; c < 2; c++)
+    patch->in[t][c].connect(OC::AudioIO::InputStream(), c, *tracks[t].input, c);
+  AudioInterrupts();
+  for (int s = MATERIAL + 1; s < SLOT_COUNT; s++) {
+    if (Device* d = tracks[t].current(s)) d->Activate();
+  }
+  Repatch(t);
+}
+
+FLASHMEM void AppSculpt::DisconnectTrack(int t) {
+  using namespace sculpt;
+  AudioNoInterrupts();
+  for (auto& c : patch->in[t]) c.disconnect();
+  for (auto& hop : patch->link[t]) for (auto& c : hop) c.disconnect();
+  AudioInterrupts();
+  // disconnected devices stop updating; now they can drop their buffers
+  for (int s = MATERIAL + 1; s < SLOT_COUNT; s++) {
+    if (Device* d = tracks[t].current(s)) d->Deactivate();
+  }
+}
+
+FLASHMEM void AppSculpt::ToggleLink() {
+  using namespace sculpt;
+  Track& a = tracks[0];
+  Track& b = tracks[1];
+  if (!linked) {
+    pre_link_source = a.input->val[0];
+    a.input->val[0] = InputDevice::STEREO;
+    a.input->Apply(0);
+    if (active) DisconnectTrack(1);
+    linked = true;
+    track = 0;
+    if (view == DEVICE) view = CHAIN;
+    return;
+  }
+
+  a.input->val[0] = pre_link_source;
+  a.input->Apply(0);
+  // track 2 starts as a copy of track 1 (its own input source and pan stay)
+  for (int s = MATERIAL + 1; s < SLOT_COUNT; s++) {
+    b.choice[s] = a.choice[s];
+    b.last_choice[s] = a.last_choice[s];
+    for (int o = 0; o < MAX_OPTIONS; o++) {
+      Device* from = a.inst[s][o];
+      Device* to = b.inst[s][o];
+      if (!from || !to) continue;
+      memcpy(to->val, from->val, sizeof(to->val));
+      memcpy(to->mode, from->mode, sizeof(to->mode));
+      to->ApplyAll();
+    }
+  }
+  for (int p = 1; p < b.input->num_params(); p++) b.input->val[p] = a.input->val[p];
+  b.input->ApplyAll();
+  b.mix->val[0] = a.mix->val[0]; // level
+  b.mix->val[2] = a.mix->val[2]; // mute
+  b.mix->ApplyAll();
+  linked = false;
+  if (active) ConnectTrack(1);
+}
+
 FLASHMEM void AppSculpt::Resume() {
   using namespace sculpt;
   if (!audio_hw() || active) return;
   if (!patch) patch = new Patch;
-  AudioNoInterrupts();
-  for (int t = 0; t < NUM_TRACKS; t++)
-    for (int c = 0; c < 2; c++)
-      patch->in[t][c].connect(OC::AudioIO::InputStream(), c, *tracks[t].input, c);
-  AudioInterrupts();
   active = true;
   for (int t = 0; t < NUM_TRACKS; t++) {
-    for (int s = MATERIAL + 1; s < SLOT_COUNT; s++) {
-      if (Device* d = tracks[t].current(s)) d->Activate();
-    }
-    Repatch(t);
+    if (TrackOn(t)) ConnectTrack(t);
   }
   OC::AudioIO::ClaimOutput(*mixer);
   AudioProcessorUsageMaxReset();
@@ -206,17 +271,7 @@ FLASHMEM void AppSculpt::Suspend() {
   using namespace sculpt;
   if (!active) return;
   OC::AudioIO::ReleaseOutput();
-  AudioNoInterrupts();
-  for (int t = 0; t < NUM_TRACKS; t++) {
-    for (auto& c : patch->in[t]) c.disconnect();
-    for (auto& hop : patch->link[t]) for (auto& c : hop) c.disconnect();
-  }
-  AudioInterrupts();
-  for (auto& tr : tracks) {
-    for (int s = MATERIAL + 1; s < SLOT_COUNT; s++) {
-      if (Device* d = tr.current(s)) d->Deactivate();
-    }
-  }
+  for (int t = 0; t < NUM_TRACKS; t++) DisconnectTrack(t);
   active = false;
   l_held = false;
 }
@@ -256,6 +311,20 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
     }
     return;
   }
+  if (event.control == OC::CONTROL_BUTTON_UP || event.control == OC::CONTROL_BUTTON_DOWN) {
+    constexpr uint16_t both = OC::CONTROL_BUTTON_UP | OC::CONTROL_BUTTON_DOWN;
+    if (event.type == UI::EVENT_BUTTON_DOWN && (event.mask & both) == both) {
+      ToggleLink();
+      chord_releases = 2; // neither release should fire an action
+      return;
+    }
+    if (event.type == UI::EVENT_BUTTON_PRESS || event.type == UI::EVENT_BUTTON_LONG_RELEASE) {
+      if (chord_releases) {
+        chord_releases--;
+        return;
+      }
+    }
+  }
   if (event.type != UI::EVENT_BUTTON_PRESS) return;
 
   Device* d = Focused();
@@ -288,7 +357,8 @@ FLASHMEM void AppSculpt::OnEncoder(const UI::Event &event) {
   const bool left = event.control == OC::CONTROL_ENCODER_L;
   if (view == CHAIN) {
     if (left) {
-      const int idx = constrain(track * COLS + col + dir, 0, NUM_TRACKS * COLS - 1);
+      const int rows = linked ? 1 : NUM_TRACKS;
+      const int idx = constrain(track * COLS + col + dir, 0, rows * COLS - 1);
       track = idx / COLS;
       col = idx % COLS;
     } else if (col == MIX_COL) {
@@ -333,6 +403,14 @@ FLASHMEM void AppSculpt::DrawChain() const {
   }
   for (int t = 0; t < NUM_TRACKS; t++) {
     const int y = 9 + t * (bh + 2);
+    if (!TrackOn(t)) {
+      // linked: track 2 is folded into track 1
+      gfxCircle(9, y + 10, 4);
+      gfxCircle(15, y + 10, 4);
+      gfxPrint(26, y + 2, PSTR("LINKED stereo"));
+      gfxPrint(26, y + 11, PSTR("IN1 L + IN2 R"));
+      continue;
+    }
     gfxPrint(1, y + 6, t + 1);
     for (int c = 0; c < COLS; c++) {
       const int x = x0 + c * bw;
