@@ -40,6 +40,7 @@
 #include "OC_strings.h"
 #include "OC_ui.h"
 #include "OC_options.h"
+#include "HSUtils.h"
 #include "src/drivers/display.h"
 #ifdef QUAD_CAPTURE
 #include "quad_capture.h" // 4-up Quadrants screen capture ('Q' command)
@@ -694,6 +695,11 @@ FLASHMEM __attribute__((noinline)) void SerialHandler() {
 #endif
         // also in release builds: lets the flash script save state first
         case 'g':
+          // Quadrants keeps its setup in the loaded preset: store it like auto-save does
+          if (HS::auto_save_enabled) {
+            OC::app_switcher.current_app()->DispatchAppEvent(OC::APP_EVENT_FLUSH);
+            Serial.println("Auto-save on: preset stored");
+          }
           Serial.println("Saving global settings + app data...");
           OC::SaveAppData();
           break;
