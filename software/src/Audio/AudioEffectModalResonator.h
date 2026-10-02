@@ -106,23 +106,24 @@ public:
             // Ceiling at 40% of Nyquist: fcoef = 2*sin(0.4*π) ≈ 1.90, giving a
             // ~5% stability margin vs. the SVF limit of fcoef < 2.0.
             // (20 kHz was only 0.7% margin — too close at extreme settings.)
+            // modes above the ceiling are muted
             const float FREQ_CEIL = AUDIO_SAMPLE_RATE_EXACT * 0.40f;
             float f_k = freq_hz * stretch;
-            if (f_k > FREQ_CEIL) f_k = FREQ_CEIL;
+            bool above_ceil = f_k > FREQ_CEIL;
+            if (above_ceil) f_k = FREQ_CEIL;
             if (f_k <      20.0f) f_k =      20.0f;
 
             // Chamberlin SVF frequency coefficient: 2*sin(π*f/fs)
-            f_[k] = 2.0f * sinf(3.14159265f * f_k / AUDIO_SAMPLE_RATE_EXACT);
+            float fc = 2.0f * sinf(3.14159265f * f_k / AUDIO_SAMPLE_RATE_EXACT);
+            f_[k] = fc;
 
-            // Chamberlin damping: damp = fcoef / Q  (not 1/Q!)
-            // Chamberlin SVF is stable only for damp < 2.0; above that the
-            // filter explodes, producing NaN/Inf that kills the channel.
-            // q_base can collapse toward zero under aggressive q_loss (low
-            // brightness), making damp = fcoef/q_base → Inf.  Clamp both ends.
+            // Chamberlin damping: damp = fcoef / Q
+            // stable only while damp < 2/f - f/2
             float q_safe = q_base;
             if (q_safe < 0.01f) q_safe = 0.01f;  // prevent divide-by-zero/Inf
-            float damp_k = f_[k] / q_safe;
-            if (damp_k > 1.9f)  damp_k = 1.9f;   // hard stability ceiling
+            float damp_k = fc / q_safe;
+            float damp_max = 0.9f * (2.0f / fc - 0.5f * fc);  // 10% margin
+            if (damp_k > damp_max) damp_k = damp_max;
             if (damp_k < 1e-4f) damp_k = 1e-4f;  // max sustain floor
             damp_[k] = damp_k;
 
@@ -138,7 +139,7 @@ public:
             // Position comb: sin²(π · pos · (k+1))
             float pos_safe = position * 0.98f + 0.01f;
             float sg = sinf(3.14159265f * pos_safe * (float)(k + 1));
-            mode_gain_[k] = sg * sg;
+            mode_gain_[k] = above_ceil ? 0.0f : sg * sg;
             gain_sum += mode_gain_[k];
         }
 
@@ -216,6 +217,12 @@ public:
             }
             lp[k] = lp_v;
             bp[k] = bp_v;
+        }
+        // NaN in the DC blocker would latch forever
+        if (dc_x1_ != dc_x1_ || dc_y1_ != dc_y1_ ||
+            dc_x1_ > 1e10f || dc_x1_ < -1e10f ||
+            dc_y1_ > 1e10f || dc_y1_ < -1e10f) {
+            dc_x1_ = dc_y1_ = 0.0f;
         }
 
         for (int i = 0; i < AUDIO_BLOCK_SAMPLES; i++) {
