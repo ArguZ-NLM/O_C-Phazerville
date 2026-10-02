@@ -297,6 +297,24 @@ FLASHMEM void AppSculpt::MainLoop() {
     int(usage), int(usage * 10) % 10, AudioMemoryUsageMax(), OC::AudioIO::AUDIO_MEMORY);
   AudioProcessorUsageMaxReset();
   AudioMemoryUsageMaxReset();
+
+  // per device: own stream + owned streams (e.g. VAST core + delay lines)
+  using namespace sculpt;
+  for (int t = 0; t < NUM_TRACKS; t++) {
+    Serial.printf("  T%d", t + 1);
+    for (int s = MATERIAL; s < SLOT_COUNT; s++) {
+      Device* d = tracks[t].current(s);
+      if (!d) continue;
+      float parts[2];
+      d->CpuMax(parts);
+      Serial.printf("  %s %d.%d+%d.%d", d->def.tag,
+        int(parts[0]), int(parts[0] * 10) % 10, int(parts[1]), int(parts[1] * 10) % 10);
+    }
+    Serial.println();
+  }
+  const float mx = mixer->processorUsageMax();
+  mixer->processorUsageMaxReset();
+  Serial.printf("  MIX %d.%d\n", int(mx), int(mx * 10) % 10);
 }
 
 /////////////////////////////////////////////////////////////////

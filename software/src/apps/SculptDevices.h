@@ -84,6 +84,9 @@ public:
   virtual bool ActionLit(int a) const { return false; }
   virtual void DrawViz(int x, int y, int w, int h) {}
   virtual void DrawMini(int x, int y, int w, int h) {}
+  // peak CPU % of this device's audio streams since the last call: parts[0]
+  // is the device's own stream, parts[1] anything it owns (e.g. delay lines)
+  virtual void CpuMax(float parts[2]) { parts[0] = parts[1] = 0.0f; }
 
   void Defaults();
   void ApplyAll();
@@ -281,6 +284,11 @@ public:
   void Apply(int p) override;
   void DrawViz(int x, int y, int w, int h) override;
   void DrawMini(int x, int y, int w, int h) override;
+  void CpuMax(float parts[2]) override {
+    parts[0] = processorUsageMax();
+    parts[1] = 0.0f;
+    processorUsageMaxReset();
+  }
   void update() override;
 private:
   audio_block_t* queue[2];
@@ -413,6 +421,7 @@ public:
   bool ActionLit(int a) const override;
   void DrawViz(int x, int y, int w, int h) override;
   void DrawMini(int x, int y, int w, int h) override;
+  void CpuMax(float parts[2]) override;
 
 private:
   // order matters: Vast updates before the delays it feeds
@@ -470,6 +479,13 @@ FLASHMEM void VastDevice::Deactivate() {
   for (auto& d : delays) d.Release();
   vast.Release();
   active = false;
+}
+
+FLASHMEM void VastDevice::CpuMax(float parts[2]) {
+  parts[0] = vast.processorUsageMax();
+  parts[1] = delays[0].processorUsageMax() + delays[1].processorUsageMax();
+  vast.processorUsageMaxReset();
+  for (auto& d : delays) d.processorUsageMaxReset();
 }
 
 FLASHMEM void VastDevice::SetTimes() {
