@@ -652,10 +652,6 @@ void FASTRUN loop() {
           case ')': OC::PresetEngine::RequestRecall(0); break;
           case '{': OC::PresetEngine::RequestSave(1); break;
           case '}': OC::PresetEngine::RequestRecall(1); break;
-          case 'g':
-            Serial.println("Saving global settings + app data...");
-            OC::SaveAppData();
-            break;
           case 'p':
             if (OC::PresetBusUI::Active()) OC::PresetBusUI::Exit();
             else OC::PresetBusUI::Enter();
@@ -671,6 +667,11 @@ void FASTRUN loop() {
             Serial.printf("PresetBus verbose = %d\n", OC::PresetBus::Verbose());
             break;
 #endif
+          // also in release builds: lets the flash script save state first
+          case 'g':
+            Serial.println("Saving global settings + app data...");
+            OC::SaveAppData();
+            break;
           default:
             capreq = true;
             break;
