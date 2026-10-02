@@ -27,6 +27,7 @@
 //   L enc  move between the 12 boxes      R enc  change the slot's device
 //   L push bypass on/off                  R push open the device
 //   UP / DOWN  the device's two actions (e.g. VAST freeze / clear)
+//   X      the track's modulators (MOD A-D)
 //   UP + DOWN  link / unlink the tracks' controls. Linking copies the track
 //              you are on to the other one; while linked every edit goes to
 //              both tracks (except input source and pan). Both keep running.
@@ -37,6 +38,11 @@
 //          CV out, MIDI map, noise),      R push unipolar / bipolar,
 //          X  MIDI learn (move a knob),   L push again to leave
 //   Y      back to the chain              UP / DOWN  actions
+//   X      action triggers: L enc source for UP's action, R enc for DOWN's
+//          (gate in, CV in as gate, MIDI map), X / Y to leave
+// MOD view (4 modulators per track, like the S4's):
+//   L enc  choose A-D                     R enc  type: WAVE/RANDOM/ADSR/FOLLOW
+//   R push open its settings              Y / X  back to the chain
 //
 // While Sculpt is the active app it claims the audio outputs from AudioIO.
 // The Quadrants audio applet chain is left intact and comes back as soon as
@@ -47,6 +53,7 @@
 #include "../OC_gpio.h"
 #include "../HSMIDI.h"
 #include "SculptDevices.h"
+#include "SculptMods.h"
 
 namespace sculpt {
   constexpr int NUM_TRACKS = 2;
@@ -59,6 +66,11 @@ namespace sculpt {
     uint8_t choice[SLOT_COUNT] = {};
     uint8_t last_choice[SLOT_COUNT] = {}; // for the bypass toggle
     Device* inst[SLOT_COUNT][MAX_OPTIONS] = {};
+    Modulator* mods[NUM_MODS][MOD_TYPES] = {};
+    uint8_t mod_type[NUM_MODS] = {};
+    float mod_out[NUM_MODS] = {};
+
+    Modulator* mod(int i) const { return mods[i][mod_type[i]]; }
 
     Device* current(int s) const {
       return s == MATERIAL ? static_cast<Device*>(input) : inst[s][choice[s]];
@@ -89,7 +101,13 @@ public:
   void Start();
   void Resume();
   void Suspend();
-  void Controller() {}
+  // latch rising edges of the gate inputs and CV inputs (as gates) for the
+  // modulators, which only look about once per millisecond
+  void Controller() {
+    uint16_t e = 0;
+    for (int i = 0; i < 12; i++) e |= HS::frame.clocked[i] << i;
+    sculpt::trig_latch |= e;
+  }
   void MainLoop();
   void ModulateAll();
   void ReadMIDI();
@@ -100,12 +118,16 @@ public:
   void OnEncoder(const UI::Event &event);
 
 private:
-  enum ViewMode : uint8_t { CHAIN, DEVICE };
+  enum ViewMode : uint8_t { CHAIN, DEVICE, MODS };
   ViewMode view = CHAIN;
+  bool focus_mod = false;   // the device view shows a modulator
+  int8_t mod_cursor = 0;
+  elapsedMicros tick_timer;
   int8_t track = 0, col = sculpt::SPACE, cursor = 0;
   bool l_held = false, l_used = false;
   bool editing = false;   // device view: setting grabbed, R enc changes it
   bool mod_mode = false;  // device view: L enc amount, R enc source
+  bool trig_mode = false; // device view: L / R enc trigger source per action
   elapsedMicros mod_timer;
   uint8_t chord_releases = 0; // UP/DOWN releases to swallow after UP+DOWN
   bool active = false;
@@ -113,7 +135,12 @@ private:
   int cpu = 0;
   elapsedMillis stats_timer;
 
-  sculpt::Device* Focused() const { return sculpt::tracks[track].at(col); }
+  sculpt::Device* FocusOn(int t) const {
+    return focus_mod ? sculpt::tracks[t].mod(mod_cursor) : sculpt::tracks[t].at(col);
+  }
+  sculpt::Device* Focused() const { return FocusOn(track); }
+  void SetModType(int t, int i, int type);
+  void DrawMods() const;
   void SetChoice(int t, int s, int option);
   void SetChoiceLinked(int s, int option);
   sculpt::Device* Twin(sculpt::Device* d) const;
@@ -135,6 +162,7 @@ FLASHMEM void AppSculpt::Start() {
   for (int t = 0; t < NUM_TRACKS; t++) {
     Track& tr = tracks[t];
     tr.input = new InputDevice;
+    tr.input->mod_bus = tr.mod_out;
     tr.input->Defaults();
     tr.input->val[0] = t ? InputDevice::IN2 : InputDevice::IN1;
     tr.input->ApplyAll();
@@ -142,6 +170,7 @@ FLASHMEM void AppSculpt::Start() {
       for (int o = 0; o < SLOT_DEFS[s].noptions; o++) {
         Device* d = MakeDevice(s, o);
         if (d) {
+          d->mod_bus = tr.mod_out;
           d->Defaults();
           d->ApplyAll();
         }
@@ -154,6 +183,7 @@ FLASHMEM void AppSculpt::Start() {
   for (int t = 0; t < NUM_TRACKS; t++) {
     Track& tr = tracks[t];
     tr.mix = new MixDevice(*mixer, t);
+    tr.mix->mod_bus = tr.mod_out;
     tr.mix->Defaults();
     tr.mix->val[1] = t ? 25 : -25; // pan the tracks apart a little
     tr.mix->ApplyAll();
@@ -229,8 +259,7 @@ FLASHMEM void AppSculpt::DisconnectTrack(int t) {
 FLASHMEM sculpt::Device* AppSculpt::Twin(sculpt::Device* d) const {
   using namespace sculpt;
   if (!linked || !d) return nullptr;
-  const Track& other = tracks[1 - track];
-  Device* tw = other.at(col);
+  Device* tw = FocusOn(1 - track);
   return (tw && &tw->def == &d->def) ? tw : nullptr;
 }
 
@@ -239,14 +268,29 @@ FLASHMEM void AppSculpt::Mirror(sculpt::Device* d, int p) const {
   using namespace sculpt;
   Device* tw = Twin(d);
   if (!tw) return;
-  if (col == MATERIAL && p == 0) return;
-  if (col == MIX_COL && p == 1) return;
+  if (!focus_mod && col == MATERIAL && p == 0) return;
+  if (!focus_mod && col == MIX_COL && p == 1) return;
   tw->val[p] = d->val[p];
   tw->mode[p] = d->mode[p];
   tw->mod_amt[p] = d->mod_amt[p];
   tw->mod_in[p] = d->mod_in[p];
+  tw->mod_bus_sel[p] = d->mod_bus_sel[p];
   tw->mod_bi = (tw->mod_bi & ~(1 << p)) | (d->mod_bi & (1 << p));
   tw->Refresh(p);
+}
+
+FLASHMEM void AppSculpt::SetModType(int t, int i, int type) {
+  using namespace sculpt;
+  Track& tr = tracks[t];
+  type = constrain(type, 0, MOD_TYPES - 1);
+  if (type && !tr.mods[i][type]) {
+    Modulator* m = MakeModulator(type);
+    m->mod_bus = tr.mod_out;
+    m->Defaults();
+    tr.mods[i][type] = m;
+  }
+  tr.mod_type[i] = type;
+  if (!type) tr.mod_out[i] = 0.0f;
 }
 
 FLASHMEM void AppSculpt::SetChoiceLinked(int s, int option) {
@@ -269,6 +313,17 @@ FLASHMEM void AppSculpt::ToggleLink() {
       Device* to = b.inst[s][o];
       if (!from || !to) continue;
       to->CopyFrom(*from);
+    }
+  }
+  for (int i = 0; i < NUM_MODS; i++) {
+    SetModType(1 - track, i, a.mod_type[i]);
+    for (int type = 1; type < MOD_TYPES; type++) {
+      if (!a.mods[i][type]) continue;
+      if (!b.mods[i][type]) {
+        SetModType(1 - track, i, type);
+        SetModType(1 - track, i, a.mod_type[i]);
+      }
+      b.mods[i][type]->CopyFrom(*a.mods[i][type]);
     }
   }
   for (int p = 1; p < b.input->num_params(); p++) b.input->val[p] = a.input->val[p];
@@ -342,11 +397,36 @@ FLASHMEM void AppSculpt::MidiLearn(sculpt::Device* d) {
 
 FLASHMEM void AppSculpt::ModulateAll() {
   using namespace sculpt;
+  ModCtx ctx;
+  ctx.dt = std::min(tick_timer * 1e-6f, 0.05f);
+  tick_timer = 0;
+  __disable_irq();
+  ctx.edges = trig_latch;
+  trig_latch = 0;
+  __enable_irq();
+  for (int t = 0; t < NUM_TRACKS; t++) {
+    Track& tr = tracks[t];
+    ctx.in_level = tr.input->level;
+    ctx.out_level = mixer->level[t];
+    for (int i = 0; i < NUM_MODS; i++) {
+      Modulator* m = tr.mod(i);
+      if (!m) continue;
+      m->Run(ctx);
+      tr.mod_out[i] = m->out;
+    }
+  }
   for (auto& tr : tracks) {
     for (int s = MATERIAL; s < SLOT_COUNT; s++) {
-      if (Device* d = tr.current(s)) d->Modulate();
+      if (Device* d = tr.current(s)) {
+        d->Modulate();
+        d->RunTriggers(ctx.edges);
+      }
     }
     tr.mix->Modulate();
+    tr.mix->RunTriggers(ctx.edges);
+    for (int i = 0; i < NUM_MODS; i++) {
+      if (Modulator* m = tr.mod(i)) m->RunTriggers(ctx.edges);
+    }
   }
 }
 
@@ -400,7 +480,7 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
       if (l_used) return;
       if (view == DEVICE) {
         mod_mode = !mod_mode;
-        editing = false;
+        editing = trig_mode = false;
       } else if (col > MATERIAL && col < MIX_COL) {
         // bypass toggle
         Track& tr = tracks[track];
@@ -425,14 +505,24 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
   }
   if (event.type != UI::EVENT_BUTTON_PRESS) return;
 
+  if (view == MODS) focus_mod = true;
+  else if (view == CHAIN) focus_mod = false;
   Device* d = Focused();
   switch (event.control) {
     case OC::CONTROL_BUTTON_R:
-      if (view == CHAIN) {
-        if (d) {
+      if (view == MODS) {
+        focus_mod = true;
+        if (Focused()) {
           view = DEVICE;
           cursor = 0;
-          editing = mod_mode = false;
+          editing = mod_mode = trig_mode = false;
+        }
+      } else if (view == CHAIN) {
+        focus_mod = false;
+        if (Focused()) {
+          view = DEVICE;
+          cursor = 0;
+          editing = mod_mode = trig_mode = false;
         }
       } else if (d && mod_mode) {
         // unipolar / bipolar, like tapping the encoder in S4 mapping mode
@@ -444,11 +534,15 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
       }
       break;
     case OC::CONTROL_BUTTON_Y:
-      view = CHAIN;
+      if (view == DEVICE && trig_mode) trig_mode = false;
+      else view = (view == DEVICE && focus_mod) ? MODS : CHAIN;
       editing = mod_mode = false;
       break;
     case OC::CONTROL_BUTTON_X:
       if (view == DEVICE && mod_mode && d) MidiLearn(d);
+      else if (view == DEVICE) { trig_mode = !trig_mode; editing = false; }
+      else if (view == CHAIN) view = MODS;
+      else if (view == MODS) view = CHAIN;
       break;
     case OC::CONTROL_BUTTON_UP:
     case OC::CONTROL_BUTTON_DOWN:
@@ -471,6 +565,16 @@ FLASHMEM void AppSculpt::OnEncoder(const UI::Event &event) {
   using namespace sculpt;
   const int dir = event.value;
   const bool left = event.control == OC::CONTROL_ENCODER_L;
+  if (view == MODS) {
+    if (left) {
+      mod_cursor = constrain(mod_cursor + dir, 0, NUM_MODS - 1);
+    } else {
+      const int type = tracks[track].mod_type[mod_cursor] + dir;
+      SetModType(track, mod_cursor, type);
+      if (linked) SetModType(1 - track, mod_cursor, tracks[track].mod_type[mod_cursor]);
+    }
+    return;
+  }
   if (view == CHAIN) {
     if (left) {
       const int idx = constrain(track * COLS + col + dir, 0, NUM_TRACKS * COLS - 1);
@@ -487,9 +591,15 @@ FLASHMEM void AppSculpt::OnEncoder(const UI::Event &event) {
 
   Device* d = Focused();
   if (!d) { view = CHAIN; return; }
+  if (trig_mode) {
+    uint8_t& src = d->act_trig[left ? 0 : 1];
+    src = constrain(src + dir, 0, TRIG_SOURCES - 1);
+    if (Device* tw = Twin(d)) tw->act_trig[left ? 0 : 1] = src;
+    return;
+  }
   if (mod_mode) {
     if (left) d->mod_amt[cursor] = constrain(d->mod_amt[cursor] + dir, -100, 100);
-    else d->mod_in[cursor].ChangeSource(dir);
+    else d->ChangeModSource(cursor, dir);
     d->Refresh(cursor);
     Mirror(d, cursor);
   } else if (left) {
@@ -580,11 +690,29 @@ FLASHMEM void AppSculpt::DrawDevice() const {
   } else {
     gfxPrint(1, 0, track + 1);
     gfxInvert(0, 0, 7, 8);
-    gfxPrint(10, 0, d->def.name);
+    if (focus_mod) {
+      char buf[8];
+      snprintf(buf, sizeof(buf), "%c %s", 'A' + mod_cursor, d->def.name);
+      gfxPrint(10, 0, buf);
+    } else {
+      gfxPrint(10, 0, d->def.name);
+    }
   }
   if (mod_mode) {
     gfxPrint(64, 0, PSTR("MOD"));
     gfxInvert(63, 0, 20, 8);
+  }
+  if (trig_mode) {
+    // which trigger fires each action
+    gfxFrame(0, 10, 128, 32);
+    for (int a = 0; a < 2; a++) {
+      char src[6], buf[16];
+      FormatTrig(d->act_trig[a], src, sizeof(src));
+      const char* act = d->def.actions[a][0] ? d->def.actions[a] : "-";
+      snprintf(buf, sizeof(buf), "%s %s:%s", a ? "DN" : "UP", act, src);
+      gfxPrint(4, 13 + a * 10, buf);
+    }
+    gfxPrint(4, 33, PSTR("L/R enc: trigger"));
   }
   for (int a = 0; a < 2 && !mod_mode; a++) {
     if (!d->def.actions[a][0]) continue;
@@ -599,7 +727,7 @@ FLASHMEM void AppSculpt::DrawDevice() const {
   gfxLine(0, 9, 127, 9);
 
   // the device's picture
-  d->DrawViz(0, 11, 128, 30);
+  if (!trig_mode) d->DrawViz(0, 11, 128, 30);
 
   // parameter grid, one page of 4
   const int page = cursor / 4;
@@ -614,10 +742,14 @@ FLASHMEM void AppSculpt::DrawDevice() const {
     // name row (in modulation mode: the source for the selected setting)
     if (sel && mod_mode) {
       const HS::CVInputMap& in = d->mod_in[p];
-      const bool learn = in.source_type() == HS::CVInputMap::TYPE_MIDI
+      const bool learn = !d->mod_bus_sel[p] && in.source_type() == HS::CVInputMap::TYPE_MIDI
         && HS::frame.MIDIState.mapping[in.index()].learning();
       if (learn) snprintf(buf, sizeof(buf), "learn");
-      else snprintf(buf, sizeof(buf), "%s %c", in.InputName(), d->Bipolar(p) ? 'B' : 'U');
+      else {
+        char src[6];
+        d->ModSourceName(p, src, sizeof(src));
+        snprintf(buf, sizeof(buf), "%s %c", src, d->Bipolar(p) ? 'B' : 'U');
+      }
       gfxPrint(x + 1, 43, buf);
     } else {
       gfxPrint(x + 1, 43, pd.name);
@@ -660,9 +792,36 @@ FLASHMEM void AppSculpt::DrawDevice() const {
   }
 }
 
+FLASHMEM void AppSculpt::DrawMods() const {
+  using namespace sculpt;
+  const Track& tr = tracks[track];
+  if (linked) gfxPrint(1, 0, PSTR("1+2"));
+  else gfxPrint(1, 0, track + 1);
+  gfxPrint(linked ? 24 : 12, 0, PSTR("MODULATORS"));
+  gfxLine(0, 9, 127, 9);
+  for (int i = 0; i < NUM_MODS; i++) {
+    const int x = i * 32;
+    Modulator* m = tr.mod(i);
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%c %s", 'A' + i, MOD_TYPE_TAGS[tr.mod_type[i]]);
+    gfxPrint(x + 2, 12, buf);
+    if (m) {
+      gfxFrame(x + 1, 21, 30, 30);
+      m->DrawMini(x + 2, 22, 28, 28);
+    } else {
+      gfxFrame(x + 1, 21, 30, 30, true);
+    }
+    if (i == mod_cursor) gfxInvert(x + 1, 11, 30, 9);
+  }
+  Modulator* m = tr.mod(mod_cursor);
+  gfxPrint(0, 56, m ? m->def.name : PSTR("off"));
+  gfxPrint(70, 56, PSTR("Y:back"));
+}
+
 FLASHMEM void AppSculpt::View() const {
   UpdateMixLevels();
   if (view == DEVICE && Focused()) DrawDevice();
+  else if (view == MODS) DrawMods();
   else DrawChain();
 }
 

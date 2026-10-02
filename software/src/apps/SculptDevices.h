@@ -56,6 +56,43 @@ struct DeviceDef {
 
 constexpr int MAX_PARAMS = 8;
 
+// rising edges since the last modulator tick: bits 0-3 gate inputs,
+// bits 4-11 CV inputs as gates. Set in the ISR, taken in the main loop.
+volatile uint16_t trig_latch = 0;
+
+struct ModCtx {
+  float dt;           // seconds since the last tick
+  uint16_t edges;     // latched rising edges, see trig_latch
+  float in_level;     // the track's input level, 0..1
+  float out_level;    // the track's output level, 0..1
+};
+
+// trigger source numbering: 0 off, 1-4 gate in, 5-12 CV in, 13+ MIDI map
+constexpr int TRIG_SOURCES = 1 + 4 + 8 + MIDIMAP_MAX;
+
+FLASHMEM static void FormatTrig(int src, char* buf, size_t n) {
+  if (src <= 0) snprintf(buf, n, "-");
+  else if (src <= 4) snprintf(buf, n, "TR%d", src);
+  else if (src <= 12) snprintf(buf, n, "CV%d", src - 4);
+  else snprintf(buf, n, "M%d", src - 12);
+}
+
+FLASHMEM static bool TrigGate(int src) {
+  if (src <= 0) return false;
+  if (src <= 12) return HS::frame.gate_high[src - 1];
+  return HS::frame.MIDIState.mapping[src - 13].ViewOut() > GATE_THRESHOLD;
+}
+
+// hardware inputs use the latched edges; MIDI maps keep their own last state
+FLASHMEM static bool TrigEdge(int src, uint16_t edges, bool& prev) {
+  if (src <= 0) return false;
+  if (src <= 12) return edges & (1 << (src - 1));
+  const bool g = TrigGate(src);
+  const bool e = g && !prev;
+  prev = g;
+  return e;
+}
+
 class Device {
 public:
   const DeviceDef& def;
@@ -66,6 +103,10 @@ public:
   // modulation source: the same picker the Quadrants applets use (CV inputs,
   // CV outputs, MIDI maps, noise)
   HS::CVInputMap mod_in[MAX_PARAMS];
+  uint8_t mod_bus_sel[MAX_PARAMS] = {}; // 1..4 = the track's MOD A-D instead
+  uint8_t act_trig[2] = {};              // trigger sources for the 2 actions
+  bool act_prev[2] = {};
+  const float* mod_bus = nullptr;        // the track's modulator outputs
   uint8_t mod_bi = 0;                // bit per param: bipolar around val
   bool active = false;
 
@@ -101,7 +142,11 @@ public:
   int Modulated(int p) const;
   void Refresh(int p);   // recompute cur[p] and apply it
   void Modulate();       // follow the CV inputs
+  void RunTriggers(uint16_t edges);  // fire actions from their triggers
   void CopyFrom(const Device& d);
+  void ChangeModSource(int p, int dir);
+  void ModSourceName(int p, char* buf, size_t n) const;
+  bool ModSourceOn(int p) const { return mod_bus_sel[p] || mod_in[p].enabled(); }
 };
 
 FLASHMEM void Device::Defaults() {
@@ -116,8 +161,9 @@ FLASHMEM void Device::Defaults() {
 
 FLASHMEM int Device::Modulated(int p) const {
   const ParamDef& d = param(p);
-  if (!mod_amt[p] || !mod_in[p].enabled()) return val[p];
-  float c = constrain(mod_in[p].InF(), -1.0f, 1.0f);
+  if (!mod_amt[p] || !ModSourceOn(p)) return val[p];
+  float c = (mod_bus_sel[p] && mod_bus) ? mod_bus[mod_bus_sel[p] - 1]
+                                        : constrain(mod_in[p].InF(), -1.0f, 1.0f);
   if (Bipolar(p)) c = 2.0f * c - 1.0f;
   const int v = val[p] + int(mod_amt[p] * 0.01f * c * (d.max - d.min));
   return constrain(v, d.min, d.max);
@@ -143,13 +189,45 @@ FLASHMEM void Device::Modulate() {
   }
 }
 
+FLASHMEM void Device::RunTriggers(uint16_t edges) {
+  for (int a = 0; a < 2; a++) {
+    if (act_trig[a] && TrigEdge(act_trig[a], edges, act_prev[a])) Action(a);
+  }
+}
+
 FLASHMEM void Device::CopyFrom(const Device& d) {
   memcpy(val, d.val, sizeof(val));
   memcpy(mode, d.mode, sizeof(mode));
   memcpy(mod_amt, d.mod_amt, sizeof(mod_amt));
   for (int p = 0; p < MAX_PARAMS; p++) mod_in[p] = d.mod_in[p];
+  memcpy(mod_bus_sel, d.mod_bus_sel, sizeof(mod_bus_sel));
+  memcpy(act_trig, d.act_trig, sizeof(act_trig));
   mod_bi = d.mod_bi;
   ApplyAll();
+}
+
+// source list: off, MOD A-D, then the CVInputMap list (CV in, CV out, MIDI
+// maps, noise)
+FLASHMEM void Device::ChangeModSource(int p, int dir) {
+  HS::CVInputMap& in = mod_in[p];
+  uint8_t& bus = mod_bus_sel[p];
+  if (bus) {
+    const int b = bus + dir;
+    if (b < 1) { bus = 0; in.Unpack(0); }            // -> off
+    else if (b > 4) { bus = 0; in.SetInput(0); }     // -> CV 1
+    else bus = b;
+  } else if (!in.enabled()) {
+    if (dir > 0) bus = 1;                            // off -> MOD A
+  } else {
+    in.ChangeSource(dir);
+    if (!in.enabled()) bus = 4;                      // CV 1 -> MOD D
+  }
+  Refresh(p);
+}
+
+FLASHMEM void Device::ModSourceName(int p, char* buf, size_t n) const {
+  if (mod_bus_sel[p]) snprintf(buf, n, "Md%c", 'A' + mod_bus_sel[p] - 1);
+  else snprintf(buf, n, "%s", mod_in[p].InputName());
 }
 
 FLASHMEM void Device::Nudge(int p, int dir) {
@@ -200,6 +278,7 @@ class SculptMixer : public AudioStream {
 public:
   SculptMixer() : AudioStream(4, queue) {}
   volatile float gain[2][2] = {{0.8f, 0.8f}, {0.8f, 0.8f}}; // [track][L/R]
+  volatile float level[2] = {}; // last block's peak per track, for FOLLOW
   float peak[2][2] = {};  // held until read, [track][L/R]
   void update() override;
   void ReadPeaks(float out[2][2]) {
@@ -221,6 +300,7 @@ FLASHMEM void SculptMixer::update() {
   audio_block_t* out[2] = {allocate(), allocate()};
   if (out[0] && out[1]) {
     int32_t acc[2][AUDIO_BLOCK_SAMPLES] = {};
+    float blk[2] = {};
     for (int t = 0; t < 2; t++) {
       for (int c = 0; c < 2; c++) {
         const audio_block_t* b = in[t * 2 + c];
@@ -233,8 +313,11 @@ FLASHMEM void SculptMixer::update() {
           pk = std::max<int32_t>(pk, abs(v));
         }
         peak[t][c] = std::max(peak[t][c], pk * (1.0f / 32768.0f));
+        blk[t] = std::max(blk[t], pk * (1.0f / 32768.0f));
       }
     }
+    level[0] = blk[0];
+    level[1] = blk[1];
     for (int c = 0; c < 2; c++)
       for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) out[c]->data[n] = __SSAT(acc[c][n], 16);
     transmit(out[0], 0);
@@ -334,6 +417,7 @@ public:
     processorUsageMaxReset();
   }
   void update() override;
+  volatile float level = 0.0f; // last block's peak, for FOLLOW
 private:
   audio_block_t* queue[2];
   volatile uint8_t source = STEREO;
@@ -396,6 +480,7 @@ FLASHMEM void InputDevice::update() {
       pk[1] = std::max<int32_t>(pk[1], abs(r[n]));
     }
     for (int c = 0; c < 2; c++) peak[c] = std::max(peak[c], pk[c] * (1.0f / 32768.0f));
+    level = std::max(pk[0], pk[1]) * (1.0f / 32768.0f);
     transmit(out[0], 0);
     transmit(out[1], 1);
   }
