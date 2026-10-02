@@ -675,7 +675,8 @@ void FASTRUN loop() {
               OC::app_switcher.current_app()->DispatchAppEvent(OC::APP_EVENT_FLUSH);
               Serial.println("Auto-save on: preset stored");
             }
-            Serial.println("Saving global settings + app data...");
+            Serial.printf("Saving global settings + app data... (build %s%s)\n",
+                          OC::Strings::VERSION, OC::Strings::BUILD_TAG);
             OC::SaveAppData();
             break;
           default:
