@@ -55,12 +55,21 @@ struct DeviceDef {
 };
 
 constexpr int MAX_PARAMS = 8;
+constexpr int NUM_CV = 8;
+
+// latest CV inputs, normalised (0..1 for 0..10 V on Buchla hardware),
+// written by the app from the main loop
+float cv_in[NUM_CV] = {};
 
 class Device {
 public:
   const DeviceDef& def;
-  int16_t val[MAX_PARAMS] = {};
+  int16_t val[MAX_PARAMS] = {};      // what the user set
+  int16_t cur[MAX_PARAMS] = {};      // after modulation; Apply() uses this
   uint8_t mode[MAX_PARAMS] = {};
+  int8_t mod_amt[MAX_PARAMS] = {};   // -100..100 % of the range, 0 = off
+  uint8_t mod_src[MAX_PARAMS] = {};  // CV input 0..7
+  uint8_t mod_bi = 0;                // bit per param: bipolar around val
   bool active = false;
 
   explicit Device(const DeviceDef& d) : def(d) {}
@@ -91,23 +100,65 @@ public:
   void ApplyAll();
   void Nudge(int p, int dir);
   void NudgeMode(int p, int dir);
+  bool Bipolar(int p) const { return mod_bi & (1 << p); }
+  int Modulated(int p) const;
+  void Refresh(int p);   // recompute cur[p] and apply it
+  void Modulate();       // follow the CV inputs
+  void CopyFrom(const Device& d);
 };
 
 FLASHMEM void Device::Defaults() {
   for (int p = 0; p < num_params(); p++) {
-    val[p] = param(p).def;
+    val[p] = cur[p] = param(p).def;
     mode[p] = param(p).defmode;
+    mod_amt[p] = 0;
+    mod_src[p] = p; // setting n listens to CV n by default
   }
+  mod_bi = 0;
+}
+
+FLASHMEM int Device::Modulated(int p) const {
+  const ParamDef& d = param(p);
+  if (!mod_amt[p]) return val[p];
+  float c = cv_in[mod_src[p]];
+  if (Bipolar(p)) c = 2.0f * c - 1.0f;
+  const int v = val[p] + int(mod_amt[p] * 0.01f * c * (d.max - d.min));
+  return constrain(v, d.min, d.max);
+}
+
+FLASHMEM void Device::Refresh(int p) {
+  cur[p] = Modulated(p);
+  Apply(p);
 }
 
 FLASHMEM void Device::ApplyAll() {
-  for (int p = 0; p < num_params(); p++) Apply(p);
+  for (int p = 0; p < num_params(); p++) Refresh(p);
+}
+
+FLASHMEM void Device::Modulate() {
+  for (int p = 0; p < num_params(); p++) {
+    if (!mod_amt[p] && cur[p] == val[p]) continue;
+    const int m = Modulated(p);
+    if (m != cur[p]) {
+      cur[p] = m;
+      Apply(p);
+    }
+  }
+}
+
+FLASHMEM void Device::CopyFrom(const Device& d) {
+  memcpy(val, d.val, sizeof(val));
+  memcpy(mode, d.mode, sizeof(mode));
+  memcpy(mod_amt, d.mod_amt, sizeof(mod_amt));
+  memcpy(mod_src, d.mod_src, sizeof(mod_src));
+  mod_bi = d.mod_bi;
+  ApplyAll();
 }
 
 FLASHMEM void Device::Nudge(int p, int dir) {
   const ParamDef& d = param(p);
   val[p] = constrain(Step(p, val[p], dir), d.min, d.max);
-  Apply(p);
+  Refresh(p);
 }
 
 FLASHMEM void Device::NudgeMode(int p, int dir) {
@@ -224,14 +275,14 @@ private:
 };
 
 FLASHMEM void MixDevice::Apply(int) {
-  const float lvl = val[2] ? 0.0f : val[0] * 0.01f;
-  const float pan = val[1] * 0.02f; // -1..1
+  const float lvl = cur[2] ? 0.0f : cur[0] * 0.01f;
+  const float pan = cur[1] * 0.02f; // -1..1
   mixer.gain[track][0] = lvl * (pan > 0.0f ? 1.0f - pan : 1.0f);
   mixer.gain[track][1] = lvl * (pan < 0.0f ? 1.0f + pan : 1.0f);
 }
 
 FLASHMEM void MixDevice::Action(int a) {
-  if (a == 1) { val[2] = !val[2]; Apply(2); }
+  if (a == 1) { val[2] = !val[2]; Refresh(2); }
 }
 
 FLASHMEM bool MixDevice::ActionLit(int a) const { return a == 1 && val[2]; }
@@ -244,16 +295,16 @@ FLASHMEM void MixDevice::DrawViz(int x, int y, int w, int h) {
   gfxFrame(cx + 1, y, mw + 2, h - 4);
   DrawVMeter(cx - mw - 2, y + 1, mw, h - 6, l);
   DrawVMeter(cx + 2, y + 1, mw, h - 6, r);
-  const int px = cx + val[1] * 40 / 50;
+  const int px = cx + cur[1] * 40 / 50;
   gfxDottedLine(cx - 40, y + h - 2, cx + 40, y + h - 2, 2);
   gfxRect(px - 1, y + h - 3, 3, 3);
   gfxPrint(x + 2, y + 2, PSTR("L"));
   gfxPrint(x + w - 8, y + 2, PSTR("R"));
-  if (val[2]) gfxPrint(cx - 12, y + h / 2 - 4, PSTR("MUTE"));
+  if (cur[2]) gfxPrint(cx - 12, y + h / 2 - 4, PSTR("MUTE"));
 }
 
 FLASHMEM void MixDevice::DrawMini(int x, int y, int w, int h) {
-  if (val[2]) { gfxLine(x, y + h / 2, x + w - 1, y + h / 2); return; }
+  if (cur[2]) { gfxLine(x, y + h / 2, x + w - 1, y + h / 2); return; }
   const float l = meters[0].Hit(level[0]), r = meters[1].Hit(level[1]);
   DrawHMeter(x, y, w, h / 2, l);
   DrawHMeter(x, y + h / 2 + 1, w, h / 2, r);
@@ -309,9 +360,9 @@ FLASHMEM void InputDevice::Poll() {
 
 FLASHMEM void InputDevice::Apply(int p) {
   switch (p) {
-    case 0: source = val[0]; break;
-    case 1: gain = val[1] * 0.01f; break;
-    case 2: width = val[2] * 0.01f; break;
+    case 0: source = cur[0]; break;
+    case 1: gain = cur[1] * 0.01f; break;
+    case 2: width = cur[2] * 0.01f; break;
   }
 }
 
@@ -464,8 +515,8 @@ FLASHMEM void VastDevice::CpuMax(float parts[2]) {
 }
 
 FLASHMEM void VastDevice::SetTimes() {
-  const float secs = val[TIME] * 0.001f;
-  const float phase = mode[SPREAD] == PHASE ? 1.0f + 0.3f * val[SPREAD] * 0.01f : 1.0f;
+  const float secs = cur[TIME] * 0.001f;
+  const float phase = mode[SPREAD] == PHASE ? 1.0f + 0.3f * cur[SPREAD] * 0.01f : 1.0f;
   for (int c = 0; c < 2; c++) {
     for (int t = 0; t < TAPS; t++) {
       float s = secs * TAP_POS[c][t] * (c ? phase : 1.0f);
@@ -477,7 +528,7 @@ FLASHMEM void VastDevice::SetTimes() {
 }
 
 FLASHMEM void VastDevice::Apply(int p) {
-  const float v = val[p] * 0.01f;
+  const float v = cur[p] * 0.01f;
   switch (p) {
     case DELAY:    vast.delay_mix(v); break;
     case TIME:     SetTimes(); break;
@@ -489,7 +540,7 @@ FLASHMEM void VastDevice::Apply(int p) {
       vast.diffuse(mode[SPREAD] == DIFFUSE ? v : 0.0f);
       SetTimes();
       break;
-    case TONE:     vast.tone(val[TONE] * 0.02f); break;
+    case TONE:     vast.tone(cur[TONE] * 0.02f); break;
     case DECAY:    vast.decay(0.3f * powf(60.0f, v)); break; // 0.3 .. 18 s
   }
 }
@@ -561,7 +612,7 @@ FLASHMEM void VastDevice::DrawViz(int x, int y, int w, int h) {
   const float tail = tail_m.v;
   const int th = constrain(int(tail * (h - 2)), 0, h - 2);
   const int tx = x + tl_w + 2;
-  const int len = 12 + (w - tl_w - 14) * val[DECAY] / 100;
+  const int len = 12 + (w - tl_w - 14) * cur[DECAY] / 100;
   for (int i = 0; i < len; i += 2) {
     const int hh = th * (len - i) / len;
     if (hh > 0) gfxLine(tx + i, base - hh, tx + i, base);
