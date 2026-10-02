@@ -9,7 +9,7 @@
 // a bank of 12 parallel two-pole resonators tuned to a modal spectrum.
 //
 // Page 1: Pit, Inh, Brt, Dmp, Pos
-// Page 2: Mix, Trg, Vel, Fin, Qnt
+// Page 2: Trg, Vel, Fin, Qnt, Mix
 // Page 3 (stereo only): Spr
 //
 //   Pit — fundamental (semitones, V/Oct CV)    Fin — fine tune in cents
@@ -246,11 +246,11 @@ private:
         { "Brt:", BRIGHT, BRIGHT_CV, false },
         { "Dmp:", DAMP,   DAMP_CV,   false },
         { "Pos:", POS,    POS_CV,    false },
-        { "Mix:", MIX,    MIX_CV,    false },
         { "Trg:", -1,     STRIKE,    false },
         { "Vel:", VEL,    VEL_CV,    false },
         { "Fin:", FINE,   -1,        false },
         { "Qnt:", QUANT,  -1,        false },
+        { "Mix:", MIX,    MIX_CV,    false },
         { "Spr:", SPREAD, SPREAD_CV, true  },
     };
 
