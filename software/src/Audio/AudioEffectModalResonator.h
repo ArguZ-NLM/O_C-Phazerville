@@ -104,6 +104,10 @@ public:
         float stiffness = structure * 1.55f - 0.05f;
         float stretch   = 1.0f;
 
+        // long decays build up more level: turn the input down above 40%
+        float d_over = damping > 0.4f ? damping - 0.4f : 0.0f;
+        in_gain_ = 1.0f / (1.0f + 3.0f * d_over * d_over);
+
         // strike noise lowpass: soft mallet at low brightness
         strike_lp_coef_ = 0.03f + 0.97f * brightness * brightness;
 
@@ -209,6 +213,7 @@ public:
         const float    cross = 1.0f - spread;
         const float    out_gain = out2 ? (1.0f + 0.41f * spread) * 32767.0f : 32767.0f;
         const float    lp_c = strike_lp_coef_;
+        const float    in_gain = in_gain_;
 
         bool  do_strike = strike_pending_;
         float vel       = strike_vel_;
@@ -271,6 +276,8 @@ public:
                 if (ax16 > 32767) ax16 = 32767;
                 if (ax16 > excite_peak_) excite_peak_ = (uint16_t)ax16;
             }
+
+            x *= in_gain;
 
             // Chamberlin SVF resonator bank — bandpass output
             // y[0] = odd modes (1st, 3rd...), y[1] = even modes
@@ -346,6 +353,7 @@ private:
     float          strike_lp_coef_ = 1.0f;
 
     bool split_ = false;
+    volatile float in_gain_ = 1.0f;
     volatile float spread_ = 1.0f;
 
     // VU
