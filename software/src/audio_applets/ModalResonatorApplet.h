@@ -121,7 +121,6 @@ public:
 
     FLASHMEM void AuxButton() override {
         manual_strike_ = true;
-        CancelEdit();
     }
 
     // --- Button / encoder ----------------------------------------------------
