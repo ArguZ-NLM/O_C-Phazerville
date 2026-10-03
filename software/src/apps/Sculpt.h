@@ -33,8 +33,8 @@
 //              both tracks (except input source and pan). Both keep running.
 // Device view:
 //   R enc  scroll through the 8 settings
-//   R push grab the setting (R enc changes the value); settings with modes:
-//          push again for the mode (R enc changes it); push again to let go
+//   R push grab / let go of the setting; while grabbed R enc changes the
+//          value and L enc the mode (e.g. VAST SPRD: PHASE / PING / DIFF)
 //   L push modulation for the setting:    L enc amount, R enc source (CV in,
 //          CV out, MIDI map, noise),      R push unipolar / bipolar,
 //          X  MIDI learn (move a knob),   L push again to leave
@@ -135,7 +135,8 @@ private:
   int8_t track = 0, col = sculpt::SPACE, cursor = 0;
   bool l_held = false, l_used = false;
   bool editing = false;   // device view: setting grabbed, R enc changes it
-  bool edit_mode = false; // ...and on its mode instead of its value
+  bool edit_mode = false; // the mode was just changed: show its name
+  mutable elapsedMillis mode_shown;
   bool mod_mode = false;  // device view: L enc amount, R enc source
   bool trig_mode = false; // device view: L / R enc trigger source per action
   elapsedMicros mod_timer;
@@ -561,15 +562,8 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
         d->Refresh(cursor);
         Mirror(d, cursor);
       } else {
-        // value -> mode (if it has modes) -> let go
-        if (!editing) {
-          editing = true;
-          edit_mode = false;
-        } else if (!edit_mode && d->param(cursor).nmodes) {
-          edit_mode = true;
-        } else {
-          editing = edit_mode = false;
-        }
+        editing = !editing;
+        edit_mode = false;
       }
       break;
     case OC::CONTROL_BUTTON_Y:
@@ -643,16 +637,23 @@ FLASHMEM void AppSculpt::OnEncoder(const UI::Event &event) {
     d->Refresh(cursor);
     Mirror(d, cursor);
   } else if (left) {
-    // left encoder only works in modulation mode
+    // while a setting is grabbed the left encoder picks its mode
+    if (editing && d->param(cursor).nmodes) {
+      d->NudgeMode(cursor, dir);
+      Mirror(d, cursor);
+      edit_mode = true; // show the mode name for a moment
+      mode_shown = 0;
+    }
   } else if (!editing) {
     cursor = constrain(cursor + dir, 0, d->num_params() - 1);
-  } else if ((edit_mode || l_held) && d->param(cursor).nmodes) {
+  } else if (l_held && d->param(cursor).nmodes) {
     d->NudgeMode(cursor, dir);
     Mirror(d, cursor);
     l_used = true;
   } else {
     d->Nudge(cursor, dir);
     Mirror(d, cursor);
+    edit_mode = false;
   }
 }
 
@@ -800,7 +801,8 @@ FLASHMEM void AppSculpt::DrawDevice() const {
     }
 
     // value row
-    const bool show_mode = sel && editing && (edit_mode || l_held) && pd.nmodes;
+    const bool show_mode = sel && editing && pd.nmodes
+      && (l_held || (edit_mode && mode_shown < 1500));
     if (sel && mod_mode) snprintf(buf, sizeof(buf), "%+d%%", d->mod_amt[p]);
     else if (show_mode) snprintf(buf, sizeof(buf), "%s", pd.modes[d->mode[p]]);
     else d->Format(p, buf, sizeof(buf));
