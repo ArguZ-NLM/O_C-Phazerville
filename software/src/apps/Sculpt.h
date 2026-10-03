@@ -695,7 +695,8 @@ FLASHMEM void AppSculpt::DrawChain() const {
       if (c != MIX_COL) {
         // devices = options minus BYPASS (MATERIAL has no bypass)
         const int first = c == MATERIAL ? 0 : 1;
-        const int n = SLOT_DEFS[c].noptions - first;
+        // one dot per planned device; ones not built yet stay hollow
+        const int n = std::max<int>(SLOT_DEFS[c].noptions - first, SLOT_DEFS[c].planned);
         if (n > 0) {
         const int dx = x + 1 + (bw - 1 - (5 * n - 2)) / 2;
         for (int k = 0; k < n; k++) {

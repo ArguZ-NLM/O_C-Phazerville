@@ -929,15 +929,16 @@ constexpr int MAX_OPTIONS = 2;
 struct SlotDef {
   char name[9];
   char tag[4];
-  uint8_t noptions;
+  uint8_t noptions;  // BYPASS + devices that exist now (MATERIAL: no bypass)
+  uint8_t planned;   // devices this slot will offer (dots on the chain view)
 };
 
 PROGMEM static const SlotDef SLOT_DEFS[SLOT_COUNT] = {
-  {"MATERIAL", "MAT", 1},  // INPUT (TAPE next)
-  {"GRANULAR", "GRN", 1},  // BYPASS (MOSAIC to come)
-  {"FILTER",   "FLT", 1},  // BYPASS (RING to come)
-  {"COLOR",    "COL", 2},  // BYPASS, DEFORM
-  {"SPACE",    "SPC", 2},  // BYPASS, VAST
+  {"MATERIAL", "MAT", 1, 3},  // INPUT (TAPE and DISC to come)
+  {"GRANULAR", "GRN", 1, 1},  // BYPASS (MOSAIC to come)
+  {"FILTER",   "FLT", 1, 1},  // BYPASS (RING to come)
+  {"COLOR",    "COL", 2, 1},  // BYPASS, DEFORM
+  {"SPACE",    "SPC", 2, 1},  // BYPASS, SPACE
 };
 
 // nullptr = BYPASS. MATERIAL/INPUT is owned by the track, not made here.
