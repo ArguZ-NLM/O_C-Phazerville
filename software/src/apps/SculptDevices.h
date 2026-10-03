@@ -994,7 +994,7 @@ FLASHMEM void DeformDevice::DrawViz(int x, int y, int w, int h) {
   // are the limits. Dotted: the input boosted by FOLD, growing past the
   // limits (the box shows twice their range). Solid: what comes out - it
   // folds back between the limits, then DRIVE rounds it and CRUSH adds
-  // steps. It scrolls slowly.
+  // steps. One whole cycle, standing still.
   const int bs = 36, half = h / 2 - 1, cyw = y + h / 2, lim = half / 2;
   gfxFrame(x, y, bs, h);
   for (int i = 2; i < bs - 2; i += 3) {
@@ -1006,10 +1006,9 @@ FLASHMEM void DeformDevice::DrawViz(int x, int y, int w, int h) {
   // the picture exaggerates the steps so they are visible at this size
   const int levels = bits ? std::max(2, 1 << std::min(4, AudioEffectDeform::CrushBits(crs) - 12)) : 0;
   const float boost = 1.0f + 6.0f * fld * std::min(1.0f, fld * 4.0f);
-  const float scroll = (millis() % 4000) * (2.0f * float(M_PI) / 4000.0f);
   int py = -1;
   for (int i = 1; i < bs - 1; i++) {
-    const float ph = scroll + 2.0f * float(M_PI) * (i - 1) / (bs - 3);
+    const float ph = 2.0f * float(M_PI) * (i - 1) / (bs - 3);
     const float in = sinf(ph);
     const int gy = int(in * boost * lim);
     if (abs(gy) < half && (i & 1)) gfxPixel(x + i, cyw - gy);
