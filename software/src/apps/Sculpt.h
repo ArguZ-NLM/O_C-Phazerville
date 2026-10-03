@@ -785,7 +785,7 @@ FLASHMEM void AppSculpt::DrawDevice() const {
     gfxInvert(0, 0, 7, 8);
     if (focus_mod) {
       char buf[8];
-      snprintf(buf, sizeof(buf), "%c %s", 'A' + mod_cursor, d->def.name);
+      snprintf(buf, sizeof(buf), "%c %s", 'A' + mod_cursor, d->def.tag); // short: actions follow
       gfxPrint(10, 0, buf);
     } else {
       gfxPrint(10, 0, d->def.name);
@@ -809,7 +809,7 @@ FLASHMEM void AppSculpt::DrawDevice() const {
   }
   for (int a = 0; a < 2 && !mod_mode; a++) {
     if (!d->def.actions[a][0]) continue;
-    const int x = 64 + a * 22;
+    const int x = 56 + a * 26; // clear of the page number at 110
     gfxPrint(x, 0, d->def.actions[a]);
     const int lw = 6 * int(strlen(d->def.actions[a])) + 2;
     // a muted track blinks MUTE so it can't be missed; other lit actions

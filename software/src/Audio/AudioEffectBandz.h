@@ -40,8 +40,9 @@ public:
     AudioInterrupts();
   }
 
-  // the last CAPTURE output samples (L+R) for the spectrum, oldest first
-  static constexpr int CAPTURE = 512;
+  // the last CAPTURE output samples (L+R) for the spectrum, oldest first:
+  // enough for a 512-point FFT at a quarter of the sample rate (low end)
+  static constexpr int CAPTURE = 2048;
   void ReadCapture(int16_t* dst) {
     AudioNoInterrupts();
     const int p = cap_pos;

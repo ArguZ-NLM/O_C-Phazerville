@@ -405,7 +405,7 @@ private:
   Meter meters[2], band_m[3], gr_m[3];
   static constexpr int SPEC_BARS = 31; // 3 px each across the 3 left columns
   float spec[SPEC_BARS] = {};
-  float* fft = nullptr; // 2 x CAPTURE floats, made when first drawn
+  float* fft = nullptr; // 4 x 512 floats for the two FFTs, made when first drawn
   void DrawSpectrum(int x, int y, int w, int h);
 };
 
@@ -505,35 +505,63 @@ FLASHMEM void MixDevice::DrawViz(int x, int y, int w, int h) {
   gfxRect(px - 1, y + h - 3, 3, 3);
 }
 
-// 31 bars, log frequency 60 Hz .. 20 kHz, -60..0 dB, with the band splits
+// 31 bars, log frequency 60 Hz .. 20 kHz, -60..0 dB, with the band splits.
+// Two 512-point FFTs: the newest 512 samples at full rate (94 Hz bins) for
+// the top, and all 2048 samples taken down to 12 kHz (23 Hz bins) for the
+// bars below 1 kHz. A bar narrower than a bin reads between two bins. The
+// display tilts +3 dB/octave so music reads roughly level.
 FLASHMEM void MixDevice::DrawSpectrum(int x, int y, int w, int h) {
-  constexpr int N = AudioEffectBandz::CAPTURE;
-  if (!fft) fft = new float[2 * N];
+  constexpr int N = 512, CAP = AudioEffectBandz::CAPTURE, DECIM = CAP / N;
+  if (!fft) fft = new float[4 * N];
   if (!fft) return;
-  float* re = fft;
+  float* re = fft;          // full rate
   float* im = fft + N;
-  int16_t samples[N];
+  float* dre = fft + 2 * N; // decimated
+  float* dim = fft + 3 * N;
+  int16_t* samples = new int16_t[CAP];
+  if (!samples) return;
   bandz.ReadCapture(samples);
   for (int i = 0; i < N; i++) {
     const float win = 0.5f - 0.5f * cosf(2.0f * float(M_PI) * i / (N - 1)); // Hann
-    re[i] = samples[i] * (1.0f / 32768.0f) * win;
+    re[i] = samples[CAP - N + i] * (1.0f / 32768.0f) * win;
     im[i] = 0.0f;
+    // average DECIM samples: a simple low-pass before taking every DECIM-th
+    int32_t acc = 0;
+    for (int k = 0; k < DECIM; k++) acc += samples[i * DECIM + k];
+    dre[i] = acc * (1.0f / (32768.0f * DECIM)) * win;
+    dim[i] = 0.0f;
   }
+  delete[] samples;
   Fft(re, im, N);
+  Fft(dre, dim, N);
 
-  constexpr float f0 = 60.0f, f1 = 20000.0f;
-  const float bin_hz = AUDIO_SAMPLE_RATE_EXACT / N;
+  constexpr float f0 = 60.0f, f1 = 20000.0f, split_hz = 1000.0f;
   const int bw = w / SPEC_BARS;
+  const float ref_db = 20.0f * log10f(N / 4.0f); // full-scale sine, Hann
   for (int b = 0; b < SPEC_BARS; b++) {
     const float lo = f0 * powf(f1 / f0, float(b) / SPEC_BARS);
     const float hi = f0 * powf(f1 / f0, float(b + 1) / SPEC_BARS);
-    int k0 = int(lo / bin_hz), k1 = int(hi / bin_hz);
-    k0 = constrain(k0, 1, N / 2 - 1);
-    k1 = constrain(std::max(k1, k0), 1, N / 2 - 1);
-    float pk = 0.0f;
-    for (int k = k0; k <= k1; k++) pk = std::max(pk, re[k] * re[k] + im[k] * im[k]);
-    // magnitude in dB relative to a full-scale sine with the Hann window
-    const float db = 10.0f * log10f(pk + 1e-12f) - 20.0f * log10f(N / 4.0f);
+    const bool low = hi <= split_hz;
+    const float* r = low ? dre : re;
+    const float* i2 = low ? dim : im;
+    const float bin_hz = AUDIO_SAMPLE_RATE_EXACT / (low ? DECIM : 1) / N;
+    float pk;
+    if (hi - lo < bin_hz) {
+      // narrower than a bin: interpolate at the bar's centre
+      const float pos = constrain(sqrtf(lo * hi) / bin_hz, 1.0f, N / 2 - 2.0f);
+      const int k = int(pos);
+      const float t = pos - k;
+      const float m0 = r[k] * r[k] + i2[k] * i2[k];
+      const float m1 = r[k + 1] * r[k + 1] + i2[k + 1] * i2[k + 1];
+      pk = m0 + t * (m1 - m0);
+    } else {
+      const int k0 = constrain(int(lo / bin_hz + 0.5f), 1, N / 2 - 1);
+      const int k1 = constrain(int(hi / bin_hz), k0, N / 2 - 1);
+      pk = 0.0f;
+      for (int k = k0; k <= k1; k++) pk = std::max(pk, r[k] * r[k] + i2[k] * i2[k]);
+    }
+    const float tilt = 3.0f * log2f(sqrtf(lo * hi) / 1000.0f); // 0 dB at 1 kHz
+    const float db = 10.0f * log10f(pk + 1e-12f) - ref_db + tilt;
     const float v = constrain((db + 60.0f) / 60.0f, 0.0f, 1.0f);
     spec[b] = std::max(v, spec[b] - 0.04f);
     const int bh = int(spec[b] * h);
