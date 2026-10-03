@@ -688,7 +688,9 @@ FLASHMEM void AppSculpt::DrawChain() const {
       Device* d = tracks[t].at(c);
       if (d) {
         gfxFrame(x, y, bw, bh);
-        gfxPrint(x + 2, y + 2, d->def.tag);
+        // centred: a 3-letter tag is 17 px of ink in the 18 px inside
+        const int tw = 6 * int(strlen(d->def.tag)) - 1;
+        gfxPrint(x + (bw - tw) / 2, y + 2, d->def.tag);
         if (d->ok()) d->DrawMini(x + 2, y + 12, bw - 4, 5);
         else gfxPrint(x + 2, y + 11, PSTR("!!"));
       } else {
