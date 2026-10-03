@@ -32,6 +32,7 @@
 #include "../Audio/AudioEffectVast.h"
 #include "../Audio/AudioEffectDeform.h"
 #include "../Audio/AudioEffectBandz.h"
+#include "../Audio/AudioEffectRing.h"
 
 namespace sculpt {
 
@@ -1098,6 +1099,140 @@ FLASHMEM void DeformDevice::DrawMini(int x, int y, int w, int h) {
 }
 
 /////////////////////////////////////////////////////////////////
+// RING (Filter): 48-band resonant filter bank
+/////////////////////////////////////////////////////////////////
+PROGMEM static const DeviceDef RING_DEF = {
+  "RING", "RNG", 8, {"", ""},
+  {
+    {"CUT", 0, 100, 70, UNI},
+    {"RESO", 0, 100, 20, UNI},
+    {"DCAY", 0, 100, 40, UNI, 0, 2, 0, {}, {"SUST", "CHOKE"}},
+    {"PITCH", -24, 24, 0, BI},
+    {"SLOPE", -50, 50, -50, BI},
+    {"TONE", -50, 50, 0, BI},
+    {"SCALE", 0, 3, 0, LIST, 4, 0, 0, {"CHROM", "MAJOR", "MINOR", "PENTA"}},
+    {"WET", 0, 100, 100, UNI},
+  }
+};
+
+class RingDevice : public Device {
+public:
+  enum { CUT, RESO, DECAY, PITCH, SLOPE, TONE, SCALE, WET };
+  static constexpr int BANDS = AudioEffectRing::BANDS;
+  RingDevice() : Device(RING_DEF) {}
+  AudioStream* in() override { return &fx; }
+  AudioStream* out() override { return &fx; }
+  bool Activate() override { fx.Reset(); active = true; return true; }
+  void Apply(int p) override { Rebuild(); }
+  void Format(int p, char* buf, size_t n) const override;
+  void DrawViz(int x, int y, int w, int h) override;
+  void DrawMini(int x, int y, int w, int h) override;
+  void CpuMax(float parts[2]) override {
+    parts[0] = fx.processorUsageMax();
+    parts[1] = 0.0f;
+    fx.processorUsageMaxReset();
+  }
+private:
+  AudioEffectRing fx;
+  float shape[BANDS] = {};   // band gains before the overall level, for the picture
+  float band_m[BANDS] = {};
+  Meter out_m;
+  void Rebuild();
+  float Q() const { return 2.0f * powf(100.0f, cur[DECAY] * 0.01f); } // 2 .. 200
+};
+
+// band k sits 2 semitones above band k-1, from C1, moved by PITCH and
+// snapped to SCALE; its gain follows CUT / SLOPE (12 dB per octave sides),
+// a RESO bump at the cutoff and the TONE tilt
+FLASHMEM void RingDevice::Rebuild() {
+  static const uint16_t scale_masks[4] = {
+    0xFFF,                                                   // chromatic
+    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 5) | (1 << 7) | (1 << 9) | (1 << 11), // major
+    (1 << 0) | (1 << 2) | (1 << 3) | (1 << 5) | (1 << 7) | (1 << 8) | (1 << 10), // minor
+    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 7) | (1 << 9),    // pentatonic
+  };
+  const uint16_t mask = scale_masks[constrain(cur[SCALE], 0, 3)];
+  const float c = cur[CUT] * 0.01f * (BANDS - 1);
+  const float res = cur[RESO] * 0.01f, slope = cur[SLOPE] * 0.02f, tone = cur[TONE] * 0.02f;
+  const float q = Q();
+  const float level = 0.5f * (1.0f + 0.2f * log2f(q / 2.0f));
+  float f[BANDS], g[BANDS];
+  for (int k = 0; k < BANDS; k++) {
+    int note = 24 + 2 * k + cur[PITCH];  // MIDI note, C1 = 24
+    for (int d = 0; d < 6; d++) {        // nearest note in the scale
+      if (mask & (1 << (((note - d) % 12 + 12) % 12))) { note -= d; break; }
+      if (mask & (1 << (((note + d) % 12 + 12) % 12))) { note += d; break; }
+    }
+    const float hz = 440.0f * powf(2.0f, (note - 69) / 12.0f);
+    f[k] = hz < 8000.0f ? 2.0f * sinf(float(M_PI) * hz / AUDIO_SAMPLE_RATE_EXACT) : 0.0f;
+
+    const float d = k - c;  // bands from the cutoff, 6 per octave
+    const float g_lp = d <= 0.0f ? 1.0f : powf(10.0f, -2.0f * d / 20.0f);
+    const float g_hp = d >= 0.0f ? 1.0f : powf(10.0f, 2.0f * d / 20.0f);
+    const float g_bp = powf(10.0f, -2.0f * fabsf(d) / 20.0f);
+    float gk = slope < 0.0f ? g_bp + (-slope) * (g_lp - g_bp) : g_bp + slope * (g_hp - g_bp);
+    gk *= 1.0f + res * 6.0f * expf(-(d * d) / 2.25f);
+    gk *= powf(2.0f, tone * (k - BANDS / 2) / float(BANDS / 2));
+    shape[k] = gk;
+    g[k] = gk * level;
+  }
+  fx.SetBank(f, g, 1.0f / q, mode[DECAY] == 1, cur[WET] * 0.01f);
+}
+
+FLASHMEM void RingDevice::Format(int p, char* buf, size_t n) const {
+  if (p == CUT) {
+    // the cutoff band's note, before PITCH
+    static const char* const names[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+    const int note = 24 + 2 * int(val[CUT] * 0.01f * (BANDS - 1) + 0.5f);
+    snprintf(buf, n, "%s%d", names[note % 12], note / 12 - 1);
+  } else if (p == DECAY) {
+    snprintf(buf, n, "Q%d", int(2.0f * powf(100.0f, val[DECAY] * 0.01f) + 0.5f));
+  } else {
+    Device::Format(p, buf, n);
+  }
+}
+
+FLASHMEM void RingDevice::DrawViz(int x, int y, int w, int h) {
+  AudioEffectRing::Viz v;
+  fx.ReadViz(v);
+  out_m.Hit(v.out);
+  // 48 bands as thin bars (2 px each) across the three left columns, the
+  // bank's shape dotted over them and the cutoff marked at the top
+  float smax = 0.01f;
+  for (float sv : shape) smax = std::max(smax, sv);
+  for (int k = 0; k < BANDS; k++) {
+    band_m[k] = std::max(sqrtf(std::min(1.0f, v.band[k] * 4.0f)), band_m[k] * 0.9f);
+    const int bx = x + k * 2;
+    const int bh = int(band_m[k] * (h - 2));
+    if (bh > 0) gfxLine(bx, y + h - 1, bx, y + h - 1 - bh);
+    const int sy = y + h - 1 - int(shape[k] / smax * (h - 3));
+    if (k & 1) gfxPixel(bx, sy);
+  }
+  const int cx = x + int(cur[CUT] * 0.01f * (BANDS - 1)) * 2;
+  gfxLine(cx - 2, y, cx + 2, y);
+  gfxLine(cx, y, cx, y + 2);
+  gfxDottedLine(x, y + h - 1, x + BANDS * 2, y + h - 1, 2);
+  // output level on the right
+  const int mx = x + w - 14;
+  gfxFrame(mx, y, 12, h);
+  DrawVMeter(mx + 1, y + 1, 10, h - 2, out_m.v);
+}
+
+FLASHMEM void RingDevice::DrawMini(int x, int y, int w, int h) {
+  AudioEffectRing::Viz v;
+  fx.ReadViz(v);
+  out_m.Hit(v.out);
+  // a tiny bank: one column per 3 bands
+  for (int i = 0; i < w; i++) {
+    float m = 0.0f;
+    for (int k = i * BANDS / w; k < (i + 1) * BANDS / w; k++) m = std::max(m, v.band[k]);
+    band_m[i] = std::max(sqrtf(std::min(1.0f, m * 4.0f)), band_m[i] * 0.9f);
+    const int bh = int(band_m[i] * h);
+    if (bh > 0) gfxLine(x + i, y + h, x + i, y + h - bh);
+  }
+}
+
+/////////////////////////////////////////////////////////////////
 // Slot catalogue, S4 order. Option 0 of the effect slots is BYPASS.
 /////////////////////////////////////////////////////////////////
 enum Slot : uint8_t { MATERIAL, GRANULAR, FILTER, COLOR, SPACE, SLOT_COUNT };
@@ -1113,13 +1248,14 @@ struct SlotDef {
 PROGMEM static const SlotDef SLOT_DEFS[SLOT_COUNT] = {
   {"MATERIAL", "MAT", 1, 3},  // INPUT (TAPE and DISC to come)
   {"GRANULAR", "GRN", 1, 1},  // BYPASS (MOSAIC to come)
-  {"FILTER",   "FLT", 1, 1},  // BYPASS (RING to come)
+  {"FILTER",   "FLT", 2, 1},  // BYPASS, RING
   {"COLOR",    "COL", 2, 1},  // BYPASS, DEFORM
   {"SPACE",    "SPC", 2, 1},  // BYPASS, SPACE
 };
 
 // nullptr = BYPASS. MATERIAL/INPUT is owned by the track, not made here.
 FLASHMEM static Device* MakeDevice(int slot, int option) {
+  if (slot == FILTER && option == 1) return new RingDevice;
   if (slot == COLOR && option == 1) return new DeformDevice;
   if (slot == SPACE && option == 1) return new VastDevice;
   return nullptr;
