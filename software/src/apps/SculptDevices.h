@@ -846,17 +846,36 @@ FLASHMEM void DeformDevice::DrawViz(int x, int y, int w, int h) {
     py = yy;
   }
 
-  // tilt see-saw with the crossover marked
-  const int tx = x + bs + 6, tw = 34, ty = y + h / 2;
-  const int lean = cur[TILT] * (h / 2 - 3) / 50;
-  gfxLine(tx, ty + lean, tx + tw, ty - lean);
-  const int xo = tx + 6 + mode[TILT] * 11;
-  gfxLine(xo, ty + 2, xo - 3, ty + 6);
-  gfxLine(xo, ty + 2, xo + 3, ty + 6);
-  gfxPrint(tx, y, PSTR("TILT"));
+  // tilt as a frequency response, 20 Hz .. 20 kHz on a log scale: it turns
+  // around the crossover (dot + frequency underneath), +-12 dB at the edges
+  static const float xover_hz[3] = {80.0f, 650.0f, 2500.0f};
+  static const char* const xover_name[3] = {"80", "650", "2k5"};
+  const int tx = x + bs + 4, tw = 44, ch = h - 9, cy = y + ch / 2;
+  const float t = cur[TILT] * 0.02f;
+  const float gl = powf(10.0f, -12.0f * t / 20.0f), gh = powf(10.0f, 12.0f * t / 20.0f);
+  const float pivot_hz = xover_hz[mode[TILT] % 3];
+  const float fc = std::min(pivot_hz * gh, 18000.0f); // same corner as the effect
+  const float px_per_db = (ch / 2 - 1) / 12.0f;
+  gfxDottedLine(tx, cy, tx + tw - 1, cy, 3);
+  int ly = -1;
+  for (int i = 0; i < tw; i++) {
+    const float f = 20.0f * powf(1000.0f, float(i) / (tw - 1));
+    const float r = f / fc;
+    const float mag = sqrtf((gl * gl + gh * gh * r * r) / (1.0f + r * r));
+    const int yy = cy - int(20.0f * log10f(mag) * px_per_db);
+    if (ly >= 0) gfxLine(tx + i - 1, ly, tx + i, yy);
+    ly = yy;
+  }
+  // the pivot sits on the 0 dB line at the crossover
+  const int pivot = tx + int(log10f(pivot_hz / 20.0f) / 3.0f * (tw - 1));
+  gfxRect(pivot - 1, cy - 1, 3, 3);
+  gfxLine(pivot, cy + 2, pivot, y + ch);
+  const char* lbl = xover_name[mode[TILT] % 3];
+  const int lx = constrain(pivot - 3 * int(strlen(lbl)), tx, tx + tw - 6 * int(strlen(lbl)));
+  gfxPrint(lx, y + ch + 1, lbl);
 
   // noise: sparkle, denser with more noise
-  const int nx = tx + tw + 6, nw = 22;
+  const int nx = tx + tw + 4, nw = 20;
   const int dots = int(noise_m.v * 60.0f);
   for (int i = 0; i < dots; i++) gfxPixel(nx + random(nw), y + 2 + random(h - 4));
   gfxFrame(nx - 1, y, nw + 2, h, true);

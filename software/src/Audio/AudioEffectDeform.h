@@ -43,7 +43,10 @@ public:
     t = constrain(t, -1.0f, 1.0f);
     tilt_lo = powf(10.0f, -12.0f * t / 20.0f);
     tilt_hi = powf(10.0f, 12.0f * t / 20.0f);
-    tilt_a = 1.0f - expf(-2.0f * float(M_PI) * hz[xover % 3] / AUDIO_SAMPLE_RATE_EXACT);
+    // with low gain 1/g and high gain g the response crosses 0 dB at
+    // corner / g, so put the corner at xover * g: the tilt pivots there
+    const float corner = std::min(hz[xover % 3] * tilt_hi, 18000.0f);
+    tilt_a = 1.0f - expf(-2.0f * float(M_PI) * corner / AUDIO_SAMPLE_RATE_EXACT);
     tilt_on = t != 0.0f;
   }
   void noise(float amt, uint8_t mode) { noise_amt = constrain(amt, 0.0f, 1.0f); noise_mode = mode; }
