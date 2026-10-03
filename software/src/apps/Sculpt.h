@@ -23,30 +23,33 @@
 // Two stereo tracks, each a fixed chain MATERIAL > GRANULAR > FILTER > COLOR
 // > SPACE, mixed to the stereo output. Every effect slot can be bypassed.
 //
+// Everywhere: R enc moves the cursor, L enc changes what is under it (device
+// type, a setting's mode, modulator type), R push opens / grabs, Y goes back.
+//
 // Chain view (home):
-//   L enc  move between the 12 boxes      R enc  change the slot's device
+//   R enc  move between the 12 boxes      L enc  change the slot's device
+//                                                (MIX: track level)
 //   L push bypass on/off                  R push open the device
 //   UP / DOWN  the device's two actions (e.g. VAST freeze / clear)
-//   X      the track's modulators (MOD A-D)
+//   X      the track's modulators (MOD A-D) and the clock
 //   UP + DOWN  link / unlink the tracks' controls. Linking copies the track
 //              you are on to the other one; while linked every edit goes to
 //              both tracks (except input source and pan). Both keep running.
 // Device view:
-//   R enc  scroll through the 8 settings
-//   R push grab / let go of the setting; while grabbed R enc changes the
-//          value and L enc the mode (e.g. VAST SPRD: PHASE / PING / DIFF)
-//   L push modulation for the setting:    L enc amount, R enc source (CV in,
-//          CV out, MIDI map, noise),      R push unipolar / bipolar,
-//          X  MIDI learn (move a knob),   L push again to leave
-//   Y      back to the chain              UP / DOWN  actions
+//   R enc  move between the 8 settings    L enc  the setting's mode
+//   R push grab / let go; grabbed, R enc changes the value
+//   L push modulation for the setting:    L enc amount, R enc source (off,
+//          MOD A-D, CV in, CV out, MIDI map, noise), R push unipolar /
+//          bipolar, X  MIDI learn (move a knob), L push again to leave
 //   X      action triggers: L enc source for UP's action, R enc for DOWN's
 //          (gate in, CV in as gate, MIDI map), X / Y to leave
-// MOD view (4 modulators per track, like the S4's):
-//   L enc  choose A-D or CLK              R enc  type: WAVE/RANDOM/ADSR/FOLLOW
+//   Y      back                           UP / DOWN  actions
+// MOD view (4 modulators per track, like the S4's, plus the clock):
+//   R enc  choose A-D or CLK              L enc  type: WAVE/RANDOM/ADSR/FOLLOW
 //   R push open its settings              Y / X  back to the chain
 //   CLK is the app's tempo: internal (UP = tap), MIDI clock or a trigger
-//   input. VAST TIME and the WAVE / RANDOM rates can sync to it (modes STR,
-//   TRI, DOT: hold L + turn R on the setting).
+//   input. VAST TIME and the WAVE / RANDOM rates can sync to it (L enc on the
+//   setting: FREE / STR / TRI / DOT).
 //
 // Settings are saved to SCULPT.BIN on the internal flash when Sculpt is left
 // (e.g. app menu) and with the global save, and loaded at power-up.
@@ -600,7 +603,7 @@ FLASHMEM void AppSculpt::OnEncoder(const UI::Event &event) {
   const int dir = event.value;
   const bool left = event.control == OC::CONTROL_ENCODER_L;
   if (view == MODS) {
-    if (left) {
+    if (!left) {
       mod_cursor = constrain(mod_cursor + dir, 0, NUM_MODS);
     } else if (mod_cursor < NUM_MODS) {
       const int type = tracks[track].mod_type[mod_cursor] + dir;
@@ -610,7 +613,7 @@ FLASHMEM void AppSculpt::OnEncoder(const UI::Event &event) {
     return;
   }
   if (view == CHAIN) {
-    if (left) {
+    if (!left) {
       const int idx = constrain(track * COLS + col + dir, 0, NUM_TRACKS * COLS - 1);
       track = idx / COLS;
       col = idx % COLS;
@@ -637,8 +640,8 @@ FLASHMEM void AppSculpt::OnEncoder(const UI::Event &event) {
     d->Refresh(cursor);
     Mirror(d, cursor);
   } else if (left) {
-    // while a setting is grabbed the left encoder picks its mode
-    if (editing && d->param(cursor).nmodes) {
+    // the left encoder picks the mode of the setting under the cursor
+    if (d->param(cursor).nmodes) {
       d->NudgeMode(cursor, dir);
       Mirror(d, cursor);
       edit_mode = true; // show the mode name for a moment
@@ -801,8 +804,8 @@ FLASHMEM void AppSculpt::DrawDevice() const {
     }
 
     // value row
-    const bool show_mode = sel && editing && pd.nmodes
-      && (l_held || (edit_mode && mode_shown < 1500));
+    const bool show_mode = sel && pd.nmodes
+      && ((editing && l_held) || (edit_mode && mode_shown < 1500));
     if (sel && mod_mode) snprintf(buf, sizeof(buf), "%+d%%", d->mod_amt[p]);
     else if (show_mode) snprintf(buf, sizeof(buf), "%s", pd.modes[d->mode[p]]);
     else d->Format(p, buf, sizeof(buf));
