@@ -678,8 +678,8 @@ FLASHMEM void AppSculpt::DrawChain() const {
   using namespace sculpt;
   // boxes are drawn one pixel wider than the spacing so neighbours share a
   // border; 19 px inside each. Glyphs are 6 px with a blank first column.
-  // Inside: dots for the devices this slot offers (filled = in use), the
-  // device's tag (or the slot's when bypassed), and a small live meter.
+  // Inside: the slot's name (BP when bypassed), dots when the slot offers
+  // more than one device (only the one in use filled), a small live meter.
   constexpr int bw = 20, bh = 26, x0 = 7;
   for (int t = 0; t < NUM_TRACKS; t++) {
     const int y = t * (bh + 1);
@@ -695,14 +695,16 @@ FLASHMEM void AppSculpt::DrawChain() const {
         // devices = options minus BYPASS (MATERIAL has no bypass)
         const int first = c == MATERIAL ? 0 : 1;
         const int n = SLOT_DEFS[c].noptions - first;
+        if (n > 1) {
         const int dx = x + 1 + (bw - 1 - (5 * n - 2)) / 2;
         for (int k = 0; k < n; k++) {
           if (tr.choice[c] == k + first) gfxRect(dx + 5 * k, y + 3, 3, 3);
           else gfxFrame(dx + 5 * k, y + 3, 3, 3);
         }
+        }
       }
 
-      const char* tag = d ? d->def.tag : SLOT_DEFS[c].tag;
+      const char* tag = c == MIX_COL ? PSTR("MIX") : d ? SLOT_DEFS[c].tag : PSTR("BP");
       const int cells = 6 * int(strlen(tag));
       gfxPrint(x + 1 + (bw - 1 - cells) / 2, y + 9, tag);
       if (d) {
