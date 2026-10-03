@@ -811,7 +811,11 @@ FLASHMEM void AppSculpt::DrawDevice() const {
     if (!d->def.actions[a][0]) continue;
     const int x = 64 + a * 22;
     gfxPrint(x, 0, d->def.actions[a]);
-    if (d->ActionLit(a)) gfxInvert(x - 1, 0, 20, 8);
+    const int lw = 6 * int(strlen(d->def.actions[a])) + 2;
+    // a muted track blinks MUTE so it can't be missed; other lit actions
+    // (e.g. FRZ) stay inverted
+    const bool blink = &d->def == &MIX_DEF;
+    if (d->ActionLit(a) && (!blink || (millis() / 300) % 2)) gfxInvert(x - 1, 0, lw, 8);
   }
   if (n > 4) {
     gfxPrint(110, 0, cursor / 4 + 1);

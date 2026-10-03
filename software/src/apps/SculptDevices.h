@@ -52,7 +52,7 @@ struct DeviceDef {
   char name[8];
   char tag[4];       // 3 letters for the chain view
   uint8_t nparams;
-  char actions[2][4];
+  char actions[2][5];
   ParamDef params[8];
 };
 
@@ -366,7 +366,7 @@ FLASHMEM void SculptMixer::update() {
 // MIX: level / pan / mute per track (not an audio stage itself)
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef MIX_DEF = {
-  "MIX", "MIX", 7, {"", "MUT"},
+  "MIX", "MIX", 7, {"", "MUTE"},
   {
     {"LEVEL", 0, 100, 80, UNI},
     {"PAN", -50, 50, 0, BI},
@@ -503,10 +503,6 @@ FLASHMEM void MixDevice::DrawViz(int x, int y, int w, int h) {
   const int px = ox + 9 + cur[PAN] * 9 / 50;
   gfxDottedLine(ox, y + h - 2, ox + 19, y + h - 2, 2);
   gfxRect(px - 1, y + h - 3, 3, 3);
-  if (cur[MUTE]) {
-    gfxPrint(ox + 1, cy - 4, PSTR("MUT"));
-    gfxInvert(ox - 1, cy - 5, 22, 10);
-  }
 }
 
 // 31 bars, log frequency 60 Hz .. 20 kHz, -60..0 dB, with the band splits
