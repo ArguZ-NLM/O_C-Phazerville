@@ -701,7 +701,7 @@ FLASHMEM void AppSculpt::DrawChain() const {
         const int dx = x + 1 + (bw - 1 - (5 * n - 2)) / 2;
         for (int k = 0; k < n; k++) {
           if (tr.choice[c] == k + first) gfxRect(dx + 5 * k, y + 3, 3, 3);
-          else gfxFrame(dx + 5 * k, y + 3, 3, 3);
+          else gfxPixel(dx + 5 * k + 1, y + 4); // small o: not in use
         }
         }
       }
