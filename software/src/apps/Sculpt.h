@@ -678,8 +678,9 @@ FLASHMEM void AppSculpt::DrawChain() const {
   using namespace sculpt;
   // boxes are drawn one pixel wider than the spacing so neighbours share a
   // border; 19 px inside each. Glyphs are 6 px with a blank first column.
-  // Inside: the slot's name (BP when bypassed), dots when the slot offers
-  // more than one device (only the one in use filled), a small live meter.
+  // Inside: dots for the devices the slot offers (only the one in use
+  // filled), the slot's name (BP when bypassed, with a wire underneath) and
+  // a small live meter.
   constexpr int bw = 20, bh = 26, x0 = 7;
   for (int t = 0; t < NUM_TRACKS; t++) {
     const int y = t * (bh + 1);
@@ -695,7 +696,7 @@ FLASHMEM void AppSculpt::DrawChain() const {
         // devices = options minus BYPASS (MATERIAL has no bypass)
         const int first = c == MATERIAL ? 0 : 1;
         const int n = SLOT_DEFS[c].noptions - first;
-        if (n > 1) {
+        if (n > 0) {
         const int dx = x + 1 + (bw - 1 - (5 * n - 2)) / 2;
         for (int k = 0; k < n; k++) {
           if (tr.choice[c] == k + first) gfxRect(dx + 5 * k, y + 3, 3, 3);
@@ -728,9 +729,20 @@ FLASHMEM void AppSculpt::DrawChain() const {
   Device* d = tr.at(col);
   gfxPrint(0, 56, track + 1);
   gfxPrint(8, 56, col == MIX_COL ? PSTR("MIX") : SLOT_DEFS[col].name);
-  // the device name, unless it is the same as the slot's (SPACE)
-  if (!d) gfxPrint(62, 56, PSTR("bypass"));
-  else if (col == MIX_COL || strcmp(d->def.name, SLOT_DEFS[col].name)) gfxPrint(62, 56, d->def.name);
+  // the device name, unless it is the same as the slot's (SPACE); for MIX
+  // where the track sits in the stereo field
+  if (!d) {
+    gfxPrint(62, 56, PSTR("bypass"));
+  } else if (col == MIX_COL) {
+    const int pan = d->val[1];
+    char buf[12];
+    if (pan < 0) snprintf(buf, sizeof(buf), "LEFT %d", -pan);
+    else if (pan > 0) snprintf(buf, sizeof(buf), "RIGHT %d", pan);
+    else snprintf(buf, sizeof(buf), "CENTER");
+    gfxPrint(32, 56, buf);
+  } else if (strcmp(d->def.name, SLOT_DEFS[col].name)) {
+    gfxPrint(62, 56, d->def.name);
+  }
   if (!audio_hw()) {
     gfxPrint(104, 56, PSTR("noIO"));
   } else {
