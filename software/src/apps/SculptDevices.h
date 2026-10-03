@@ -31,6 +31,7 @@
 
 #include "../Audio/AudioEffectVast.h"
 #include "../Audio/AudioEffectDeform.h"
+#include "../Audio/AudioEffectBandz.h"
 
 namespace sculpt {
 
@@ -140,7 +141,7 @@ public:
   uint8_t mod_bi = 0;                // bit per param: bipolar around val
   bool active = false;
 
-  explicit Device(const DeviceDef& d) : def(d) {}
+  explicit Device(const DeviceDef& d);
 
   const ParamDef& param(int p) const { return def.params[p]; }
   int num_params() const { return def.nparams; }
@@ -179,6 +180,8 @@ public:
   void ModSourceName(int p, char* buf, size_t n) const;
   bool ModSourceOn(int p) const { return mod_bus_sel[p] || mod_in[p].enabled(); }
 };
+
+FLASHMEM Device::Device(const DeviceDef& d) : def(d) {}
 
 FLASHMEM void Device::Defaults() {
   for (int p = 0; p < num_params(); p++) {
@@ -362,60 +365,115 @@ FLASHMEM void SculptMixer::update() {
 // MIX: level / pan / mute per track (not an audio stage itself)
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef MIX_DEF = {
-  "MIX", "MIX", 3, {"", "MUT"},
+  "MIX", "MIX", 7, {"", "MUT"},
   {
     {"LEVEL", 0, 100, 80, UNI},
     {"PAN", -50, 50, 0, BI},
     {"MUTE", 0, 1, 0, LIST, 2, 0, 0, {"off", "ON"}},
+    {"BANDZ", 0, 100, 0, UNI},
+    {"LOW", -24, 24, 0, BI, 0, 3, 1, {}, {"120", "250", "500"}},
+    {"MID", -24, 24, 0, BI},
+    {"HIGH", -24, 24, 0, BI, 0, 3, 1, {}, {"1.5k", "3k", "6k"}},
   }
 };
 
+// level / pan / mute and a 3-band tone + dynamics stage (after 3-Bandz).
+// The track's audio runs through the band stage, then into the mixer.
 class MixDevice : public Device {
 public:
-  MixDevice(SculptMixer& m, int t) : Device(MIX_DEF), mixer(m), track(t) {}
+  enum { LEVEL, PAN, MUTE, BANDZ, B_LOW, B_MID, B_HIGH };
+  explicit MixDevice(int t) : Device(MIX_DEF), track(t) {}
+  AudioStream* in() override { return &bandz; }
+  AudioStream* out() override { return &bandz; }
   void Apply(int p) override;
+  void Format(int p, char* buf, size_t n) const override;
   void Action(int a) override;
   bool ActionLit(int a) const override;
   void DrawViz(int x, int y, int w, int h) override;
   void DrawMini(int x, int y, int w, int h) override;
+  void CpuMax(float parts[2]) override {
+    parts[0] = bandz.processorUsageMax();
+    parts[1] = 0.0f;
+    bandz.processorUsageMaxReset();
+  }
   float level[2] = {};  // set by the app from the mixer peaks
+  SculptMixer* mixer = nullptr;
 private:
-  SculptMixer& mixer;
+  AudioEffectBandz bandz;
   int track;
-  Meter meters[2];
+  Meter meters[2], band_m[3], gr_m[3];
 };
 
-FLASHMEM void MixDevice::Apply(int) {
-  const float lvl = cur[2] ? 0.0f : cur[0] * 0.01f;
-  const float pan = cur[1] * 0.02f; // -1..1
-  mixer.gain[track][0] = lvl * (pan > 0.0f ? 1.0f - pan : 1.0f);
-  mixer.gain[track][1] = lvl * (pan < 0.0f ? 1.0f + pan : 1.0f);
+FLASHMEM void MixDevice::Apply(int p) {
+  static const float lo_hz[3] = {120.0f, 250.0f, 500.0f};
+  static const float hi_hz[3] = {1500.0f, 3000.0f, 6000.0f};
+  switch (p) {
+    case BANDZ: bandz.compress(cur[BANDZ] * 0.01f); return;
+    case B_LOW:   bandz.band_gain(0, cur[B_LOW] * 0.5f); bandz.split_low(lo_hz[mode[B_LOW] % 3]); return;
+    case B_MID:   bandz.band_gain(1, cur[B_MID] * 0.5f); return;
+    case B_HIGH:  bandz.band_gain(2, cur[B_HIGH] * 0.5f); bandz.split_high(hi_hz[mode[B_HIGH] % 3]); return;
+    default: break;
+  }
+  if (!mixer) return;
+  const float lvl = cur[MUTE] ? 0.0f : cur[LEVEL] * 0.01f;
+  const float pan = cur[PAN] * 0.02f; // -1..1
+  mixer->gain[track][0] = lvl * (pan > 0.0f ? 1.0f - pan : 1.0f);
+  mixer->gain[track][1] = lvl * (pan < 0.0f ? 1.0f + pan : 1.0f);
+}
+
+// band gains in 0.5 dB steps
+FLASHMEM void MixDevice::Format(int p, char* buf, size_t n) const {
+  if (p >= B_LOW) {
+    const int v = val[p];
+    snprintf(buf, n, "%s%d.%d", v < 0 ? "-" : v > 0 ? "+" : "", abs(v) / 2, abs(v) % 2 ? 5 : 0);
+  } else {
+    Device::Format(p, buf, n);
+  }
 }
 
 FLASHMEM void MixDevice::Action(int a) {
-  if (a == 1) { val[2] = !val[2]; Refresh(2); }
+  if (a == 1) { val[MUTE] = !val[MUTE]; Refresh(MUTE); }
 }
 
-FLASHMEM bool MixDevice::ActionLit(int a) const { return a == 1 && val[2]; }
+FLASHMEM bool MixDevice::ActionLit(int a) const { return a == 1 && val[MUTE]; }
 
 FLASHMEM void MixDevice::DrawViz(int x, int y, int w, int h) {
-  // two tall output meters with a pan marker underneath
+  AudioEffectBandz::Viz v;
+  bandz.ReadViz(v);
+  for (int b = 0; b < 3; b++) {
+    band_m[b].Hit(v.level[b]);
+    gr_m[b].Hit(std::min(1.0f, v.gr_db[b] / 18.0f), 0.9f);
+  }
+  // left: output meters with the pan position underneath
   const float l = meters[0].Hit(level[0]), r = meters[1].Hit(level[1]);
-  const int mw = 14, cx = x + w / 2;
-  gfxFrame(cx - mw - 3, y, mw + 2, h - 4);
-  gfxFrame(cx + 1, y, mw + 2, h - 4);
-  DrawVMeter(cx - mw - 2, y + 1, mw, h - 6, l);
-  DrawVMeter(cx + 2, y + 1, mw, h - 6, r);
-  const int px = cx + cur[1] * 40 / 50;
-  gfxDottedLine(cx - 40, y + h - 2, cx + 40, y + h - 2, 2);
+  gfxFrame(x, y, 8, h - 4);
+  gfxFrame(x + 10, y, 8, h - 4);
+  DrawVMeter(x + 1, y + 1, 6, h - 6, l);
+  DrawVMeter(x + 11, y + 1, 6, h - 6, r);
+  const int px = x + 9 + cur[PAN] * 9 / 50;
+  gfxDottedLine(x, y + h - 2, x + 18, y + h - 2, 2);
   gfxRect(px - 1, y + h - 3, 3, 3);
-  gfxPrint(x + 2, y + 2, PSTR("L"));
-  gfxPrint(x + w - 8, y + 2, PSTR("R"));
-  if (cur[2]) gfxPrint(cx - 12, y + h / 2 - 4, PSTR("MUTE"));
+  if (cur[MUTE]) gfxPrint(x + 22, y + 2, PSTR("MUTE"));
+
+  // right: the three bands. Gain as a bar from the centre line, level as a
+  // thin meter beside it, compression hanging from the top
+  static const char* const names[3] = {"L", "M", "H"};
+  const int bx0 = x + 48, bwid = (w - 48) / 3, cy = y + (h - 8) / 2;
+  for (int b = 0; b < 3; b++) {
+    const int bx = bx0 + b * bwid;
+    const int gain = cur[B_LOW + b] * ((h - 8) / 2 - 1) / 24;
+    gfxDottedLine(bx, cy, bx + bwid - 6, cy, 2);
+    if (gain > 0) gfxRect(bx + 2, cy - gain, 6, gain);
+    else if (gain < 0) gfxRect(bx + 2, cy, 6, -gain);
+    DrawVMeter(bx + 10, y, 2, h - 9, band_m[b].v);
+    const int gr = int(gr_m[b].v * (h - 9));
+    if (gr > 0) gfxRect(bx + 14, y, 2, gr);
+    gfxPrint(bx + 3, y + h - 8, names[b]);
+  }
 }
 
 FLASHMEM void MixDevice::DrawMini(int x, int y, int w, int h) {
-  if (cur[2]) { gfxLine(x, y + h / 2, x + w - 1, y + h / 2); return; }
+  if (cur[MUTE]) { gfxLine(x, y + h / 2, x + w - 1, y + h / 2); return; }
   const float l = meters[0].Hit(level[0]), r = meters[1].Hit(level[1]);
   DrawHMeter(x, y, w, h / 2, l);
   DrawHMeter(x, y + h / 2 + 1, w, h / 2, r);
@@ -758,7 +816,7 @@ PROGMEM static const DeviceDef DEFORM_DEF = {
   "DEFORM", "DEF", 8, {"", ""},
   {
     {"DRIVE", 0, 100, 30, UNI},
-    {"COMP", 0, 100, 20, UNI},
+    {"FOLD", 0, 100, 0, UNI},
     {"CRSH", 0, 100, 0, UNI, 0, 3, 0, {}, {"BIT", "REDUX", "BOTH"}},
     {"TILT", -50, 50, 0, BI, 0, 3, 1, {}, {"LOW", "MID", "HIGH"}},
     {"NOIS", 0, 100, 0, UNI, 0, 3, 1, {}, {"WHITE", "PINK", "DUST"}},
@@ -770,7 +828,7 @@ PROGMEM static const DeviceDef DEFORM_DEF = {
 
 class DeformDevice : public Device {
 public:
-  enum { DRIVE, COMP, CRUSH, TILT, NOISE, NDECAY, NTONE, WET };
+  enum { DRIVE, FOLD, CRUSH, TILT, NOISE, NDECAY, NTONE, WET };
   DeformDevice() : Device(DEFORM_DEF) {}
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
@@ -785,7 +843,7 @@ public:
   }
 private:
   AudioEffectDeform fx;
-  Meter out_m, gr_m, noise_m;
+  Meter in_m, out_m, noise_m;
   void Poll();
   float NoiseDecaySecs() const { return 0.01f * powf(200.0f, cur[NDECAY] * 0.01f); } // 10 ms .. 2 s
 };
@@ -794,7 +852,7 @@ FLASHMEM void DeformDevice::Apply(int p) {
   const float v = cur[p] * 0.01f;
   switch (p) {
     case DRIVE:  fx.drive(v); break;
-    case COMP:   fx.compress(v); break;
+    case FOLD:   fx.fold(v); break;
     case CRUSH:  fx.crush(v, mode[CRUSH]); break;
     case TILT:   fx.tilt(cur[TILT] * 0.02f, mode[TILT]); break;
     case NOISE:  fx.noise(v, mode[NOISE]); break;
@@ -821,25 +879,25 @@ FLASHMEM void DeformDevice::Format(int p, char* buf, size_t n) const {
 FLASHMEM void DeformDevice::Poll() {
   AudioEffectDeform::Viz v;
   fx.ReadViz(v);
+  in_m.Hit(v.in);
   out_m.Hit(v.out);
-  gr_m.Hit(std::min(1.0f, v.gr_db / 20.0f) * std::min(1.0f, v.gr_db / 20.0f), 0.9f);
   noise_m.Hit(v.noise, 0.8f);
 }
 
 FLASHMEM void DeformDevice::DrawViz(int x, int y, int w, int h) {
   Poll();
-  // transfer curve: how DRIVE bends the signal, with CRUSH's bit steps
+  // transfer curve: how FOLD and DRIVE bend the signal, with CRUSH's steps
   const int bs = h;
   gfxFrame(x, y, bs, bs);
   gfxDottedLine(x, y + bs / 2, x + bs - 1, y + bs / 2, 3);
-  const float drv = cur[DRIVE] * 0.01f, crs = cur[CRUSH] * 0.01f;
+  const float drv = cur[DRIVE] * 0.01f, crs = cur[CRUSH] * 0.01f, fld = cur[FOLD] * 0.01f;
   const bool bits = crs > 0.0f && mode[CRUSH] != AudioEffectDeform::CRUSH_REDUX;
   // the picture exaggerates the steps so they are visible at 30 px
   const int levels = bits ? std::max(2, 1 << std::min(5, AudioEffectDeform::CrushBits(crs) - 11)) : 0;
   int py = -1;
   for (int i = 1; i < bs - 1; i++) {
     const float xin = -1.0f + 2.0f * (i - 1) / (bs - 3);
-    float yo = AudioEffectDeform::Shape(xin, drv);
+    float yo = AudioEffectDeform::Shape(AudioEffectDeform::Fold(xin, fld), drv);
     if (levels) yo = roundf(yo * levels) / levels;
     const int yy = y + bs / 2 - int(yo * (bs / 2 - 2));
     if (py >= 0) gfxLine(x + i - 1, py, x + i, yy);
@@ -905,19 +963,17 @@ FLASHMEM void DeformDevice::DrawViz(int x, int y, int w, int h) {
   static const char* const noise_name[3] = {"WHT", "PNK", "DST"};
   gfxPrint(nx + (nw - 18) / 2, y + h - 8, noise_name[mode[NOISE] % 3]);
 
-  // gain reduction (hangs from the top) and output level
+  // input and output level
   gfxFrame(gx, y, 6, h);
-  const int gr = int(gr_m.v * (h - 2));
-  if (gr > 0) gfxRect(gx + 1, y + 1, 4, gr);
+  DrawVMeter(gx + 1, y + 1, 4, h - 2, in_m.v);
   gfxFrame(gx + 7, y, 6, h);
   DrawVMeter(gx + 8, y + 1, 4, h - 2, out_m.v);
 }
 
 FLASHMEM void DeformDevice::DrawMini(int x, int y, int w, int h) {
   Poll();
-  DrawHMeter(x, y, w, h / 2, out_m.v);
-  const int gr = int(gr_m.v * w);
-  if (gr > 0) gfxRect(x + w - gr, y + h / 2 + 1, gr, h / 2); // GR from the right
+  DrawHMeter(x, y, w, h / 2, in_m.v);
+  DrawHMeter(x, y + h / 2 + 1, w, h / 2, out_m.v);
 }
 
 /////////////////////////////////////////////////////////////////

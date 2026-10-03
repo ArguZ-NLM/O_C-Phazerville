@@ -43,7 +43,7 @@ public:
   float hist_t = 0.0f;
   float flash = 0.0f;   // trigger indicator, seconds left
 
-  explicit Modulator(const DeviceDef& d) : Device(d) {}
+  explicit Modulator(const DeviceDef& d);
   void Apply(int) override {}  // settings are read live in Tick()
   virtual void Tick(const ModCtx& ctx) = 0;
   void Run(const ModCtx& ctx);
@@ -54,25 +54,35 @@ protected:
   bool prev_gate[2] = {};
   bool Gate(int src) const;
   bool Edge(int src, const ModCtx& ctx, int slot);
-  float Seconds(int v, float lo, float hi) const { // 0..100 -> lo..hi, exp
-    return lo * powf(hi / lo, constrain(v, 0, 100) * 0.01f);
-  }
+  float Seconds(int v, float lo, float hi) const; // 0..100 -> lo..hi, exp
   // RATE setting p in Hz: free (lo..hi) or one cycle per note value
-  float RateHz(int p, float lo, float hi) const {
-    if (mode[p] == SYNC_FREE) return Seconds(cur[p], lo, hi);
-    return 1.0f / DivSeconds(NUM_DIVS - 1 - DivIndex(cur[p], 0, 100), mode[p]);
-  }
-  int Step(int p, int v, int dir) const override {
-    if (param(p).nmodes == 4 && mode[p] != SYNC_FREE) // synced RATE: whole notes
-      return DivValue(DivIndex(v, 0, 100) + dir, 0, 100);
-    return v + dir;
-  }
-  void FormatRate(int p, float hz, char* buf, size_t n) const {
-    if (mode[p] != SYNC_FREE) FormatDiv(NUM_DIVS - 1 - DivIndex(val[p], 0, 100), mode[p], buf, n);
-    else if (hz < 1.0f) snprintf(buf, n, "%ds", int(1.0f / hz + 0.5f));
-    else snprintf(buf, n, "%dHz", int(hz + 0.5f));
-  }
+  float RateHz(int p, float lo, float hi) const;
+  int Step(int p, int v, int dir) const override;
+  void FormatRate(int p, float hz, char* buf, size_t n) const;
 };
+
+FLASHMEM Modulator::Modulator(const DeviceDef& d) : Device(d) {}
+
+FLASHMEM float Modulator::Seconds(int v, float lo, float hi) const {
+  return lo * powf(hi / lo, constrain(v, 0, 100) * 0.01f);
+}
+
+FLASHMEM float Modulator::RateHz(int p, float lo, float hi) const {
+  if (mode[p] == SYNC_FREE) return Seconds(cur[p], lo, hi);
+  return 1.0f / DivSeconds(NUM_DIVS - 1 - DivIndex(cur[p], 0, 100), mode[p]);
+}
+
+FLASHMEM int Modulator::Step(int p, int v, int dir) const {
+  if (param(p).nmodes == 4 && mode[p] != SYNC_FREE) // synced RATE: whole notes
+    return DivValue(DivIndex(v, 0, 100) + dir, 0, 100);
+  return v + dir;
+}
+
+FLASHMEM void Modulator::FormatRate(int p, float hz, char* buf, size_t n) const {
+  if (mode[p] != SYNC_FREE) FormatDiv(NUM_DIVS - 1 - DivIndex(val[p], 0, 100), mode[p], buf, n);
+  else if (hz < 1.0f) snprintf(buf, n, "%ds", int(1.0f / hz + 0.5f));
+  else snprintf(buf, n, "%dHz", int(hz + 0.5f));
+}
 
 FLASHMEM bool Modulator::Gate(int src) const { return TrigGate(src); }
 
@@ -283,8 +293,10 @@ private:
   enum Stage : uint8_t { IDLE, ATTACK, DECAY, SUSTAIN, RELEASE } stage = IDLE;
   float env = 0.0f;
   float manual = 0.0f; // the action button holds the gate this long
-  float Time(int p) const { return Seconds(cur[p], 0.001f, 10.0f); }
+  float Time(int p) const;
 };
+
+FLASHMEM float AdsrMod::Time(int p) const { return Seconds(cur[p], 0.001f, 10.0f); }
 
 FLASHMEM void AdsrMod::Tick(const ModCtx& ctx) {
   if (Edge(cur[P_TRIG], ctx, 0)) { stage = ATTACK; flash = 0.1f; }

@@ -95,6 +95,7 @@ namespace sculpt {
   struct Patch {
     AudioConnection in[NUM_TRACKS][2];
     AudioConnection link[NUM_TRACKS][SLOT_COUNT][2];
+    AudioConnection mix_out[NUM_TRACKS][2];
   };
 
   Track tracks[NUM_TRACKS];
@@ -151,10 +152,7 @@ private:
   int cpu = 0;
   elapsedMillis stats_timer;
 
-  sculpt::Device* FocusOn(int t) const {
-    if (focus_mod && mod_cursor == sculpt::NUM_MODS) return sculpt::tempo_clock;
-    return focus_mod ? sculpt::tracks[t].mod(mod_cursor) : sculpt::tracks[t].at(col);
-  }
+  sculpt::Device* FocusOn(int t) const;
   void SaveFile() const;
   void LoadFile();
   template <typename F> void ForEachDevice(F f) const;
@@ -173,6 +171,11 @@ private:
   void DrawChain() const;
   void DrawDevice() const;
 };
+
+FLASHMEM sculpt::Device* AppSculpt::FocusOn(int t) const {
+  if (focus_mod && mod_cursor == sculpt::NUM_MODS) return sculpt::tempo_clock;
+  return focus_mod ? sculpt::tracks[t].mod(mod_cursor) : sculpt::tracks[t].at(col);
+}
 
 FLASHMEM void AppSculpt::Start() {
   using namespace sculpt;
@@ -199,10 +202,13 @@ FLASHMEM void AppSculpt::Start() {
       tr.last_choice[s] = SLOT_DEFS[s].noptions > 1 ? 1 : 0;
     }
   }
+  // the MIX band stages before the mixer, so the update order follows the
+  // signal
+  for (int t = 0; t < NUM_TRACKS; t++) tracks[t].mix = new MixDevice(t);
   mixer = new SculptMixer;
   for (int t = 0; t < NUM_TRACKS; t++) {
     Track& tr = tracks[t];
-    tr.mix = new MixDevice(*mixer, t);
+    tr.mix->mixer = mixer;
     tr.mix->mod_bus = tr.mod_out;
     tr.mix->Defaults();
     tr.mix->val[1] = t ? 25 : -25; // pan the tracks apart a little
@@ -229,6 +235,7 @@ FLASHMEM void AppSculpt::Repatch(int t) {
   auto& link = patch->link[t];
   AudioNoInterrupts();
   for (auto& hop : link) for (auto& c : hop) c.disconnect();
+  for (auto& c : patch->mix_out[t]) c.disconnect();
   AudioStream* prev = tr.input;
   int hop = 0;
   for (int s = MATERIAL + 1; s < SLOT_COUNT; s++) {
@@ -238,7 +245,9 @@ FLASHMEM void AppSculpt::Repatch(int t) {
     prev = d->out();
     hop++;
   }
-  for (int c = 0; c < 2; c++) link[hop][c].connect(*prev, c, *mixer, t * 2 + c);
+  // through the track's MIX band stage into the mixer
+  for (int c = 0; c < 2; c++) link[hop][c].connect(*prev, c, *tr.mix->in(), c);
+  for (int c = 0; c < 2; c++) patch->mix_out[t][c].connect(*tr.mix->out(), c, *mixer, t * 2 + c);
   AudioInterrupts();
 }
 
@@ -274,6 +283,7 @@ FLASHMEM void AppSculpt::DisconnectTrack(int t) {
   AudioNoInterrupts();
   for (auto& c : patch->in[t]) c.disconnect();
   for (auto& hop : patch->link[t]) for (auto& c : hop) c.disconnect();
+  for (auto& c : patch->mix_out[t]) c.disconnect();
   AudioInterrupts();
   // disconnected devices stop updating; now they can drop their buffers
   for (int s = MATERIAL + 1; s < SLOT_COUNT; s++) {
@@ -942,7 +952,8 @@ namespace sculpt {
     char tag[4];
     uint8_t n = 0;
     if (f.read(tag, 4) != 4 || f.read(&n, 1) != 1 || n > MAX_PARAMS) return false;
-    const bool use = d && !memcmp(tag, d->def.tag, 4) && n == d->num_params();
+    // a device may have gained settings since: read the ones that are there
+    const bool use = d && !memcmp(tag, d->def.tag, 4) && n <= d->num_params();
     for (int p = 0; p < n; p++) {
       int16_t v; uint8_t md; int8_t amt; uint16_t src; uint8_t bus;
       if (f.read(&v, 2) != 2 || f.read(&md, 1) != 1 || f.read(&amt, 1) != 1
