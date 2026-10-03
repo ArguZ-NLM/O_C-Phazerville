@@ -678,26 +678,38 @@ FLASHMEM void AppSculpt::DrawChain() const {
   using namespace sculpt;
   // boxes are drawn one pixel wider than the spacing so neighbours share a
   // border; 19 px inside each. Glyphs are 6 px with a blank first column.
-  constexpr int bw = 20, bh = 20, x0 = 7;
-  for (int c = 0; c < COLS; c++) {
-    gfxPrint(x0 + c * bw + 1, 0, c == MIX_COL ? PSTR("MIX") : SLOT_DEFS[c].tag);
-  }
+  // Inside: dots for the devices this slot offers (filled = in use), the
+  // device's tag (or the slot's when bypassed), and a small live meter.
+  constexpr int bw = 20, bh = 26, x0 = 7;
   for (int t = 0; t < NUM_TRACKS; t++) {
-    const int y = 9 + t * (bh + 2);
-    gfxPrint(1, y + 6, t + 1);
+    const int y = t * (bh + 1);
+    gfxPrint(1, y + 9, t + 1);
     for (int c = 0; c < COLS; c++) {
       const int x = x0 + c * bw;
-      Device* d = tracks[t].at(c);
+      const Track& tr = tracks[t];
+      Device* d = tr.at(c);
+      if (d) gfxFrame(x, y, bw + 1, bh);
+      else gfxFrame(x, y, bw + 1, bh, true);
+
+      if (c != MIX_COL) {
+        // devices = options minus BYPASS (MATERIAL has no bypass)
+        const int first = c == MATERIAL ? 0 : 1;
+        const int n = SLOT_DEFS[c].noptions - first;
+        const int dx = x + 1 + (bw - 1 - (5 * n - 2)) / 2;
+        for (int k = 0; k < n; k++) {
+          if (tr.choice[c] == k + first) gfxRect(dx + 5 * k, y + 3, 3, 3);
+          else gfxFrame(dx + 5 * k, y + 3, 3, 3);
+        }
+      }
+
+      const char* tag = d ? d->def.tag : SLOT_DEFS[c].tag;
+      const int cells = 6 * int(strlen(tag));
+      gfxPrint(x + 1 + (bw - 1 - cells) / 2, y + 9, tag);
       if (d) {
-        gfxFrame(x, y, bw + 1, bh);
-        // ink centred in the 19 px inside: 3 letters get 1 px each side
-        const int cells = 6 * int(strlen(d->def.tag));
-        gfxPrint(x + 1 + (bw - 1 - cells) / 2, y + 2, d->def.tag);
-        if (d->ok()) d->DrawMini(x + 2, y + 12, bw - 3, 5);
-        else gfxPrint(x + 2, y + 11, PSTR("!!"));
+        if (d->ok()) d->DrawMini(x + 2, y + 19, bw - 3, 5);
+        else gfxPrint(x + 5, y + 18, PSTR("!!"));
       } else {
-        gfxFrame(x, y, bw + 1, bh, true);
-        gfxLine(x + 6, y + bh / 2, x + bw - 6, y + bh / 2); // bypass: wire
+        gfxLine(x + 4, y + 21, x + bw - 4, y + 21); // bypass: a plain wire
       }
       if (t == track && c == col) gfxInvert(x + 1, y + 1, bw - 1, bh - 2);
     }
@@ -705,8 +717,8 @@ FLASHMEM void AppSculpt::DrawChain() const {
 
   if (linked) {
     // chain link between the track numbers
-    gfxFrame(1, 24, 5, 6);
-    gfxFrame(1, 28, 5, 6);
+    gfxFrame(1, 21, 5, 6);
+    gfxFrame(1, 25, 5, 6);
   }
 
   // status line: what is under the cursor, CPU load
