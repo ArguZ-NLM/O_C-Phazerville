@@ -338,11 +338,12 @@ FLASHMEM void AppSculpt::ToggleLink() {
   using namespace sculpt;
   linked = !linked;
   if (!linked) return;
+  const int master = track;
   // the track under the cursor is the master: copy it to the other one
-  Track& a = tracks[track];
-  Track& b = tracks[1 - track];
+  Track& a = tracks[master];
+  Track& b = tracks[1 - master];
   for (int s = MATERIAL + 1; s < SLOT_COUNT; s++) {
-    SetChoice(1 - track, s, a.choice[s]);
+    SetChoice(1 - master, s, a.choice[s]);
     b.last_choice[s] = a.last_choice[s];
     for (int o = 0; o < MAX_OPTIONS; o++) {
       Device* from = a.inst[s][o];
@@ -352,12 +353,12 @@ FLASHMEM void AppSculpt::ToggleLink() {
     }
   }
   for (int i = 0; i < NUM_MODS; i++) {
-    SetModType(1 - track, i, a.mod_type[i]);
+    SetModType(1 - master, i, a.mod_type[i]);
     for (int type = 1; type < MOD_TYPES; type++) {
       if (!a.mods[i][type]) continue;
       if (!b.mods[i][type]) {
-        SetModType(1 - track, i, type);
-        SetModType(1 - track, i, a.mod_type[i]);
+        SetModType(1 - master, i, type);
+        SetModType(1 - master, i, a.mod_type[i]);
       }
       b.mods[i][type]->CopyFrom(*a.mods[i][type]);
     }
@@ -367,6 +368,7 @@ FLASHMEM void AppSculpt::ToggleLink() {
   b.mix->val[0] = a.mix->val[0]; // level
   b.mix->val[2] = a.mix->val[2]; // mute
   b.mix->ApplyAll();
+  track = 0; // the cursor lives on row 1 while linked
 }
 
 FLASHMEM void AppSculpt::Resume() {
@@ -624,7 +626,9 @@ FLASHMEM void AppSculpt::OnEncoder(const UI::Event &event) {
   }
   if (view == CHAIN) {
     if (!left) {
-      const int idx = constrain(track * COLS + col + dir, 0, NUM_TRACKS * COLS - 1);
+      // linked: both rows are the same, so the cursor stays on row 1
+      const int rows = linked ? 1 : NUM_TRACKS;
+      const int idx = constrain(track * COLS + col + dir, 0, rows * COLS - 1);
       track = idx / COLS;
       col = idx % COLS;
     } else if (col == MIX_COL) {
@@ -1016,6 +1020,10 @@ FLASHMEM void AppSculpt::SaveFile() const {
     for (int i = 0; i < NUM_MODS; i++)
       for (int type = 1; type < MOD_TYPES; type++) WriteDevice(f, tr.mods[i][type]);
   }
+  // where the user was, so Sculpt opens there again (older files end before)
+  const uint8_t ui[6] = {uint8_t(view), uint8_t(track), uint8_t(col),
+                         uint8_t(cursor), uint8_t(focus_mod), uint8_t(mod_cursor)};
+  f.write(ui, sizeof(ui));
   f.close();
   fs.remove(SAVE_FILE);
   fs.rename(SAVE_TMP, SAVE_FILE);
@@ -1058,8 +1066,22 @@ FLASHMEM void AppSculpt::LoadFile() {
       if (tr.mod_type[i] && !tr.mod(i)) tr.mod_type[i] = 0;
     }
   }
+  uint8_t ui[6];
+  if (ok && f.read(ui, sizeof(ui)) == sizeof(ui)) {
+    view = ui[0] <= MODS ? ViewMode(ui[0]) : CHAIN;
+    track = ui[1] < NUM_TRACKS ? ui[1] : 0;
+    col = ui[2] < COLS ? ui[2] : SPACE;
+    cursor = ui[3] < MAX_PARAMS ? ui[3] : 0;
+    focus_mod = ui[4];
+    mod_cursor = ui[5] <= NUM_MODS ? ui[5] : 0;
+  }
   f.close();
   linked = lk;
+  if (linked) track = 0;
+  if (view == DEVICE && (!Focused() || cursor >= Focused()->num_params())) {
+    view = CHAIN;
+    cursor = 0;
+  }
   ForEachDevice([](Device* d) { d->ApplyAll(); });
   Serial.printf("Sculpt: settings loaded%s\n", ok ? "" : " (partly)");
 }
