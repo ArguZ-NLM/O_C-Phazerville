@@ -990,20 +990,27 @@ FLASHMEM void DeformDevice::Poll() {
 
 FLASHMEM void DeformDevice::DrawViz(int x, int y, int w, int h) {
   Poll();
-  // transfer curve: how FOLD and DRIVE bend the signal, with CRUSH's steps
-  const int bs = h;
-  gfxFrame(x, y, bs, bs);
-  gfxDottedLine(x, y + bs / 2, x + bs - 1, y + bs / 2, 3);
+  // a sine over time, like the fold diagrams: the box's top and bottom are
+  // the limits. Dotted: the input boosted by FOLD, growing past the limits.
+  // Solid: what comes out - it folds back where the dotted one goes over,
+  // then DRIVE rounds it and CRUSH adds steps. It scrolls slowly.
+  const int bs = 36, half = h / 2 - 1, cyw = y + h / 2;
+  gfxFrame(x, y, bs, h);
   const float drv = cur[DRIVE] * 0.01f, crs = cur[CRUSH] * 0.01f, fld = cur[FOLD] * 0.01f;
   const bool bits = crs > 0.0f && mode[CRUSH] != AudioEffectDeform::CRUSH_REDUX;
-  // the picture exaggerates the steps so they are visible at 30 px
+  // the picture exaggerates the steps so they are visible at this size
   const int levels = bits ? std::max(2, 1 << std::min(5, AudioEffectDeform::CrushBits(crs) - 11)) : 0;
+  const float boost = 1.0f + 6.0f * fld * std::min(1.0f, fld * 4.0f);
+  const float scroll = (millis() % 4000) * (2.0f * float(M_PI) / 4000.0f);
   int py = -1;
   for (int i = 1; i < bs - 1; i++) {
-    const float xin = -1.0f + 2.0f * (i - 1) / (bs - 3);
-    float yo = AudioEffectDeform::Shape(AudioEffectDeform::Fold(xin, fld), drv);
+    const float ph = scroll + 2.0f * float(M_PI) * (i - 1) / (bs - 3);
+    const float in = sinf(ph);
+    const float ghost = in * boost;
+    if (fabsf(ghost) < 1.0f && (i & 1)) gfxPixel(x + i, cyw - int(ghost * half));
+    float yo = AudioEffectDeform::Shape(AudioEffectDeform::Fold(in, fld), drv);
     if (levels) yo = roundf(yo * levels) / levels;
-    const int yy = y + bs / 2 - int(yo * (bs / 2 - 2));
+    const int yy = cyw - int(constrain(yo, -1.0f, 1.0f) * half);
     if (py >= 0) gfxLine(x + i - 1, py, x + i, yy);
     py = yy;
   }
