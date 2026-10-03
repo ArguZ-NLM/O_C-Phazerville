@@ -1018,7 +1018,7 @@ FLASHMEM void DeformDevice::DrawViz(int x, int y, int w, int h) {
   // around the crossover (dot + frequency underneath), +-12 dB at the edges
   static const float xover_hz[3] = {80.0f, 650.0f, 2500.0f};
   static const char* const xover_name[3] = {"80", "650", "2k5"};
-  const int tx = x + bs + 4, tw = 30, ch = h - 9, cy = y + ch / 2;
+  const int tx = x + bs + 4, tw = 30, ch = h - 10, cy = y + ch / 2;
   gfxFrame(tx - 2, y, tw + 4, h);  // same frame as the other sections
   const float t = cur[TILT] * 0.02f;
   const float gl = powf(10.0f, -12.0f * t / 20.0f), gh = powf(10.0f, 12.0f * t / 20.0f);
@@ -1072,7 +1072,7 @@ FLASHMEM void DeformDevice::DrawViz(int x, int y, int w, int h) {
     } break;
   }
   static const char* const noise_name[3] = {"WHT", "PNK", "DST"};
-  gfxPrint(nx + (nw - 18) / 2, y + h - 8, noise_name[mode[NOISE] % 3]);
+  gfxPrint(nx + (nw - 18) / 2, y + h - 9, noise_name[mode[NOISE] % 3]);
 
   // input and output level
   gfxFrame(gx, y, 6, h);
