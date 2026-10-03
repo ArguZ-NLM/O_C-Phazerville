@@ -1019,6 +1019,7 @@ FLASHMEM void DeformDevice::DrawViz(int x, int y, int w, int h) {
   static const float xover_hz[3] = {80.0f, 650.0f, 2500.0f};
   static const char* const xover_name[3] = {"80", "650", "2k5"};
   const int tx = x + bs + 4, tw = 30, ch = h - 9, cy = y + ch / 2;
+  gfxFrame(tx - 2, y, tw + 4, h);  // same frame as the other sections
   const float t = cur[TILT] * 0.02f;
   const float gl = powf(10.0f, -12.0f * t / 20.0f), gh = powf(10.0f, 12.0f * t / 20.0f);
   const float pivot_hz = xover_hz[mode[TILT] % 3];
@@ -1045,8 +1046,8 @@ FLASHMEM void DeformDevice::DrawViz(int x, int y, int w, int h) {
   // noise: a box between the tilt curve and the meters, filled with grains
   // that look like the noise type; denser with more noise
   const int gx = x + w - 14;
-  const int nx = tx + tw + 4, nw = gx - 3 - nx, nh = h - 9;
-  gfxFrame(nx - 1, y, nw + 2, h, true);
+  const int nx = tx + tw + 5, nw = gx - 3 - nx, nh = h - 9;
+  gfxFrame(nx - 1, y, nw + 2, h);
   const float lvl = noise_m.v;
   switch (mode[NOISE]) {
     case AudioEffectDeform::NOISE_WHITE: {  // fine, even
