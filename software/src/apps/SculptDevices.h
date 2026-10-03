@@ -444,31 +444,35 @@ FLASHMEM void MixDevice::DrawViz(int x, int y, int w, int h) {
     band_m[b].Hit(v.level[b]);
     gr_m[b].Hit(std::min(1.0f, v.gr_db[b] / 18.0f), 0.9f);
   }
-  // left: output meters with the pan position underneath
-  const float l = meters[0].Hit(level[0]), r = meters[1].Hit(level[1]);
-  gfxFrame(x, y, 8, h - 4);
-  gfxFrame(x + 10, y, 8, h - 4);
-  DrawVMeter(x + 1, y + 1, 6, h - 6, l);
-  DrawVMeter(x + 11, y + 1, 6, h - 6, r);
-  const int px = x + 9 + cur[PAN] * 9 / 50;
-  gfxDottedLine(x, y + h - 2, x + 18, y + h - 2, 2);
-  gfxRect(px - 1, y + h - 3, 3, 3);
-  if (cur[MUTE]) gfxPrint(x + 22, y + 2, PSTR("MUTE"));
-
-  // right: the three bands. Gain as a bar from the centre line, level as a
-  // thin meter beside it, compression hanging from the top
-  static const char* const names[3] = {"L", "M", "H"};
-  const int bx0 = x + 48, bwid = (w - 48) / 3, cy = y + (h - 8) / 2;
+  // the three bands sit above their LOW / MID / HIGH settings (columns of
+  // 32 px): gain as a bar from the centre line, the band's level as a thin
+  // meter beside it, compression hanging from the top
+  const int cy = y + h / 2;
   for (int b = 0; b < 3; b++) {
-    const int bx = bx0 + b * bwid;
-    const int gain = cur[B_LOW + b] * ((h - 8) / 2 - 1) / 24;
-    gfxDottedLine(bx, cy, bx + bwid - 6, cy, 2);
-    if (gain > 0) gfxRect(bx + 2, cy - gain, 6, gain);
-    else if (gain < 0) gfxRect(bx + 2, cy, 6, -gain);
-    DrawVMeter(bx + 10, y, 2, h - 9, band_m[b].v);
-    const int gr = int(gr_m[b].v * (h - 9));
-    if (gr > 0) gfxRect(bx + 14, y, 2, gr);
-    gfxPrint(bx + 3, y + h - 8, names[b]);
+    const int bx = x + b * 32;
+    const int gain = cur[B_LOW + b] * (h / 2 - 1) / 24;
+    gfxDottedLine(bx + 3, cy, bx + 28, cy, 2);
+    if (gain > 0) gfxRect(bx + 10, cy - gain, 8, gain);
+    else if (gain < 0) gfxRect(bx + 10, cy, 8, -gain);
+    else gfxLine(bx + 10, cy, bx + 17, cy);
+    DrawVMeter(bx + 21, y, 2, h, band_m[b].v);
+    const int gr = int(gr_m[b].v * h);
+    if (gr > 0) gfxRect(bx + 25, y, 2, gr);
+  }
+
+  // fourth column: output meters with the pan position underneath
+  const float l = meters[0].Hit(level[0]), r = meters[1].Hit(level[1]);
+  const int ox = x + 96 + 6;
+  gfxFrame(ox, y, 8, h - 4);
+  gfxFrame(ox + 11, y, 8, h - 4);
+  DrawVMeter(ox + 1, y + 1, 6, h - 6, l);
+  DrawVMeter(ox + 12, y + 1, 6, h - 6, r);
+  const int px = ox + 9 + cur[PAN] * 9 / 50;
+  gfxDottedLine(ox, y + h - 2, ox + 19, y + h - 2, 2);
+  gfxRect(px - 1, y + h - 3, 3, 3);
+  if (cur[MUTE]) {
+    gfxPrint(ox + 1, cy - 4, PSTR("MUT"));
+    gfxInvert(ox - 1, cy - 5, 22, 10);
   }
 }
 
