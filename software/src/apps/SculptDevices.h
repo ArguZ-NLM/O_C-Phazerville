@@ -759,9 +759,9 @@ PROGMEM static const DeviceDef DEFORM_DEF = {
   {
     {"DRIVE", 0, 100, 30, UNI},
     {"COMP", 0, 100, 20, UNI},
-    {"CRUSH", 0, 100, 0, UNI, 0, 3, 0, {}, {"BIT", "REDUX", "BOTH"}},
+    {"CRSH", 0, 100, 0, UNI, 0, 3, 0, {}, {"BIT", "REDUX", "BOTH"}},
     {"TILT", -50, 50, 0, BI, 0, 3, 1, {}, {"LOW", "MID", "HIGH"}},
-    {"NOISE", 0, 100, 0, UNI, 0, 3, 1, {}, {"WHITE", "PINK", "DUST"}},
+    {"NOIS", 0, 100, 0, UNI, 0, 3, 1, {}, {"WHITE", "PINK", "DUST"}},
     {"N.DCY", 0, 100, 40, UNI},
     {"N.TON", 0, 100, 50, UNI},
     {"WET", 0, 100, 100, UNI},
