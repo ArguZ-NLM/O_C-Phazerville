@@ -990,17 +990,12 @@ FLASHMEM void DeformDevice::Poll() {
 
 FLASHMEM void DeformDevice::DrawViz(int x, int y, int w, int h) {
   Poll();
-  // a sine over time, like the fold diagrams. Dashed lines at half height
-  // are the limits. Dotted: the input boosted by FOLD, growing past the
-  // limits (the box shows twice their range). Solid: what comes out - it
-  // folds back between the limits, then DRIVE rounds it and CRUSH adds
-  // steps. One whole cycle, standing still.
-  const int bs = 36, half = h / 2 - 1, cyw = y + h / 2, lim = half / 2;
+  // a sine over time, like the fold diagrams: the box's top and bottom are
+  // the limits. Dotted: the input boosted by FOLD (where it is still inside
+  // the box). Solid: what comes out - it folds back from the limits, then
+  // DRIVE rounds it and CRUSH adds steps. One whole cycle, standing still.
+  const int bs = 52, half = h / 2 - 1, cyw = y + h / 2, lim = half;
   gfxFrame(x, y, bs, h);
-  for (int i = 2; i < bs - 2; i += 3) {
-    gfxPixel(x + i, cyw - lim);
-    gfxPixel(x + i, cyw + lim);
-  }
   const float drv = cur[DRIVE] * 0.01f, crs = cur[CRUSH] * 0.01f, fld = cur[FOLD] * 0.01f;
   const bool bits = crs > 0.0f && mode[CRUSH] != AudioEffectDeform::CRUSH_REDUX;
   // the picture exaggerates the steps so they are visible at this size
@@ -1023,7 +1018,7 @@ FLASHMEM void DeformDevice::DrawViz(int x, int y, int w, int h) {
   // around the crossover (dot + frequency underneath), +-12 dB at the edges
   static const float xover_hz[3] = {80.0f, 650.0f, 2500.0f};
   static const char* const xover_name[3] = {"80", "650", "2k5"};
-  const int tx = x + bs + 4, tw = 44, ch = h - 9, cy = y + ch / 2;
+  const int tx = x + bs + 4, tw = 30, ch = h - 9, cy = y + ch / 2;
   const float t = cur[TILT] * 0.02f;
   const float gl = powf(10.0f, -12.0f * t / 20.0f), gh = powf(10.0f, 12.0f * t / 20.0f);
   const float pivot_hz = xover_hz[mode[TILT] % 3];
