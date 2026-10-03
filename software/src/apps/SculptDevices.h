@@ -874,14 +874,38 @@ FLASHMEM void DeformDevice::DrawViz(int x, int y, int w, int h) {
   const int lx = constrain(pivot - 3 * int(strlen(lbl)), tx, tx + tw - 6 * int(strlen(lbl)));
   gfxPrint(lx, y + ch + 1, lbl);
 
-  // noise: sparkle, denser with more noise
-  const int nx = tx + tw + 4, nw = 20;
-  const int dots = int(noise_m.v * 60.0f);
-  for (int i = 0; i < dots; i++) gfxPixel(nx + random(nw), y + 2 + random(h - 4));
+  // noise: a box between the tilt curve and the meters, filled with grains
+  // that look like the noise type; denser with more noise
+  const int gx = x + w - 14;
+  const int nx = tx + tw + 4, nw = gx - 3 - nx, nh = h - 9;
   gfxFrame(nx - 1, y, nw + 2, h, true);
+  const float lvl = noise_m.v;
+  switch (mode[NOISE]) {
+    case AudioEffectDeform::NOISE_WHITE: {  // fine, even
+      const int dots = int(lvl * 120.0f);
+      for (int i = 0; i < dots; i++) gfxPixel(nx + random(nw), y + 1 + random(nh));
+    } break;
+    case AudioEffectDeform::NOISE_PINK: {   // chunkier, heavier at the bottom
+      const int dots = int(lvl * 45.0f);
+      for (int i = 0; i < dots; i++) {
+        const int r = random(nh - 1);
+        const int yy = y + 1 + (nh - 2) - (r * r) / (nh - 1); // more near the bottom
+        gfxRect(nx + random(nw - 1), yy, 2, 2);
+      }
+    } break;
+    default: {                              // dust: few big specks, in bursts
+      const int specks = lvl > 0.02f && random(100) < int(lvl * 160.0f) ? 1 + random(3) : 0;
+      for (int i = 0; i < specks; i++) {
+        const int sx = nx + random(nw - 4), sy = y + 1 + random(nh - 3);
+        if (random(2)) gfxRect(sx, sy, 3, 3);
+        else gfxLine(sx, sy + 1, sx + 4, sy + 1);
+      }
+    } break;
+  }
+  static const char* const noise_name[3] = {"WHT", "PNK", "DST"};
+  gfxPrint(nx + (nw - 18) / 2, y + h - 8, noise_name[mode[NOISE] % 3]);
 
   // gain reduction (hangs from the top) and output level
-  const int gx = x + w - 14;
   gfxFrame(gx, y, 6, h);
   const int gr = int(gr_m.v * (h - 2));
   if (gr > 0) gfxRect(gx + 1, y + 1, 4, gr);
