@@ -551,7 +551,7 @@ FLASHMEM void InputDevice::DrawMini(int x, int y, int w, int h) {
 // VAST (Space): hybrid delay + reverb
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef VAST_DEF = {
-  "VAST", "VST", 8, {"FRZ", "CLR"},
+  "SPACE", "VST", 8, {"FRZ", "CLR"}, // the tag stays VST: saved files use it
   {
     {"DELAY", 0, 100, 40, UNI},
     {"TIME", 20, 6000, 450, UNI, 0, 4, 0, {}, {"FREE", "STR", "TRI", "DOT"}},

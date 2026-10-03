@@ -728,7 +728,9 @@ FLASHMEM void AppSculpt::DrawChain() const {
   Device* d = tr.at(col);
   gfxPrint(0, 56, track + 1);
   gfxPrint(8, 56, col == MIX_COL ? PSTR("MIX") : SLOT_DEFS[col].name);
-  gfxPrint(62, 56, d ? d->def.name : PSTR("bypass"));
+  // the device name, unless it is the same as the slot's (SPACE)
+  if (!d) gfxPrint(62, 56, PSTR("bypass"));
+  else if (col == MIX_COL || strcmp(d->def.name, SLOT_DEFS[col].name)) gfxPrint(62, 56, d->def.name);
   if (!audio_hw()) {
     gfxPrint(104, 56, PSTR("noIO"));
   } else {
