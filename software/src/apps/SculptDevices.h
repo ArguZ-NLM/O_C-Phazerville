@@ -990,27 +990,32 @@ FLASHMEM void DeformDevice::Poll() {
 
 FLASHMEM void DeformDevice::DrawViz(int x, int y, int w, int h) {
   Poll();
-  // a sine over time, like the fold diagrams: the box's top and bottom are
-  // the limits. Dotted: the input boosted by FOLD, growing past the limits.
-  // Solid: what comes out - it folds back where the dotted one goes over,
-  // then DRIVE rounds it and CRUSH adds steps. It scrolls slowly.
-  const int bs = 36, half = h / 2 - 1, cyw = y + h / 2;
+  // a sine over time, like the fold diagrams. Dashed lines at half height
+  // are the limits. Dotted: the input boosted by FOLD, growing past the
+  // limits (the box shows twice their range). Solid: what comes out - it
+  // folds back between the limits, then DRIVE rounds it and CRUSH adds
+  // steps. It scrolls slowly.
+  const int bs = 36, half = h / 2 - 1, cyw = y + h / 2, lim = half / 2;
   gfxFrame(x, y, bs, h);
+  for (int i = 2; i < bs - 2; i += 3) {
+    gfxPixel(x + i, cyw - lim);
+    gfxPixel(x + i, cyw + lim);
+  }
   const float drv = cur[DRIVE] * 0.01f, crs = cur[CRUSH] * 0.01f, fld = cur[FOLD] * 0.01f;
   const bool bits = crs > 0.0f && mode[CRUSH] != AudioEffectDeform::CRUSH_REDUX;
   // the picture exaggerates the steps so they are visible at this size
-  const int levels = bits ? std::max(2, 1 << std::min(5, AudioEffectDeform::CrushBits(crs) - 11)) : 0;
+  const int levels = bits ? std::max(2, 1 << std::min(4, AudioEffectDeform::CrushBits(crs) - 12)) : 0;
   const float boost = 1.0f + 6.0f * fld * std::min(1.0f, fld * 4.0f);
   const float scroll = (millis() % 4000) * (2.0f * float(M_PI) / 4000.0f);
   int py = -1;
   for (int i = 1; i < bs - 1; i++) {
     const float ph = scroll + 2.0f * float(M_PI) * (i - 1) / (bs - 3);
     const float in = sinf(ph);
-    const float ghost = in * boost;
-    if (fabsf(ghost) < 1.0f && (i & 1)) gfxPixel(x + i, cyw - int(ghost * half));
+    const int gy = int(in * boost * lim);
+    if (abs(gy) < half && (i & 1)) gfxPixel(x + i, cyw - gy);
     float yo = AudioEffectDeform::Shape(AudioEffectDeform::Fold(in, fld), drv);
     if (levels) yo = roundf(yo * levels) / levels;
-    const int yy = cyw - int(constrain(yo, -1.0f, 1.0f) * half);
+    const int yy = cyw - int(constrain(yo, -1.0f, 1.0f) * lim);
     if (py >= 0) gfxLine(x + i - 1, py, x + i, yy);
     py = yy;
   }
