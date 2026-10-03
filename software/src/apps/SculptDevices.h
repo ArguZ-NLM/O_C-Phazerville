@@ -30,6 +30,7 @@
 #pragma once
 
 #include "../Audio/AudioEffectVast.h"
+#include "../Audio/AudioEffectDeform.h"
 
 namespace sculpt {
 
@@ -751,6 +752,132 @@ FLASHMEM void VastDevice::DrawMini(int x, int y, int w, int h) {
 }
 
 /////////////////////////////////////////////////////////////////
+// DEFORM (Color): drive, compress, crush, tilt, envelope-following noise
+/////////////////////////////////////////////////////////////////
+PROGMEM static const DeviceDef DEFORM_DEF = {
+  "DEFORM", "DEF", 8, {"", ""},
+  {
+    {"DRIVE", 0, 100, 30, UNI},
+    {"COMP", 0, 100, 20, UNI},
+    {"CRUSH", 0, 100, 0, UNI, 0, 3, 0, {}, {"BIT", "REDUX", "BOTH"}},
+    {"TILT", -50, 50, 0, BI, 0, 3, 1, {}, {"LOW", "MID", "HIGH"}},
+    {"NOISE", 0, 100, 0, UNI, 0, 3, 1, {}, {"WHITE", "PINK", "DUST"}},
+    {"N.DCY", 0, 100, 40, UNI},
+    {"N.TON", 0, 100, 50, UNI},
+    {"WET", 0, 100, 100, UNI},
+  }
+};
+
+class DeformDevice : public Device {
+public:
+  enum { DRIVE, COMP, CRUSH, TILT, NOISE, NDECAY, NTONE, WET };
+  DeformDevice() : Device(DEFORM_DEF) {}
+  AudioStream* in() override { return &fx; }
+  AudioStream* out() override { return &fx; }
+  void Apply(int p) override;
+  void Format(int p, char* buf, size_t n) const override;
+  void DrawViz(int x, int y, int w, int h) override;
+  void DrawMini(int x, int y, int w, int h) override;
+  void CpuMax(float parts[2]) override {
+    parts[0] = fx.processorUsageMax();
+    parts[1] = 0.0f;
+    fx.processorUsageMaxReset();
+  }
+private:
+  AudioEffectDeform fx;
+  Meter out_m, gr_m, noise_m;
+  void Poll();
+  float NoiseDecaySecs() const { return 0.01f * powf(200.0f, cur[NDECAY] * 0.01f); } // 10 ms .. 2 s
+};
+
+FLASHMEM void DeformDevice::Apply(int p) {
+  const float v = cur[p] * 0.01f;
+  switch (p) {
+    case DRIVE:  fx.drive(v); break;
+    case COMP:   fx.compress(v); break;
+    case CRUSH:  fx.crush(v, mode[CRUSH]); break;
+    case TILT:   fx.tilt(cur[TILT] * 0.02f, mode[TILT]); break;
+    case NOISE:  fx.noise(v, mode[NOISE]); break;
+    case NDECAY: fx.noise_decay(NoiseDecaySecs()); break;
+    case NTONE:  fx.noise_tone(v); break;
+    case WET:    fx.wet(v); break;
+  }
+}
+
+FLASHMEM void DeformDevice::Format(int p, char* buf, size_t n) const {
+  if (p == NDECAY) {
+    const float s = 0.01f * powf(200.0f, val[NDECAY] * 0.01f);
+    if (s < 1.0f) snprintf(buf, n, "%dms", int(s * 1000.0f + 0.5f));
+    else snprintf(buf, n, "%d.%ds", int(s), int(s * 10.0f) % 10);
+  } else if (p == NTONE) {
+    const int hz = int(100.0f * powf(100.0f, val[NTONE] * 0.01f));
+    if (hz < 1000) snprintf(buf, n, "%dHz", hz);
+    else snprintf(buf, n, "%dk%d", hz / 1000, (hz % 1000) / 100);
+  } else {
+    Device::Format(p, buf, n);
+  }
+}
+
+FLASHMEM void DeformDevice::Poll() {
+  AudioEffectDeform::Viz v;
+  fx.ReadViz(v);
+  out_m.Hit(v.out);
+  gr_m.Hit(std::min(1.0f, v.gr_db / 20.0f) * std::min(1.0f, v.gr_db / 20.0f), 0.9f);
+  noise_m.Hit(v.noise, 0.8f);
+}
+
+FLASHMEM void DeformDevice::DrawViz(int x, int y, int w, int h) {
+  Poll();
+  // transfer curve: how DRIVE bends the signal, with CRUSH's bit steps
+  const int bs = h;
+  gfxFrame(x, y, bs, bs);
+  gfxDottedLine(x, y + bs / 2, x + bs - 1, y + bs / 2, 3);
+  const float drv = cur[DRIVE] * 0.01f, crs = cur[CRUSH] * 0.01f;
+  const bool bits = crs > 0.0f && mode[CRUSH] != AudioEffectDeform::CRUSH_REDUX;
+  // the picture exaggerates the steps so they are visible at 30 px
+  const int levels = bits ? std::max(2, 1 << std::min(5, AudioEffectDeform::CrushBits(crs) - 11)) : 0;
+  int py = -1;
+  for (int i = 1; i < bs - 1; i++) {
+    const float xin = -1.0f + 2.0f * (i - 1) / (bs - 3);
+    float yo = AudioEffectDeform::Shape(xin, drv);
+    if (levels) yo = roundf(yo * levels) / levels;
+    const int yy = y + bs / 2 - int(yo * (bs / 2 - 2));
+    if (py >= 0) gfxLine(x + i - 1, py, x + i, yy);
+    py = yy;
+  }
+
+  // tilt see-saw with the crossover marked
+  const int tx = x + bs + 6, tw = 34, ty = y + h / 2;
+  const int lean = cur[TILT] * (h / 2 - 3) / 50;
+  gfxLine(tx, ty + lean, tx + tw, ty - lean);
+  const int xo = tx + 6 + mode[TILT] * 11;
+  gfxLine(xo, ty + 2, xo - 3, ty + 6);
+  gfxLine(xo, ty + 2, xo + 3, ty + 6);
+  gfxPrint(tx, y, PSTR("TILT"));
+
+  // noise: sparkle, denser with more noise
+  const int nx = tx + tw + 6, nw = 22;
+  const int dots = int(noise_m.v * 60.0f);
+  for (int i = 0; i < dots; i++) gfxPixel(nx + random(nw), y + 2 + random(h - 4));
+  gfxFrame(nx - 1, y, nw + 2, h, true);
+
+  // gain reduction (hangs from the top) and output level
+  const int gx = x + w - 14;
+  gfxFrame(gx, y, 6, h);
+  const int gr = int(gr_m.v * (h - 2));
+  if (gr > 0) gfxRect(gx + 1, y + 1, 4, gr);
+  gfxFrame(gx + 7, y, 6, h);
+  DrawVMeter(gx + 8, y + 1, 4, h - 2, out_m.v);
+}
+
+FLASHMEM void DeformDevice::DrawMini(int x, int y, int w, int h) {
+  Poll();
+  DrawHMeter(x, y, w, h / 2, out_m.v);
+  const int gr = int(gr_m.v * w);
+  if (gr > 0) gfxRect(x + w - gr, y + h / 2 + 1, gr, h / 2); // GR from the right
+}
+
+/////////////////////////////////////////////////////////////////
 // Slot catalogue, S4 order. Option 0 of the effect slots is BYPASS.
 /////////////////////////////////////////////////////////////////
 enum Slot : uint8_t { MATERIAL, GRANULAR, FILTER, COLOR, SPACE, SLOT_COUNT };
@@ -766,12 +893,13 @@ PROGMEM static const SlotDef SLOT_DEFS[SLOT_COUNT] = {
   {"MATERIAL", "MAT", 1},  // INPUT (TAPE next)
   {"GRANULAR", "GRN", 1},  // BYPASS (MOSAIC to come)
   {"FILTER",   "FLT", 1},  // BYPASS (RING to come)
-  {"COLOR",    "COL", 1},  // BYPASS (DEFORM to come)
+  {"COLOR",    "COL", 2},  // BYPASS, DEFORM
   {"SPACE",    "SPC", 2},  // BYPASS, VAST
 };
 
 // nullptr = BYPASS. MATERIAL/INPUT is owned by the track, not made here.
 FLASHMEM static Device* MakeDevice(int slot, int option) {
+  if (slot == COLOR && option == 1) return new DeformDevice;
   if (slot == SPACE && option == 1) return new VastDevice;
   return nullptr;
 }

@@ -1,0 +1,218 @@
+#pragma once
+
+#include <Audio.h>
+#include <algorithm>
+#include <cmath>
+
+// Stereo colour stage for the Sculpt DEFORM device, after the S4's DEFORM.
+//
+// Signal chain: tilt -> noise -> drive -> crush -> compress -> wet/dry.
+//   TILT     two bands split at 80 Hz / 650 Hz / 2.5 kHz; + lifts the highs
+//            and drops the lows, - the other way round
+//   NOISE    white, pink or dust (random bursts), its level follows the input
+//            (N.DCY = how long it trails), band-passed (N.TON)
+//   DRIVE    soft saturation, clean at 0
+//   CRUSH    bit depth, sample-rate reduction with jitter, or both
+//   COMPRESS one knob: lower threshold and higher ratio together, fixed
+//            attack / release, some make-up gain
+class AudioEffectDeform : public AudioStream {
+public:
+  enum CrushMode : uint8_t { CRUSH_BIT, CRUSH_REDUX, CRUSH_BOTH };
+  enum NoiseMode : uint8_t { NOISE_WHITE, NOISE_PINK, NOISE_DUST };
+
+  struct Viz {
+    float in, out;
+    float gr_db;     // most gain reduction in dB (positive)
+    float noise;     // noise envelope level
+  };
+
+  AudioEffectDeform() : AudioStream(2, input_queue_array) {}
+
+  // --- parameters, set from the UI thread ---
+  void drive(float d) { drive_ = constrain(d, 0.0f, 1.0f); }
+  void crush(float c, uint8_t mode) { crush_ = constrain(c, 0.0f, 1.0f); crush_mode = mode; }
+  void compress(float c) {
+    c = constrain(c, 0.0f, 1.0f);
+    thresh_db = -30.0f * c;
+    slope = 1.0f - 1.0f / (1.0f + 7.0f * c);           // 1 - 1/ratio
+    makeup_db = -thresh_db * slope * 0.5f;
+    comp_on = c > 0.0f;
+  }
+  void tilt(float t, uint8_t xover) {
+    static const float hz[3] = {80.0f, 650.0f, 2500.0f};
+    t = constrain(t, -1.0f, 1.0f);
+    tilt_lo = powf(10.0f, -12.0f * t / 20.0f);
+    tilt_hi = powf(10.0f, 12.0f * t / 20.0f);
+    tilt_a = 1.0f - expf(-2.0f * float(M_PI) * hz[xover % 3] / AUDIO_SAMPLE_RATE_EXACT);
+    tilt_on = t != 0.0f;
+  }
+  void noise(float amt, uint8_t mode) { noise_amt = constrain(amt, 0.0f, 1.0f); noise_mode = mode; }
+  void noise_decay(float secs) { noise_rel = expf(-1.0f / (std::max(secs, 0.001f) * AUDIO_SAMPLE_RATE_EXACT)); }
+  void noise_tone(float t) { // 0..1 -> 100 Hz .. 10 kHz band-pass centre
+    const float fc = 100.0f * powf(100.0f, constrain(t, 0.0f, 1.0f));
+    svf_f = 2.0f * sinf(float(M_PI) * fc / AUDIO_SAMPLE_RATE_EXACT);
+  }
+  void wet(float w) { wet_ = constrain(w, 0.0f, 1.0f); }
+
+  // drive curve, shared with the picture
+  static inline float Shape(float x, float drive) {
+    if (drive <= 0.0f) return x;
+    const float d = 1.0f + 12.0f * drive * drive;
+    const float s = d * x / (1.0f + fabsf(d * x));      // rational soft clip
+    const float norm = (1.0f + d) / d;                  // full scale stays full scale
+    return x + std::min(1.0f, drive * 4.0f) * (s * norm - x);
+  }
+  static inline int CrushBits(float c) { return 16 - int(c * 14.0f + 0.5f); } // 16 .. 2
+  static inline int ReduxHold(float c) { return 1 + int(c * c * 31.0f); }     // 1 .. 32
+
+  void ReadViz(Viz& v) {
+    AudioNoInterrupts();
+    v = viz;
+    viz = Viz{};
+    AudioInterrupts();
+  }
+
+  void update() override;
+
+private:
+  audio_block_t* input_queue_array[2];
+
+  volatile float drive_ = 0.0f, crush_ = 0.0f, wet_ = 1.0f;
+  volatile uint8_t crush_mode = CRUSH_BIT, noise_mode = NOISE_PINK;
+  volatile float thresh_db = 0.0f, slope = 0.0f, makeup_db = 0.0f;
+  volatile bool comp_on = false, tilt_on = false;
+  volatile float tilt_lo = 1.0f, tilt_hi = 1.0f, tilt_a = 0.1f;
+  volatile float noise_amt = 0.0f, noise_rel = 0.999f, svf_f = 0.1f;
+
+  // state
+  uint32_t rng = 0x12345678;
+  float tilt_z[2] = {}, env_in = 0.0f, comp_env = 0.0f, gain = 1.0f;
+  float pink[2][3] = {}, svf_lo[2] = {}, svf_bp[2] = {};
+  int dust_left = 0;
+  int hold_count = 0;
+  float hold_val[2] = {};
+  Viz viz = {};
+
+  inline float Rand() { // -1..1
+    rng ^= rng << 13;
+    rng ^= rng >> 17;
+    rng ^= rng << 5;
+    return int32_t(rng) * (1.0f / 2147483648.0f);
+  }
+};
+
+// Runs from flash like the other Sculpt engines (RAM1 is full).
+FLASHMEM void AudioEffectDeform::update() {
+  audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
+  audio_block_t* out[2] = {allocate(), allocate()};
+  if (!out[0] || !out[1]) {
+    for (auto b : out) if (b) release(b);
+    for (auto b : in) if (b) release(b);
+    return;
+  }
+
+  const float drv = drive_, crs = crush_, w = wet_, namt = noise_amt;
+  const uint8_t cmode = crush_mode, nmode = noise_mode;
+  const bool do_bits = crs > 0.0f && cmode != CRUSH_REDUX;
+  const bool do_redux = crs > 0.0f && cmode != CRUSH_BIT;
+  const int shift = 16 - CrushBits(crs);
+  const int hold = ReduxHold(crs);
+  const float tl = tilt_lo, th = tilt_hi, ta = tilt_a;
+  const bool tilt = tilt_on, comp = comp_on;
+  const float nrel = noise_rel, sf = svf_f;
+  const float th_db = thresh_db, sl = slope, mk = makeup_db;
+  // compressor envelope: 5 ms attack, 150 ms release
+  constexpr float att = 0.99584f, rel = 0.99986f;
+
+  float peak_in = 0.0f, peak_out = 0.0f, max_gr = 0.0f;
+  constexpr float q = 1.0f / 32768.0f;
+  float target_gain = gain;
+
+  for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+    float x[2] = {in[0] ? in[0]->data[n] * q : 0.0f, in[1] ? in[1]->data[n] * q : 0.0f};
+    const float dry[2] = {x[0], x[1]};
+    const float lvl = std::max(fabsf(x[0]), fabsf(x[1]));
+    peak_in = std::max(peak_in, lvl);
+
+    // noise level follows the input: instant rise, N.DCY fall
+    env_in = lvl > env_in ? lvl : env_in * nrel;
+
+    // the redux sample-and-hold runs for both channels together
+    bool take = true;
+    if (do_redux) {
+      if (--hold_count > 0) take = false;
+      else hold_count = hold + int((Rand() + 1.0f) * 0.25f * hold); // jitter
+    }
+    if (namt > 0.0f && nmode == NOISE_DUST) {
+      if (dust_left > 0) dust_left--;
+      else if (Rand() > 0.996f) dust_left = 24 + int((Rand() + 1.0f) * 60.0f);
+    }
+
+    for (int c = 0; c < 2; c++) {
+      float v = x[c];
+      if (tilt) {
+        tilt_z[c] += ta * (v - tilt_z[c]);
+        v = tilt_z[c] * tl + (v - tilt_z[c]) * th;
+      }
+      if (namt > 0.0f) {
+        float nz = Rand();
+        if (nmode == NOISE_PINK) {
+          float* b = pink[c];
+          b[0] = 0.99765f * b[0] + nz * 0.0990460f;
+          b[1] = 0.96300f * b[1] + nz * 0.2965164f;
+          b[2] = 0.57000f * b[2] + nz * 1.0526913f;
+          nz = (b[0] + b[1] + b[2] + nz * 0.1848f) * 0.25f;
+        } else if (nmode == NOISE_DUST) {
+          nz = dust_left ? nz : 0.0f;
+        }
+        // N.TON: band-pass (state variable)
+        const float hp = nz - svf_lo[c] - svf_bp[c];
+        svf_bp[c] += sf * hp;
+        svf_lo[c] += sf * svf_bp[c];
+        v += svf_bp[c] * env_in * namt * 2.0f;
+      }
+      v = Shape(v, drv);
+      if (do_bits) {
+        const int32_t s = __SSAT(int32_t(v * 32767.0f), 16);
+        v = ((s >> shift) << shift) * q;
+      }
+      if (do_redux) {
+        if (take) hold_val[c] = v;
+        v = hold_val[c];
+      }
+      x[c] = v;
+    }
+
+    if (comp) {
+      const float det = std::max(fabsf(x[0]), fabsf(x[1]));
+      comp_env = det > comp_env ? att * comp_env + (1.0f - att) * det
+                                : rel * comp_env + (1.0f - rel) * det;
+      if ((n & 15) == 0) { // gain computer every 16 samples
+        const float env_db = 20.0f * log10f(comp_env + 1e-6f);
+        const float over = env_db - th_db;
+        const float gr = over > 0.0f ? over * sl : 0.0f;
+        max_gr = std::max(max_gr, gr);
+        target_gain = powf(10.0f, (mk - gr) * 0.05f);
+      }
+      gain += 0.05f * (target_gain - gain);
+      x[0] *= gain;
+      x[1] *= gain;
+    }
+
+    for (int c = 0; c < 2; c++) {
+      const float o = dry[c] + w * (x[c] - dry[c]);
+      peak_out = std::max(peak_out, fabsf(o));
+      out[c]->data[n] = __SSAT(int32_t(o * 32767.0f), 16);
+    }
+  }
+
+  transmit(out[0], 0);
+  transmit(out[1], 1);
+  for (auto b : out) release(b);
+  for (auto b : in) if (b) release(b);
+
+  viz.in = std::max(viz.in, peak_in);
+  viz.out = std::max(viz.out, peak_out);
+  viz.gr_db = std::max(viz.gr_db, max_gr);
+  viz.noise = std::max(viz.noise, env_in * namt);
+}
