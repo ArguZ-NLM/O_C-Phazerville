@@ -141,6 +141,7 @@ public:
   uint8_t mod_bi = 0;                // bit per param: bipolar around val
   bool active = false;
   uint8_t view_page = 0;  // which page of settings the device view shows
+  int8_t view_cursor = 0; // the setting under the cursor there
 
   explicit Device(const DeviceDef& d);
 
@@ -990,12 +991,20 @@ FLASHMEM void DeformDevice::Poll() {
 
 FLASHMEM void DeformDevice::DrawViz(int x, int y, int w, int h) {
   Poll();
+  // only the section of the setting under the cursor gets an outline
+  int sect;
+  switch (view_cursor) {
+    case DRIVE: case FOLD: case CRUSH: sect = 0; break;
+    case TILT: sect = 1; break;
+    case NOISE: case NDECAY: case NTONE: sect = 2; break;
+    default: sect = 3; break; // WET: the level meters
+  }
   // a sine over time, like the fold diagrams: the box's top and bottom are
   // the limits. Dotted: the input boosted by FOLD (where it is still inside
   // the box). Solid: what comes out - it folds back from the limits, then
   // DRIVE rounds it and CRUSH adds steps. One whole cycle, standing still.
   const int bs = 52, half = h / 2 - 1, cyw = y + h / 2, lim = half;
-  gfxFrame(x, y, bs, h);
+  if (sect == 0) gfxFrame(x, y, bs, h);
   const float drv = cur[DRIVE] * 0.01f, crs = cur[CRUSH] * 0.01f, fld = cur[FOLD] * 0.01f;
   const bool bits = crs > 0.0f && mode[CRUSH] != AudioEffectDeform::CRUSH_REDUX;
   // the picture exaggerates the steps so they are visible at this size
@@ -1019,7 +1028,7 @@ FLASHMEM void DeformDevice::DrawViz(int x, int y, int w, int h) {
   static const float xover_hz[3] = {80.0f, 650.0f, 2500.0f};
   static const char* const xover_name[3] = {"80", "650", "2k5"};
   const int tx = x + bs + 4, tw = 30, ch = h - 10, cy = y + ch / 2;
-  gfxFrame(tx - 2, y, tw + 4, h);  // same frame as the other sections
+  if (sect == 1) gfxFrame(tx - 2, y, tw + 4, h);
   const float t = cur[TILT] * 0.02f;
   const float gl = powf(10.0f, -12.0f * t / 20.0f), gh = powf(10.0f, 12.0f * t / 20.0f);
   const float pivot_hz = xover_hz[mode[TILT] % 3];
@@ -1047,7 +1056,7 @@ FLASHMEM void DeformDevice::DrawViz(int x, int y, int w, int h) {
   // that look like the noise type; denser with more noise
   const int gx = x + w - 14;
   const int nx = tx + tw + 5, nw = gx - 3 - nx, nh = h - 10;
-  gfxFrame(nx - 1, y, nw + 2, h);
+  if (sect == 2) gfxFrame(nx - 1, y, nw + 2, h);
   const float lvl = noise_m.v;
   switch (mode[NOISE]) {
     case AudioEffectDeform::NOISE_WHITE: {  // fine, even
@@ -1075,6 +1084,7 @@ FLASHMEM void DeformDevice::DrawViz(int x, int y, int w, int h) {
   gfxPrint(nx + (nw - 18) / 2, y + h - 9, noise_name[mode[NOISE] % 3]);
 
   // input and output level
+  if (sect == 3) gfxFrame(gx - 2, y, x + w - gx + 2, h);
   gfxFrame(gx, y, 6, h);
   DrawVMeter(gx + 1, y + 1, 4, h - 2, in_m.v);
   gfxFrame(gx + 7, y, 6, h);
