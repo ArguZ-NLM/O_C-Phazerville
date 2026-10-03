@@ -676,10 +676,11 @@ FLASHMEM void AppSculpt::UpdateMixLevels() const {
 
 FLASHMEM void AppSculpt::DrawChain() const {
   using namespace sculpt;
-  // neighbouring boxes share their border line: 19 px inside each box
+  // gfxFrame(x, w) covers x..x+w, so neighbouring boxes share their border
+  // and each has 19 px inside. Glyphs are 6 px with a blank first column.
   constexpr int bw = 20, bh = 20, x0 = 7;
   for (int c = 0; c < COLS; c++) {
-    gfxPrint(x0 + c * bw + 2, 0, c == MIX_COL ? PSTR("MIX") : SLOT_DEFS[c].tag);
+    gfxPrint(x0 + c * bw + 1, 0, c == MIX_COL ? PSTR("MIX") : SLOT_DEFS[c].tag);
   }
   for (int t = 0; t < NUM_TRACKS; t++) {
     const int y = 9 + t * (bh + 2);
@@ -688,14 +689,14 @@ FLASHMEM void AppSculpt::DrawChain() const {
       const int x = x0 + c * bw;
       Device* d = tracks[t].at(c);
       if (d) {
-        gfxFrame(x, y, bw + 1, bh);
-        // centred, 1 px clear of the borders for a 3-letter tag
-        const int tw = 6 * int(strlen(d->def.tag)) - 1;
-        gfxPrint(x + (bw + 1 - tw) / 2, y + 2, d->def.tag);
+        gfxFrame(x, y, bw, bh);
+        // ink centred in the 19 px inside: 3 letters get 1 px each side
+        const int cells = 6 * int(strlen(d->def.tag));
+        gfxPrint(x + 1 + (bw - 1 - cells) / 2, y + 2, d->def.tag);
         if (d->ok()) d->DrawMini(x + 2, y + 12, bw - 3, 5);
         else gfxPrint(x + 2, y + 11, PSTR("!!"));
       } else {
-        gfxFrame(x, y, bw + 1, bh, true);
+        gfxFrame(x, y, bw, bh, true);
         gfxLine(x + 6, y + bh / 2, x + bw - 6, y + bh / 2); // bypass: wire
       }
       if (t == track && c == col) gfxInvert(x + 1, y + 1, bw - 1, bh - 2);
