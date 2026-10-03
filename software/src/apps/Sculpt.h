@@ -720,6 +720,12 @@ FLASHMEM void AppSculpt::DrawChain() const {
   }
 }
 
+// text centred in a 32 px parameter column
+FLASHMEM static void PrintCentred(int x, int y, const char* str) {
+  const int w = 6 * int(strlen(str));
+  gfxPrint(x + std::max(0, (32 - w) / 2), y, str);
+}
+
 FLASHMEM void AppSculpt::DrawDevice() const {
   using namespace sculpt;
   Device* d = Focused();
@@ -794,9 +800,9 @@ FLASHMEM void AppSculpt::DrawDevice() const {
         d->ModSourceName(p, src, sizeof(src));
         snprintf(buf, sizeof(buf), "%s %c", src, d->Bipolar(p) ? 'B' : 'U');
       }
-      gfxPrint(x + 1, 43, buf);
+      PrintCentred(x, 43, buf);
     } else {
-      gfxPrint(x + 1, 43, pd.name);
+      PrintCentred(x, 43, pd.name);
       if (pd.nmodes) gfxRect(x + 29, 43, 2, 2); // has modes (hold L + turn R)
     }
     if (d->mod_amt[p]) { // modulated: small wave mark
@@ -809,7 +815,7 @@ FLASHMEM void AppSculpt::DrawDevice() const {
     if (sel && mod_mode) snprintf(buf, sizeof(buf), "%+d%%", d->mod_amt[p]);
     else if (show_mode) snprintf(buf, sizeof(buf), "%s", pd.modes[d->mode[p]]);
     else d->Format(p, buf, sizeof(buf));
-    gfxPrint(x + 1, 52, buf);
+    PrintCentred(x, 52, buf);
     if (sel && (editing || mod_mode)) gfxInvert(x, 51, 32, 9);
 
     // value bar, plus a tick where modulation puts it right now
