@@ -873,9 +873,10 @@ FLASHMEM void AppSculpt::DrawMods() const {
     const int x = i * bw + 1;
     Modulator* m = i < NUM_MODS ? tr.mod(i) : tempo_clock;
     char buf[8];
-    if (i < NUM_MODS) snprintf(buf, sizeof(buf), "%c%s", 'A' + i, MOD_TYPE_TAGS[tr.mod_type[i]]);
+    // fixed labels; the type is named in the bottom line
+    if (i < NUM_MODS) snprintf(buf, sizeof(buf), "-%c-", 'A' + i);
     else snprintf(buf, sizeof(buf), "CLK");
-    gfxPrint(x + 1, 12, buf);
+    gfxPrint(x + (bw - 1 - 6 * int(strlen(buf))) / 2, 12, buf);
     if (m) {
       gfxFrame(x, 21, bw - 1, 30);
       m->DrawMini(x + 1, 22, bw - 3, 28);
