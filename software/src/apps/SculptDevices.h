@@ -1046,7 +1046,7 @@ FLASHMEM void DeformDevice::DrawViz(int x, int y, int w, int h) {
   // noise: a box between the tilt curve and the meters, filled with grains
   // that look like the noise type; denser with more noise
   const int gx = x + w - 14;
-  const int nx = tx + tw + 5, nw = gx - 3 - nx, nh = h - 9;
+  const int nx = tx + tw + 5, nw = gx - 3 - nx, nh = h - 10;
   gfxFrame(nx - 1, y, nw + 2, h);
   const float lvl = noise_m.v;
   switch (mode[NOISE]) {
