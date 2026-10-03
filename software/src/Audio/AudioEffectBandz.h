@@ -40,10 +40,28 @@ public:
     AudioInterrupts();
   }
 
+  // the last CAPTURE output samples (L+R) for the spectrum, oldest first
+  static constexpr int CAPTURE = 512;
+  void ReadCapture(int16_t* dst) {
+    AudioNoInterrupts();
+    const int p = cap_pos;
+    for (int i = 0; i < CAPTURE; i++) dst[i] = cap[(p + i) % CAPTURE];
+    AudioInterrupts();
+  }
+
   void update() override;
 
 private:
   audio_block_t* input_queue_array[2];
+  int16_t cap[CAPTURE] = {};
+  int cap_pos = 0;
+  void Capture(const audio_block_t* l, const audio_block_t* r) {
+    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+      const int a = l ? l->data[n] : 0, b = r ? r->data[n] : 0;
+      cap[cap_pos] = (a + b) >> 1;
+      cap_pos = (cap_pos + 1) % CAPTURE;
+    }
+  }
   volatile float gain[BANDS] = {1.0f, 1.0f, 1.0f};
   volatile float f_lo = 0.03f, f_hi = 0.3f;
   volatile float thresh_db = -6.0f, slope = 0.0f, makeup_db = 0.0f;
@@ -65,6 +83,7 @@ private:
 FLASHMEM void AudioEffectBandz::update() {
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   if (flat) {
+    Capture(in[0], in[1]);
     // nothing to do: pass the blocks on as they are
     for (int c = 0; c < 2; c++) {
       if (!in[c]) continue;
@@ -132,6 +151,7 @@ FLASHMEM void AudioEffectBandz::update() {
     }
   }
 
+  Capture(out[0], out[1]);
   transmit(out[0], 0);
   transmit(out[1], 1);
   for (auto b : out) release(b);

@@ -820,6 +820,7 @@ FLASHMEM void AppSculpt::DrawDevice() const {
   gfxLine(0, 9, 127, 9);
 
   // the device's picture
+  d->view_page = cursor / 4;
   if (!trig_mode) d->DrawViz(0, 11, 128, 30);
 
   // parameter grid, one page of 4

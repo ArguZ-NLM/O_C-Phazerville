@@ -140,6 +140,7 @@ public:
   const float* mod_bus = nullptr;        // the track's modulator outputs
   uint8_t mod_bi = 0;                // bit per param: bipolar around val
   bool active = false;
+  uint8_t view_page = 0;  // which page of settings the device view shows
 
   explicit Device(const DeviceDef& d);
 
@@ -402,7 +403,37 @@ private:
   AudioEffectBandz bandz;
   int track;
   Meter meters[2], band_m[3], gr_m[3];
+  static constexpr int SPEC_BARS = 31; // 3 px each across the 3 left columns
+  float spec[SPEC_BARS] = {};
+  float* fft = nullptr; // 2 x CAPTURE floats, made when first drawn
+  void DrawSpectrum(int x, int y, int w, int h);
 };
+
+// in-place radix-2 FFT, n a power of two
+FLASHMEM static void Fft(float* re, float* im, int n) {
+  for (int i = 1, j = 0; i < n; i++) {
+    int bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) { std::swap(re[i], re[j]); std::swap(im[i], im[j]); }
+  }
+  for (int len = 2; len <= n; len <<= 1) {
+    const float a = -2.0f * float(M_PI) / len;
+    const float wr = cosf(a), wi = sinf(a);
+    for (int i = 0; i < n; i += len) {
+      float cr = 1.0f, ci = 0.0f;
+      for (int k = 0; k < len / 2; k++) {
+        const int u = i + k, v = i + k + len / 2;
+        const float tr = re[v] * cr - im[v] * ci, ti = re[v] * ci + im[v] * cr;
+        re[v] = re[u] - tr; im[v] = im[u] - ti;
+        re[u] += tr; im[u] += ti;
+        const float nr = cr * wr - ci * wi;
+        ci = cr * wi + ci * wr;
+        cr = nr;
+      }
+    }
+  }
+}
 
 FLASHMEM void MixDevice::Apply(int p) {
   static const float lo_hz[3] = {120.0f, 250.0f, 500.0f};
@@ -444,11 +475,13 @@ FLASHMEM void MixDevice::DrawViz(int x, int y, int w, int h) {
     band_m[b].Hit(v.level[b]);
     gr_m[b].Hit(std::min(1.0f, v.gr_db[b] / 18.0f), 0.9f);
   }
-  // the three bands sit above their LOW / MID / HIGH settings (columns of
-  // 32 px): gain as a bar from the centre line, the band's level as a thin
-  // meter beside it, compression hanging from the top
   const int cy = y + h / 2;
-  for (int b = 0; b < 3; b++) {
+  // page 1: spectrum of the track's output; page 2: the three bands sit
+  // above their LOW / MID / HIGH settings (columns of 32 px): gain as a bar
+  // from the centre line, the band's level as a thin meter beside it,
+  // compression hanging from the top
+  if (view_page == 0) DrawSpectrum(x, y, 94, h);
+  for (int b = 0; b < 3 && view_page == 1; b++) {
     const int bx = x + b * 32;
     const int gain = cur[B_LOW + b] * (h / 2 - 1) / 24;
     gfxDottedLine(bx + 3, cy, bx + 28, cy, 2);
@@ -473,6 +506,49 @@ FLASHMEM void MixDevice::DrawViz(int x, int y, int w, int h) {
   if (cur[MUTE]) {
     gfxPrint(ox + 1, cy - 4, PSTR("MUT"));
     gfxInvert(ox - 1, cy - 5, 22, 10);
+  }
+}
+
+// 31 bars, log frequency 60 Hz .. 20 kHz, -60..0 dB, with the band splits
+FLASHMEM void MixDevice::DrawSpectrum(int x, int y, int w, int h) {
+  constexpr int N = AudioEffectBandz::CAPTURE;
+  if (!fft) fft = new float[2 * N];
+  if (!fft) return;
+  float* re = fft;
+  float* im = fft + N;
+  int16_t samples[N];
+  bandz.ReadCapture(samples);
+  for (int i = 0; i < N; i++) {
+    const float win = 0.5f - 0.5f * cosf(2.0f * float(M_PI) * i / (N - 1)); // Hann
+    re[i] = samples[i] * (1.0f / 32768.0f) * win;
+    im[i] = 0.0f;
+  }
+  Fft(re, im, N);
+
+  constexpr float f0 = 60.0f, f1 = 20000.0f;
+  const float bin_hz = AUDIO_SAMPLE_RATE_EXACT / N;
+  const int bw = w / SPEC_BARS;
+  for (int b = 0; b < SPEC_BARS; b++) {
+    const float lo = f0 * powf(f1 / f0, float(b) / SPEC_BARS);
+    const float hi = f0 * powf(f1 / f0, float(b + 1) / SPEC_BARS);
+    int k0 = int(lo / bin_hz), k1 = int(hi / bin_hz);
+    k0 = constrain(k0, 1, N / 2 - 1);
+    k1 = constrain(std::max(k1, k0), 1, N / 2 - 1);
+    float pk = 0.0f;
+    for (int k = k0; k <= k1; k++) pk = std::max(pk, re[k] * re[k] + im[k] * im[k]);
+    // magnitude in dB relative to a full-scale sine with the Hann window
+    const float db = 10.0f * log10f(pk + 1e-12f) - 20.0f * log10f(N / 4.0f);
+    const float v = constrain((db + 60.0f) / 60.0f, 0.0f, 1.0f);
+    spec[b] = std::max(v, spec[b] - 0.04f);
+    const int bh = int(spec[b] * h);
+    if (bh > 0) gfxRect(x + b * bw, y + h - bh, bw - 1, bh);
+  }
+  // where the 3-band stage splits
+  static const float lo_hz[3] = {120.0f, 250.0f, 500.0f};
+  static const float hi_hz[3] = {1500.0f, 3000.0f, 6000.0f};
+  for (float hz : {lo_hz[mode[B_LOW] % 3], hi_hz[mode[B_HIGH] % 3]}) {
+    const int sx = x + int(log10f(hz / f0) / log10f(f1 / f0) * SPEC_BARS * bw);
+    gfxDottedLine(sx, y, sx, y + h - 1, 3);
   }
 }
 
