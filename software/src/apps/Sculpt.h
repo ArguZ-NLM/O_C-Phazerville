@@ -485,6 +485,7 @@ FLASHMEM void AppSculpt::Resume() {
   active = true;
   for (int t = 0; t < NUM_TRACKS; t++) ConnectTrack(t);
   OC::AudioIO::ClaimOutput(*mixer);
+  OC::AudioIO::ResyncInput();  // L and R in the same order on every start
   AudioProcessorUsageMaxReset();
   AudioMemoryUsageMaxReset();
   stats_timer = 0;

@@ -70,6 +70,31 @@ namespace OC {
       AudioMemory(AUDIO_MEMORY);
     }
 
+    // derived only to reach the input's (protected) DMA channel
+    struct InputSync : public AudioInputI2S2 {
+      static void Run() {
+        DMAChannel& d = AudioInputI2S2::dma;
+        __disable_irq();
+        I2S2_RCSR &= ~I2S_RCSR_FRDE;
+        d.disable();
+        // back to the start of the DMA buffer, so words land in L, R order
+        const uint16_t biter = d.TCD->BITER_ELINKNO, citer = d.TCD->CITER_ELINKNO;
+        d.TCD->DADDR = (void*)((uint32_t)d.TCD->DADDR - (biter - citer) * 2);
+        d.TCD->CITER_ELINKNO = biter;
+        // wait for a frame's first word (left) to begin, then empty the FIFO:
+        // that word is the first one it takes in again
+        I2S2_RCSR |= I2S_RCSR_WSF;
+        const uint32_t t0 = ARM_DWT_CYCCNT;
+        while (!(I2S2_RCSR & I2S_RCSR_WSF) && ARM_DWT_CYCCNT - t0 < 600000) {}
+        I2S2_RCSR |= I2S_RCSR_FR;
+        d.enable();
+        I2S2_RCSR |= I2S_RCSR_FRDE;
+        __enable_irq();
+      }
+    };
+
+    FLASHMEM void ResyncInput() { InputSync::Run(); }
+
     // used while an app has claimed the outputs; on the heap so they cost
     // no RAM1 until first used
     struct ClaimConns {

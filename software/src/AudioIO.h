@@ -16,5 +16,11 @@ namespace OC {
     // output is released again. src channels 0 and 1 become L and R.
     void ClaimOutput(AudioStream& src);
     void ReleaseOutput();
+
+    // Restart reading the I2S input at the start of a frame. Depending on
+    // timing at power-up the input can start on the right channel's word, and
+    // L and R stay swapped until the next restart; after this they come in the
+    // same order every time.
+    void ResyncInput();
   }
 }
