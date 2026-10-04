@@ -799,7 +799,7 @@ PROGMEM static const DeviceDef VAST_DEF = {
   "SPACE", "VST", 8, {"FRZ", "CLR"}, // the tag stays VST: saved files use it
   {
     // page 1: the delay, page 2: the reverb and TONE
-    {"DELAY", 0, 100, 40, UNI},
+    {"LEVEL", 0, 100, 40, UNI},  // the delay's
     {"TIME", 20, 6000, 450, UNI, 0, 4, 0, {}, {"FREE", "STR", "TRI", "DOT"}},
     {"FDBK", 0, 100, 45, UNI},
     {"SPRD", 0, 100, 40, UNI, 0, 3, 1, {}, {"PHASE", "PING", "DIFF"}},
@@ -808,7 +808,7 @@ PROGMEM static const DeviceDef VAST_DEF = {
     {"DECAY", 0, 100, 50, UNI},
     {"TONE", -50, 50, -10, BI},
   },
-  {"", "REVRB"},
+  {"DELAY", "REVRB"},
 };
 
 class VastDevice : public Device {
