@@ -961,19 +961,12 @@ FLASHMEM void VastDevice::DrawViz(int x, int y, int w, int h) {
     // page 1, the delay: a fixed time line from the left edge to 6 s (the
     // longest delay). Filled bars: the 4 echoes of the left side, as tall as
     // DELAY; with SPRD up an outlined bar next to each shows the right side.
-    // Hollow bars further on: the repeats through FDBK, each round shorter
+    // Thin lines further on: the repeats through FDBK, each round shorter
     // by the FDBK amount.
-    // TRIAL: the time line swaps every 3 s between A (linear) and B (log,
-    // 20 ms .. 6 s) until one is picked.
     if (cur[DELAY] > 0) {
       const int bh = std::max(1, (h - 2) * cur[DELAY] / 100);
       const int tw = w - 8;
-      const bool look_a = (millis() / 3000) % 2 == 0;
-      auto px = [&](float sec) {
-        float f = look_a ? sec / MAX_SECS
-                         : logf(std::max(sec, 0.02f) / 0.02f) / logf(MAX_SECS / 0.02f);
-        return x + int(constrain(f, 0.0f, 1.0f) * tw);
-      };
+      auto px = [&](float sec) { return x + int(constrain(sec / MAX_SECS, 0.0f, 1.0f) * tw); };
       const float period = tap_secs[0][TAPS - 1];
       const float fb = std::min(1.0f, cur[FEEDBACK] * 0.01f);
       for (int t = 0; t < TAPS; t++) {
@@ -990,12 +983,11 @@ FLASHMEM void VastDevice::DrawViz(int x, int y, int w, int h) {
         for (int t = 0; t < TAPS; t++) {
           const float sec = round * period + tap_secs[0][t];
           if (sec > MAX_SECS) break;
-          gfxFrame(px(sec), base - rh, 2, rh);
+          gfxLine(px(sec), base - rh + 1, px(sec), base);
           any = true;
         }
         if (!any) break;
       }
-      if (!vast.frozen()) gfxPrint(x + w - 7, y + 1, look_a ? PSTR("A") : PSTR("B"));
     }
   } else {
     // page 2, the reverb: a wedge fading out from the middle to both sides,
