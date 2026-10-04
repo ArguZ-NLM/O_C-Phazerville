@@ -1028,13 +1028,20 @@ FLASHMEM void VastDevice::DrawViz(int x, int y, int w, int h) {
   }
 }
 
+// the delay page in small: the echoes on the 6 s line, as tall as the delay
+// LEVEL, and a dot running through them in real time
 FLASHMEM void VastDevice::DrawMini(int x, int y, int w, int h) {
   Poll();
-  float m = 0.0f;
-  for (auto& c : tap_m) for (auto& t : c) m = std::max(m, t.v);
-  DrawHMeter(x, y, w, h / 2, m);
-  DrawHMeter(x, y + h / 2 + 1, w, h / 2, tail_m.v);
-  if (vast.frozen()) gfxInvert(x, y, w, h + 1);
+  const int base = y + h - 1;
+  const int bh = std::max(1, h * cur[DELAY] / 100);
+  auto px = [&](float sec) { return x + int(constrain(sec / MAX_SECS, 0.0f, 1.0f) * (w - 1)); };
+  for (int t = 0; t < TAPS; t++) gfxLine(px(tap_secs[0][t]), base - bh + 1, px(tap_secs[0][t]), base);
+  const float period = tap_secs[0][TAPS - 1];
+  if (period > 0.0f) {
+    const float at = fmodf(millis() * 0.001f, period);
+    gfxPixel(px(at), base);
+  }
+  if (vast.frozen()) gfxInvert(x, y, w, h);
 }
 
 /////////////////////////////////////////////////////////////////
@@ -1214,10 +1221,23 @@ FLASHMEM void DeformDevice::DrawViz(int x, int y, int w, int h) {
   DrawVMeter(gx + 8, y + 1, 4, h - 2, out_m.v);
 }
 
+// the fold picture in small, a sine running through it
 FLASHMEM void DeformDevice::DrawMini(int x, int y, int w, int h) {
   Poll();
-  DrawHMeter(x, y, w, h / 2, in_m.v);
-  DrawHMeter(x, y + h / 2 + 1, w, h / 2, out_m.v);
+  const float drv = cur[DRIVE] * 0.01f, crs = cur[CRUSH] * 0.01f, fld = cur[FOLD] * 0.01f;
+  const bool bits = crs > 0.0f && mode[CRUSH] != AudioEffectDeform::CRUSH_REDUX;
+  const int levels = bits ? std::max(2, 1 << std::min(3, AudioEffectDeform::CrushBits(crs) - 12)) : 0;
+  const float run = millis() * 0.004f;
+  const int cy = y + h / 2, lim = h / 2;
+  int py = -1;
+  for (int i = 0; i < w; i++) {
+    const float in = sinf(2.0f * float(M_PI) * i / w + run);
+    float yo = AudioEffectDeform::Shape(AudioEffectDeform::Fold(in, fld), drv);
+    if (levels) yo = roundf(yo * levels) / levels;
+    const int yy = cy - int(constrain(yo, -1.0f, 1.0f) * lim);
+    if (py >= 0) gfxLine(x + i - 1, py, x + i, yy);
+    py = yy;
+  }
 }
 
 /////////////////////////////////////////////////////////////////

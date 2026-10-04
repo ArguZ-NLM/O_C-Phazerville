@@ -775,9 +775,7 @@ FLASHMEM void AppSculpt::DrawChain() const {
   using namespace sculpt;
   // boxes are drawn one pixel wider than the spacing so neighbours share a
   // border; 19 px inside each. Glyphs are 6 px with a blank first column.
-  // Inside: dots for the devices the slot offers (only the one in use
-  // filled), the slot's name (BP when bypassed, with a wire underneath) and
-  // a small live meter.
+  // Inside: the slot's name and a small live picture of its device.
   constexpr int bw = 20, bh = 26, x0 = 7;
   for (int t = 0; t < NUM_TRACKS; t++) {
     const int y = t * (bh + 1);
@@ -797,28 +795,16 @@ FLASHMEM void AppSculpt::DrawChain() const {
       if (d) gfxFrame(x, y, bw + 1, bh);
       else gfxFrame(x, y, bw + 1, bh, true);
 
-      if (c != MIX_COL) {
-        // devices = options minus BYPASS (MATERIAL has no bypass)
-        const int first = c == MATERIAL ? 0 : 1;
-        // one dot per planned device; ones not built yet stay hollow
-        const int n = std::max<int>(SLOT_DEFS[c].noptions - first, SLOT_DEFS[c].planned);
-        if (n > 0) {
-        const int dx = x + 1 + (bw - 1 - (5 * n - 2)) / 2;
-        for (int k = 0; k < n; k++) {
-          if (tr.choice[c] == k + first) gfxRect(dx + 5 * k, y + 3, 3, 3);
-          else gfxPixel(dx + 5 * k + 1, y + 4); // small o: not in use
-        }
-        }
-      }
-
+      // the slot's name at the top, its device's little picture underneath
+      // (BP and a plain wire when bypassed)
       const char* tag = !d ? PSTR("BP") : c == MIX_COL ? PSTR("OUT") : SLOT_DEFS[c].tag;
       const int cells = 6 * int(strlen(tag));
-      gfxPrint(x + 1 + (bw - 1 - cells) / 2, y + 9, tag);
+      gfxPrint(x + 1 + (bw - 1 - cells) / 2, y + 3, tag);
       if (d) {
-        if (d->ok()) d->DrawMini(x + 2, y + 19, bw - 3, 5);
-        else gfxPrint(x + 5, y + 18, PSTR("!!"));
+        if (d->ok()) d->DrawMini(x + 2, y + 13, bw - 3, 10);
+        else gfxPrint(x + 5, y + 14, PSTR("!!"));
       } else {
-        gfxLine(x + 4, y + 21, x + bw - 4, y + 21); // bypass: a plain wire
+        gfxLine(x + 4, y + 18, x + bw - 4, y + 18);
       }
       if (t == track && c == col) gfxInvert(x + 1, y + 1, bw - 1, bh - 2);
     }
