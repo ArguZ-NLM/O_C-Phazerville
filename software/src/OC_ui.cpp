@@ -292,7 +292,9 @@ UiMode Ui::Splashscreen(bool &reset_settings, uint8_t phase) {
 
       GRAPHICS_END_FRAME();
 
-    } while (timeout < SPLASHSCREEN_DELAY_MS);
+      // Sculpt test firmware: only stays while L or R (or the reset combo)
+      // is held at power-up; otherwise it's gone after a short check
+    } while (timeout < (mode != UI_MODE_MENU || reset_settings ? SPLASHSCREEN_DELAY_MS : 300));
       break;
 
   case 1:

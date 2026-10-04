@@ -354,8 +354,8 @@ FLASHMEM void setup() {
 
   // first sign of life
   GRAPHICS_BEGIN_FRAME(true);
-  graphics.setPrintPos(1, 28);
-  graphics.print("*Main Screen Turn On*");
+  graphics.setPrintPos(46, 28);  // Sculpt test firmware: a plain name
+  graphics.print("SCULPT");
   GRAPHICS_END_FRAME();
 
 #if defined(ARDUINO_TEENSY41)
@@ -465,8 +465,7 @@ FLASHMEM void setup() {
   OC::PresetBusUI::Init();
   OC::PresetEngine::BootRecall();
 
-  // Welcome splash
-  OC::ui.Splashscreen(firstrun, 1);
+  // (no welcome splash in the Sculpt test firmware)
 
   if (start_cal)
     OC::start_calibration();
