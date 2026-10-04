@@ -477,6 +477,8 @@ FLASHMEM void AppSculpt::ToggleLink() {
 }
 
 FLASHMEM void AppSculpt::Resume() {
+  // SPRAY: at most 8 overlapping grains while Sculpt runs (CPU peaks)
+  AudioEffectClouds::grain_limit = 8;
   using namespace sculpt;
   if (!audio_hw() || active) return;
   if (!patch) patch = new Patch;
@@ -489,6 +491,8 @@ FLASHMEM void AppSculpt::Resume() {
 }
 
 FLASHMEM void AppSculpt::Suspend() {
+  // the Quadrants applets get all their grains back
+  AudioEffectClouds::grain_limit = AudioEffectClouds::MAX_GRAINS;
   using namespace sculpt;
   if (!active) return;
   OC::AudioIO::ReleaseOutput();

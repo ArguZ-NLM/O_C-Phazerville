@@ -45,6 +45,9 @@ class AudioEffectClouds : public AudioStream {
 public:
     static const size_t CLOUDS_BUFFER_SAMPLES = AUDIO_SAMPLE_RATE; // ~1 sec
     static const int    MAX_GRAINS = 12;
+    // grains that may overlap, for every instance (a full-screen app can lower
+    // it while it runs; the Quadrants applets use all MAX_GRAINS)
+    static inline int grain_limit = MAX_GRAINS;
     static const int    MAX_CHANNELS = 2;
 
     AudioEffectClouds(size_t buf_len = CLOUDS_BUFFER_SAMPLES, int channels = 1)
@@ -161,8 +164,20 @@ private:
                     size_t buf_size, size_t head, int pre_delay);
 };
 
-// The hot loop: runs from RAM1 (ITCM); from flash it costs a lot more.
-FASTRUN void AudioEffectClouds::update() {
+// The hot loop. Built for speed (the project is built for size, which leaves the per-sample
+// helpers as calls), from flash: the loop stays in the I-cache.
+static inline __attribute__((always_inline)) float CloudsHermite(
+    float xm1, float x0, float x1, float x2, float t) {
+    const float c = (x1 - xm1) * 0.5f;
+    const float v = x0 - x1;
+    const float w = c + v;
+    const float a = w + v + (x2 - x0) * 0.5f;
+    const float b_neg = w + a;
+    return (((a * t) - b_neg) * t + c) * t + x0;
+}
+
+__attribute__((optimize("O2")))
+FLASHMEM void AudioEffectClouds::update() {
     audio_block_t* in[MAX_CHANNELS]  = {};
     audio_block_t* out[MAX_CHANNELS] = {};
     bool ok = true;
@@ -224,9 +239,9 @@ FASTRUN void AudioEffectClouds::update() {
         const float abs_density = cur_density < 0.0f ? -cur_density : cur_density;
         const bool  stochastic  = cur_density > 0.0f;
 
-        // Cap density so avg concurrent grains stays < MAX_GRAINS.
-        const float capped = (abs_density * cur_size < (float)(MAX_GRAINS - 1))
-            ? abs_density : (float)(MAX_GRAINS - 1) / cur_size;
+        // Cap density so avg concurrent grains stays < grain_limit.
+        const float capped = (abs_density * cur_size < (float)(grain_limit - 1))
+            ? abs_density : (float)(grain_limit - 1) / cur_size;
 
         const float advance = capped / AUDIO_SAMPLE_RATE_EXACT;
         for (int i = 0; i < AUDIO_BLOCK_SAMPLES; i++) {
@@ -307,7 +322,7 @@ FASTRUN void AudioEffectClouds::update() {
                 t += n * t_step;
                 const float dw = (window(t) - w) / n;
                 for (int k = 0; k < n; k++, i++) {
-                    const float m = InterpHermite(span_[li - 1], span_[li], span_[li + 1],
+                    const float m = CloudsHermite(span_[li - 1], span_[li], span_[li + 1],
                                                   span_[li + 2], frac) * w;
                     if (stereo) {
                         accum_[0][i] += m * gl;
@@ -405,8 +420,8 @@ FLASHMEM void AudioEffectClouds::spawnGrain(float cur_pos, float cur_size, float
                   float cur_pitch, float cur_psprd, float cur_texture,
                   size_t buf_size, size_t head, int pre_delay) {
     Grain* g = nullptr;
-    for (auto& gr : grains) {
-        if (!gr.active) { g = &gr; break; }
+    for (int k = 0; k < grain_limit && k < MAX_GRAINS; k++) {
+        if (!grains[k].active) { g = &grains[k]; break; }
     }
     if (!g) return; // all slots busy
 
