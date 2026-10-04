@@ -745,10 +745,9 @@ FASTRUN void InputDevice::update() {
   audio_block_t* out[2] = {allocate(), allocate()};
   if (out[0] && out[1]) {
     static const int16_t silence[AUDIO_BLOCK_SAMPLES] = {};
-    // the codec's channels are the other way round from the panel jacks on
-    // Sascha's hardware: channel 1 is L, channel 0 is R
-    const int16_t* a = in[1] ? in[1]->data : silence;
-    const int16_t* b = in[0] ? in[0]->data : silence;
+    // channel 0 is L (the input is resynced at start, see AudioIO)
+    const int16_t* a = in[0] ? in[0]->data : silence;
+    const int16_t* b = in[1] ? in[1]->data : silence;
     const uint8_t src = source;
     const int32_t g = static_cast<int32_t>(gain * 16384.0f);   // Q14, up to 2.0
     const int32_t wd = static_cast<int32_t>(width * 16384.0f); // Q14
