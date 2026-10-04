@@ -840,7 +840,7 @@ private:
 
   static constexpr float TAP_POS[2][TAPS] = {
     {0.25f, 0.50f, 0.75f, 1.0f},
-    {0.33f, 0.58f, 0.83f, 1.0f},
+    {0.25f, 0.50f, 0.75f, 1.0f},  // same grid: SPRD makes the stereo spread
   };
   void SetTimes();
   void Poll();
@@ -955,31 +955,36 @@ FLASHMEM void VastDevice::DrawViz(int x, int y, int w, int h) {
     gfxPrint(x + 22, y + h / 2 - 4, PSTR("out of memory"));
     return;
   }
-  // echoes on a time line from the left edge (L filled, R outlined): where
-  // they sit follows the tap times on an even scale of 2 s across (longer
-  // times fill the width), how tall they are follows DELAY. Then the
-  // reverb tail as a fading wedge whose length follows DECAY and height the
-  // tail level.
-  const int base = y + h - 1, tl_w = w * 2 / 3;
+  const int base = y + h - 1;
   gfxDottedLine(x, base, x + w - 1, base, 2);
-  const int bh = std::max(1, (h - 2) * cur[DELAY] / 100);
-  float span = 2.0f;
-  for (auto& c : tap_secs) for (float sec : c) span = std::max(span, sec);
-  for (int c = 0; c < 2; c++) {
-    for (int t = 0; t < TAPS; t++) {
-      const int bx = x + int(tap_secs[c][t] / span * (tl_w - 6)) + c * 3;
-      if (cur[DELAY] == 0) continue;
-      if (c == 0) gfxRect(bx, base - bh, 2, bh);
-      else gfxFrame(bx, base - bh, 2, bh);
+  if (view_page == 0) {
+    // page 1, the delay: echoes on a time line from the left edge, on an
+    // even scale of 2 s across (longer times fill the width), as tall as
+    // DELAY. Filled: the left side; with SPRD up, an outlined bar next to
+    // each shows where the right side's echo lands.
+    if (cur[DELAY] > 0) {
+      const int bh = std::max(1, (h - 2) * cur[DELAY] / 100);
+      float span = 2.0f;
+      for (auto& c : tap_secs) for (float sec : c) span = std::max(span, sec);
+      const int tw = w - 8;
+      for (int t = 0; t < TAPS; t++) {
+        const int lx = x + int(tap_secs[0][t] / span * tw);
+        gfxRect(lx, base - bh, 2, bh);
+        if (cur[SPREAD] > 0) {
+          const int rx = std::max(lx + 3, x + int(tap_secs[1][t] / span * tw));
+          gfxFrame(rx, base - bh, 2, bh);
+        }
+      }
     }
-  }
-  const float tail = tail_m.v;
-  const int th = constrain(int(tail * (h - 2)), 0, h - 2);
-  const int tx = x + tl_w + 2;
-  const int len = 12 + (w - tl_w - 14) * cur[DECAY] / 100;
-  for (int i = 0; i < len; i += 2) {
-    const int hh = th * (len - i) / len;
-    if (hh > 0) gfxLine(tx + i, base - hh, tx + i, base);
+  } else {
+    // page 2, the reverb: a fading wedge, as long as DECAY and as tall as
+    // REVRB
+    const int th = (h - 2) * cur[REVERB] / 100;
+    const int len = 12 + (w - 14) * cur[DECAY] / 100;
+    for (int i = 0; i < len; i += 2) {
+      const int hh = th * (len - i) / len;
+      if (hh > 0) gfxLine(x + i, base - hh, x + i, base);
+    }
   }
   if (vast.frozen()) {
     gfxPrint(x + w - 25, y + 1, PSTR("FRZ"));
