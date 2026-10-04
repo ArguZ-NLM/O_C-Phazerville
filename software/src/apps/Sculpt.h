@@ -797,8 +797,13 @@ FLASHMEM void AppSculpt::DrawChain() const {
   gfxPrint(8, 56, col == MIX_COL ? PSTR("MIX") : SLOT_DEFS[col].name);
   // the device name, unless it is the same as the slot's (SPACE); for MIX
   // where the track sits in the stereo field
-  if (!d || tr.bypassed(col)) {
-    gfxPrint(62, 56, PSTR("bypass"));
+  // bypass sits at the right end, the CPU load to its left
+  const bool bp = !d || tr.bypassed(col);
+  int right = 128;
+  if (bp) {
+    right -= 6 * 6;
+    gfxPrint(right, 56, PSTR("bypass"));
+    right -= 6;
   } else if (col == MIX_COL) {
     const int pan = d->val[1];
     char buf[12];
@@ -810,11 +815,11 @@ FLASHMEM void AppSculpt::DrawChain() const {
     gfxPrint(62, 56, d->def.name);
   }
   if (!audio_hw()) {
-    gfxPrint(104, 56, PSTR("noIO"));
+    gfxPrint(right - 24, 56, PSTR("noIO"));
   } else {
     char buf[6];
     snprintf(buf, sizeof(buf), "%d%%", cpu);
-    gfxPrint(128 - 6 * int(strlen(buf)), 56, buf);
+    gfxPrint(right - 6 * int(strlen(buf)), 56, buf);
   }
 }
 
