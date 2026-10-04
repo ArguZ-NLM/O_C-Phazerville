@@ -1576,22 +1576,18 @@ FLASHMEM void SprayDevice::DrawViz(int x, int y, int w, int h) {
   const int cl = std::max(x, hx - 1), cr = std::min(x + w - 1, hx + 1);
   graphics.clearRect(cl, y, cr - cl + 1, h);  // kept inside the screen
   gfxLine(hx, y, hx, base);
-  // where grains are read: POS back from the head, widened by SCATR only as
-  // far as the engine does; ticks at the top and bottom mark it (it can
-  // wrap around the edge like the buffer)
+  // the grain window: fixed in the middle, its edges move apart with how
+  // far SCATR really scatters (the engine narrows it near both buffer ends)
   const float pos = cur[POS] * 0.01f, spray = cur[SCATTER] * 0.005f;
   const float eff = std::min(spray, std::min(pos, 1.0f - pos));
-  const int k_lo = head - int((pos + eff) * HIST + 0.5f), k_hi = head - int((pos - eff) * HIST + 0.5f);
-  const int span = std::max(2, k_hi - k_lo);
-  for (int k : {k_lo, k_lo + span}) {
-    const int ex = col_x(k);
+  const int mid = x + w / 2, half = std::max(2, int(eff * w + 0.5f));
+  const int wl = std::max(x, mid - half), wr = std::min(x + w - 1, mid + half);
+  for (int ex : {wl, wr}) {
     gfxLine(ex, y, ex, y + 3);
     gfxLine(ex, base - 3, ex, base);
   }
-  for (int k = k_lo; k <= k_lo + span; k++) {
-    gfxPixel(col_x(k), y);
-    gfxPixel(col_x(k), base);
-  }
+  gfxLine(wl, y, wr, y);
+  gfxLine(wl, base, wr, base);
   // one square per grain playing, inside the window, up and down with PITCH
   const int py = cy - cur[PITCH] * (h / 2 - 4) / 24;
   const int jit = 4 + SpreadSemis() * (h / 2 - 4) / 24;  // spread scatters them up and down
@@ -1599,7 +1595,7 @@ FLASHMEM void SprayDevice::DrawViz(int x, int y, int w, int h) {
   uint32_t r = millis() / 60;
   for (int i = 0; i < n; i++) {
     r = r * 1103515245u + 12345u;
-    const int gx = col_x(k_lo + int((r >> 8) % uint32_t(span + 1)));
+    const int gx = wl + int((r >> 8) % uint32_t(wr - wl + 1));
     const int gy = constrain(py + int((r >> 20) % uint32_t(2 * jit + 1)) - jit, y + 2, base - 4);
     const int sx = constrain(gx - 1, x + 1, x + w - 4);  // gap stays on screen
     graphics.clearRect(sx - 1, gy - 1, 5, 5);  // a gap around it in the waveform
