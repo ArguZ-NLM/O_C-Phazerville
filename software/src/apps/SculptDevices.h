@@ -163,6 +163,9 @@ public:
   virtual void Apply(int p) = 0;
   virtual int Step(int p, int v, int dir) const { return v + dir; }
   virtual void Format(int p, char* buf, size_t n) const;
+  // a setting's mode as text; modes past the 4 named ones are shown by the
+  // device (e.g. a number)
+  virtual void FormatMode(int p, char* buf, size_t n) const;
   virtual void Action(int a) {}
   virtual bool ActionLit(int a) const { return false; }
   virtual void DrawViz(int x, int y, int w, int h) {}
@@ -285,6 +288,12 @@ FLASHMEM void Device::NudgeMode(int p, int dir) {
   if (!d.nmodes) return;
   mode[p] = constrain(mode[p] + dir, 0, d.nmodes - 1);
   Apply(p);
+}
+
+FLASHMEM void Device::FormatMode(int p, char* buf, size_t n) const {
+  const int m = mode[p];
+  if (m < 4) snprintf(buf, n, "%s", param(p).modes[m]);
+  else snprintf(buf, n, "%d", m);
 }
 
 FLASHMEM void Device::Format(int p, char* buf, size_t n) const {
@@ -1448,8 +1457,8 @@ PROGMEM static const DeviceDef SPRAY_DEF = {
   {
     // left of the middle: P (periodic), right: R (random), middle: no grains
     {"RATE", -100, 100, 55, BI},
-    {"SIZE", 0, 100, 50, UNI},
-    {"PITCH", -24, 24, 0, BI, 0, 4, 0, {}, {"OFF", "+-1", "+-5", "+-12"}},  // mode: spread
+    {"SIZE", 0, 100, 50, UNI, 0, 21, 0},   // mode: size spread, 0..100% in 5% steps
+    {"PITCH", -24, 24, 0, BI, 0, 25, 0},  // mode: pitch spread, 0..24 semitones
     {"SCATR", 0, 100, 20, UNI},
     {"POS", 0, 100, 10, UNI},
     {"SHAPE", 0, 100, 70, UNI},
@@ -1485,7 +1494,9 @@ private:
   bool frozen = false;
   // 0.5 .. 40 Hz either side of the middle, 0 in it
   static float RateHz(int v) { return v ? 0.5f * powf(80.0f, (abs(v) - 1) / 99.0f) : 0.0f; }
-  int SpreadSemis() const { static const int8_t s[4] = {0, 1, 5, 12}; return s[mode[PITCH] & 3]; }
+  int SpreadSemis() const { return mode[PITCH]; }
+  float SizeSpread() const { return mode[SIZE] * 0.05f; }
+  void FormatMode(int p, char* buf, size_t n) const override;
   float SizeSecs() const { return 0.01f * powf(100.0f, cur[SIZE] * 0.01f); } // 10 ms .. 1 s
 };
 
@@ -1513,7 +1524,7 @@ FLASHMEM void SprayDevice::Apply(int p) {
   const float v = cur[p] * 0.01f;
   switch (p) {
     case RATE:  fx.setDensity(cur[RATE] < 0 ? -RateHz(cur[RATE]) : RateHz(cur[RATE])); break; // neg = periodic
-    case SIZE:  fx.setSize(SizeSecs()); break;
+    case SIZE:  fx.setSize(SizeSecs()); fx.setSizeSpread(SizeSpread()); break;
     case PITCH:
       fx.setPitch(powf(2.0f, cur[PITCH] / 12.0f));
       fx.setPitchSpread(SpreadSemis());
@@ -1524,6 +1535,14 @@ FLASHMEM void SprayDevice::Apply(int p) {
     case FDBK:  fx.setFeedback(v * 0.9f); break;
     case LEVEL: wet = v; break;
   }
+}
+
+// the spreads: OFF, then +-semitones (PITCH) or percent (SIZE)
+FLASHMEM void SprayDevice::FormatMode(int p, char* buf, size_t n) const {
+  if ((p == PITCH || p == SIZE) && mode[p] == 0) snprintf(buf, n, "OFF");
+  else if (p == PITCH) snprintf(buf, n, "+-%d", mode[p]);
+  else if (p == SIZE) snprintf(buf, n, "%d%%", mode[p] * 5);
+  else Device::FormatMode(p, buf, n);
 }
 
 FLASHMEM void SprayDevice::Format(int p, char* buf, size_t n) const {
@@ -1588,18 +1607,18 @@ FLASHMEM void SprayDevice::DrawViz(int x, int y, int w, int h) {
   }
   gfxLine(wl, y, wr, y);
   gfxLine(wl, base, wr, base);
-  // one square per grain playing, inside the window, up and down with PITCH
-  const int py = cy - cur[PITCH] * (h / 2 - 4) / 24;
-  const int jit = 4 + SpreadSemis() * (h / 2 - 4) / 24;  // spread scatters them up and down
-  const int n = fx.ActiveGrainCount();
-  uint32_t r = millis() / 60;
+  // the grains as they play: across from the middle by their scatter, up
+  // and down by their own pitch offset around PITCH (all on one line without
+  // spread), as wide as they are long on the buffer's scale
+  const int line = cy - cur[PITCH] * (h / 2 - 4) / 24;
+  AudioEffectClouds::GrainView gv[AudioEffectClouds::MAX_GRAINS];
+  const int n = fx.ReadGrains(gv, AudioEffectClouds::MAX_GRAINS);
   for (int i = 0; i < n; i++) {
-    r = r * 1103515245u + 12345u;
-    const int gx = wl + int((r >> 8) % uint32_t(wr - wl + 1));
-    const int gy = constrain(py + int((r >> 20) % uint32_t(2 * jit + 1)) - jit, y + 2, base - 4);
-    const int sx = constrain(gx - 1, x + 1, x + w - 4);  // gap stays on screen
-    graphics.clearRect(sx - 1, gy - 1, 5, 5);  // a gap around it in the waveform
-    gfxRect(sx, gy, 3, 3);
+    const int gw = constrain(int(gv[i].secs / BUF_SECS * w + 0.5f), 2, w / 2);
+    const int gx = constrain(mid + int(gv[i].scatter * w) - gw / 2, x + 1, x + w - gw - 1);
+    const int gy = constrain(line - int(gv[i].semis * (h / 2 - 4) / 24) - 1, y + 2, base - 4);
+    graphics.clearRect(gx - 1, gy - 1, gw + 2, 5);  // a gap around it in the waveform
+    gfxRect(gx, gy, gw, 3);
   }
   if (frozen) {
     gfxPrint(x + w - 25, y + 1, PSTR("FRZ"));

@@ -1004,7 +1004,7 @@ FLASHMEM void AppSculpt::DrawDevice() const {
     const bool show_mode = sel && pd.nmodes
       && ((editing && l_held) || (edit_mode && mode_shown < 1500));
     if (sel && mod_mode) snprintf(buf, sizeof(buf), "%+d%%", d->mod_amt[p]);
-    else if (show_mode) snprintf(buf, sizeof(buf), "%s", pd.modes[d->mode[p]]);
+    else if (show_mode) d->FormatMode(p, buf, sizeof(buf));
     else d->Format(p, buf, sizeof(buf));
     PrintCentred(x, 52, buf);
     if (sel && (editing || mod_mode)) gfxInvert(x, 51, 32, 9);

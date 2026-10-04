@@ -75,6 +75,9 @@ public:
     void setSpray(float s)           { spray_    = s; }
     void setPitch(float r)           { pitch_    = r; }
     void setPitchSpread(float semis) { psprd_    = semis; }
+    // random grain length, 0..1: each grain is up to that fraction longer or
+    // shorter than the size
+    void setSizeSpread(float f)      { ssprd_    = f; }
     // texture ∈ [0, 1]: 0=rect, 0.5=triangle, 1.0=Hann
     void setTexture(float t)         { texture_  = t; }
     // feedback ∈ [0, 1]: fraction of grain cloud fed back into record buffer
@@ -93,6 +96,20 @@ public:
     int ReadHistory(uint8_t* dst) const {
         for (int k = 0; k < HIST; k++) dst[k] = hist_[k];
         return hist_pos_;
+    }
+
+    // what the playing grains are doing, for a picture: offset from the
+    // position (fraction of the buffer), pitch offset (semitones), length
+    // (seconds) and how far through it they are (0..1)
+    struct GrainView { float scatter, semis, secs, progress; };
+    int ReadGrains(GrainView* out, int max) const {
+        int n = 0;
+        for (const auto& g : grains) {
+            if (!g.active || n >= max) continue;
+            out[n++] = {g.scatter, g.semis, g.grain_len / AUDIO_SAMPLE_RATE_EXACT,
+                        g.grain_len ? (float)g.phase / g.grain_len : 0.0f};
+        }
+        return n;
     }
 
     uint8_t ActiveGrainCount() const {
@@ -131,6 +148,8 @@ private:
         float  gain_l        = 1.0f; // stereo pan gains
         float  gain_r        = 1.0f;
         int8_t source        = 0;    // stereo: 0 = left input, 1 = right input
+        float  scatter       = 0.0f; // for ReadGrains: offset from the position
+        float  semis         = 0.0f; //                 random pitch offset
     } grains[MAX_GRAINS];
 
 
@@ -166,6 +185,7 @@ private:
     volatile float spray_    = 0.0f;
     volatile float pitch_    = 1.0f;  // ratio
     volatile float psprd_    = 0.0f;  // semitones spread
+    volatile float ssprd_    = 0.0f;  // size spread, fraction
     volatile float texture_  = 0.5f;  // 0=rect, 0.5=tri, 1.0=Hann
     volatile float feedback_ = 0.0f;  // 0..1
     volatile bool  freeze_   = false;
@@ -459,12 +479,15 @@ FLASHMEM void AudioEffectClouds::spawnGrain(float cur_pos, float cur_size, float
     if (eff_pos > 1.0f) eff_pos = 1.0f;
 
     float grain_pitch = cur_pitch;
+    float rand_semis = 0.0f;
     if (cur_psprd > 0.0f) {
-        float rand_semis = cur_psprd * (stmlib::Random::GetFloat() * 2.0f - 1.0f);
+        rand_semis = cur_psprd * (stmlib::Random::GetFloat() * 2.0f - 1.0f);
         grain_pitch *= SemitonesToRatio(rand_semis);
     }
 
     float grain_size = cur_size * AUDIO_SAMPLE_RATE_EXACT;
+    const float ss = ssprd_;
+    if (ss > 0.0f) grain_size *= 1.0f + ss * (stmlib::Random::GetFloat() * 2.0f - 1.0f);
     if (grain_size < (float)AUDIO_BLOCK_SAMPLES) grain_size = AUDIO_BLOCK_SAMPLES;
     if (grain_size > buf_size * 0.5f)            grain_size = buf_size * 0.5f;
     // a fast play head must not run through the whole buffer
@@ -514,6 +537,8 @@ FLASHMEM void AudioEffectClouds::spawnGrain(float cur_pos, float cur_size, float
     // grain source: left or right input, odds set by source_ (0 = 50/50)
     const float p_left = 0.5f - 0.5f * source_;
     g->source = (stmlib::Random::GetFloat() < p_left) ? 0 : 1;
+    g->scatter       = eff_pos - cur_pos;
+    g->semis         = rand_semis;
     g->active        = true;
 }
 
