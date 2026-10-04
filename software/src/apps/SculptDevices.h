@@ -1446,9 +1446,10 @@ FLASHMEM void ResonatorDevice::DrawMini(int x, int y, int w, int h) {
 PROGMEM static const DeviceDef SPRAY_DEF = {
   "SPRAY", "SPR", 8, {"FRZ", ""},
   {
-    {"RATE", 0, 100, 55, UNI, 0, 2, 1, {}, {"EVEN", "RAND"}},
+    // left of the middle: P (periodic), right: R (random), middle: no grains
+    {"RATE", -100, 100, 55, BI},
     {"SIZE", 0, 100, 50, UNI},
-    {"PITCH", -24, 24, 0, BI},
+    {"PITCH", -24, 24, 0, BI, 0, 4, 0, {}, {"OFF", "+-1", "+-5", "+-12"}},  // mode: spread
     {"SCATR", 0, 100, 20, UNI},
     {"POS", 0, 100, 10, UNI},
     {"SHAPE", 0, 100, 70, UNI},
@@ -1482,7 +1483,9 @@ public:
 private:
   AudioEffectClouds fx;
   bool frozen = false;
-  float RateHz() const { return 0.5f * powf(80.0f, cur[RATE] * 0.01f); }    // 0.5 .. 40 Hz
+  // 0.5 .. 40 Hz either side of the middle, 0 in it
+  static float RateHz(int v) { return v ? 0.5f * powf(80.0f, (abs(v) - 1) / 99.0f) : 0.0f; }
+  int SpreadSemis() const { static const int8_t s[4] = {0, 1, 5, 12}; return s[mode[PITCH] & 3]; }
   float SizeSecs() const { return 0.01f * powf(100.0f, cur[SIZE] * 0.01f); } // 10 ms .. 1 s
 };
 
@@ -1509,9 +1512,12 @@ FLASHMEM void SprayDevice::Deactivate() {
 FLASHMEM void SprayDevice::Apply(int p) {
   const float v = cur[p] * 0.01f;
   switch (p) {
-    case RATE:  fx.setDensity(mode[RATE] ? RateHz() : -RateHz()); break; // neg = even
+    case RATE:  fx.setDensity(cur[RATE] < 0 ? -RateHz(cur[RATE]) : RateHz(cur[RATE])); break; // neg = periodic
     case SIZE:  fx.setSize(SizeSecs()); break;
-    case PITCH: fx.setPitch(powf(2.0f, cur[PITCH] / 12.0f)); break;
+    case PITCH:
+      fx.setPitch(powf(2.0f, cur[PITCH] / 12.0f));
+      fx.setPitchSpread(SpreadSemis());
+      break;
     case SCATTER: fx.setSpray(v * 0.5f); break;
     case POS:   fx.setPosition(v); break;
     case SHAPE: fx.setTexture(v); break;
@@ -1522,9 +1528,12 @@ FLASHMEM void SprayDevice::Apply(int p) {
 
 FLASHMEM void SprayDevice::Format(int p, char* buf, size_t n) const {
   if (p == RATE) {
-    const float hz = 0.5f * powf(80.0f, val[RATE] * 0.01f);
-    if (hz < 10.0f) snprintf(buf, n, "%d.%dHz", int(hz), int(hz * 10) % 10);
-    else snprintf(buf, n, "%dHz", int(hz + 0.5f));
+    // P periodic / R random, in grains per second
+    const float hz = RateHz(val[RATE]);
+    const char side = val[RATE] < 0 ? 'P' : 'R';
+    if (!val[RATE]) snprintf(buf, n, "OFF");
+    else if (hz < 10.0f) snprintf(buf, n, "%c%d.%d", side, int(hz), int(hz * 10) % 10);
+    else snprintf(buf, n, "%c%d", side, int(hz + 0.5f));
   } else if (p == SIZE) {
     const int ms = int(10.0f * powf(100.0f, val[SIZE] * 0.01f) + 0.5f);
     if (ms < 1000) snprintf(buf, n, "%dms", ms);
@@ -1564,7 +1573,8 @@ FLASHMEM void SprayDevice::DrawViz(int x, int y, int w, int h) {
     else gfxPixel(col_x(k), cy);
   }
   const int hx = col_x(head);
-  graphics.clearRect(hx - 1, y, 3, h);
+  const int cl = std::max(x, hx - 1), cr = std::min(x + w - 1, hx + 1);
+  graphics.clearRect(cl, y, cr - cl + 1, h);  // kept inside the screen
   gfxLine(hx, y, hx, base);
   // where grains are read: POS back from the head, widened by SCATR only as
   // far as the engine does; ticks at the top and bottom mark it (it can
@@ -1584,13 +1594,14 @@ FLASHMEM void SprayDevice::DrawViz(int x, int y, int w, int h) {
   }
   // one square per grain playing, inside the window, up and down with PITCH
   const int py = cy - cur[PITCH] * (h / 2 - 4) / 24;
+  const int jit = 4 + SpreadSemis() * (h / 2 - 4) / 24;  // spread scatters them up and down
   const int n = fx.ActiveGrainCount();
   uint32_t r = millis() / 60;
   for (int i = 0; i < n; i++) {
     r = r * 1103515245u + 12345u;
     const int gx = col_x(k_lo + int((r >> 8) % uint32_t(span + 1)));
-    const int gy = constrain(py + int((r >> 20) % 9) - 4, y + 2, base - 4);
-    const int sx = constrain(gx - 1, x, x + w - 3);
+    const int gy = constrain(py + int((r >> 20) % uint32_t(2 * jit + 1)) - jit, y + 2, base - 4);
+    const int sx = constrain(gx - 1, x + 1, x + w - 4);  // gap stays on screen
     graphics.clearRect(sx - 1, gy - 1, 5, 5);  // a gap around it in the waveform
     gfxRect(sx, gy, 3, 3);
   }
