@@ -1551,21 +1551,28 @@ FLASHMEM void SprayDevice::DrawViz(int x, int y, int w, int h) {
   }
   const int base = y + h - 1;
   gfxDottedLine(x, base, x + w - 1, base, 2);
+  // where grains are read: POS back from now (right edge), widened by SCATR
+  // only as far as the engine does (it never reaches past now or the oldest
+  // audio, so the window narrows towards both ends)
   const int now = x + w - 1;
   const float pos = cur[POS] * 0.01f, spray = cur[SCATTER] * 0.005f;
-  const int cxp = now - int(pos * (w - 1));
-  const int half = std::max(1, int(spray * (w - 1)));
-  gfxLine(cxp - half, base - 2, cxp + half, base - 2);
-  gfxLine(cxp - half, base - 4, cxp - half, base - 1);
-  gfxLine(cxp + half, base - 4, cxp + half, base - 1);
+  const float eff = std::min(spray, std::min(pos, 1.0f - pos));
+  auto px = [&](float back) { return now - int(constrain(back, 0.0f, 1.0f) * (w - 1)); };
+  int lo = px(pos + eff), hi = px(pos - eff);
+  if (hi - lo < 2) { lo = std::max(x, lo - 1); hi = std::min(now, hi + 1); }
+  gfxLine(lo, base - 2, hi, base - 2);
+  gfxLine(lo, base - 4, lo, base - 1);
+  gfxLine(hi, base - 4, hi, base - 1);
+  // one dot per grain playing, inside the window, raised / lowered by PITCH
+  const int top = y + 2, bottom = base - 7;
+  const int py = (top + bottom) / 2 - cur[PITCH] * ((bottom - top) / 2 - 3) / 24;
   const int n = fx.ActiveGrainCount();
-  const int py = y + (h - 6) / 2 - cur[PITCH] * ((h - 8) / 2) / 24;
   uint32_t r = millis() / 60;
   for (int i = 0; i < n; i++) {
     r = r * 1103515245u + 12345u;
-    const int gx = cxp - half + int((r >> 8) % uint32_t(2 * half + 1));
-    const int gy = py + int((r >> 20) % 7) - 3;
-    gfxRect(gx - 1, gy - 1, 3, 3);
+    const int gx = lo + int((r >> 8) % uint32_t(hi - lo + 1));
+    const int gy = constrain(py + int((r >> 20) % 7) - 3, top + 1, bottom - 1);
+    gfxRect(constrain(gx - 1, x, now - 2), gy - 1, 3, 3);
   }
   if (frozen) {
     gfxPrint(x + w - 25, y + 1, PSTR("FRZ"));
