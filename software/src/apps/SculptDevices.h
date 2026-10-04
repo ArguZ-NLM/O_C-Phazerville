@@ -1136,6 +1136,7 @@ private:
   AudioEffectRing fx;
   float shape[BANDS] = {};   // band gains before the overall level, for the picture
   float band_m[BANDS] = {};
+  float coef[BANDS] = {};    // band frequencies as the bank gets them
   Meter out_m;
   void Rebuild();
   float Q() const { return 2.0f * powf(100.0f, cur[DECAY] * 0.01f); } // 2 .. 200
@@ -1176,6 +1177,7 @@ FLASHMEM void RingDevice::Rebuild() {
     shape[k] = gk;
     g[k] = gk * level;
   }
+  memcpy(coef, f, sizeof(coef));
   fx.SetBank(f, g, 1.0f / q, mode[DECAY] == 1, cur[WET] * 0.01f);
 }
 
@@ -1197,19 +1199,38 @@ FLASHMEM void RingDevice::DrawViz(int x, int y, int w, int h) {
   fx.ReadViz(v);
   out_m.Hit(v.out);
   // 48 bands as thin bars (2 px each) across the three left columns, the
-  // bank's shape dotted over them and the cutoff marked at the top
+  // bank's shape drawn over them and the cutoff marked at the top
   float smax = 0.01f;
   for (float sv : shape) smax = std::max(smax, sv);
+
+  // with DCAY under the cursor the bank gets struck every 2 s: each band
+  // lights up to its shape and rings out in its own time (low bands longer,
+  // 8x slowed down to be seen); CHOKE cuts the ringing when the strike ends
+  const bool ping = view_cursor == DECAY;
+  const float t = (millis() % 2000) * 0.001f, held = 0.25f;
+  const float q = Q();
   for (int k = 0; k < BANDS; k++) {
     band_m[k] = std::max(sqrtf(std::min(1.0f, v.band[k] * 4.0f)), band_m[k] * 0.9f);
+    float lvl = band_m[k];
+    if (ping && coef[k] > 0.0f) {
+      float env = 1.0f;
+      if (t > held) {
+        const float tau = mode[DECAY] == 1 ? 0.03f
+            : constrain(8.0f * 2.0f * q / (coef[k] * AUDIO_SAMPLE_RATE_EXACT), 0.04f, 3.0f);
+        env = expf(-(t - held) / tau);
+      }
+      lvl = std::max(lvl, env * shape[k] / smax);
+    }
     const int bx = x + k * 2;
-    const int bh = int(band_m[k] * (h - 2));
+    const int bh = int(lvl * (h - 2));
     if (bh > 0) gfxLine(bx, y + h - 1, bx, y + h - 1 - bh);
   }
-  // the shape: a dot in every gap between the bars, so the bars never hide it
-  for (int k = 0; k + 1 < BANDS; k++) {
-    const float sv = 0.5f * (shape[k] + shape[k + 1]);
-    gfxPixel(x + k * 2 + 1, y + h - 1 - int(sv / smax * (h - 3)));
+  // the shape as a solid line from band to band
+  int py = 0;
+  for (int k = 0; k < BANDS; k++) {
+    const int sy = y + h - 1 - int(shape[k] / smax * (h - 3));
+    if (k) gfxLine(x + k * 2 - 2, py, x + k * 2, sy);
+    py = sy;
   }
   const int cx = x + int(cur[CUT] * 0.01f * (BANDS - 1)) * 2;
   gfxLine(cx - 2, y, cx + 2, y);
@@ -1219,6 +1240,12 @@ FLASHMEM void RingDevice::DrawViz(int x, int y, int w, int h) {
   const int mx = x + w - 14;
   gfxFrame(mx, y, 12, h);
   DrawVMeter(mx + 1, y + 1, 10, h - 2, out_m.v);
+  // PITCH left of the meter: a short line moving up and down, the middle
+  // (no shift) marked by a dot
+  const int pc = y + (h - 1) / 2;
+  gfxPixel(mx - 5, pc);
+  const int pyy = pc - cur[PITCH] * ((h - 3) / 2) / 24;
+  gfxLine(mx - 4, pyy, mx - 2, pyy);
 }
 
 FLASHMEM void RingDevice::DrawMini(int x, int y, int w, int h) {
