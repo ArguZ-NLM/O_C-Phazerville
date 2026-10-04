@@ -1224,22 +1224,19 @@ FLASHMEM void RingDevice::DrawViz(int x, int y, int w, int h) {
   // bank's shape drawn over them and the cutoff marked at the top
 
   // with DCAY under the cursor the bank gets struck every 2 s: each band
-  // lights up to its shape and rings out in its own time (low bands longer,
-  // 8x slowed down to be seen); CHOKE cuts the ringing when the strike ends
+  // jumps to its shape and rings out in its own time (low bands longer,
+  // 8x slowed down to be seen, never quicker than a short fade); CHOKE
+  // rings shorter, as the bank is damped once the strike is over
   const bool ping = view_cursor == DECAY;
-  const float t = (millis() % 2000) * 0.001f, held = 0.25f;
+  const float t = (millis() % 2000) * 0.001f;
   const float q = Q();
   for (int k = 0; k < BANDS; k++) {
     band_m[k] = std::max(sqrtf(std::min(1.0f, v.band[k] * 4.0f)), band_m[k] * 0.9f);
     float lvl = band_m[k];
     if (ping && coef[k] > 0.0f) {
-      float env = 1.0f;
-      if (t > held) {
-        const float tau = mode[DECAY] == 1 ? 0.03f
-            : constrain(8.0f * 2.0f * q / (coef[k] * AUDIO_SAMPLE_RATE_EXACT), 0.04f, 3.0f);
-        env = expf(-(t - held) / tau);
-      }
-      lvl = std::max(lvl, env * View(k));
+      float tau = constrain(8.0f * 2.0f * q / (coef[k] * AUDIO_SAMPLE_RATE_EXACT), 0.12f, 1.8f);
+      if (mode[DECAY] == 1) tau = std::min(tau, 0.12f);
+      lvl = std::max(lvl, expf(-t / tau) * View(k));
     }
     const int bx = x + k * 2;
     const int bh = int(lvl * (h - 2));
