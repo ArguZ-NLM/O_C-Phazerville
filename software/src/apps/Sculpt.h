@@ -73,6 +73,7 @@ namespace sculpt {
 
   struct Track {
     InputDevice* input = nullptr;
+    ReelDevice* reel = nullptr;    // SOURCE option 1: a looper after the input
     MixDevice* mix = nullptr;
     uint8_t choice[SLOT_COUNT] = {};
     uint8_t last_choice[SLOT_COUNT] = {}; // for the bypass toggle
@@ -89,7 +90,8 @@ namespace sculpt {
     Modulator* mod(int i) const { return mods[i][mod_type[i]]; }
 
     Device* current(int s) const {
-      return s == SOURCE ? static_cast<Device*>(input) : inst[s][choice[s]];
+      if (s == SOURCE) return choice[SOURCE] && reel ? static_cast<Device*>(reel) : input;
+      return inst[s][choice[s]];
     }
     bool bypassed(int s) const { return s < SLOT_COUNT && (bypass >> s & 1); }
     bool shown_bypassed(int c) const { return bypass >> c & 1; } // incl. OUT
@@ -203,6 +205,11 @@ FLASHMEM void AppSculpt::Start() {
     tr.input->Defaults();
     tr.input->val[0] = t ? InputDevice::IN2 : InputDevice::IN1;
     tr.input->ApplyAll();
+    tr.reel = new ReelDevice(tr.input);
+    tr.reel->mod_bus = tr.mod_out;
+    tr.reel->Defaults();
+    tr.reel->val[ReelDevice::IN] = tr.input->val[0];
+    tr.reel->ApplyAll();
     for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
       if (s == ECHO) tr.gate = new SculptGate;
       for (int o = 0; o < SLOT_DEFS[s].noptions; o++) {
@@ -254,6 +261,10 @@ FLASHMEM void AppSculpt::Repatch(int t) {
   for (auto& c : patch->to_mix[t]) c.disconnect();
   for (auto& c : patch->mix_out[t]) c.disconnect();
   AudioStream* prev = tr.input;
+  if (tr.choice[SOURCE] && tr.reel) {  // REEL records and plays after the input
+    for (int c = 0; c < 2; c++) link[SOURCE][c].connect(*tr.input, c, *tr.reel->in(), c);
+    prev = tr.reel->out();
+  }
   for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
     Device* d = tr.current(s);
     if (!d || !d->in()) continue;
@@ -328,7 +339,7 @@ FLASHMEM void AppSculpt::ConnectTrack(int t) {
   for (int c = 0; c < 2; c++)
     patch->in[t][c].connect(OC::AudioIO::InputStream(), c, *tracks[t].input, c);
   AudioInterrupts();
-  for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
+  for (int s = SOURCE; s < SLOT_COUNT; s++) {
     if (Device* d = tracks[t].current(s)) d->Activate();
   }
   Repatch(t);
@@ -343,7 +354,7 @@ FLASHMEM void AppSculpt::DisconnectTrack(int t) {
   for (auto& c : patch->mix_out[t]) c.disconnect();
   AudioInterrupts();
   // disconnected devices stop updating; now they can drop their buffers
-  for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
+  for (int s = SOURCE; s < SLOT_COUNT; s++) {
     if (Device* d = tracks[t].current(s)) d->Deactivate();
   }
 }
@@ -442,6 +453,13 @@ FLASHMEM void AppSculpt::ToggleLink() {
   // the track under the cursor is the master: copy it to the other one
   Track& a = tracks[master];
   Track& b = tracks[1 - master];
+  SetChoice(1 - master, SOURCE, a.choice[SOURCE]);
+  if (a.reel && b.reel) {
+    const int16_t keep_in = b.reel->val[ReelDevice::IN];  // the input stays per track
+    b.reel->CopyFrom(*a.reel);
+    b.reel->val[ReelDevice::IN] = keep_in;
+    b.reel->ApplyAll();
+  }
   for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
     SetChoice(1 - master, s, a.choice[s]);
     b.last_choice[s] = a.last_choice[s];
@@ -752,8 +770,8 @@ FLASHMEM void AppSculpt::OnEncoder(const UI::Event &event) {
     } else if (col == MIX_COL) {
       tracks[track].mix->Nudge(0, dir); // level
       Mirror(tracks[track].mix, 0);
-    } else if (col > SOURCE) {
-      SetChoiceLinked(col, tracks[track].choice[col] + dir);
+    } else {
+      SetChoiceLinked(col, tracks[track].choice[col] + dir);  // SOURCE: INPUT / REEL
     }
     return;
   }
@@ -867,7 +885,7 @@ FLASHMEM void AppSculpt::DrawChain() const {
   const Track& tr = tracks[track];
   Device* d = tr.at(col);
   if (!linked) gfxPrint(0, 56, track ? PSTR("R") : PSTR("L"));
-  // the slot name; SOURCE names its source (INPUT, later a looper)
+  // the slot name; SOURCE names its source (INPUT or REEL)
   gfxPrint(8, 56, col == MIX_COL ? PSTR("OUTPUT")
                   : col == SOURCE && d ? d->def.name : SLOT_DEFS[col].name);
   // bypass (when on) at the right end; the CPU load always left of its place
@@ -1141,6 +1159,7 @@ FLASHMEM void AppSculpt::ForEachDevice(F f) const {
   if (tempo_clock) f(tempo_clock);
   for (auto& tr : tracks) {
     f(tr.input);
+    if (tr.reel) f(tr.reel);
     f(tr.mix);
     for (int s = SOURCE + 1; s < SLOT_COUNT; s++)
       for (auto d : tr.inst[s]) if (d) f(d);
@@ -1176,6 +1195,8 @@ FLASHMEM void AppSculpt::SaveFile() const {
   f.write(ui, sizeof(ui));
   // bypassed slots (older files end before)
   for (auto& tr : tracks) f.write(&tr.bypass, 1);
+  // REEL's settings (older files end before); the recording isn't kept
+  for (auto& tr : tracks) WriteDevice(f, tr.reel);
   f.close();
   fs.remove(SAVE_FILE);
   fs.rename(SAVE_TMP, SAVE_FILE);
@@ -1200,6 +1221,7 @@ FLASHMEM void AppSculpt::LoadFile() {
     uint8_t choice[SLOT_COUNT], last[SLOT_COUNT], types[NUM_MODS];
     ok = f.read(choice, SLOT_COUNT) == SLOT_COUNT && f.read(last, SLOT_COUNT) == SLOT_COUNT;
     if (!ok) break;
+    tr.choice[SOURCE] = choice[SOURCE] < SLOT_DEFS[SOURCE].noptions ? choice[SOURCE] : 0;
     for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
       tr.choice[s] = choice[s] < SLOT_DEFS[s].noptions ? choice[s] : 0;
       tr.last_choice[s] = last[s] < SLOT_DEFS[s].noptions ? last[s] : 0;
@@ -1230,6 +1252,7 @@ FLASHMEM void AppSculpt::LoadFile() {
       uint8_t b = 0;
       if (f.read(&b, 1) == 1) tr.bypass = b & ~1;  // SOURCE can't be bypassed
     }
+    for (auto& tr : tracks) if (!ReadDevice(f, tr.reel)) break;
   }
   f.close();
   linked = lk;

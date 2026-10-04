@@ -34,6 +34,7 @@
 #include "../Audio/AudioEffectBandz.h"
 #include "../Audio/AudioEffectResonator.h"
 #include "../Audio/AudioEffectClouds.h"
+#include "../Audio/AudioEffectReel.h"
 
 namespace sculpt {
 
@@ -817,6 +818,158 @@ FLASHMEM void InputDevice::DrawMini(int x, int y, int w, int h) {
   const int bw = (w - 3) / 2;
   if (cur[0] == STEREO || cur[0] == IN1) DrawVMeter(x, y, bw, h, cur[0] == STEREO ? meters[0].v : std::max(meters[0].v, meters[1].v));
   if (cur[0] == STEREO || cur[0] == IN2) DrawVMeter(x + w - bw, y, bw, h, cur[0] == STEREO ? meters[1].v : std::max(meters[0].v, meters[1].v));
+}
+
+/////////////////////////////////////////////////////////////////
+// REEL (Source): a looper in front of the chain. It records what comes in
+// through the track's input; IN is the input's source, so it is set here too.
+/////////////////////////////////////////////////////////////////
+PROGMEM static const DeviceDef REEL_DEF = {
+  "REEL", "REL", 7, {"REC", "CLR"},
+  {
+    {"IN", 0, 3, 1, LIST, 4, 0, 0, {"L+R", "L", "R", "OFF"}},
+    {"SPEED", -200, 200, 100, BI},
+    {"START", 0, 100, 0, UNI},
+    {"LEN", 1, 100, 100, UNI},
+    {"DUB", 0, 100, 80, UNI},  // how much of the old loop stays when overdubbing
+    {"MON", 0, 100, 100, UNI}, // the live input passed through
+    {"LEVEL", 0, 100, 100, UNI},
+  },
+  {"", ""},
+};
+
+class ReelDevice : public Device {
+public:
+  enum { IN, SPEED, START, LEN, DUB, MON, LEVEL };
+  static constexpr float MAX_SECS = 16.0f;
+  explicit ReelDevice(InputDevice* i) : Device(REEL_DEF), input(i) {}
+  AudioStream* in() override { return &fx; }
+  AudioStream* out() override { return &fx; }
+  bool Activate() override;
+  void Deactivate() override;
+  bool ok() const override { return fx.ready(); }
+  void Apply(int p) override;
+  void Format(int p, char* buf, size_t n) const override;
+  void Action(int a) override;
+  bool ActionLit(int a) const override;
+  void DrawViz(int x, int y, int w, int h) override;
+  void DrawMini(int x, int y, int w, int h) override;
+  void CpuMax(float parts[2]) override {
+    parts[0] = fx.processorUsageMax();
+    parts[1] = 0.0f;
+    fx.processorUsageMaxReset();
+  }
+private:
+  AudioEffectReel fx;
+  InputDevice* input;
+};
+
+// called while the stream is not patched in
+FLASHMEM bool ReelDevice::Activate() {
+  if (active) return fx.ready();
+  fx.Acquire(MAX_SECS);
+  ApplyAll();
+  active = true;
+  return fx.ready();
+}
+
+FLASHMEM void ReelDevice::Deactivate() {
+  if (!active) return;
+  fx.Release();
+  active = false;
+}
+
+FLASHMEM void ReelDevice::Apply(int p) {
+  const float v = cur[p] * 0.01f;
+  switch (p) {
+    case IN:
+      if (input) { input->val[0] = cur[IN]; input->Refresh(0); }
+      break;
+    case SPEED: fx.SetSpeed(v); break;
+    case START: case LEN: fx.SetWindow(cur[START] * 0.01f, cur[LEN] * 0.01f); break;
+    case DUB:   fx.SetDub(v); break;
+    case MON:   fx.SetMonitor(v); break;
+    case LEVEL: fx.SetLevel(v); break;
+  }
+}
+
+FLASHMEM void ReelDevice::Format(int p, char* buf, size_t n) const {
+  if (p == SPEED || p == START || p == LEN) snprintf(buf, n, "%d%%", val[p]);
+  else Device::Format(p, buf, n);
+}
+
+// A: REC -> PLAY -> DUB -> PLAY; B: stop and clear
+FLASHMEM void ReelDevice::Action(int a) {
+  if (a == 0) fx.Press();
+  else fx.Clear();
+}
+
+FLASHMEM bool ReelDevice::ActionLit(int a) const {
+  const auto st = fx.state();
+  return a == 0 && (st == AudioEffectReel::REC || st == AudioEffectReel::DUB);
+}
+
+// the loop as a waveform, the looping part (START / LEN) bracketed, the
+// play head running through it; REC / DUB in the corner
+FLASHMEM void ReelDevice::DrawViz(int x, int y, int w, int h) {
+  if (!fx.ready()) {
+    gfxPrint(x + 22, y + h / 2 - 4, PSTR("out of memory"));
+    return;
+  }
+  const int base = y + h - 1, cy = y + h / 2;
+  const auto st = fx.state();
+  if (st == AudioEffectReel::EMPTY) {
+    gfxDottedLine(x, cy, x + w - 1, cy, 2);
+    gfxPrint(x + w / 2 - 21, cy - 12, PSTR("A: REC"));
+    return;
+  }
+  constexpr int HIST = AudioEffectReel::HIST;
+  uint8_t hist[HIST];
+  fx.ReadHistory(hist);
+  for (int k = 0; k < HIST; k++) {
+    const int cx = x + k * w / HIST;
+    const int a = int(sqrtf(hist[k] / 255.0f) * (h / 2 - 1));
+    gfxLine(cx, cy - a, cx, cy + a);
+  }
+  if (st != AudioEffectReel::REC) {
+    float a, b;
+    fx.Window(a, b);
+    const int wl = x + int(a * (w - 1)), wr = x + int(std::min(b, 1.0f) * (w - 1));
+    for (int px = wl; px <= wr; px++) { gfxPixel(px, y); gfxPixel(px, base); }
+    for (int k = 1; k < 5; k++) {
+      gfxPixel(wl, y + k); gfxPixel(wr, y + k);
+      gfxPixel(wl, base - k); gfxPixel(wr, base - k);
+    }
+  }
+  // the head: recording at the end of what is there, playing in the loop
+  const int hx = constrain(x + int(fx.HeadPos() * (w - 1)), x, x + w - 1);
+  const int cl = std::max(x, hx - 1), cr = std::min(x + w - 1, hx + 1);
+  graphics.clearRect(cl, y + 1, cr - cl + 1, h - 2);
+  gfxLine(hx, y + 1, hx, base - 1);
+  if (st == AudioEffectReel::REC || st == AudioEffectReel::DUB) {
+    const bool rec = st == AudioEffectReel::REC;
+    if (!rec || (millis() / 300) % 2) {
+      graphics.clearRect(x + w - 27, y, 27, 9);
+      gfxPrint(x + w - 25, y + 1, rec ? PSTR("REC") : PSTR("DUB"));
+      gfxInvert(x + w - 26, y, 20, 9);
+    }
+  }
+}
+
+FLASHMEM void ReelDevice::DrawMini(int x, int y, int w, int h) {
+  const auto st = fx.state();
+  const int cy = y + h / 2;
+  if (st == AudioEffectReel::EMPTY) { gfxDottedLine(x, cy, x + w - 1, cy, 2); return; }
+  constexpr int HIST = AudioEffectReel::HIST;
+  uint8_t hist[HIST];
+  fx.ReadHistory(hist);
+  for (int i = 0; i < w; i++) {
+    const int a = int(sqrtf(hist[i * HIST / w] / 255.0f) * (h / 2));
+    gfxLine(x + i, cy - a, x + i, cy + a);
+  }
+  const int hx = constrain(x + int(fx.HeadPos() * (w - 1)), x, x + w - 1);
+  gfxInvert(hx, y, 1, h);
+  if (st == AudioEffectReel::REC && (millis() / 300) % 2) gfxInvert(x, y, w, h);
 }
 
 /////////////////////////////////////////////////////////////////
@@ -1670,7 +1823,7 @@ struct SlotDef {
 };
 
 PROGMEM static const SlotDef SLOT_DEFS[SLOT_COUNT] = {
-  {"SOURCE",   "SRC", 1, 3},  // INPUT (a looper to come)
+  {"SOURCE",   "SRC", 2, 2},  // INPUT, REEL (owned by the track, not made here)
   {"SPRAY",    "SPR", 2, 1},  // BYPASS, SPRAY
   {"RESONATOR", "RES", 2, 1},  // BYPASS, RESONATOR
   {"TEXTURE",  "TEX", 2, 1},  // BYPASS, TEXTURE
