@@ -795,15 +795,14 @@ FLASHMEM void AppSculpt::DrawChain() const {
   const Track& tr = tracks[track];
   Device* d = tr.at(col);
   if (!linked) gfxPrint(0, 56, track ? PSTR("R") : PSTR("L"));
-  gfxPrint(8, 56, col == MIX_COL ? PSTR("OUTPUT") : SLOT_DEFS[col].name);
+  // the slot name; MATERIAL names its source (INPUT, later TAPE / DISC)
+  gfxPrint(8, 56, col == MIX_COL ? PSTR("OUTPUT")
+                  : col == MATERIAL && d ? d->def.name : SLOT_DEFS[col].name);
   // bypass (when on) at the right end; the CPU load always left of its place
   const bool bp = !d || tr.shown_bypassed(col);
   const int right = 128 - 6 * 6 - 6;
   if (bp) {
     gfxPrint(128 - 6 * 6, 56, PSTR("bypass"));
-  } else if (col < MIX_COL && SLOT_DEFS[col].planned > 1 && strcmp(d->def.name, SLOT_DEFS[col].name)) {
-    // the device name only where the slot offers a choice (MATERIAL)
-    gfxPrint(62, 56, d->def.name);
   }
   if (!audio_hw()) {
     gfxPrint(right - 24, 56, PSTR("noIO"));
