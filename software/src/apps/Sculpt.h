@@ -88,6 +88,7 @@ namespace sculpt {
       return s == MATERIAL ? static_cast<Device*>(input) : inst[s][choice[s]];
     }
     bool bypassed(int s) const { return s < SLOT_COUNT && (bypass >> s & 1); }
+    bool shown_bypassed(int c) const { return bypass >> c & 1; } // incl. OUT
     Device* at(int col) const {
       return col == MIX_COL ? mix : current(col);
     }
@@ -753,7 +754,7 @@ FLASHMEM void AppSculpt::DrawChain() const {
       const int x = x0 + c * bw;
       const Track& tr = tracks[t];
       Device* d = tr.at(c);
-      if (tr.bypassed(c)) d = nullptr;  // drawn like an empty slot
+      if (tr.shown_bypassed(c)) d = nullptr;  // drawn like an empty slot
       if (d) gfxFrame(x, y, bw + 1, bh);
       else gfxFrame(x, y, bw + 1, bh, true);
 
@@ -771,7 +772,7 @@ FLASHMEM void AppSculpt::DrawChain() const {
         }
       }
 
-      const char* tag = c == MIX_COL ? PSTR("OUT") : d ? SLOT_DEFS[c].tag : PSTR("BP");
+      const char* tag = !d ? PSTR("BP") : c == MIX_COL ? PSTR("OUT") : SLOT_DEFS[c].tag;
       const int cells = 6 * int(strlen(tag));
       gfxPrint(x + 1 + (bw - 1 - cells) / 2, y + 9, tag);
       if (d) {
@@ -796,7 +797,7 @@ FLASHMEM void AppSculpt::DrawChain() const {
   if (!linked) gfxPrint(0, 56, track ? PSTR("R") : PSTR("L"));
   gfxPrint(8, 56, col == MIX_COL ? PSTR("OUTPUT") : SLOT_DEFS[col].name);
   // bypass (when on) at the right end; the CPU load always left of its place
-  const bool bp = !d || tr.bypassed(col);
+  const bool bp = !d || tr.shown_bypassed(col);
   const int right = 128 - 6 * 6 - 6;
   if (bp) {
     gfxPrint(128 - 6 * 6, 56, PSTR("bypass"));
