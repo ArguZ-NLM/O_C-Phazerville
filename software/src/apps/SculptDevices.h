@@ -1221,17 +1221,16 @@ FLASHMEM void DeformDevice::DrawViz(int x, int y, int w, int h) {
   DrawVMeter(gx + 8, y + 1, 4, h - 2, out_m.v);
 }
 
-// the fold picture in small, a sine running through it
+// the fold picture in small, standing still like on the page
 FLASHMEM void DeformDevice::DrawMini(int x, int y, int w, int h) {
   Poll();
   const float drv = cur[DRIVE] * 0.01f, crs = cur[CRUSH] * 0.01f, fld = cur[FOLD] * 0.01f;
   const bool bits = crs > 0.0f && mode[CRUSH] != AudioEffectDeform::CRUSH_REDUX;
   const int levels = bits ? std::max(2, 1 << std::min(3, AudioEffectDeform::CrushBits(crs) - 12)) : 0;
-  const float run = millis() * 0.004f;
   const int cy = y + h / 2, lim = h / 2;
   int py = -1;
   for (int i = 0; i < w; i++) {
-    const float in = sinf(2.0f * float(M_PI) * i / w + run);
+    const float in = sinf(2.0f * float(M_PI) * i / (w - 1));
     float yo = AudioEffectDeform::Shape(AudioEffectDeform::Fold(in, fld), drv);
     if (levels) yo = roundf(yo * levels) / levels;
     const int yy = cy - int(constrain(yo, -1.0f, 1.0f) * lim);

@@ -795,17 +795,13 @@ FLASHMEM void AppSculpt::DrawChain() const {
       if (d) gfxFrame(x, y, bw + 1, bh);
       else gfxFrame(x, y, bw + 1, bh, true);
 
-      // the slot's name at the top, its device's little picture underneath
-      // (BP and a plain wire when bypassed)
-      const char* tag = !d ? PSTR("BP") : c == MIX_COL ? PSTR("OUT") : SLOT_DEFS[c].tag;
-      const int cells = 6 * int(strlen(tag));
-      gfxPrint(x + 1 + (bw - 1 - cells) / 2, y + 3, tag);
-      if (d) {
-        if (d->ok()) d->DrawMini(x + 2, y + 13, bw - 3, 10);
-        else gfxPrint(x + 5, y + 14, PSTR("!!"));
-      } else {
-        gfxLine(x + 4, y + 18, x + bw - 4, y + 18);
-      }
+      // the slot's name at the top, always; underneath its device's little
+      // picture, or BP when bypassed
+      const char* tag = c == MIX_COL ? PSTR("OUT") : SLOT_DEFS[c].tag;
+      gfxPrint(x + 1 + (bw - 1 - 6 * int(strlen(tag))) / 2, y + 3, tag);
+      if (!d) gfxPrint(x + 1 + (bw - 1 - 12) / 2, y + 14, PSTR("BP"));
+      else if (d->ok()) d->DrawMini(x + 2, y + 13, bw - 3, 10);
+      else gfxPrint(x + 5, y + 14, PSTR("!!"));
       if (t == track && c == col) gfxInvert(x + 1, y + 1, bw - 1, bh - 2);
     }
   }
