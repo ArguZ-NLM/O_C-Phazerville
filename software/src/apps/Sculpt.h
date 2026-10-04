@@ -77,6 +77,8 @@ namespace sculpt {
     uint8_t choice[SLOT_COUNT] = {};
     uint8_t last_choice[SLOT_COUNT] = {}; // for the bypass toggle
     uint8_t bypass = 0;  // bit per slot (+ MIX_COL: its band stage): passed around
+    uint8_t parked = 0;  // bit per slot: bypassed and unpatched (no CPU)
+    uint32_t park_at[SLOT_COUNT] = {};  // when a bypassed device gets parked
     Device* inst[SLOT_COUNT][MAX_OPTIONS] = {};
     SculptFade* fade[SLOT_COUNT] = {};  // after each effect slot: bypass fade
     SculptGate* gate = nullptr;         // before SPACE: its tail rings out
@@ -173,6 +175,7 @@ private:
   void Mirror(sculpt::Device* d, int p) const;
   void Repatch(int t);
   void ApplyBypass(int t);
+  void ParkBypassed(int t);
   void ConnectTrack(int t);
   void DisconnectTrack(int t);
   void ToggleLink();
@@ -254,8 +257,14 @@ FLASHMEM void AppSculpt::Repatch(int t) {
   for (int s = MATERIAL + 1; s < SLOT_COUNT; s++) {
     Device* d = tr.current(s);
     if (!d || !d->in()) continue;
-    // bypassed slots stay patched; their fade picks dry or wet
+    // bypassed slots stay patched while their fade (or tail) runs; parked
+    // ones only pass the dry signal through the fade
     AudioConnection* l = link[s];
+    if (tr.parked >> s & 1) {
+      for (int c = 0; c < 2; c++) (l++)->connect(*prev, c, *tr.fade[s], c);
+      prev = tr.fade[s];
+      continue;
+    }
     AudioStream* feed = prev;
     if (s == SPACE && tr.gate) {
       for (int c = 0; c < 2; c++) (l++)->connect(*prev, c, *tr.gate, c);
@@ -304,6 +313,8 @@ FLASHMEM void AppSculpt::SetChoice(int t, int s, int option) {
   Device* old = tr.current(s);
   tr.choice[s] = option;
   if (option) tr.last_choice[s] = option;
+  tr.parked &= ~(1 << s);  // a new device starts patched; parks again if bypassed
+  tr.park_at[s] = millis() + 40;
   if (!active) return;
   Device* now = tr.current(s);
   if (now) now->Activate();
@@ -382,14 +393,43 @@ FLASHMEM void AppSculpt::SetChoiceLinked(int s, int option) {
 
 // one-click bypass of a slot: the device stays (and keeps its settings and
 // page) but the track's audio goes around it
+// unpatch devices that have been bypassed long enough (fade done, tail rung
+// out), so they stop using CPU
+FLASHMEM void AppSculpt::ParkBypassed(int t) {
+  using namespace sculpt;
+  Track& tr = tracks[t];
+  uint8_t fresh = 0;
+  for (int s = MATERIAL + 1; s < SLOT_COUNT; s++) {
+    const uint8_t bit = 1 << s;
+    if (!(tr.bypass & bit) || (tr.parked & bit) || !tr.current(s)) continue;
+    if (int32_t(millis() - tr.park_at[s]) < 0) continue;
+    fresh |= bit;
+  }
+  if (!fresh) return;
+  tr.parked |= fresh;
+  Repatch(t);
+  for (int s = MATERIAL + 1; s < SLOT_COUNT; s++)
+    if (fresh >> s & 1) tr.current(s)->Parked();
+}
+
 FLASHMEM void AppSculpt::ToggleBypass(int s) {
   using namespace sculpt;
   const uint8_t bit = 1 << s;
   const bool on = !(tracks[track].bypass & bit);
   for (int t = 0; t < NUM_TRACKS; t++) {
     if (t != track && !linked) continue;
-    if (on) tracks[t].bypass |= bit;
-    else tracks[t].bypass &= ~bit;
+    Track& tr = tracks[t];
+    if (on) {
+      tr.bypass |= bit;
+      const Device* d = s < SLOT_COUNT ? tr.current(s) : nullptr;
+      tr.park_at[s < SLOT_COUNT ? s : 0] = millis() + (d ? d->TailMs() : 0);
+    } else {
+      tr.bypass &= ~bit;
+      if (tr.parked & bit) {  // back in the chain before it fades in
+        tr.parked &= ~bit;
+        Repatch(t);
+      }
+    }
     if (active) ApplyBypass(t);
   }
 }
@@ -413,6 +453,9 @@ FLASHMEM void AppSculpt::ToggleLink() {
     }
   }
   b.bypass = a.bypass;
+  b.parked = 0;
+  for (auto& at : b.park_at) at = millis() + 40;
+  Repatch(1 - master);
   if (active) ApplyBypass(1 - master);
   for (int i = 0; i < NUM_MODS; i++) {
     SetModType(1 - master, i, a.mod_type[i]);
@@ -543,7 +586,10 @@ FLASHMEM void AppSculpt::MainLoop() {
   if (active && mod_timer >= 1000) { // follow the sources about once per ms
     mod_timer = 0;
     ModulateAll();
-    for (int t = 0; t < sculpt::NUM_TRACKS; t++) ApplyBypass(t);  // follows MOSAIC LEVEL
+    for (int t = 0; t < sculpt::NUM_TRACKS; t++) {
+      ApplyBypass(t);  // follows MOSAIC LEVEL
+      ParkBypassed(t);
+    }
   }
   if (!active || stats_timer < 1000) return;
   stats_timer = 0;

@@ -171,6 +171,10 @@ public:
   // is the device's own stream, parts[1] anything it owns (e.g. delay lines)
   virtual void CpuMax(float parts[2]) { parts[0] = parts[1] = 0.0f; }
   virtual void TempoChanged() {}
+  // bypassed devices are unpatched (no CPU) once this long has passed, so
+  // a tail can ring out first; Parked() runs then, with the stream idle
+  virtual uint32_t TailMs() const;
+  virtual void Parked() {}
 
   void Defaults();
   void ApplyAll();
@@ -846,6 +850,8 @@ public:
   void DrawMini(int x, int y, int w, int h) override;
   void CpuMax(float parts[2]) override;
   void TempoChanged() override { if (mode[TIME] != SYNC_FREE) SetTimes(); }
+  uint32_t TailMs() const override;
+  void Parked() override { if (mem_ok) vast.Reset(); }  // no old tail on return
 
 private:
   AudioEffectVast vast;
@@ -880,6 +886,16 @@ FLASHMEM void VastDevice::Deactivate() {
   if (!active) return;
   vast.Release();
   active = false;
+}
+
+FLASHMEM uint32_t Device::TailMs() const { return 40; }
+
+// the reverb's decay plus a few rounds of echoes; frozen: never
+FLASHMEM uint32_t VastDevice::TailMs() const {
+  if (vast.frozen()) return UINT32_MAX;
+  const float decay = 0.3f * powf(60.0f, cur[DECAY] * 0.01f);
+  const float echoes = tap_secs[0][TAPS - 1] * (1.0f + 8.0f * cur[FEEDBACK] * 0.01f);
+  return uint32_t((decay + echoes) * 1000.0f) + 200;
 }
 
 FLASHMEM void VastDevice::CpuMax(float parts[2]) {
