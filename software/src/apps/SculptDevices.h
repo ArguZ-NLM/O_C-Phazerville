@@ -1584,9 +1584,9 @@ FLASHMEM void SprayDevice::DrawViz(int x, int y, int w, int h) {
   const int head = fx.ReadHistory(hist);
   auto col_x = [&](int k) { return x + ((k % HIST + HIST) % HIST) * w / HIST; };
   // MIX makes it see-through: solid with only the source heard (0), thinner
-  // as the grains take over, a faint dot pattern at 100
+  // as the grains take over, gone at 100
   static const uint8_t wave_bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
-  const int wave_fill = 16 - cur[LEVEL] * 13 / 100;  // 16 .. 3 of 16
+  const int wave_fill = 16 - cur[LEVEL] * 16 / 100;  // 16 .. 0 of 16
   for (int k = 0; k < HIST; k++) {
     const int a = int(sqrtf(hist[k] / 255.0f) * (h / 2 - 1));
     const int cx = col_x(k);
