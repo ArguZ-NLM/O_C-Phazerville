@@ -105,8 +105,8 @@ private:
   }
 };
 
-// Runs from flash like the other Sculpt engines (RAM1 is full).
-FLASHMEM void AudioEffectDirt::update() {
+// Runs from RAM1 (ITCM) like the other Sculpt engines.
+FASTRUN void AudioEffectDirt::update() {
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   audio_block_t* out[2] = {allocate(), allocate()};
   if (!out[0] || !out[1]) {

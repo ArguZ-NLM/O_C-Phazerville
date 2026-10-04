@@ -82,8 +82,8 @@ private:
   }
 };
 
-// Runs from flash like the other Sculpt engines (RAM1 is full).
-FLASHMEM void AudioEffectBandz::update() {
+// Runs from RAM1 (ITCM) like the other Sculpt engines.
+FASTRUN void AudioEffectBandz::update() {
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   // bypass fades over ~15 ms; nothing to do once it is all the way out
   const float mix_to = bypass ? 0.0f : 1.0f;

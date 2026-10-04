@@ -21,8 +21,8 @@
 // Devices for the Sculpt app.
 //
 // A device is a stereo audio stage with up to 8 parameters (2 pages of 4),
-// up to 2 actions (UP / DOWN buttons) and a picture. Everything here runs
-// from flash and keeps its tables in flash: RAM1 is full in T41_audio.
+// up to 2 actions (UP / DOWN buttons) and a picture. The audio updates run
+// from RAM1 (ITCM); the UI code runs from flash.
 // Devices are created on first use and never deleted (Teensy audio streams
 // can't be removed from the update list); a device that is not in a chain is
 // disconnected, so it costs no CPU, and has released its buffers.
@@ -338,7 +338,7 @@ private:
   audio_block_t* queue[4];
 };
 
-FLASHMEM void SculptMixer::update() {
+FASTRUN void SculptMixer::update() {
   audio_block_t* in[4];
   for (int i = 0; i < 4; i++) in[i] = receiveReadOnly(i);
   audio_block_t* out[2] = {allocate(), allocate()};
@@ -379,7 +379,7 @@ FLASHMEM void SculptMixer::update() {
 /////////////////////////////////////////////////////////////////
 constexpr float FADE_STEP = 1.0f / (0.015f * AUDIO_SAMPLE_RATE_EXACT);
 
-FLASHMEM static float Glide(float g, float to) {
+static inline float Glide(float g, float to) {
   return to > g ? std::min(to, g + FADE_STEP) : std::max(to, g - FADE_STEP);
 }
 
@@ -394,7 +394,7 @@ private:
   float g_dry = 0.0f, g_wet = 1.0f;
 };
 
-FLASHMEM void SculptFade::update() {
+FASTRUN void SculptFade::update() {
   audio_block_t* in[4];
   for (int i = 0; i < 4; i++) in[i] = receiveReadOnly(i);
   const float td = to_dry, tw = to_wet;
@@ -435,7 +435,7 @@ private:
   float g = 1.0f;
 };
 
-FLASHMEM void SculptGate::update() {
+FASTRUN void SculptGate::update() {
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   const float t = to;
   if (g == t && (t == 0.0f || t == 1.0f)) {
@@ -731,7 +731,7 @@ FLASHMEM void InputDevice::Apply(int p) {
   }
 }
 
-FLASHMEM void InputDevice::update() {
+FASTRUN void InputDevice::update() {
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   audio_block_t* out[2] = {allocate(), allocate()};
   if (out[0] && out[1]) {

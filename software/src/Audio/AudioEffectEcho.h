@@ -224,9 +224,8 @@ FLASHMEM void AudioEffectEcho::ReadTap(int ch, int t, int16_t* out) {
   if (tp.phase >= XFADE) tp.cur = tp.next;
 }
 
-// Runs from flash: RAM1 is full in the T41_audio build. It stays in the
-// I-cache while Sculpt is running.
-FLASHMEM void AudioEffectEcho::update() {
+// Runs from RAM1 (ITCM) like the other Sculpt engines.
+FASTRUN void AudioEffectEcho::update() {
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   audio_block_t* out[2] = {allocate(), allocate()};
   if (!out[0] || !out[1] || !ready()) {

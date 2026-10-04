@@ -165,7 +165,7 @@ private:
 };
 
 // The hot loop. Built for speed (the project is built for size, which leaves the per-sample
-// helpers as calls), from flash: the loop stays in the I-cache.
+// helpers as calls), from RAM1 (ITCM).
 static inline __attribute__((always_inline)) float CloudsHermite(
     float xm1, float x0, float x1, float x2, float t) {
     const float c = (x1 - xm1) * 0.5f;
@@ -177,7 +177,7 @@ static inline __attribute__((always_inline)) float CloudsHermite(
 }
 
 __attribute__((optimize("O2")))
-FLASHMEM void AudioEffectClouds::update() {
+FASTRUN void AudioEffectClouds::update() {
     audio_block_t* in[MAX_CHANNELS]  = {};
     audio_block_t* out[MAX_CHANNELS] = {};
     bool ok = true;

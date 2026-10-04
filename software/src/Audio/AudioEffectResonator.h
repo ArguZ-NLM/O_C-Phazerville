@@ -60,8 +60,8 @@ private:
   float x[AUDIO_BLOCK_SAMPLES], dmp[AUDIO_BLOCK_SAMPLES], sum[2][AUDIO_BLOCK_SAMPLES];
 };
 
-// Runs from flash like the other Sculpt engines (RAM1 is full).
-FLASHMEM void AudioEffectResonator::update() {
+// Runs from RAM1 (ITCM) like the other Sculpt engines.
+FASTRUN void AudioEffectResonator::update() {
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   audio_block_t* out[2] = {allocate(), allocate()};
   if (!out[0] || !out[1]) {
