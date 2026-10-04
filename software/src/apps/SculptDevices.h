@@ -913,7 +913,7 @@ FLASHMEM void VastDevice::DrawMini(int x, int y, int w, int h) {
 // DEFORM (Color): drive, compress, crush, tilt, envelope-following noise
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef DEFORM_DEF = {
-  "DEFORM", "DEF", 8, {"", ""},
+  "COLOR", "DEF", 8, {"", ""},  // DEFORM; the tag stays DEF: saved files use it
   {
     {"DRIVE", 0, 100, 30, UNI},
     {"FOLD", 0, 100, 0, UNI},
