@@ -675,7 +675,7 @@ FLASHMEM void MixDevice::DrawMini(int x, int y, int w, int h) {
 }
 
 /////////////////////////////////////////////////////////////////
-// INPUT (Feed): picks the track's source from the audio inputs
+// INPUT (Source): picks the track's source from the audio inputs
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef INPUT_DEF = {
   "INPUT", "IN", 3, {"", ""},
@@ -813,7 +813,7 @@ FLASHMEM void InputDevice::DrawMini(int x, int y, int w, int h) {
 // ECHO: hybrid delay + reverb
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef ECHO_DEF = {
-  "ECHO", "ECH", 8, {"FRZ", "CLR"},
+  "ECHO", "ECO", 8, {"FRZ", "CLR"},
   {
     // page 1: the delay, page 2: the reverb and TONE
     {"LEVEL", 0, 100, 40, UNI},  // the delay's
@@ -1073,10 +1073,10 @@ FLASHMEM void EchoDevice::DrawMini(int x, int y, int w, int h) {
 }
 
 /////////////////////////////////////////////////////////////////
-// DIRT: fold, drive, crush, tilt, envelope-following noise
+// TEXTURE: fold, drive, crush, tilt, envelope-following noise
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef DIRT_DEF = {
-  "DIRT", "DRT", 8, {"", ""},
+  "TEXTURE", "TEX", 8, {"", ""},
   {
     {"DRIVE", 0, 100, 30, UNI},
     {"FOLD", 0, 100, 0, UNI},
@@ -1583,29 +1583,29 @@ FLASHMEM void SprayDevice::DrawMini(int x, int y, int w, int h) {
 /////////////////////////////////////////////////////////////////
 // Slot catalogue, in chain order. Option 0 of the effect slots is BYPASS.
 /////////////////////////////////////////////////////////////////
-enum Slot : uint8_t { FEED, SPRAY, RESONATOR, DIRT, ECHO, SLOT_COUNT };
+enum Slot : uint8_t { SOURCE, SPRAY, RESONATOR, TEXTURE, ECHO, SLOT_COUNT };
 constexpr int MAX_OPTIONS = 2;
 
 struct SlotDef {
   char name[10];
   char tag[4];
-  uint8_t noptions;  // BYPASS + devices that exist now (FEED: no bypass)
+  uint8_t noptions;  // BYPASS + devices that exist now (SOURCE: no bypass)
   uint8_t planned;   // devices this slot will offer (dots on the chain view)
 };
 
 PROGMEM static const SlotDef SLOT_DEFS[SLOT_COUNT] = {
-  {"FEED",     "FED", 1, 3},  // INPUT (a looper to come)
+  {"SOURCE",   "SRC", 1, 3},  // INPUT (a looper to come)
   {"SPRAY",    "SPR", 2, 1},  // BYPASS, SPRAY
   {"RESONATOR", "RES", 2, 1},  // BYPASS, RESONATOR
-  {"DIRT",     "DRT", 2, 1},  // BYPASS, DIRT
-  {"ECHO",     "ECH", 2, 1},  // BYPASS, ECHO
+  {"TEXTURE",  "TEX", 2, 1},  // BYPASS, TEXTURE
+  {"ECHO",     "ECO", 2, 1},  // BYPASS, ECHO
 };
 
-// nullptr = BYPASS. FEED/INPUT is owned by the track, not made here.
+// nullptr = BYPASS. SOURCE/INPUT is owned by the track, not made here.
 FLASHMEM static Device* MakeDevice(int slot, int option) {
   if (slot == SPRAY && option == 1) return new SprayDevice;
   if (slot == RESONATOR && option == 1) return new ResonatorDevice;
-  if (slot == DIRT && option == 1) return new DirtDevice;
+  if (slot == TEXTURE && option == 1) return new DirtDevice;
   if (slot == ECHO && option == 1) return new EchoDevice;
   return nullptr;
 }

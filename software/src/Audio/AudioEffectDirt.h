@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <cmath>
 
-// Stereo dirt stage for the Sculpt DIRT device.
+// Stereo dirt stage for the Sculpt TEXTURE device.
 //
 // Signal chain: tilt -> noise -> fold -> drive -> crush -> wet/dry.
 //   TILT     two bands split at 80 Hz / 650 Hz / 2.5 kHz; + lifts the highs

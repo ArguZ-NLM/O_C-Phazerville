@@ -20,7 +20,7 @@
 
 // Sculpt: a full-screen effect chain app.
 //
-// Two stereo tracks, each a fixed chain FEED > SPRAY > RESONATOR > DIRT
+// Two stereo tracks, each a fixed chain SOURCE > SPRAY > RESONATOR > TEXTURE
 // > ECHO, mixed to the stereo output. Every effect slot can be bypassed.
 //
 // Everywhere: R enc moves the cursor, L enc changes what is under it (device
@@ -89,7 +89,7 @@ namespace sculpt {
     Modulator* mod(int i) const { return mods[i][mod_type[i]]; }
 
     Device* current(int s) const {
-      return s == FEED ? static_cast<Device*>(input) : inst[s][choice[s]];
+      return s == SOURCE ? static_cast<Device*>(input) : inst[s][choice[s]];
     }
     bool bypassed(int s) const { return s < SLOT_COUNT && (bypass >> s & 1); }
     bool shown_bypassed(int c) const { return bypass >> c & 1; } // incl. OUT
@@ -203,7 +203,7 @@ FLASHMEM void AppSculpt::Start() {
     tr.input->Defaults();
     tr.input->val[0] = t ? InputDevice::IN2 : InputDevice::IN1;
     tr.input->ApplyAll();
-    for (int s = FEED + 1; s < SLOT_COUNT; s++) {
+    for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
       if (s == ECHO) tr.gate = new SculptGate;
       for (int o = 0; o < SLOT_DEFS[s].noptions; o++) {
         Device* d = MakeDevice(s, o);
@@ -254,7 +254,7 @@ FLASHMEM void AppSculpt::Repatch(int t) {
   for (auto& c : patch->to_mix[t]) c.disconnect();
   for (auto& c : patch->mix_out[t]) c.disconnect();
   AudioStream* prev = tr.input;
-  for (int s = FEED + 1; s < SLOT_COUNT; s++) {
+  for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
     Device* d = tr.current(s);
     if (!d || !d->in()) continue;
     // bypassed slots stay patched while their fade (or tail) runs; parked
@@ -287,7 +287,7 @@ FLASHMEM void AppSculpt::Repatch(int t) {
 FLASHMEM void AppSculpt::ApplyBypass(int t) {
   using namespace sculpt;
   Track& tr = tracks[t];
-  for (int s = FEED + 1; s < SLOT_COUNT; s++) {
+  for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
     if (!tr.fade[s]) continue;
     const bool bp = tr.bypassed(s);
     if (s == ECHO) {
@@ -328,7 +328,7 @@ FLASHMEM void AppSculpt::ConnectTrack(int t) {
   for (int c = 0; c < 2; c++)
     patch->in[t][c].connect(OC::AudioIO::InputStream(), c, *tracks[t].input, c);
   AudioInterrupts();
-  for (int s = FEED + 1; s < SLOT_COUNT; s++) {
+  for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
     if (Device* d = tracks[t].current(s)) d->Activate();
   }
   Repatch(t);
@@ -343,7 +343,7 @@ FLASHMEM void AppSculpt::DisconnectTrack(int t) {
   for (auto& c : patch->mix_out[t]) c.disconnect();
   AudioInterrupts();
   // disconnected devices stop updating; now they can drop their buffers
-  for (int s = FEED + 1; s < SLOT_COUNT; s++) {
+  for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
     if (Device* d = tracks[t].current(s)) d->Deactivate();
   }
 }
@@ -361,7 +361,7 @@ FLASHMEM void AppSculpt::Mirror(sculpt::Device* d, int p) const {
   using namespace sculpt;
   Device* tw = Twin(d);
   if (!tw) return;
-  if (!focus_mod && col == FEED && p == 0) return;
+  if (!focus_mod && col == SOURCE && p == 0) return;
   if (!focus_mod && col == MIX_COL && p == 1) return;
   tw->val[p] = d->val[p];
   tw->mode[p] = d->mode[p];
@@ -399,7 +399,7 @@ FLASHMEM void AppSculpt::ParkBypassed(int t) {
   using namespace sculpt;
   Track& tr = tracks[t];
   uint8_t fresh = 0;
-  for (int s = FEED + 1; s < SLOT_COUNT; s++) {
+  for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
     const uint8_t bit = 1 << s;
     if (!(tr.bypass & bit) || (tr.parked & bit) || !tr.current(s)) continue;
     if (int32_t(millis() - tr.park_at[s]) < 0) continue;
@@ -408,7 +408,7 @@ FLASHMEM void AppSculpt::ParkBypassed(int t) {
   if (!fresh) return;
   tr.parked |= fresh;
   Repatch(t);
-  for (int s = FEED + 1; s < SLOT_COUNT; s++)
+  for (int s = SOURCE + 1; s < SLOT_COUNT; s++)
     if (fresh >> s & 1) tr.current(s)->Parked();
 }
 
@@ -442,7 +442,7 @@ FLASHMEM void AppSculpt::ToggleLink() {
   // the track under the cursor is the master: copy it to the other one
   Track& a = tracks[master];
   Track& b = tracks[1 - master];
-  for (int s = FEED + 1; s < SLOT_COUNT; s++) {
+  for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
     SetChoice(1 - master, s, a.choice[s]);
     b.last_choice[s] = a.last_choice[s];
     for (int o = 0; o < MAX_OPTIONS; o++) {
@@ -567,7 +567,7 @@ FLASHMEM void AppSculpt::ModulateAll() {
     }
   }
   for (auto& tr : tracks) {
-    for (int s = FEED; s < SLOT_COUNT; s++) {
+    for (int s = SOURCE; s < SLOT_COUNT; s++) {
       if (Device* d = tr.current(s)) {
         d->Modulate();
         d->RunTriggers(ctx.edges);
@@ -604,7 +604,7 @@ FLASHMEM void AppSculpt::MainLoop() {
   using namespace sculpt;
   for (int t = 0; t < NUM_TRACKS; t++) {
     Serial.printf("  %c", t ? 'R' : 'L');
-    for (int s = FEED; s < SLOT_COUNT; s++) {
+    for (int s = SOURCE; s < SLOT_COUNT; s++) {
       Device* d = tracks[t].current(s);
       if (!d) continue;
       float parts[2];
@@ -703,8 +703,8 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
         // bypass toggle of the slot under the cursor (MIX: its band stage);
         // a slot set to no device gets its last one back
         Track& tr = tracks[track];
-        if (col == MIX_COL || (col > FEED && tr.choice[col])) ToggleBypass(col);
-        else if (col > FEED) SetChoiceLinked(col, tr.last_choice[col]);
+        if (col == MIX_COL || (col > SOURCE && tr.choice[col])) ToggleBypass(col);
+        else if (col > SOURCE) SetChoiceLinked(col, tr.last_choice[col]);
       } else if (d && event.control == OC::CONTROL_BUTTON_DOWN && BypassKey()) {
         ToggleBypass(col);
       } else if (d) {
@@ -747,7 +747,7 @@ FLASHMEM void AppSculpt::OnEncoder(const UI::Event &event) {
     } else if (col == MIX_COL) {
       tracks[track].mix->Nudge(0, dir); // level
       Mirror(tracks[track].mix, 0);
-    } else if (col > FEED) {
+    } else if (col > SOURCE) {
       SetChoiceLinked(col, tracks[track].choice[col] + dir);
     }
     return;
@@ -813,7 +813,7 @@ FLASHMEM bool AppSculpt::Muted() const {
 // reachable through a trigger); on OUTPUT it bypasses the band stage
 FLASHMEM bool AppSculpt::BypassKey() const {
   using namespace sculpt;
-  if (view != DEVICE || focus_mod || col <= FEED || col > MIX_COL) return false;
+  if (view != DEVICE || focus_mod || col <= SOURCE || col > MIX_COL) return false;
   return Focused() != nullptr;
 }
 
@@ -862,9 +862,9 @@ FLASHMEM void AppSculpt::DrawChain() const {
   const Track& tr = tracks[track];
   Device* d = tr.at(col);
   if (!linked) gfxPrint(0, 56, track ? PSTR("R") : PSTR("L"));
-  // the slot name; FEED names its source (INPUT, later a looper)
+  // the slot name; SOURCE names its source (INPUT, later a looper)
   gfxPrint(8, 56, col == MIX_COL ? PSTR("OUTPUT")
-                  : col == FEED && d ? d->def.name : SLOT_DEFS[col].name);
+                  : col == SOURCE && d ? d->def.name : SLOT_DEFS[col].name);
   // bypass (when on) at the right end; the CPU load always left of its place
   const bool bp = !d || tr.shown_bypassed(col);
   const int right = 128 - 6 * 6 - 6;
@@ -1103,8 +1103,9 @@ namespace sculpt {
     // a device may have gained settings since: read the ones that are there
     // files saved before the devices were renamed carry their old tags;
     // the next save writes the new ones (this table can go after that)
-    static const char renamed[4][2][4] = {
-      {"RNG", "RES"}, {"DEF", "DRT"}, {"VST", "ECH"}, {"MOS", "SPR"}};
+    static const char renamed[6][2][4] = {
+      {"RNG", "RES"}, {"DEF", "TEX"}, {"DRT", "TEX"}, {"VST", "ECO"}, {"ECH", "ECO"},
+      {"MOS", "SPR"}};
     for (auto& r : renamed) if (!memcmp(tag, r[0], 4)) memcpy(tag, r[1], 4);
     const bool use = d && !memcmp(tag, d->def.tag, 4) && n <= d->num_params();
     for (int p = 0; p < n; p++) {
@@ -1136,7 +1137,7 @@ FLASHMEM void AppSculpt::ForEachDevice(F f) const {
   for (auto& tr : tracks) {
     f(tr.input);
     f(tr.mix);
-    for (int s = FEED + 1; s < SLOT_COUNT; s++)
+    for (int s = SOURCE + 1; s < SLOT_COUNT; s++)
       for (auto d : tr.inst[s]) if (d) f(d);
     for (auto& slot : tr.mods)
       for (auto m : slot) if (m) f(m);
@@ -1158,7 +1159,7 @@ FLASHMEM void AppSculpt::SaveFile() const {
     f.write(tr.last_choice, SLOT_COUNT);
     WriteDevice(f, tr.input);
     WriteDevice(f, tr.mix);
-    for (int s = FEED + 1; s < SLOT_COUNT; s++)
+    for (int s = SOURCE + 1; s < SLOT_COUNT; s++)
       for (int o = 0; o < MAX_OPTIONS; o++) WriteDevice(f, tr.inst[s][o]);
     f.write(tr.mod_type, NUM_MODS);
     for (int i = 0; i < NUM_MODS; i++)
@@ -1194,12 +1195,12 @@ FLASHMEM void AppSculpt::LoadFile() {
     uint8_t choice[SLOT_COUNT], last[SLOT_COUNT], types[NUM_MODS];
     ok = f.read(choice, SLOT_COUNT) == SLOT_COUNT && f.read(last, SLOT_COUNT) == SLOT_COUNT;
     if (!ok) break;
-    for (int s = FEED + 1; s < SLOT_COUNT; s++) {
+    for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
       tr.choice[s] = choice[s] < SLOT_DEFS[s].noptions ? choice[s] : 0;
       tr.last_choice[s] = last[s] < SLOT_DEFS[s].noptions ? last[s] : 0;
     }
     ok = ReadDevice(f, tr.input) && ReadDevice(f, tr.mix);
-    for (int s = FEED + 1; s < SLOT_COUNT && ok; s++)
+    for (int s = SOURCE + 1; s < SLOT_COUNT && ok; s++)
       for (int o = 0; o < MAX_OPTIONS && ok; o++) ok = ReadDevice(f, tr.inst[s][o]);
     if (!ok || f.read(types, NUM_MODS) != NUM_MODS) { ok = false; break; }
     for (int i = 0; i < NUM_MODS && ok; i++) {
@@ -1222,7 +1223,7 @@ FLASHMEM void AppSculpt::LoadFile() {
     mod_cursor = ui[5] <= NUM_MODS ? ui[5] : 0;
     for (auto& tr : tracks) {
       uint8_t b = 0;
-      if (f.read(&b, 1) == 1) tr.bypass = b & ~1;  // FEED can't be bypassed
+      if (f.read(&b, 1) == 1) tr.bypass = b & ~1;  // SOURCE can't be bypassed
     }
   }
   f.close();
