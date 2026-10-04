@@ -736,8 +736,8 @@ FASTRUN void InputDevice::update() {
   audio_block_t* out[2] = {allocate(), allocate()};
   if (out[0] && out[1]) {
     static const int16_t silence[AUDIO_BLOCK_SAMPLES] = {};
-    // TEST (Sascha): the module's inputs swapped, to see if they match the
-    // panel that way round
+    // the codec's channels are the other way round from the panel jacks on
+    // Sascha's hardware: channel 1 is L, channel 0 is R
     const int16_t* a = in[1] ? in[1]->data : silence;
     const int16_t* b = in[0] ? in[0]->data : silence;
     const uint8_t src = source;
