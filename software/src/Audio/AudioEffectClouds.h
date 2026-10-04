@@ -157,8 +157,8 @@ private:
                     size_t buf_size, size_t head, int pre_delay);
 };
 
-// Runs from flash (out of the class body, see below): RAM1 is full.
-FLASHMEM void AudioEffectClouds::update() {
+// The hot loop: runs from RAM1 (ITCM); from flash it costs a lot more.
+FASTRUN void AudioEffectClouds::update() {
     audio_block_t* in[MAX_CHANNELS]  = {};
     audio_block_t* out[MAX_CHANNELS] = {};
     bool ok = true;
