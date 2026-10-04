@@ -149,6 +149,8 @@ private:
   elapsedMicros tick_timer;
   int8_t track = 0, col = sculpt::ECHO, cursor = 0;
   bool l_held = false, l_used = false;
+  bool save_held = false;   // chain view: Y is down (held 2 s saves) ...
+  uint32_t save_hold = 0, saved_at = 0;  // ... since then; when the save happened
   bool clear_held = false;  // REEL: B is down on the REEL page ...
   uint32_t clear_hold = 0;  // ... since then
   bool editing = false;   // device view: setting grabbed, R enc changes it
@@ -608,6 +610,11 @@ FLASHMEM void AppSculpt::ModulateAll() {
 
 FLASHMEM void AppSculpt::MainLoop() {
   if (active) ReadMIDI();
+  if (save_held && millis() - save_hold >= 2000) {
+    save_held = false;
+    SaveFile();  // a short audio stop while the flash is written
+    saved_at = millis() | 1;
+  }
   {
     using namespace sculpt;
     const bool held = clear_held;
@@ -681,6 +688,15 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
   }
   // REEL: B held for 3 s clears the loop (see MainLoop); followed by the
   // button's own down / release events
+  // chain view: Y held for 2 s saves the settings (see MainLoop)
+  if (event.control == OC::CONTROL_BUTTON_Y) {
+    if (event.type == UI::EVENT_BUTTON_DOWN) {
+      save_held = view == CHAIN;
+      save_hold = millis();
+    } else if (event.type == UI::EVENT_BUTTON_PRESS || event.type == UI::EVENT_BUTTON_LONG_RELEASE) {
+      save_held = false;
+    }
+  }
   if (event.control == OC::CONTROL_BUTTON_DOWN) {
     if (event.type == UI::EVENT_BUTTON_DOWN) {
       clear_held = view == DEVICE && !focus_mod && col == SOURCE && tracks[track].choice[SOURCE];
@@ -1295,6 +1311,20 @@ FLASHMEM void AppSculpt::View() const {
   if (view == DEVICE && Focused()) DrawDevice();
   else if (view == MODS) DrawMods();
   else DrawChain();
+  // saving: a bar fills while Y is held, then SAVED
+  const uint32_t since = millis() - saved_at;
+  if (saved_at && since < 1200) {
+    graphics.clearRect(36, 22, 56, 15);
+    gfxFrame(36, 22, 56, 15);
+    gfxPrint(49, 26, PSTR("SAVED"));
+    gfxInvert(37, 23, 54, 13);
+  } else if (save_held && view == CHAIN && millis() - save_hold > 250) {
+    const int fill = std::min<int>(52, (millis() - save_hold) * 52 / 2000);
+    graphics.clearRect(36, 22, 56, 15);
+    gfxFrame(36, 22, 56, 15);
+    gfxPrint(46, 26, PSTR("SAVE..."));
+    gfxInvert(38, 24, fill, 11);
+  }
 }
 
 /////////////////////////////////////////////////////////////////
