@@ -1583,10 +1583,15 @@ FLASHMEM void SprayDevice::DrawViz(int x, int y, int w, int h) {
   uint8_t hist[HIST];
   const int head = fx.ReadHistory(hist);
   auto col_x = [&](int k) { return x + ((k % HIST + HIST) % HIST) * w / HIST; };
+  // MIX makes it see-through: solid with only the source heard (0), thinner
+  // as the grains take over, a faint dot pattern at 100
+  static const uint8_t wave_bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
+  const int wave_fill = 16 - cur[LEVEL] * 13 / 100;  // 16 .. 3 of 16
   for (int k = 0; k < HIST; k++) {
     const int a = int(sqrtf(hist[k] / 255.0f) * (h / 2 - 1));
-    if (a > 0) gfxLine(col_x(k), cy - a, col_x(k), cy + a);
-    else gfxPixel(col_x(k), cy);
+    const int cx = col_x(k);
+    for (int py = cy - a; py <= cy + a; py++)
+      if (wave_bayer[py & 3][cx & 3] < wave_fill) gfxPixel(cx, py);
   }
   const int hx = col_x(head);
   const int cl = std::max(x, hx - 1), cr = std::min(x + w - 1, hx + 1);
