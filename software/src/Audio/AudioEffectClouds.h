@@ -89,8 +89,10 @@ public:
     // level of what was recorded, one column per 1/HIST of the buffer, for
     // a picture of the buffer; stands still while frozen
     static const int HIST = 128;
-    void ReadHistory(uint8_t* dst) const {
-        for (int k = 0; k < HIST; k++) dst[k] = hist_[(hist_pos_ + k) % HIST]; // oldest first
+    // as laid out in the buffer; returns the column the record head is at
+    int ReadHistory(uint8_t* dst) const {
+        for (int k = 0; k < HIST; k++) dst[k] = hist_[k];
+        return hist_pos_;
     }
 
     uint8_t ActiveGrainCount() const {
