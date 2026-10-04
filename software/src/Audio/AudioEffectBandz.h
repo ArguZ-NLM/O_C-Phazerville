@@ -24,6 +24,7 @@ public:
   // --- parameters, set from the UI thread ---
   void band_gain(int b, float db) { gain[b] = powf(10.0f, constrain(db, -24.0f, 24.0f) * 0.05f); Check(); }
   void split_low(float hz) { f_lo = Coeff(hz); }
+  void set_bypass(bool b) { bypass = b; Check(); }  // pass through, settings kept
   void split_high(float hz) { f_hi = Coeff(hz); }
   void compress(float c) {
     c = constrain(c, 0.0f, 1.0f);
@@ -66,7 +67,7 @@ private:
   volatile float gain[BANDS] = {1.0f, 1.0f, 1.0f};
   volatile float f_lo = 0.03f, f_hi = 0.3f;
   volatile float thresh_db = -6.0f, slope = 0.0f, makeup_db = 0.0f;
-  volatile bool flat = true;
+  volatile bool flat = true, bypass = false;
 
   float lo_l[2] = {}, lo_b[2] = {}, hi_l[2] = {}, hi_b[2] = {};
   float env[BANDS] = {}, cgain[BANDS] = {1.0f, 1.0f, 1.0f}, target[BANDS] = {1.0f, 1.0f, 1.0f};
@@ -76,7 +77,7 @@ private:
     return 2.0f * sinf(float(M_PI) * std::min(hz, 7000.0f) / AUDIO_SAMPLE_RATE_EXACT);
   }
   void Check() {
-    flat = slope == 0.0f && gain[0] == 1.0f && gain[1] == 1.0f && gain[2] == 1.0f;
+    flat = bypass || (slope == 0.0f && gain[0] == 1.0f && gain[1] == 1.0f && gain[2] == 1.0f);
   }
 };
 

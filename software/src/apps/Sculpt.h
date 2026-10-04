@@ -76,7 +76,7 @@ namespace sculpt {
     MixDevice* mix = nullptr;
     uint8_t choice[SLOT_COUNT] = {};
     uint8_t last_choice[SLOT_COUNT] = {}; // for the bypass toggle
-    uint8_t bypass = 0;  // bit per slot: device kept but passed around
+    uint8_t bypass = 0;  // bit per slot (+ MIX_COL: its band stage): passed around
     Device* inst[SLOT_COUNT][MAX_OPTIONS] = {};
     Modulator* mods[NUM_MODS][MOD_TYPES] = {};
     uint8_t mod_type[NUM_MODS] = {};
@@ -251,6 +251,7 @@ FLASHMEM void AppSculpt::Repatch(int t) {
     hop++;
   }
   // through the track's MIX band stage into the mixer
+  tr.mix->SetBypass(tr.bypass >> MIX_COL & 1);
   for (int c = 0; c < 2; c++) link[hop][c].connect(*prev, c, *tr.mix->in(), c);
   for (int c = 0; c < 2; c++) patch->mix_out[t][c].connect(*tr.mix->out(), c, *mixer, t * 2 + c);
   AudioInterrupts();
@@ -716,15 +717,15 @@ FLASHMEM void AppSculpt::UpdateMixLevels() const {
 FLASHMEM bool AppSculpt::Muted() const {
   using namespace sculpt;
   for (int t = 0; t < NUM_TRACKS; t++)
-    if ((t == track || linked) && tracks[t].mix && tracks[t].mix->ActionLit(1)) return true;
+    if ((t == track || linked) && tracks[t].mix && tracks[t].mix->Muted()) return true;
   return false;
 }
 
 // on an effect slot's page, B (DOWN) bypasses the slot unless the device
-// has its own second action there
+// has its own second action there; on MIX it bypasses the band stage
 FLASHMEM bool AppSculpt::BypassKey() const {
   using namespace sculpt;
-  if (view != DEVICE || focus_mod || col <= MATERIAL || col >= MIX_COL) return false;
+  if (view != DEVICE || focus_mod || col <= MATERIAL || col > MIX_COL) return false;
   Device* d = Focused();
   return d && !d->def.actions[1][0];
 }
@@ -856,20 +857,17 @@ FLASHMEM void AppSculpt::DrawDevice() const {
     }
     gfxPrint(4, 33, PSTR("L/R enc: trigger"));
   }
-  // MIX's own MUTE label is left out (MUTE is in its settings); the
-  // blinking MUTE below stands for it like on every other page
-  const bool is_mix = &d->def == &MIX_DEF;
   const bool mute_turn = !mod_mode && Muted()
-      && (is_mix || !(d->def.actions[1][0] || BypassKey()) || (millis() / 600) % 2);
+      && (!(d->def.actions[1][0] || BypassKey()) || (millis() / 600) % 2);
   for (int a = 0; a < 2 && !mod_mode; a++) {
     const bool byp = a == 1 && BypassKey();
     const char* label = byp ? PSTR("BYP") : d->def.actions[a];
-    if (!label[0] || (a == 1 && (mute_turn || is_mix))) continue;
+    if (!label[0] || (a == 1 && mute_turn)) continue;
     const int x = 56 + a * 26; // clear of the page number at 110
     gfxPrint(x, 0, label);
     // lit actions (e.g. FRZ, BYP) are inverted
     const int lw = 6 * int(strlen(label)) + 2;
-    if (byp ? tracks[track].bypassed(col) : d->ActionLit(a)) gfxInvert(x - 1, 0, lw, 8);
+    if (byp ? (tracks[track].bypass >> col & 1) : d->ActionLit(a)) gfxInvert(x - 1, 0, lw, 8);
   }
   // a muted track shows MUTE blinking on every page, in the second action
   // place; where a device has its own action there, the two take turns

@@ -368,7 +368,7 @@ FLASHMEM void SculptMixer::update() {
 // MIX: level / pan / mute per track (not an audio stage itself)
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef MIX_DEF = {
-  "MIX", "MIX", 7, {"", "MUTE"},
+  "MIX", "MIX", 7, {"", ""},
   {
     {"LEVEL", 0, 100, 80, UNI},
     {"PAN", -50, 50, 0, BI},
@@ -390,9 +390,9 @@ public:
   AudioStream* out() override { return &bandz; }
   void Apply(int p) override;
   void Format(int p, char* buf, size_t n) const override;
-  void Action(int a) override;
-  bool ActionLit(int a) const override;
   void DrawViz(int x, int y, int w, int h) override;
+  bool Muted() const { return cur[MUTE]; }
+  void SetBypass(bool b) { bandz.set_bypass(b); }  // tone + dynamics stage
   void DrawMini(int x, int y, int w, int h) override;
   void CpuMax(float parts[2]) override {
     parts[0] = bandz.processorUsageMax();
@@ -463,12 +463,6 @@ FLASHMEM void MixDevice::Format(int p, char* buf, size_t n) const {
     Device::Format(p, buf, n);
   }
 }
-
-FLASHMEM void MixDevice::Action(int a) {
-  if (a == 1) { val[MUTE] = !val[MUTE]; Refresh(MUTE); }
-}
-
-FLASHMEM bool MixDevice::ActionLit(int a) const { return a == 1 && val[MUTE]; }
 
 FLASHMEM void MixDevice::DrawViz(int x, int y, int w, int h) {
   AudioEffectBandz::Viz v;
