@@ -796,13 +796,11 @@ FLASHMEM void AppSculpt::DrawChain() const {
   if (!linked) gfxPrint(0, 56, track ? PSTR("R") : PSTR("L"));
   gfxPrint(8, 56, col == MIX_COL ? PSTR("MIX") : SLOT_DEFS[col].name);
   // the slot name; for MIX where the track sits in the stereo field
-  // bypass sits at the right end, the CPU load to its left
+  // bypass (when on) at the right end; the CPU load always left of its place
   const bool bp = !d || tr.bypassed(col);
-  int right = 128;
+  const int right = 128 - 6 * 6 - 6;
   if (bp) {
-    right -= 6 * 6;
-    gfxPrint(right, 56, PSTR("bypass"));
-    right -= 6;
+    gfxPrint(128 - 6 * 6, 56, PSTR("bypass"));
   } else if (col == MIX_COL) {
     const int pan = d->val[1];
     char buf[12];
