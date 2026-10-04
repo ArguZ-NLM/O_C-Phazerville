@@ -1246,22 +1246,22 @@ FLASHMEM void RingDevice::Rebuild() {
     const float hz = 440.0f * powf(2.0f, (note - 69) / 12.0f);
     f[k] = hz < 8000.0f ? 2.0f * sinf(float(M_PI) * hz / AUDIO_SAMPLE_RATE_EXACT) : 0.0f;
 
-    const float gk = Base(k) * (1.0f + cur[RESO] * 0.06f * Bump(k));
+    const float gk = Base(k) * (1.0f + cur[RESO] * 0.06f * Bump(k))
+        * powf(2.0f, cur[TONE] * 0.02f * (k - BANDS / 2) / float(BANDS / 2));
     g[k] = gk * level;
   }
   fx.SetBank(f, g, 1.0f / q, mode[DECAY] == 1, cur[WET] * 0.01f);
 }
 
 // gain of a band (fractional k for the picture) from CUT / SLOPE (12 dB per
-// octave sides, 6 bands an octave) and the TONE tilt, before RESO
+// octave sides, 6 bands an octave), before RESO and TONE
 FLASHMEM float RingDevice::Base(float k) const {
   const float d = k - cur[CUT] * 0.01f * (BANDS - 1);
   const float slope = cur[SLOPE] * 0.02f;
   const float g_lp = d <= 0.0f ? 1.0f : powf(10.0f, -2.0f * d / 20.0f);
   const float g_hp = d >= 0.0f ? 1.0f : powf(10.0f, 2.0f * d / 20.0f);
   const float g_bp = powf(10.0f, -2.0f * fabsf(d) / 20.0f);
-  const float g = slope < 0.0f ? g_bp + (-slope) * (g_lp - g_bp) : g_bp + slope * (g_hp - g_bp);
-  return g * powf(2.0f, cur[TONE] * 0.02f * (k - BANDS / 2) / float(BANDS / 2));
+  return slope < 0.0f ? g_bp + (-slope) * (g_lp - g_bp) : g_bp + slope * (g_hp - g_bp);
 }
 
 // the RESO bump around the cutoff, 0..1
@@ -1270,11 +1270,12 @@ FLASHMEM float RingDevice::Bump(float k) const {
   return expf(-(d * d) / 2.25f);
 }
 
-// height of the shape in the picture, 0..1: the pass band at half height,
-// RESO lifts the peak at the cutoff up to the top (TONE lifts one end).
+// height of the shape in the picture, 0..1: the pass band at the top, RESO
+// lowers it to half with the peak staying at the top. TONE has its own box.
 // Fixed scale, so nothing jumps while CUT moves between bands.
 FLASHMEM float RingDevice::View(float k) const {
-  return std::min(1.0f, 0.5f * Base(k) * (1.0f + cur[RESO] * 0.01f * Bump(k)));
+  const float res = cur[RESO] * 0.01f;
+  return std::min(1.0f, Base(k) * (1.0f - 0.5f * res + 0.5f * res * Bump(k)));
 }
 
 FLASHMEM void RingDevice::Format(int p, char* buf, size_t n) const {
@@ -1314,6 +1315,15 @@ FLASHMEM void RingDevice::DrawViz(int x, int y, int w, int h) {
   const int mx = x + w - 14;
   gfxFrame(mx, y, 12, h);
   DrawVMeter(mx + 1, y + 1, 10, h - 2, out_m.v);
+  // TONE between the bands and PITCH: a box filled to its setting, empty
+  // at the darkest, half (checkered) in the middle, solid at the brightest
+  static const uint8_t bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
+  const int tx = x + BANDS * 2 + 2, tw = mx - 7 - tx + 1;
+  gfxFrame(tx, y, tw, h);
+  const int fill = (cur[TONE] + 50) * 16 / 100;  // 0..16
+  for (int py = y + 1; py < y + h - 1; py++)
+    for (int px = tx + 1; px < tx + tw - 1; px++)
+      if (bayer[py & 3][px & 3] < fill) gfxPixel(px, py);
   // PITCH left of the meter: a short line moving up and down, the middle
   // (no shift) marked by a dot
   const int pc = y + (h - 1) / 2;
