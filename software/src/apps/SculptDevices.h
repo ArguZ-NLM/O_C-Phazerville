@@ -1309,7 +1309,7 @@ FLASHMEM void RingDevice::DrawViz(int x, int y, int w, int h) {
   fx.ReadViz(v);
   out_m.Hit(v.out);
   // 48 bands as thin bars (2 px each) across the three left columns, the
-  // bank's shape drawn over them and the cutoff marked at the top.
+  // bank's shape drawn over them.
   // Changing DCAY strikes the bank in the picture: each band jumps to its
   // shape and rings out in its own time (low bands longer, 8x slowed down
   // to be seen, never quicker than a short fade); CHOKE rings shorter
@@ -1336,9 +1336,6 @@ FLASHMEM void RingDevice::DrawViz(int x, int y, int w, int h) {
     if (i) gfxLine(x + i - 1, py, x + i, sy);
     py = sy;
   }
-  const int cx = x + int(cur[CUT] * 0.01f * (BANDS - 1) * 2 + 0.5f);
-  gfxLine(cx - 2, y, cx + 2, y);
-  gfxLine(cx, y, cx, y + 2);
   gfxDottedLine(x, y + h - 1, x + BANDS * 2, y + h - 1, 2);
   // output level on the right
   const int mx = x + w - 14;
