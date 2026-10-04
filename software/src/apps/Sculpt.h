@@ -169,6 +169,7 @@ private:
   void ToggleLink();
   void UpdateMixLevels() const;
   void DrawChain() const;
+  bool Muted() const;
   void DrawDevice() const;
 };
 
@@ -688,6 +689,14 @@ FLASHMEM void AppSculpt::UpdateMixLevels() const {
   }
 }
 
+// the track on screen is muted (while linked: either of them)
+FLASHMEM bool AppSculpt::Muted() const {
+  using namespace sculpt;
+  for (int t = 0; t < NUM_TRACKS; t++)
+    if ((t == track || linked) && tracks[t].mix && tracks[t].mix->ActionLit(1)) return true;
+  return false;
+}
+
 FLASHMEM void AppSculpt::DrawChain() const {
   using namespace sculpt;
   // boxes are drawn one pixel wider than the spacing so neighbours share a
@@ -814,8 +823,10 @@ FLASHMEM void AppSculpt::DrawDevice() const {
     }
     gfxPrint(4, 33, PSTR("L/R enc: trigger"));
   }
+  const bool mute_turn = !mod_mode && &d->def != &MIX_DEF && Muted()
+      && (!d->def.actions[1][0] || (millis() / 600) % 2);
   for (int a = 0; a < 2 && !mod_mode; a++) {
-    if (!d->def.actions[a][0]) continue;
+    if (!d->def.actions[a][0] || (a == 1 && mute_turn)) continue;
     const int x = 56 + a * 26; // clear of the page number at 110
     gfxPrint(x, 0, d->def.actions[a]);
     const int lw = 6 * int(strlen(d->def.actions[a])) + 2;
@@ -823,6 +834,12 @@ FLASHMEM void AppSculpt::DrawDevice() const {
     // (e.g. FRZ) stay inverted
     const bool blink = &d->def == &MIX_DEF;
     if (d->ActionLit(a) && (!blink || (millis() / 300) % 2)) gfxInvert(x - 1, 0, lw, 8);
+  }
+  // a muted track shows MUTE blinking on every page, in the second action
+  // place; where a device has its own action there, the two take turns
+  if (mute_turn && (millis() / 300) % 2) {
+    gfxPrint(82, 0, PSTR("MUTE"));
+    gfxInvert(81, 0, 26, 8);
   }
   if (n > 4) {
     gfxPrint(110, 0, cursor / 4 + 1);
@@ -905,6 +922,10 @@ FLASHMEM void AppSculpt::DrawMods() const {
   if (linked) gfxPrint(1, 0, PSTR("1+2"));
   else gfxPrint(1, 0, track + 1);
   gfxPrint(linked ? 24 : 12, 0, PSTR("MODULATORS"));
+  if (Muted() && (millis() / 300) % 2) {
+    gfxPrint(104, 0, PSTR("MUTE"));
+    gfxInvert(103, 0, 25, 8);
+  }
   gfxLine(0, 9, 127, 9);
   constexpr int bw = 25;
   for (int i = 0; i <= NUM_MODS; i++) {
