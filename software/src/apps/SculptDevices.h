@@ -859,7 +859,9 @@ public:
     parts[1] = 0.0f;
     fx.processorUsageMaxReset();
   }
-  void ClearLoop() { fx.Clear(); }  // B held for 3 s
+  void ClearLoop() { fx.Clear(); cleared_at = millis() | 1; hold = 0.0f; }  // B held for 3 s
+  float hold = 0.0f;        // how far B has been held towards clearing, 0..1 (set by the app)
+  uint32_t cleared_at = 0;  // when it was cleared, for the picture
 private:
   AudioEffectReel fx;
   InputDevice* input;
@@ -920,6 +922,15 @@ FLASHMEM void ReelDevice::DrawViz(int x, int y, int w, int h) {
   }
   const int base = y + h - 1, cy = y + h / 2;
   const auto st = fx.state();
+  // just cleared: a big CLEARED for a second
+  if (cleared_at && millis() - cleared_at < 1200) {
+    gfxDottedLine(x, cy, x + w - 1, cy, 2);
+    graphics.clearRect(x + w / 2 - 26, cy - 6, 52, 13);
+    gfxFrame(x + w / 2 - 26, cy - 6, 52, 13);
+    gfxPrint(x + w / 2 - 21, cy - 3, PSTR("CLEARED"));
+    if ((millis() - cleared_at) / 200 % 2 == 0) gfxInvert(x + w / 2 - 25, cy - 5, 50, 11);
+    return;
+  }
   if (st == AudioEffectReel::EMPTY) {
     gfxDottedLine(x, cy, x + w - 1, cy, 2);
     gfxPrint(x + w / 2 - 21, cy - 12, PSTR("A: REC"));
@@ -948,6 +959,18 @@ FLASHMEM void ReelDevice::DrawViz(int x, int y, int w, int h) {
   const int cl = std::max(x, hx - 1), cr = std::min(x + w - 1, hx + 1);
   graphics.clearRect(cl, y + 1, cr - cl + 1, h - 2);
   gfxLine(hx, y + 1, hx, base - 1);
+  // B held: the loop is wiped away from the right as the 3 s run out
+  if (hold > 0.0f) {
+    const int wipe = std::min(w, int(hold * w + 0.5f));
+    graphics.clearRect(x + w - wipe, y, wipe, h);
+    if (wipe < w) gfxLine(x + w - wipe - 1, y, x + w - wipe - 1, base);
+    char t[10];
+    snprintf(t, sizeof(t), "CLEAR %d", 3 - std::min(2, int(hold * 3.0f)));
+    graphics.clearRect(x + w / 2 - 26, cy - 6, 52, 13);
+    gfxPrint(x + w / 2 - 21, cy - 3, t);
+    gfxInvert(x + w / 2 - 25, cy - 5, 50, 11);
+    return;
+  }
   if (st == AudioEffectReel::REC || st == AudioEffectReel::DUB) {
     const bool rec = st == AudioEffectReel::REC;
     if (!rec || (millis() / 300) % 2) {
@@ -961,6 +984,10 @@ FLASHMEM void ReelDevice::DrawViz(int x, int y, int w, int h) {
 FLASHMEM void ReelDevice::DrawMini(int x, int y, int w, int h) {
   const auto st = fx.state();
   const int cy = y + h / 2;
+  if (cleared_at && millis() - cleared_at < 1200) {  // flashes when cleared
+    if ((millis() - cleared_at) / 200 % 2 == 0) gfxRect(x, y, w, h);
+    return;
+  }
   if (st == AudioEffectReel::EMPTY) { gfxDottedLine(x, cy, x + w - 1, cy, 2); return; }
   constexpr int HIST = AudioEffectReel::HIST;
   uint8_t hist[HIST];

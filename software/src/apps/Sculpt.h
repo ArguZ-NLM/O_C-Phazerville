@@ -609,13 +609,16 @@ FLASHMEM void AppSculpt::MainLoop() {
   if (active) ReadMIDI();
   if (clear_hold) {
     using namespace sculpt;
-    if (!OC::ui.read_immediate(OC::CONTROL_BUTTON_DOWN)) {
-      clear_hold = 0;
-    } else if (millis() - clear_hold >= 3000) {
-      clear_hold = 0;
-      for (int t = 0; t < NUM_TRACKS; t++)
-        if ((t == track || linked) && tracks[t].reel) tracks[t].reel->ClearLoop();
+    const bool held = OC::ui.read_immediate(OC::CONTROL_BUTTON_DOWN);
+    const uint32_t ms = millis() - clear_hold;
+    // only after a moment, so a short press (stop) shows nothing
+    const float hold = held && ms > 250 ? std::min(1.0f, ms / 3000.0f) : 0.0f;
+    for (int t = 0; t < NUM_TRACKS; t++) {
+      if ((t != track && !linked) || !tracks[t].reel) continue;
+      tracks[t].reel->hold = hold;
+      if (held && ms >= 3000) tracks[t].reel->ClearLoop();
     }
+    if (!held || ms >= 3000) clear_hold = 0;
   }
   if (active && mod_timer >= 1000) { // follow the sources about once per ms
     mod_timer = 0;
