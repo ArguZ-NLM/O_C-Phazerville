@@ -129,6 +129,10 @@ private:
     static const int SPAN_MAX = AUDIO_BLOCK_SAMPLES * 4 + 8;
     int16_t span_[SPAN_MAX];
 
+    struct Grain;
+    void SlowGrain(Grain& g, int first, float t, float t_step,
+                   const int16_t* src, size_t buf_size, bool stereo);
+
     void release_blocks(audio_block_t** in, audio_block_t** out) {
         for (int c = 0; c < MAX_CHANNELS; c++) {
             if (in[c])  release(in[c]);
@@ -280,48 +284,51 @@ FASTRUN void AudioEffectClouds::update() {
                 memcpy(span_ + first_part, src, (span - first_part) * sizeof(int16_t));
         }
 
-        for (int i = first; i < AUDIO_BLOCK_SAMPLES; i++) {
-            // ── Window ────────────────────────────────────────────────────
-            const bool rising = t < 0.5f;
-            const float x = rising ? (2.0f * t) : (2.0f - 2.0f * t);
+        // ── Window: half-Hann rise over the attack, fall over the release ─
+        auto window = [&](float tt) {
+            const bool rising = tt < 0.5f;
+            const float x = rising ? (2.0f * tt) : (2.0f - 2.0f * tt);
             const float u = x * (rising ? g.inv_attack : g.inv_release);
-            float w = 1.0f;
-            if (u < 1.0f) {
-                // half-Hann rise: hann(u/2) = sin²(πu/2)
-                uint8_t lut_idx = (uint8_t)(u * 127.5f + 0.5f);
-                w = (float)hann_lut_[lut_idx] * (1.0f / 32767.0f);
+            if (u >= 1.0f) return 1.0f;
+            // half-Hann rise: hann(u/2) = sin²(πu/2)
+            return (float)hann_lut_[(uint8_t)(u * 127.5f + 0.5f)] * (1.0f / 32767.0f);
+        };
+        if (near) {
+            // Fast path: samples from span_, the window worked out every 8
+            // samples and glided in between, state kept in registers.
+            float frac = g.frac;
+            size_t li = 1, phase = g.phase;
+            const size_t ii = g.inc_int, len = g.grain_len;
+            const float fi = g.inc_frac, gl = g.gain_l, gr = g.gain_r;
+            int i = first;
+            while (i < AUDIO_BLOCK_SAMPLES && phase < len) {
+                const int n = std::min<int>(std::min(8, AUDIO_BLOCK_SAMPLES - i), (int)(len - phase));
+                float w = window(t);
+                t += n * t_step;
+                const float dw = (window(t) - w) / n;
+                for (int k = 0; k < n; k++, i++) {
+                    const float m = InterpHermite(span_[li - 1], span_[li], span_[li + 1],
+                                                  span_[li + 2], frac) * w;
+                    if (stereo) {
+                        accum_[0][i] += m * gl;
+                        accum_[1][i] += m * gr;
+                    } else {
+                        accum_[0][i] += m;
+                    }
+                    w += dw;
+                    frac += fi;
+                    if (frac >= 1.0f) { frac -= 1.0f; li++; }
+                    li += ii;
+                }
+                phase += n;
             }
-            t += t_step;
-
-            // ── Hermite interpolated read ──────────────────────────────────
-            // position = whole sample idx + fraction: exact for any buffer length
-            const size_t idx  = g.idx;
-            const float  frac = g.frac;
-            float sm1, s0, s1, s2;
-            if (near) {
-                sm1 = span_[lidx - 1]; s0 = span_[lidx]; s1 = span_[lidx + 1]; s2 = span_[lidx + 2];
-            } else {
-                size_t im1  = (idx == 0)             ? buf_size - 1       : idx - 1;
-                size_t i1   = (idx + 1 >= buf_size)  ? 0                  : idx + 1;
-                size_t i2   = (idx + 2 >= buf_size)  ? idx + 2 - buf_size : idx + 2;
-                sm1 = src[im1]; s0 = src[idx]; s1 = src[i1]; s2 = src[i2];
-            }
-            const float m = InterpHermite(sm1, s0, s1, s2, frac) * w;
-            if (stereo) {
-                // one input per grain, placed by its pan
-                accum_[0][i] += m * g.gain_l;
-                accum_[1][i] += m * g.gain_r;
-            } else {
-                accum_[0][i] += m;
-            }
-
-            g.frac += g.inc_frac;
-            if (g.frac >= 1.0f) { g.frac -= 1.0f; g.idx++; lidx++; }
-            g.idx += g.inc_int;
-            lidx += g.inc_int;
-            if (g.idx >= buf_size) g.idx -= buf_size;
-            if (++g.phase >= g.grain_len) { g.active = false; break; }
+            g.frac = frac;
+            g.phase = phase;
+            g.idx = (g.idx + li - 1) % buf_size;
+            if (phase >= len) g.active = false;
+            continue;
         }
+        SlowGrain(g, first, t, t_step, src, buf_size, stereo);
     }
 
     // ── Pass 3: normalize, soft-limit, capture feedback for next block ─────
@@ -348,6 +355,48 @@ FASTRUN void AudioEffectClouds::update() {
 
     for (int c = 0; c < nch_; c++) transmit(out[c], c);
     release_blocks(in, out);
+}
+
+// Grains too fast for span_ (very high pitch): read the buffer directly.
+// Rare, so it runs from flash to keep RAM1 free.
+FLASHMEM void AudioEffectClouds::SlowGrain(Grain& g, int first, float t, float t_step,
+                                           const int16_t* src, size_t buf_size, bool stereo) {
+    for (int i = first; i < AUDIO_BLOCK_SAMPLES; i++) {
+        // ── Window ────────────────────────────────────────────────────
+        const bool rising = t < 0.5f;
+        const float x = rising ? (2.0f * t) : (2.0f - 2.0f * t);
+        const float u = x * (rising ? g.inv_attack : g.inv_release);
+        float w = 1.0f;
+        if (u < 1.0f) {
+            // half-Hann rise: hann(u/2) = sin²(πu/2)
+            uint8_t lut_idx = (uint8_t)(u * 127.5f + 0.5f);
+            w = (float)hann_lut_[lut_idx] * (1.0f / 32767.0f);
+        }
+        t += t_step;
+
+        // ── Hermite interpolated read ──────────────────────────────────
+        // position = whole sample idx + fraction: exact for any buffer length
+        const size_t idx  = g.idx;
+        const float  frac = g.frac;
+        const size_t im1 = (idx == 0)            ? buf_size - 1       : idx - 1;
+        const size_t i1  = (idx + 1 >= buf_size) ? 0                  : idx + 1;
+        const size_t i2  = (idx + 2 >= buf_size) ? idx + 2 - buf_size : idx + 2;
+        const float sm1 = src[im1], s0 = src[idx], s1 = src[i1], s2 = src[i2];
+        const float m = InterpHermite(sm1, s0, s1, s2, frac) * w;
+        if (stereo) {
+            // one input per grain, placed by its pan
+            accum_[0][i] += m * g.gain_l;
+            accum_[1][i] += m * g.gain_r;
+        } else {
+            accum_[0][i] += m;
+        }
+
+        g.frac += g.inc_frac;
+        if (g.frac >= 1.0f) { g.frac -= 1.0f; g.idx++; }
+        g.idx += g.inc_int;
+        if (g.idx >= buf_size) g.idx -= buf_size;
+        if (++g.phase >= g.grain_len) { g.active = false; break; }
+    }
 }
 
 // Out of the class body on purpose: under LTO, FLASHMEM is dropped from

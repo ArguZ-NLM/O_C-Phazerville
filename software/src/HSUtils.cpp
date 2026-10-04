@@ -896,7 +896,7 @@ struct Zap {
     }
 };
 static constexpr int HOW_MANY_ZAPS = 30;
-void ZapScreensaver(const uint8_t stars) {
+FLASHMEM void ZapScreensaver(const uint8_t stars) { // screensaver: no need for RAM1
   static Zap zaps[HOW_MANY_ZAPS];
   static int frame_delay = 0;
   static elapsedMillis timer = 0;
