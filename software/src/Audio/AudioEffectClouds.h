@@ -89,177 +89,7 @@ public:
         return n;
     }
 
-    void update() override {
-        audio_block_t* in[MAX_CHANNELS]  = {};
-        audio_block_t* out[MAX_CHANNELS] = {};
-        bool ok = true;
-        for (int c = 0; c < nch_; c++) {
-            in[c]  = receiveReadOnly(c);
-            out[c] = allocate();
-            if (!out[c]) ok = false;
-        }
-        if (!ok) { release_blocks(in, out); return; }
-
-        // Snapshot volatile params once for this block.
-        const float  cur_pos      = pos_;
-        const float  cur_density  = density_;
-        const float  cur_size     = size_;
-        const float  cur_spray    = spray_;
-        const float  cur_pitch    = pitch_;
-        const float  cur_psprd    = psprd_;
-        const float  cur_texture  = texture_;
-        const float  cur_feedback = feedback_;
-        const bool   cur_freeze   = freeze_;
-        const size_t buf_size     = g_buffer[0].NumSamples;
-
-        if (!IsReady()) {
-            // No PSRAM — pass through unchanged.
-            for (int c = 0; c < nch_; c++) {
-                if (in[c]) memcpy(out[c]->data, in[c]->data, AUDIO_BLOCK_SAMPLES * sizeof(int16_t));
-                else       memset(out[c]->data, 0, AUDIO_BLOCK_SAMPLES * sizeof(int16_t));
-                transmit(out[c], c);
-            }
-            release_blocks(in, out);
-            return;
-        }
-
-        int16_t* buf[MAX_CHANNELS] = {};
-        for (int c = 0; c < nch_; c++) buf[c] = g_buffer[c].RawBuffer();
-
-        // ── Write incoming audio (+ feedback from previous block) unless frozen ─
-        // All channels are written together so their record heads stay in step.
-        bool any_in = false;
-        for (int c = 0; c < nch_; c++) if (in[c]) any_in = true;
-        const bool recorded = !cur_freeze && any_in;
-        if (recorded) {
-            for (int c = 0; c < nch_; c++) {
-                // Mix live input with previous block's feedback, then write.
-                int16_t tmp[AUDIO_BLOCK_SAMPLES];
-                for (int i = 0; i < AUDIO_BLOCK_SAMPLES; i++) {
-                    int32_t s = in[c] ? (int32_t)in[c]->data[i] : 0;
-                    if (cur_feedback > 0.0f) s += Clip16(feedback_buf_[c][i]);
-                    tmp[i] = (int16_t)(s > 32767 ? 32767 : (s < -32768 ? -32768 : s));
-                }
-                g_buffer[c].Write(tmp);
-            }
-        }
-
-        // ── Pass 1: grain scheduling ───────────────────────────────────────────
-        // density=0 → no grains. neg → periodic. pos → stochastic: each sample
-        // starts a grain with probability rate/fs (random gaps, same average).
-        if (cur_density != 0.0f) {
-            const float abs_density = cur_density < 0.0f ? -cur_density : cur_density;
-            const bool  stochastic  = cur_density > 0.0f;
-
-            // Cap density so avg concurrent grains stays < MAX_GRAINS.
-            const float capped = (abs_density * cur_size < (float)(MAX_GRAINS - 1))
-                ? abs_density : (float)(MAX_GRAINS - 1) / cur_size;
-
-            const float advance = capped / AUDIO_SAMPLE_RATE_EXACT;
-            for (int i = 0; i < AUDIO_BLOCK_SAMPLES; i++) {
-                bool seed;
-                if (stochastic) {
-                    seed = stmlib::Random::GetFloat() < advance;
-                } else {
-                    spawn_phase_ += advance;
-                    seed = spawn_phase_ >= 1.0f;
-                    if (seed) spawn_phase_ -= 1.0f;
-                }
-                if (seed) {
-                    // record head as it was at sample i of this block
-                    const size_t head = (g_buffer[0].GetWriteIx() + buf_size
-                        - (recorded ? AUDIO_BLOCK_SAMPLES - i : 0)) % buf_size;
-                    spawnGrain(cur_pos, cur_size, cur_spray, cur_pitch,
-                               cur_psprd, cur_texture, buf_size, head, i);
-                }
-            }
-        }
-
-        // ── Pass 2: grain processing (grain-outer, sample-inner) ───────────────
-        //
-        // Window — attack and release shaped separately, no sinf:
-        //   x = ramp position of the current half (0 at the edge, 1 at the centre)
-        //   w = x < len ? half-Hann(x / len) : 1
-        //   (1/len per side precomputed at spawn — 0 per-sample cost).
-        //
-        // Hann: read Q15 LUT, convert with one fmul. No sinf in the hot path.
-        memset(accum_, 0, sizeof(accum_));
-        const uint8_t active_at_start = ActiveGrainCount();
-        const bool stereo = nch_ > 1;
-
-        for (auto& g : grains) {
-            if (!g.active) continue;
-            // grains start on the sample they were scheduled, not the block start
-            const int first = g.pre_delay;
-            g.pre_delay = 0;
-            float       t      = (float)g.phase * g.inv_grain_len;
-            const float t_step = g.inv_grain_len;
-
-            for (int i = first; i < AUDIO_BLOCK_SAMPLES; i++) {
-                // ── Window ────────────────────────────────────────────────────
-                const bool rising = t < 0.5f;
-                const float x = rising ? (2.0f * t) : (2.0f - 2.0f * t);
-                const float u = x * (rising ? g.inv_attack : g.inv_release);
-                float w = 1.0f;
-                if (u < 1.0f) {
-                    // half-Hann rise: hann(u/2) = sin²(πu/2)
-                    uint8_t lut_idx = (uint8_t)(u * 127.5f + 0.5f);
-                    w = (float)hann_lut_[lut_idx] * (1.0f / 32767.0f);
-                }
-                t += t_step;
-
-                // ── Hermite interpolated read ──────────────────────────────────
-                // position = whole sample idx + fraction: exact for any buffer length
-                const size_t idx  = g.idx;
-                const float  frac = g.frac;
-                size_t im1  = (idx == 0)             ? buf_size - 1       : idx - 1;
-                size_t i1   = (idx + 1 >= buf_size)  ? 0                  : idx + 1;
-                size_t i2   = (idx + 2 >= buf_size)  ? idx + 2 - buf_size : idx + 2;
-                if (stereo) {
-                    // one input per grain, placed by its pan
-                    const int16_t *b = buf[g.source];
-                    const float m = InterpHermite((float)b[im1], (float)b[idx],
-                                                  (float)b[i1],  (float)b[i2], frac) * w;
-                    accum_[0][i] += m * g.gain_l;
-                    accum_[1][i] += m * g.gain_r;
-                } else {
-                    accum_[0][i] += InterpHermite((float)buf[0][im1], (float)buf[0][idx],
-                                                  (float)buf[0][i1],  (float)buf[0][i2], frac) * w;
-                }
-
-                g.frac += g.inc_frac;
-                if (g.frac >= 1.0f) { g.frac -= 1.0f; g.idx++; }
-                g.idx += g.inc_int;
-                if (g.idx >= buf_size) g.idx -= buf_size;
-                if (++g.phase >= g.grain_len) { g.active = false; break; }
-            }
-        }
-
-        // ── Pass 3: normalize, soft-limit, capture feedback for next block ─────
-        // Gain follows the (smoothed) number of overlapping grains: 1/(n-1)
-        // above two grains — twice Clouds' 1/sqrt(n-1) in dB.
-        {
-            const float n = (float)active_at_start;
-            num_grains_ += (n - num_grains_) * (n > num_grains_ ? 0.95f : 0.5f);
-        }
-        const float gain_target = num_grains_ > 2.0f
-            ? 1.0f / (num_grains_ - 1.0f) : 1.0f;
-        for (int i = 0; i < AUDIO_BLOCK_SAMPLES; i++) {
-            gain_ += (gain_target - gain_) * 0.01f;
-            for (int c = 0; c < nch_; c++) {
-                float x = accum_[c][i] * gain_ * (1.0f / 32768.0f);
-                if (x > 3.0f) x = 3.0f;
-                if (x < -3.0f) x = -3.0f;
-                x = x * (27.0f + x * x) / (27.0f + 9.0f * x * x); // soft limit
-                const float scaled = x * 32767.0f;
-                out[c]->data[i] = Clip16(scaled);
-                feedback_buf_[c][i] = scaled * cur_feedback;
-            }
-        }
-
-        for (int c = 0; c < nch_; c++) transmit(out[c], c);
-        release_blocks(in, out);
-    }
+    void update() override;
 
 private:
     // Overlap normalisation state (audio ISR only).
@@ -295,6 +125,9 @@ private:
     // Feedback and grain sums — member arrays (not stack) to avoid stack pressure.
     float feedback_buf_[MAX_CHANNELS][AUDIO_BLOCK_SAMPLES] = {};
     float accum_[MAX_CHANNELS][AUDIO_BLOCK_SAMPLES] = {};
+    // one grain's samples for the current block, read from PSRAM in one go
+    static const int SPAN_MAX = AUDIO_BLOCK_SAMPLES * 4 + 8;
+    int16_t span_[SPAN_MAX];
 
     void release_blocks(audio_block_t** in, audio_block_t** out) {
         for (int c = 0; c < MAX_CHANNELS; c++) {
@@ -323,6 +156,199 @@ private:
                     float cur_pitch, float cur_psprd, float cur_texture,
                     size_t buf_size, size_t head, int pre_delay);
 };
+
+// Runs from flash (out of the class body, see below): RAM1 is full.
+FLASHMEM void AudioEffectClouds::update() {
+    audio_block_t* in[MAX_CHANNELS]  = {};
+    audio_block_t* out[MAX_CHANNELS] = {};
+    bool ok = true;
+    for (int c = 0; c < nch_; c++) {
+        in[c]  = receiveReadOnly(c);
+        out[c] = allocate();
+        if (!out[c]) ok = false;
+    }
+    if (!ok) { release_blocks(in, out); return; }
+
+    // Snapshot volatile params once for this block.
+    const float  cur_pos      = pos_;
+    const float  cur_density  = density_;
+    const float  cur_size     = size_;
+    const float  cur_spray    = spray_;
+    const float  cur_pitch    = pitch_;
+    const float  cur_psprd    = psprd_;
+    const float  cur_texture  = texture_;
+    const float  cur_feedback = feedback_;
+    const bool   cur_freeze   = freeze_;
+    const size_t buf_size     = g_buffer[0].NumSamples;
+
+    if (!IsReady()) {
+        // No PSRAM — pass through unchanged.
+        for (int c = 0; c < nch_; c++) {
+            if (in[c]) memcpy(out[c]->data, in[c]->data, AUDIO_BLOCK_SAMPLES * sizeof(int16_t));
+            else       memset(out[c]->data, 0, AUDIO_BLOCK_SAMPLES * sizeof(int16_t));
+            transmit(out[c], c);
+        }
+        release_blocks(in, out);
+        return;
+    }
+
+    int16_t* buf[MAX_CHANNELS] = {};
+    for (int c = 0; c < nch_; c++) buf[c] = g_buffer[c].RawBuffer();
+
+    // ── Write incoming audio (+ feedback from previous block) unless frozen ─
+    // All channels are written together so their record heads stay in step.
+    bool any_in = false;
+    for (int c = 0; c < nch_; c++) if (in[c]) any_in = true;
+    const bool recorded = !cur_freeze && any_in;
+    if (recorded) {
+        for (int c = 0; c < nch_; c++) {
+            // Mix live input with previous block's feedback, then write.
+            int16_t tmp[AUDIO_BLOCK_SAMPLES];
+            for (int i = 0; i < AUDIO_BLOCK_SAMPLES; i++) {
+                int32_t s = in[c] ? (int32_t)in[c]->data[i] : 0;
+                if (cur_feedback > 0.0f) s += Clip16(feedback_buf_[c][i]);
+                tmp[i] = (int16_t)(s > 32767 ? 32767 : (s < -32768 ? -32768 : s));
+            }
+            g_buffer[c].Write(tmp);
+        }
+    }
+
+    // ── Pass 1: grain scheduling ───────────────────────────────────────────
+    // density=0 → no grains. neg → periodic. pos → stochastic: each sample
+    // starts a grain with probability rate/fs (random gaps, same average).
+    if (cur_density != 0.0f) {
+        const float abs_density = cur_density < 0.0f ? -cur_density : cur_density;
+        const bool  stochastic  = cur_density > 0.0f;
+
+        // Cap density so avg concurrent grains stays < MAX_GRAINS.
+        const float capped = (abs_density * cur_size < (float)(MAX_GRAINS - 1))
+            ? abs_density : (float)(MAX_GRAINS - 1) / cur_size;
+
+        const float advance = capped / AUDIO_SAMPLE_RATE_EXACT;
+        for (int i = 0; i < AUDIO_BLOCK_SAMPLES; i++) {
+            bool seed;
+            if (stochastic) {
+                seed = stmlib::Random::GetFloat() < advance;
+            } else {
+                spawn_phase_ += advance;
+                seed = spawn_phase_ >= 1.0f;
+                if (seed) spawn_phase_ -= 1.0f;
+            }
+            if (seed) {
+                // record head as it was at sample i of this block
+                const size_t head = (g_buffer[0].GetWriteIx() + buf_size
+                    - (recorded ? AUDIO_BLOCK_SAMPLES - i : 0)) % buf_size;
+                spawnGrain(cur_pos, cur_size, cur_spray, cur_pitch,
+                           cur_psprd, cur_texture, buf_size, head, i);
+            }
+        }
+    }
+
+    // ── Pass 2: grain processing (grain-outer, sample-inner) ───────────────
+    //
+    // Window — attack and release shaped separately, no sinf:
+    //   x = ramp position of the current half (0 at the edge, 1 at the centre)
+    //   w = x < len ? half-Hann(x / len) : 1
+    //   (1/len per side precomputed at spawn — 0 per-sample cost).
+    //
+    // Hann: read Q15 LUT, convert with one fmul. No sinf in the hot path.
+    memset(accum_, 0, sizeof(accum_));
+    const uint8_t active_at_start = ActiveGrainCount();
+    const bool stereo = nch_ > 1;
+
+    for (auto& g : grains) {
+        if (!g.active) continue;
+        // grains start on the sample they were scheduled, not the block start
+        const int first = g.pre_delay;
+        g.pre_delay = 0;
+        float       t      = (float)g.phase * g.inv_grain_len;
+        const float t_step = g.inv_grain_len;
+
+        // The grain's stretch of the buffer for this block, copied from
+        // PSRAM in one go (reading it sample by sample is what costs);
+        // very fast grains that wouldn't fit read the buffer directly.
+        const int16_t* src = stereo ? buf[g.source] : buf[0];
+        const int steps = std::min<int>(AUDIO_BLOCK_SAMPLES - first, (int)(g.grain_len - g.phase));
+        const int span = (int)(steps * ((float)g.inc_int + g.inc_frac) + g.frac) + 4;
+        const bool near = span <= SPAN_MAX;
+        size_t lidx = 1; // g.idx in span_ (which starts one sample before it)
+        if (near) {
+            const size_t start = g.idx == 0 ? buf_size - 1 : g.idx - 1;
+            const size_t first_part = std::min<size_t>(span, buf_size - start);
+            memcpy(span_, src + start, first_part * sizeof(int16_t));
+            if (first_part < (size_t)span)
+                memcpy(span_ + first_part, src, (span - first_part) * sizeof(int16_t));
+        }
+
+        for (int i = first; i < AUDIO_BLOCK_SAMPLES; i++) {
+            // ── Window ────────────────────────────────────────────────────
+            const bool rising = t < 0.5f;
+            const float x = rising ? (2.0f * t) : (2.0f - 2.0f * t);
+            const float u = x * (rising ? g.inv_attack : g.inv_release);
+            float w = 1.0f;
+            if (u < 1.0f) {
+                // half-Hann rise: hann(u/2) = sin²(πu/2)
+                uint8_t lut_idx = (uint8_t)(u * 127.5f + 0.5f);
+                w = (float)hann_lut_[lut_idx] * (1.0f / 32767.0f);
+            }
+            t += t_step;
+
+            // ── Hermite interpolated read ──────────────────────────────────
+            // position = whole sample idx + fraction: exact for any buffer length
+            const size_t idx  = g.idx;
+            const float  frac = g.frac;
+            float sm1, s0, s1, s2;
+            if (near) {
+                sm1 = span_[lidx - 1]; s0 = span_[lidx]; s1 = span_[lidx + 1]; s2 = span_[lidx + 2];
+            } else {
+                size_t im1  = (idx == 0)             ? buf_size - 1       : idx - 1;
+                size_t i1   = (idx + 1 >= buf_size)  ? 0                  : idx + 1;
+                size_t i2   = (idx + 2 >= buf_size)  ? idx + 2 - buf_size : idx + 2;
+                sm1 = src[im1]; s0 = src[idx]; s1 = src[i1]; s2 = src[i2];
+            }
+            const float m = InterpHermite(sm1, s0, s1, s2, frac) * w;
+            if (stereo) {
+                // one input per grain, placed by its pan
+                accum_[0][i] += m * g.gain_l;
+                accum_[1][i] += m * g.gain_r;
+            } else {
+                accum_[0][i] += m;
+            }
+
+            g.frac += g.inc_frac;
+            if (g.frac >= 1.0f) { g.frac -= 1.0f; g.idx++; lidx++; }
+            g.idx += g.inc_int;
+            lidx += g.inc_int;
+            if (g.idx >= buf_size) g.idx -= buf_size;
+            if (++g.phase >= g.grain_len) { g.active = false; break; }
+        }
+    }
+
+    // ── Pass 3: normalize, soft-limit, capture feedback for next block ─────
+    // Gain follows the (smoothed) number of overlapping grains: 1/(n-1)
+    // above two grains — twice Clouds' 1/sqrt(n-1) in dB.
+    {
+        const float n = (float)active_at_start;
+        num_grains_ += (n - num_grains_) * (n > num_grains_ ? 0.95f : 0.5f);
+    }
+    const float gain_target = num_grains_ > 2.0f
+        ? 1.0f / (num_grains_ - 1.0f) : 1.0f;
+    for (int i = 0; i < AUDIO_BLOCK_SAMPLES; i++) {
+        gain_ += (gain_target - gain_) * 0.01f;
+        for (int c = 0; c < nch_; c++) {
+            float x = accum_[c][i] * gain_ * (1.0f / 32768.0f);
+            if (x > 3.0f) x = 3.0f;
+            if (x < -3.0f) x = -3.0f;
+            x = x * (27.0f + x * x) / (27.0f + 9.0f * x * x); // soft limit
+            const float scaled = x * 32767.0f;
+            out[c]->data[i] = Clip16(scaled);
+            feedback_buf_[c][i] = scaled * cur_feedback;
+        }
+    }
+
+    for (int c = 0; c < nch_; c++) transmit(out[c], c);
+    release_blocks(in, out);
+}
 
 // Out of the class body on purpose: under LTO, FLASHMEM is dropped from
 // functions defined inside a class, and this one is not time-critical.
