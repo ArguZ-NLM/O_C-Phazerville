@@ -793,7 +793,7 @@ FLASHMEM void AppSculpt::DrawChain() const {
   // status line: what is under the cursor, CPU load
   const Track& tr = tracks[track];
   Device* d = tr.at(col);
-  gfxPrint(0, 56, track ? PSTR("R") : PSTR("L"));
+  if (!linked) gfxPrint(0, 56, track ? PSTR("R") : PSTR("L"));
   gfxPrint(8, 56, col == MIX_COL ? PSTR("MIX") : SLOT_DEFS[col].name);
   // the device name, unless it is the same as the slot's (SPACE); for MIX
   // where the track sits in the stereo field
