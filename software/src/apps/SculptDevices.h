@@ -1627,9 +1627,14 @@ FLASHMEM void SprayDevice::DrawViz(int x, int y, int w, int h) {
     const int gx = constrain(mid + int(gv[i].scatter * w) - gw / 2, x + 1, x + w - gw - 1);
     const int gy = constrain(line - int(gv[i].semis * (h / 2 - 4) / 24) - gh / 2, y + 2, base - gh - 1);
     graphics.clearRect(gx - 1, gy - 1, gw + 2, gh + 2);  // a gap around it in the waveform
-    // with FDBK the grains turn hollow: outline only, dark inside
-    if (cur[FDBK] > 0) gfxFrame(gx, gy, gw, gh);
-    else gfxRect(gx, gy, gw, gh);
+    // FDBK empties them gradually: solid at 0, a thinning dot pattern on the
+    // way, just the outline at 100
+    gfxFrame(gx, gy, gw, gh);
+    static const uint8_t bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
+    const int fill = 16 - cur[FDBK] * 16 / 100;
+    for (int yy = gy + 1; yy < gy + gh - 1; yy++)
+      for (int xx = gx + 1; xx < gx + gw - 1; xx++)
+        if (bayer[yy & 3][xx & 3] < fill) gfxPixel(xx, yy);
   }
   if (frozen) {
     gfxPrint(x + w - 25, y + 1, PSTR("FRZ"));
