@@ -149,7 +149,8 @@ private:
   elapsedMicros tick_timer;
   int8_t track = 0, col = sculpt::ECHO, cursor = 0;
   bool l_held = false, l_used = false;
-  uint32_t clear_hold = 0;  // REEL: when B went down (0 = not held)
+  bool clear_held = false;  // REEL: B is down on the REEL page ...
+  uint32_t clear_hold = 0;  // ... since then
   bool editing = false;   // device view: setting grabbed, R enc changes it
   bool edit_mode = false; // the mode was just changed: show its name
   mutable elapsedMillis mode_shown;
@@ -609,7 +610,7 @@ FLASHMEM void AppSculpt::MainLoop() {
   if (active) ReadMIDI();
   {
     using namespace sculpt;
-    const bool held = clear_hold != 0;
+    const bool held = clear_held;
     const uint32_t ms = held ? millis() - clear_hold : 0;
     // only after a moment, so a short press (stop) shows nothing
     const float hold = held && ms > 250 ? std::min(1.0f, ms / 3000.0f) : 0.0f;
@@ -618,7 +619,7 @@ FLASHMEM void AppSculpt::MainLoop() {
       tracks[t].reel->hold = hold;
       if (held && ms >= 3000) tracks[t].reel->ClearLoop();
     }
-    if (held && ms >= 3000) clear_hold = 0;
+    if (held && ms >= 3000) clear_held = false;
   }
   if (active && mod_timer >= 1000) { // follow the sources about once per ms
     mod_timer = 0;
@@ -681,10 +682,12 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
   // REEL: B held for 3 s clears the loop (see MainLoop); followed by the
   // button's own down / release events
   if (event.control == OC::CONTROL_BUTTON_DOWN) {
-    if (event.type == UI::EVENT_BUTTON_DOWN)
-      clear_hold = (view == DEVICE && !focus_mod && col == SOURCE && tracks[track].choice[SOURCE]) ? millis() | 1 : 0;
-    else if (event.type == UI::EVENT_BUTTON_PRESS || event.type == UI::EVENT_BUTTON_LONG_RELEASE)
-      clear_hold = 0;
+    if (event.type == UI::EVENT_BUTTON_DOWN) {
+      clear_held = view == DEVICE && !focus_mod && col == SOURCE && tracks[track].choice[SOURCE];
+      clear_hold = millis();
+    } else if (event.type == UI::EVENT_BUTTON_PRESS || event.type == UI::EVENT_BUTTON_LONG_RELEASE) {
+      clear_held = false;
+    }
   }
   if (event.control == OC::CONTROL_BUTTON_UP || event.control == OC::CONTROL_BUTTON_DOWN) {
     constexpr uint16_t both = OC::CONTROL_BUTTON_UP | OC::CONTROL_BUTTON_DOWN;
