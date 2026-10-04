@@ -55,6 +55,7 @@ struct DeviceDef {
   uint8_t nparams;
   char actions[2][5];
   ParamDef params[8];
+  char page_title[2][6]; // shown after the name in the header, per page
 };
 
 constexpr int MAX_PARAMS = 8;
@@ -802,11 +803,12 @@ PROGMEM static const DeviceDef VAST_DEF = {
     {"TIME", 20, 6000, 450, UNI, 0, 4, 0, {}, {"FREE", "STR", "TRI", "DOT"}},
     {"FDBK", 0, 100, 45, UNI},
     {"SPRD", 0, 100, 40, UNI, 0, 3, 1, {}, {"PHASE", "PING", "DIFF"}},
-    {"REVRB", 0, 100, 30, UNI},
+    {"LEVEL", 0, 100, 30, UNI},  // the reverb's
     {"SIZE", 0, 100, 60, UNI},
     {"DECAY", 0, 100, 50, UNI},
     {"TONE", -50, 50, -10, BI},
-  }
+  },
+  {"", "REVRB"},
 };
 
 class VastDevice : public Device {
@@ -995,19 +997,24 @@ FLASHMEM void VastDevice::DrawViz(int x, int y, int w, int h) {
       }
     }
   } else {
-    // page 2, the reverb: a wedge fading out from the middle to both sides,
-    // as long as DECAY and as tall as REVRB, between two walls that SIZE
-    // moves apart from the middle towards the edges
+    // page 2, the reverb: two walls that SIZE moves apart from 30% to the
+    // edges, and between them a wedge fading out from the middle to both
+    // sides, as tall as LEVEL and reaching towards the walls with DECAY.
+    // TONE fills it in: sparse when dark, solid when bright.
+    static const uint8_t bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
     const int cx = x + w / 2, hw = w / 2 - 1;
+    const int wall = hw * (30 + 70 * cur[SIZE] / 100) / 100;
     const int th = (h - 2) * cur[REVERB] / 100;
-    const int len = 4 + (hw - 4) * cur[DECAY] / 100;
-    for (int i = 0; i < len; i += 2) {
+    const int len = std::max(2, (wall - 1) * cur[DECAY] / 100);
+    const int fill = 3 + (cur[TONE] + 50) * 13 / 100;  // 3..16 of 16
+    for (int i = 0; i < len; i++) {
       const int hh = th * (len - i) / len;
-      if (hh <= 0) continue;
-      gfxLine(cx + i, base - hh, cx + i, base);
-      if (i) gfxLine(cx - i, base - hh, cx - i, base);
+      for (int py = base - hh + 1; py <= base; py++) {
+        const bool edge = py == base - hh + 1;  // keep the outline readable
+        if (edge || bayer[py & 3][(cx + i) & 3] < fill) gfxPixel(cx + i, py);
+        if (i && (edge || bayer[py & 3][(cx - i) & 3] < fill)) gfxPixel(cx - i, py);
+      }
     }
-    const int wall = 2 + (hw - 2) * cur[SIZE] / 100;
     gfxLine(cx - wall, y, cx - wall, base);
     gfxLine(cx + wall, y, cx + wall, base);
   }

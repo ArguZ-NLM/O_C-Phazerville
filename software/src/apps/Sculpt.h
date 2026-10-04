@@ -876,6 +876,9 @@ FLASHMEM void AppSculpt::DrawDevice() const {
       gfxPrint(name_x, 1, buf);
     } else {
       gfxPrint(name_x, 1, name);
+      // e.g. SPACE REVRB on the reverb page
+      const char* sub = d->def.page_title[cursor / 4];
+      if (!mod_mode && sub[0]) gfxPrint(name_x + 6 * int(strlen(name)) + 6, 1, sub);
     }
   }
   if (mod_mode) {
