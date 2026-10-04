@@ -368,7 +368,7 @@ FLASHMEM void SculptMixer::update() {
 // MIX: level / pan / mute per track (not an audio stage itself)
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef MIX_DEF = {
-  "MIX", "MIX", 7, {"", ""},
+  "OUTPUT", "MIX", 7, {"", ""},  // the tag stays MIX: saved files use it
   {
     {"LEVEL", 0, 100, 80, UNI},
     {"PAN", -50, 50, 0, BI},

@@ -771,7 +771,7 @@ FLASHMEM void AppSculpt::DrawChain() const {
         }
       }
 
-      const char* tag = c == MIX_COL ? PSTR("MIX") : d ? SLOT_DEFS[c].tag : PSTR("BP");
+      const char* tag = c == MIX_COL ? PSTR("OUT") : d ? SLOT_DEFS[c].tag : PSTR("BP");
       const int cells = 6 * int(strlen(tag));
       gfxPrint(x + 1 + (bw - 1 - cells) / 2, y + 9, tag);
       if (d) {
@@ -794,21 +794,13 @@ FLASHMEM void AppSculpt::DrawChain() const {
   const Track& tr = tracks[track];
   Device* d = tr.at(col);
   if (!linked) gfxPrint(0, 56, track ? PSTR("R") : PSTR("L"));
-  gfxPrint(8, 56, col == MIX_COL ? PSTR("MIX") : SLOT_DEFS[col].name);
-  // the slot name; for MIX where the track sits in the stereo field
+  gfxPrint(8, 56, col == MIX_COL ? PSTR("OUTPUT") : SLOT_DEFS[col].name);
   // bypass (when on) at the right end; the CPU load always left of its place
   const bool bp = !d || tr.bypassed(col);
   const int right = 128 - 6 * 6 - 6;
   if (bp) {
     gfxPrint(128 - 6 * 6, 56, PSTR("bypass"));
-  } else if (col == MIX_COL) {
-    const int pan = d->val[1];
-    char buf[12];
-    if (pan < 0) snprintf(buf, sizeof(buf), "LEFT %d", -pan);
-    else if (pan > 0) snprintf(buf, sizeof(buf), "RIGHT %d", pan);
-    else snprintf(buf, sizeof(buf), "CENTER");
-    gfxPrint(32, 56, buf);
-  } else if (SLOT_DEFS[col].planned > 1 && strcmp(d->def.name, SLOT_DEFS[col].name)) {
+  } else if (col < MIX_COL && SLOT_DEFS[col].planned > 1 && strcmp(d->def.name, SLOT_DEFS[col].name)) {
     // the device name only where the slot offers a choice (MATERIAL)
     gfxPrint(62, 56, d->def.name);
   }
