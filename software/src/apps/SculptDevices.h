@@ -955,16 +955,18 @@ FLASHMEM void VastDevice::DrawViz(int x, int y, int w, int h) {
     return;
   }
   // echoes on a time line from the left edge (L filled, R outlined): where
-  // they sit follows the tap times (square-root scale up to 6 s, so short
-  // times still spread out), how tall they are follows DELAY. Then the
+  // they sit follows the tap times on an even scale of 2 s across (longer
+  // times fill the width), how tall they are follows DELAY. Then the
   // reverb tail as a fading wedge whose length follows DECAY and height the
   // tail level.
   const int base = y + h - 1, tl_w = w * 2 / 3;
   gfxDottedLine(x, base, x + w - 1, base, 2);
   const int bh = std::max(1, (h - 2) * cur[DELAY] / 100);
+  float span = 2.0f;
+  for (auto& c : tap_secs) for (float sec : c) span = std::max(span, sec);
   for (int c = 0; c < 2; c++) {
     for (int t = 0; t < TAPS; t++) {
-      const int bx = x + int(sqrtf(tap_secs[c][t] / MAX_SECS) * (tl_w - 6)) + c * 3;
+      const int bx = x + int(tap_secs[c][t] / span * (tl_w - 6)) + c * 3;
       if (cur[DELAY] == 0) continue;
       if (c == 0) gfxRect(bx, base - bh, 2, bh);
       else gfxFrame(bx, base - bh, 2, bh);
