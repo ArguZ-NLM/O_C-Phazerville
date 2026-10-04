@@ -1453,14 +1453,13 @@ FLASHMEM void ResonatorDevice::DrawMini(int x, int y, int w, int h) {
 // slot's fade mixes them with the dry signal by LEVEL.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef SPRAY_DEF = {
-  "SPRAY", "SPR", 8, {"FRZ", ""},
+  "SPRAY", "SPR", 7, {"FRZ", ""},
   {
     // left of the middle: P (periodic), right: R (random), middle: no grains
     {"RATE", -100, 100, 55, BI},
     {"SIZE", 0, 100, 50, UNI, 0, 21, 0},   // mode: size spread, 0..100% in 5% steps
     {"PITCH", -24, 24, 0, BI, 0, 25, 0},  // mode: pitch spread, 0..24 semitones
-    {"SCATR", 0, 100, 20, UNI},
-    {"POS", 0, 100, 10, UNI},
+    {"POS", 0, 100, 10, UNI, 0, 21, 4},  // mode: position variation, 0..100% in 5% steps
     {"SHAPE", 0, 100, 70, UNI},
     {"FDBK", 0, 100, 0, UNI},
     {"MIX", 0, 100, 50, UNI},  // source <> grains
@@ -1470,7 +1469,7 @@ PROGMEM static const DeviceDef SPRAY_DEF = {
 
 class SprayDevice : public Device {
 public:
-  enum { RATE, SIZE, PITCH, SCATTER, POS, SHAPE, FDBK, LEVEL };
+  enum { RATE, SIZE, PITCH, POS, SHAPE, FDBK, LEVEL };
   static constexpr float BUF_SECS = 4.0f;
   SprayDevice();
   AudioStream* in() override { return &fx; }
@@ -1496,6 +1495,7 @@ private:
   static float RateHz(int v) { return v ? 0.5f * powf(80.0f, (abs(v) - 1) / 99.0f) : 0.0f; }
   int SpreadSemis() const { return mode[PITCH]; }
   float SizeSpread() const { return mode[SIZE] * 0.05f; }
+  float PosVariation() const { return mode[POS] * 0.025f; }  // up to half the buffer either way
   void FormatMode(int p, char* buf, size_t n) const override;
   float SizeSecs() const { return 0.01f * powf(100.0f, cur[SIZE] * 0.01f); } // 10 ms .. 1 s
 };
@@ -1529,19 +1529,18 @@ FLASHMEM void SprayDevice::Apply(int p) {
       fx.setPitch(powf(2.0f, cur[PITCH] / 12.0f));
       fx.setPitchSpread(SpreadSemis());
       break;
-    case SCATTER: fx.setSpray(v * 0.5f); break;
-    case POS:   fx.setPosition(v); break;
+    case POS:   fx.setPosition(v); fx.setSpray(PosVariation()); break;
     case SHAPE: fx.setTexture(v); break;
     case FDBK:  fx.setFeedback(v * 0.9f); break;
     case LEVEL: wet = v; break;
   }
 }
 
-// the spreads: OFF, then +-semitones (PITCH) or percent (SIZE)
+// the spreads: OFF, then +-semitones (PITCH) or percent (SIZE, POS)
 FLASHMEM void SprayDevice::FormatMode(int p, char* buf, size_t n) const {
-  if ((p == PITCH || p == SIZE) && mode[p] == 0) snprintf(buf, n, "OFF");
+  if ((p == PITCH || p == SIZE || p == POS) && mode[p] == 0) snprintf(buf, n, "OFF");
   else if (p == PITCH) snprintf(buf, n, "+-%d", mode[p]);
-  else if (p == SIZE) snprintf(buf, n, "%d%%", mode[p] * 5);
+  else if (p == SIZE || p == POS) snprintf(buf, n, "%d%%", mode[p] * 5);
   else Device::FormatMode(p, buf, n);
 }
 
@@ -1569,9 +1568,6 @@ FLASHMEM void SprayDevice::Action(int a) {
   }
 }
 
-// first look: the last 4 s as a line (now at the right), the window grains
-// are taken from (POS back from now, widened by SCATTER), one dot per active
-// grain inside it, raised or lowered by PITCH
 FLASHMEM void SprayDevice::DrawViz(int x, int y, int w, int h) {
   if (!fx.IsReady()) {
     gfxPrint(x + 22, y + h / 2 - 4, PSTR("out of memory"));
@@ -1595,11 +1591,12 @@ FLASHMEM void SprayDevice::DrawViz(int x, int y, int w, int h) {
   const int cl = std::max(x, hx - 1), cr = std::min(x + w - 1, hx + 1);
   graphics.clearRect(cl, y, cr - cl + 1, h);  // kept inside the screen
   gfxLine(hx, y, hx, base);
-  // the grain window: fixed in the middle, its edges move apart with how
-  // far SCATR really scatters (the engine narrows it near both buffer ends)
-  const float pos = cur[POS] * 0.01f, spray = cur[SCATTER] * 0.005f;
-  const float eff = std::min(spray, std::min(pos, 1.0f - pos));
-  const int mid = x + w / 2, half = std::max(2, int(eff * w + 0.5f));
+  // the grain window: POS moves it from now (right) back to the oldest audio
+  // (left); its variation widens it, only as far as the engine really
+  // scatters (never past now or the oldest audio)
+  const float pos = cur[POS] * 0.01f;
+  const float eff = std::min(PosVariation(), std::min(pos, 1.0f - pos));
+  const int mid = x + w - 1 - int(pos * (w - 1) + 0.5f), half = std::max(2, int(eff * w + 0.5f));
   const int wl = std::max(x, mid - half), wr = std::min(x + w - 1, mid + half);
   for (int ex : {wl, wr}) {
     gfxLine(ex, y, ex, y + 3);
