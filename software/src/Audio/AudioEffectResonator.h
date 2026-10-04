@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <cmath>
 
-// Resonant filter bank for the Sculpt RING device, after the S4's RING.
+// Resonant filter bank for the Sculpt RESONATOR device.
 //
 // BANDS two-pole band-pass resonators (Chamberlin state variable), fed with
 // the track's input summed to mono; even bands go left, odd bands right.
@@ -12,7 +12,7 @@
 // bank only runs them. Bands set to gain 0 (or too high to be stable) are
 // skipped. CHOKE: the damping rises when the input goes quiet, so the bank
 // stops ringing with the input instead of sustaining.
-class AudioEffectRing : public AudioStream {
+class AudioEffectResonator : public AudioStream {
 public:
   static constexpr int BANDS = 48;
 
@@ -21,7 +21,7 @@ public:
     float out;
   };
 
-  AudioEffectRing() : AudioStream(2, input_queue_array) {}
+  AudioEffectResonator() : AudioStream(2, input_queue_array) {}
 
   // --- from the UI thread: the whole bank at once ---
   void SetBank(const float* f, const float* gain, float damp, bool choke, float wet) {
@@ -61,7 +61,7 @@ private:
 };
 
 // Runs from flash like the other Sculpt engines (RAM1 is full).
-FLASHMEM void AudioEffectRing::update() {
+FLASHMEM void AudioEffectResonator::update() {
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   audio_block_t* out[2] = {allocate(), allocate()};
   if (!out[0] || !out[1]) {

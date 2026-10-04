@@ -6,7 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 
-// Delay + reverb core for the Sculpt VAST device. Stereo in, stereo out.
+// Delay + reverb core for the Sculpt ECHO device. Stereo in, stereo out.
 //
 // The delay lines live in extmem and are read a whole block at a time (taps
 // are at least one block long), which suits PSRAM far better than reading
@@ -15,7 +15,7 @@
 // filtered (TONE), diffused / cross-fed (SPREAD) and soft clipped. DELAY
 // crossfades the taps against the dry signal, then REVERB crossfades that
 // against a 4-line FDN fed by it.
-class AudioEffectVast : public AudioStream {
+class AudioEffectEcho : public AudioStream {
 public:
   static constexpr int TAPS = 4;
   static constexpr int MIN_TAP = AUDIO_BLOCK_SAMPLES;
@@ -29,7 +29,7 @@ public:
     uint32_t blocks;
   };
 
-  explicit AudioEffectVast(size_t delay_samples)
+  explicit AudioEffectEcho(size_t delay_samples)
     : AudioStream(2, input_queue_array), dlen(delay_samples) {}
 
   // allocate and clear everything; call while the stream is disconnected
@@ -205,7 +205,7 @@ private:
 };
 
 // Reads one tap's block; crossfades when its time has changed.
-FLASHMEM void AudioEffectVast::ReadTap(int ch, int t, int16_t* out) {
+FLASHMEM void AudioEffectEcho::ReadTap(int ch, int t, int16_t* out) {
   Tap& tp = tap_[ch][t];
   if (tp.phase >= XFADE && tp.target != tp.cur) {
     tp.next = tp.target;
@@ -226,7 +226,7 @@ FLASHMEM void AudioEffectVast::ReadTap(int ch, int t, int16_t* out) {
 
 // Runs from flash: RAM1 is full in the T41_audio build. It stays in the
 // I-cache while Sculpt is running.
-FLASHMEM void AudioEffectVast::update() {
+FLASHMEM void AudioEffectEcho::update() {
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   audio_block_t* out[2] = {allocate(), allocate()};
   if (!out[0] || !out[1] || !ready()) {

@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <cmath>
 
-// Stereo colour stage for the Sculpt DEFORM device, after the S4's DEFORM.
+// Stereo dirt stage for the Sculpt DIRT device.
 //
 // Signal chain: tilt -> noise -> fold -> drive -> crush -> wet/dry.
 //   TILT     two bands split at 80 Hz / 650 Hz / 2.5 kHz; + lifts the highs
@@ -14,7 +14,7 @@
 //   FOLD     sine wavefolder, West-coast style, clean at 0
 //   DRIVE    soft saturation, clean at 0
 //   CRUSH    bit depth, sample-rate reduction with jitter, or both
-class AudioEffectDeform : public AudioStream {
+class AudioEffectDirt : public AudioStream {
 public:
   enum CrushMode : uint8_t { CRUSH_BIT, CRUSH_REDUX, CRUSH_BOTH };
   enum NoiseMode : uint8_t { NOISE_WHITE, NOISE_PINK, NOISE_DUST };
@@ -24,7 +24,7 @@ public:
     float noise;     // noise envelope level
   };
 
-  AudioEffectDeform() : AudioStream(2, input_queue_array) {}
+  AudioEffectDirt() : AudioStream(2, input_queue_array) {}
 
   // --- parameters, set from the UI thread ---
   void drive(float d) { drive_ = constrain(d, 0.0f, 1.0f); }
@@ -106,7 +106,7 @@ private:
 };
 
 // Runs from flash like the other Sculpt engines (RAM1 is full).
-FLASHMEM void AudioEffectDeform::update() {
+FLASHMEM void AudioEffectDirt::update() {
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   audio_block_t* out[2] = {allocate(), allocate()};
   if (!out[0] || !out[1]) {

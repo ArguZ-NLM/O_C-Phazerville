@@ -18,7 +18,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Devices for the Sculpt app, modelled on the Torso S4 device chain.
+// Devices for the Sculpt app.
 //
 // A device is a stereo audio stage with up to 8 parameters (2 pages of 4),
 // up to 2 actions (UP / DOWN buttons) and a picture. Everything here runs
@@ -29,10 +29,10 @@
 
 #pragma once
 
-#include "../Audio/AudioEffectVast.h"
-#include "../Audio/AudioEffectDeform.h"
+#include "../Audio/AudioEffectEcho.h"
+#include "../Audio/AudioEffectDirt.h"
 #include "../Audio/AudioEffectBandz.h"
-#include "../Audio/AudioEffectRing.h"
+#include "../Audio/AudioEffectResonator.h"
 #include "../Audio/AudioEffectClouds.h"
 
 namespace sculpt {
@@ -143,7 +143,7 @@ public:
   const float* mod_bus = nullptr;        // the track's modulator outputs
   uint8_t mod_bi = 0;                // bit per param: bipolar around val
   bool active = false;
-  float wet = 1.0f;       // the device's share in its slot's fade (MOSAIC: LEVEL)
+  float wet = 1.0f;       // the device's share in its slot's fade (SPRAY: LEVEL)
   uint8_t view_page = 0;  // which page of settings the device view shows
   int8_t view_cursor = 0; // the setting under the cursor there
 
@@ -374,7 +374,7 @@ FLASHMEM void SculptMixer::update() {
 /////////////////////////////////////////////////////////////////
 // Bypass fades. SculptFade sits after every effect slot and mixes the
 // slot's input (dry) with the device's output (wet); SculptGate sits in
-// front of a device whose tail rings out when bypassed (SPACE). Both glide
+// front of a device whose tail rings out when bypassed (ECHO). Both glide
 // to their targets in ~15 ms and pass blocks through untouched once there.
 /////////////////////////////////////////////////////////////////
 constexpr float FADE_STEP = 1.0f / (0.015f * AUDIO_SAMPLE_RATE_EXACT);
@@ -675,7 +675,7 @@ FLASHMEM void MixDevice::DrawMini(int x, int y, int w, int h) {
 }
 
 /////////////////////////////////////////////////////////////////
-// INPUT (Material): picks the track's source from the audio inputs
+// INPUT (Feed): picks the track's source from the audio inputs
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef INPUT_DEF = {
   "INPUT", "IN", 3, {"", ""},
@@ -810,10 +810,10 @@ FLASHMEM void InputDevice::DrawMini(int x, int y, int w, int h) {
 }
 
 /////////////////////////////////////////////////////////////////
-// VAST (Space): hybrid delay + reverb
+// ECHO: hybrid delay + reverb
 /////////////////////////////////////////////////////////////////
-PROGMEM static const DeviceDef VAST_DEF = {
-  "SPACE", "VST", 8, {"FRZ", "CLR"}, // the tag stays VST: saved files use it
+PROGMEM static const DeviceDef ECHO_DEF = {
+  "ECHO", "ECH", 8, {"FRZ", "CLR"},
   {
     // page 1: the delay, page 2: the reverb and TONE
     {"LEVEL", 0, 100, 40, UNI},  // the delay's
@@ -828,16 +828,16 @@ PROGMEM static const DeviceDef VAST_DEF = {
   {"DELAY", "REVRB"},
 };
 
-class VastDevice : public Device {
+class EchoDevice : public Device {
 public:
   enum { DELAY, TIME, FEEDBACK, SPREAD, REVERB, SIZE, DECAY, TONE };
   enum { PHASE, PING, DIFFUSE };
-  static constexpr int TAPS = AudioEffectVast::TAPS;
+  static constexpr int TAPS = AudioEffectEcho::TAPS;
   static constexpr float MAX_SECS = 6.0f;
 
-  VastDevice();
-  AudioStream* in() override { return &vast; }
-  AudioStream* out() override { return &vast; }
+  EchoDevice();
+  AudioStream* in() override { return &echo; }
+  AudioStream* out() override { return &echo; }
   bool Activate() override;
   void Deactivate() override;
   bool ok() const override { return mem_ok; }
@@ -851,10 +851,10 @@ public:
   void CpuMax(float parts[2]) override;
   void TempoChanged() override { if (mode[TIME] != SYNC_FREE) SetTimes(); }
   uint32_t TailMs() const override;
-  void Parked() override { if (mem_ok) vast.Reset(); }  // no old tail on return
+  void Parked() override { if (mem_ok) echo.Reset(); }  // no old tail on return
 
 private:
-  AudioEffectVast vast;
+  AudioEffectEcho echo;
   bool mem_ok = false;
   float tap_secs[2][TAPS] = {};
   Meter tap_m[2][TAPS], tail_m;
@@ -867,44 +867,44 @@ private:
   void Poll();
 };
 
-constexpr size_t VAST_DELAY_SAMPLES
-  = static_cast<size_t>(VastDevice::MAX_SECS * AUDIO_SAMPLE_RATE_EXACT) + 512;
+constexpr size_t ECHO_DELAY_SAMPLES
+  = static_cast<size_t>(EchoDevice::MAX_SECS * AUDIO_SAMPLE_RATE_EXACT) + 512;
 
-FLASHMEM VastDevice::VastDevice() : Device(VAST_DEF), vast(VAST_DELAY_SAMPLES) {}
+FLASHMEM EchoDevice::EchoDevice() : Device(ECHO_DEF), echo(ECHO_DELAY_SAMPLES) {}
 
 // called while the stream is not patched in, so it isn't updating
-FLASHMEM bool VastDevice::Activate() {
+FLASHMEM bool EchoDevice::Activate() {
   if (active) return mem_ok;
-  mem_ok = vast.Acquire();
+  mem_ok = echo.Acquire();
   ApplyAll();
   active = true;
   return mem_ok;
 }
 
 // called after the stream has been unpatched
-FLASHMEM void VastDevice::Deactivate() {
+FLASHMEM void EchoDevice::Deactivate() {
   if (!active) return;
-  vast.Release();
+  echo.Release();
   active = false;
 }
 
 FLASHMEM uint32_t Device::TailMs() const { return 40; }
 
 // the reverb's decay plus a few rounds of echoes; frozen: never
-FLASHMEM uint32_t VastDevice::TailMs() const {
-  if (vast.frozen()) return UINT32_MAX;
+FLASHMEM uint32_t EchoDevice::TailMs() const {
+  if (echo.frozen()) return UINT32_MAX;
   const float decay = 0.3f * powf(60.0f, cur[DECAY] * 0.01f);
   const float echoes = tap_secs[0][TAPS - 1] * (1.0f + 8.0f * cur[FEEDBACK] * 0.01f);
   return uint32_t((decay + echoes) * 1000.0f) + 200;
 }
 
-FLASHMEM void VastDevice::CpuMax(float parts[2]) {
-  parts[0] = vast.processorUsageMax();
+FLASHMEM void EchoDevice::CpuMax(float parts[2]) {
+  parts[0] = echo.processorUsageMax();
   parts[1] = 0.0f;
-  vast.processorUsageMaxReset();
+  echo.processorUsageMaxReset();
 }
 
-FLASHMEM void VastDevice::SetTimes() {
+FLASHMEM void EchoDevice::SetTimes() {
   const float secs = mode[TIME] == SYNC_FREE ? cur[TIME] * 0.001f
     : DivSeconds(DivIndex(cur[TIME], 20, 6000), mode[TIME]);
   const float phase = mode[SPREAD] == PHASE ? 1.0f + 0.3f * cur[SPREAD] * 0.01f : 1.0f;
@@ -913,37 +913,37 @@ FLASHMEM void VastDevice::SetTimes() {
       float s = secs * TAP_POS[c][t] * (c ? phase : 1.0f);
       s = std::min(s, MAX_SECS - 0.01f);
       tap_secs[c][t] = s;
-      vast.tap(c, t, int(s * AUDIO_SAMPLE_RATE_EXACT));
+      echo.tap(c, t, int(s * AUDIO_SAMPLE_RATE_EXACT));
     }
   }
 }
 
-FLASHMEM void VastDevice::Apply(int p) {
+FLASHMEM void EchoDevice::Apply(int p) {
   const float v = cur[p] * 0.01f;
   switch (p) {
-    case DELAY:    vast.delay_mix(v); break;
+    case DELAY:    echo.delay_mix(v); break;
     case TIME:     SetTimes(); break;
-    case REVERB:   vast.reverb_mix(v); break;
-    case SIZE:     vast.size(v); break;
-    case FEEDBACK: vast.feedback(v); break;
+    case REVERB:   echo.reverb_mix(v); break;
+    case SIZE:     echo.size(v); break;
+    case FEEDBACK: echo.feedback(v); break;
     case SPREAD:
-      vast.pingpong(mode[SPREAD] == PING ? v : 0.0f);
-      vast.diffuse(mode[SPREAD] == DIFFUSE ? v : 0.0f);
+      echo.pingpong(mode[SPREAD] == PING ? v : 0.0f);
+      echo.diffuse(mode[SPREAD] == DIFFUSE ? v : 0.0f);
       SetTimes();
       break;
-    case TONE:     vast.tone(cur[TONE] * 0.02f); break;
-    case DECAY:    vast.decay(0.3f * powf(60.0f, v)); break; // 0.3 .. 18 s
+    case TONE:     echo.tone(cur[TONE] * 0.02f); break;
+    case DECAY:    echo.decay(0.3f * powf(60.0f, v)); break; // 0.3 .. 18 s
   }
 }
 
-FLASHMEM int VastDevice::Step(int p, int v, int dir) const {
+FLASHMEM int EchoDevice::Step(int p, int v, int dir) const {
   if (p == TIME && mode[TIME] != SYNC_FREE)
     return DivValue(DivIndex(v, 20, 6000) + dir, 20, 6000);
   if (p == TIME) return v + dir * std::max(1, v / 32); // ~3% per detent
   return v + dir;
 }
 
-FLASHMEM void VastDevice::Format(int p, char* buf, size_t n) const {
+FLASHMEM void EchoDevice::Format(int p, char* buf, size_t n) const {
   if (p == TIME && mode[TIME] != SYNC_FREE) {
     FormatDiv(DivIndex(val[TIME], 20, 6000), mode[TIME], buf, n);
   } else if (p == TIME) {
@@ -958,29 +958,29 @@ FLASHMEM void VastDevice::Format(int p, char* buf, size_t n) const {
   }
 }
 
-FLASHMEM void VastDevice::Action(int a) {
+FLASHMEM void EchoDevice::Action(int a) {
   if (a == 0) {
-    vast.set_freeze(!vast.frozen());
+    echo.set_freeze(!echo.frozen());
   } else if (a == 1) {
     // CLEAR: empty the delay and reverb buffers
     if (!mem_ok) return;
     AudioNoInterrupts();
-    vast.Reset();
+    echo.Reset();
     AudioInterrupts();
   }
 }
 
-FLASHMEM bool VastDevice::ActionLit(int a) const { return a == 0 && vast.frozen(); }
+FLASHMEM bool EchoDevice::ActionLit(int a) const { return a == 0 && echo.frozen(); }
 
-FLASHMEM void VastDevice::Poll() {
-  AudioEffectVast::Viz v;
-  vast.ReadViz(v);
+FLASHMEM void EchoDevice::Poll() {
+  AudioEffectEcho::Viz v;
+  echo.ReadViz(v);
   for (int c = 0; c < 2; c++)
     for (int t = 0; t < TAPS; t++) tap_m[c][t].Hit(v.tap[c][t]);
   tail_m.Hit(v.tail, 0.93f);
 }
 
-FLASHMEM void VastDevice::DrawViz(int x, int y, int w, int h) {
+FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
   Poll();
   if (!mem_ok) {
     gfxPrint(x + 22, y + h / 2 - 4, PSTR("out of memory"));
@@ -1049,7 +1049,7 @@ FLASHMEM void VastDevice::DrawViz(int x, int y, int w, int h) {
     gfxLine(cx - wall, y, cx - wall, base);
     gfxLine(cx + wall, y, cx + wall, base);
   }
-  if (vast.frozen()) {
+  if (echo.frozen()) {
     gfxPrint(x + w - 25, y + 1, PSTR("FRZ"));
     gfxInvert(x + w - 26, y, 20, 9);
   }
@@ -1058,7 +1058,7 @@ FLASHMEM void VastDevice::DrawViz(int x, int y, int w, int h) {
 // the delay page in small: the echoes on a 1 s line (longer times fill the
 // width), as tall as the delay LEVEL, and a dot running through them in
 // real time
-FLASHMEM void VastDevice::DrawMini(int x, int y, int w, int h) {
+FLASHMEM void EchoDevice::DrawMini(int x, int y, int w, int h) {
   Poll();
   const int base = y + h - 1;
   const int bh = std::max(1, h * cur[DELAY] / 100);
@@ -1069,14 +1069,14 @@ FLASHMEM void VastDevice::DrawMini(int x, int y, int w, int h) {
     const float at = fmodf(millis() * 0.001f, period);
     gfxPixel(px(at), base);
   }
-  if (vast.frozen()) gfxInvert(x, y, w, h);
+  if (echo.frozen()) gfxInvert(x, y, w, h);
 }
 
 /////////////////////////////////////////////////////////////////
-// DEFORM (Color): drive, compress, crush, tilt, envelope-following noise
+// DIRT: fold, drive, crush, tilt, envelope-following noise
 /////////////////////////////////////////////////////////////////
-PROGMEM static const DeviceDef DEFORM_DEF = {
-  "COLOR", "DEF", 8, {"", ""},  // DEFORM; the tag stays DEF: saved files use it
+PROGMEM static const DeviceDef DIRT_DEF = {
+  "DIRT", "DRT", 8, {"", ""},
   {
     {"DRIVE", 0, 100, 30, UNI},
     {"FOLD", 0, 100, 0, UNI},
@@ -1089,10 +1089,10 @@ PROGMEM static const DeviceDef DEFORM_DEF = {
   }
 };
 
-class DeformDevice : public Device {
+class DirtDevice : public Device {
 public:
   enum { DRIVE, FOLD, CRUSH, TILT, NOISE, NDECAY, NTONE, WET };
-  DeformDevice() : Device(DEFORM_DEF) {}
+  DirtDevice() : Device(DIRT_DEF) {}
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
   void Apply(int p) override;
@@ -1105,13 +1105,13 @@ public:
     fx.processorUsageMaxReset();
   }
 private:
-  AudioEffectDeform fx;
+  AudioEffectDirt fx;
   Meter in_m, out_m, noise_m;
   void Poll();
   float NoiseDecaySecs() const { return 0.01f * powf(200.0f, cur[NDECAY] * 0.01f); } // 10 ms .. 2 s
 };
 
-FLASHMEM void DeformDevice::Apply(int p) {
+FLASHMEM void DirtDevice::Apply(int p) {
   const float v = cur[p] * 0.01f;
   switch (p) {
     case DRIVE:  fx.drive(v); break;
@@ -1125,7 +1125,7 @@ FLASHMEM void DeformDevice::Apply(int p) {
   }
 }
 
-FLASHMEM void DeformDevice::Format(int p, char* buf, size_t n) const {
+FLASHMEM void DirtDevice::Format(int p, char* buf, size_t n) const {
   if (p == NDECAY) {
     const float s = 0.01f * powf(200.0f, val[NDECAY] * 0.01f);
     if (s < 1.0f) snprintf(buf, n, "%dms", int(s * 1000.0f + 0.5f));
@@ -1139,15 +1139,15 @@ FLASHMEM void DeformDevice::Format(int p, char* buf, size_t n) const {
   }
 }
 
-FLASHMEM void DeformDevice::Poll() {
-  AudioEffectDeform::Viz v;
+FLASHMEM void DirtDevice::Poll() {
+  AudioEffectDirt::Viz v;
   fx.ReadViz(v);
   in_m.Hit(v.in);
   out_m.Hit(v.out);
   noise_m.Hit(v.noise, 0.8f);
 }
 
-FLASHMEM void DeformDevice::DrawViz(int x, int y, int w, int h) {
+FLASHMEM void DirtDevice::DrawViz(int x, int y, int w, int h) {
   Poll();
   // only the section of the setting under the cursor gets an outline
   int sect;
@@ -1164,9 +1164,9 @@ FLASHMEM void DeformDevice::DrawViz(int x, int y, int w, int h) {
   const int bs = 52, half = h / 2 - 1, cyw = y + h / 2, lim = half;
   if (sect == 0) gfxFrame(x, y, bs, h);
   const float drv = cur[DRIVE] * 0.01f, crs = cur[CRUSH] * 0.01f, fld = cur[FOLD] * 0.01f;
-  const bool bits = crs > 0.0f && mode[CRUSH] != AudioEffectDeform::CRUSH_REDUX;
+  const bool bits = crs > 0.0f && mode[CRUSH] != AudioEffectDirt::CRUSH_REDUX;
   // the picture exaggerates the steps so they are visible at this size
-  const int levels = bits ? std::max(2, 1 << std::min(4, AudioEffectDeform::CrushBits(crs) - 12)) : 0;
+  const int levels = bits ? std::max(2, 1 << std::min(4, AudioEffectDirt::CrushBits(crs) - 12)) : 0;
   const float boost = 1.0f + 6.0f * fld * std::min(1.0f, fld * 4.0f);
   int py = -1;
   for (int i = 1; i < bs - 1; i++) {
@@ -1174,7 +1174,7 @@ FLASHMEM void DeformDevice::DrawViz(int x, int y, int w, int h) {
     const float in = sinf(ph);
     const int gy = int(in * boost * lim);
     if (abs(gy) < half && (i & 1)) gfxPixel(x + i, cyw - gy);
-    float yo = AudioEffectDeform::Shape(AudioEffectDeform::Fold(in, fld), drv);
+    float yo = AudioEffectDirt::Shape(AudioEffectDirt::Fold(in, fld), drv);
     if (levels) yo = roundf(yo * levels) / levels;
     const int yy = cyw - int(constrain(yo, -1.0f, 1.0f) * lim);
     if (py >= 0) gfxLine(x + i - 1, py, x + i, yy);
@@ -1217,11 +1217,11 @@ FLASHMEM void DeformDevice::DrawViz(int x, int y, int w, int h) {
   if (sect == 2) gfxFrame(nx - 1, y, nw + 2, h);
   const float lvl = noise_m.v;
   switch (mode[NOISE]) {
-    case AudioEffectDeform::NOISE_WHITE: {  // fine, even
+    case AudioEffectDirt::NOISE_WHITE: {  // fine, even
       const int dots = int(lvl * 120.0f);
       for (int i = 0; i < dots; i++) gfxPixel(nx + random(nw), y + 1 + random(nh));
     } break;
-    case AudioEffectDeform::NOISE_PINK: {   // chunkier, heavier at the bottom
+    case AudioEffectDirt::NOISE_PINK: {   // chunkier, heavier at the bottom
       const int dots = int(lvl * 45.0f);
       for (int i = 0; i < dots; i++) {
         const int r = random(nh - 1);
@@ -1250,16 +1250,16 @@ FLASHMEM void DeformDevice::DrawViz(int x, int y, int w, int h) {
 }
 
 // the fold picture in small, standing still like on the page
-FLASHMEM void DeformDevice::DrawMini(int x, int y, int w, int h) {
+FLASHMEM void DirtDevice::DrawMini(int x, int y, int w, int h) {
   Poll();
   const float drv = cur[DRIVE] * 0.01f, crs = cur[CRUSH] * 0.01f, fld = cur[FOLD] * 0.01f;
-  const bool bits = crs > 0.0f && mode[CRUSH] != AudioEffectDeform::CRUSH_REDUX;
-  const int levels = bits ? std::max(2, 1 << std::min(3, AudioEffectDeform::CrushBits(crs) - 12)) : 0;
+  const bool bits = crs > 0.0f && mode[CRUSH] != AudioEffectDirt::CRUSH_REDUX;
+  const int levels = bits ? std::max(2, 1 << std::min(3, AudioEffectDirt::CrushBits(crs) - 12)) : 0;
   const int cy = y + h / 2, lim = h / 2;
   int py = -1;
   for (int i = 0; i < w; i++) {
     const float in = sinf(2.0f * float(M_PI) * i / (w - 1));
-    float yo = AudioEffectDeform::Shape(AudioEffectDeform::Fold(in, fld), drv);
+    float yo = AudioEffectDirt::Shape(AudioEffectDirt::Fold(in, fld), drv);
     if (levels) yo = roundf(yo * levels) / levels;
     const int yy = cy - int(constrain(yo, -1.0f, 1.0f) * lim);
     if (py >= 0) gfxLine(x + i - 1, py, x + i, yy);
@@ -1268,10 +1268,10 @@ FLASHMEM void DeformDevice::DrawMini(int x, int y, int w, int h) {
 }
 
 /////////////////////////////////////////////////////////////////
-// RING (Resonator slot, shown as RESONATOR): 48-band resonant filter bank
+// RESONATOR: 48-band resonant filter bank
 /////////////////////////////////////////////////////////////////
-PROGMEM static const DeviceDef RING_DEF = {
-  "RESONATOR", "RNG", 8, {"", ""},  // tag kept for saved files
+PROGMEM static const DeviceDef RESONATOR_DEF = {
+  "RESONATOR", "RES", 8, {"", ""},
   {
     {"CUT", 0, 100, 70, UNI},
     {"SLOPE", -50, 50, -50, BI},
@@ -1284,11 +1284,11 @@ PROGMEM static const DeviceDef RING_DEF = {
   }
 };
 
-class RingDevice : public Device {
+class ResonatorDevice : public Device {
 public:
   enum { CUT, SLOPE, RESO, DECAY, PITCH, TONE, SCALE, WET };
-  static constexpr int BANDS = AudioEffectRing::BANDS;
-  RingDevice() : Device(RING_DEF) {}
+  static constexpr int BANDS = AudioEffectResonator::BANDS;
+  ResonatorDevice() : Device(RESONATOR_DEF) {}
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
   bool Activate() override { fx.Reset(); active = true; return true; }
@@ -1302,7 +1302,7 @@ public:
     fx.processorUsageMaxReset();
   }
 private:
-  AudioEffectRing fx;
+  AudioEffectResonator fx;
   float band_m[BANDS] = {};
   Meter out_m;
   void Rebuild();
@@ -1315,7 +1315,7 @@ private:
 // band k sits 2 semitones above band k-1, from C1, moved by PITCH and
 // snapped to SCALE; its gain follows CUT / SLOPE (12 dB per octave sides),
 // a RESO bump at the cutoff and the TONE tilt
-FLASHMEM void RingDevice::Rebuild() {
+FLASHMEM void ResonatorDevice::Rebuild() {
   static const uint16_t scale_masks[4] = {
     0xFFF,                                                   // chromatic
     (1 << 0) | (1 << 2) | (1 << 4) | (1 << 5) | (1 << 7) | (1 << 9) | (1 << 11), // major
@@ -1344,7 +1344,7 @@ FLASHMEM void RingDevice::Rebuild() {
 
 // gain of a band (fractional k for the picture) from CUT / SLOPE (12 dB per
 // octave sides, 6 bands an octave), before RESO and TONE
-FLASHMEM float RingDevice::Base(float k) const {
+FLASHMEM float ResonatorDevice::Base(float k) const {
   const float d = k - cur[CUT] * 0.01f * (BANDS - 1);
   const float slope = cur[SLOPE] * 0.02f;
   const float g_lp = d <= 0.0f ? 1.0f : powf(10.0f, -2.0f * d / 20.0f);
@@ -1354,7 +1354,7 @@ FLASHMEM float RingDevice::Base(float k) const {
 }
 
 // the RESO bump around the cutoff, 0..1
-FLASHMEM float RingDevice::Bump(float k) const {
+FLASHMEM float ResonatorDevice::Bump(float k) const {
   const float d = k - cur[CUT] * 0.01f * (BANDS - 1);
   return expf(-(d * d) / 2.25f);
 }
@@ -1362,12 +1362,12 @@ FLASHMEM float RingDevice::Bump(float k) const {
 // height of the shape in the picture, 0..1: the pass band at the top, RESO
 // lowers it to half with the peak staying at the top. TONE has its own box.
 // Fixed scale, so nothing jumps while CUT moves between bands.
-FLASHMEM float RingDevice::View(float k) const {
+FLASHMEM float ResonatorDevice::View(float k) const {
   const float res = cur[RESO] * 0.01f;
   return std::min(1.0f, Base(k) * (1.0f - 0.5f * res + 0.5f * res * Bump(k)));
 }
 
-FLASHMEM void RingDevice::Format(int p, char* buf, size_t n) const {
+FLASHMEM void ResonatorDevice::Format(int p, char* buf, size_t n) const {
   if (p == CUT) {
     // the cutoff band's note, before PITCH
     static const char* const names[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
@@ -1380,8 +1380,8 @@ FLASHMEM void RingDevice::Format(int p, char* buf, size_t n) const {
   }
 }
 
-FLASHMEM void RingDevice::DrawViz(int x, int y, int w, int h) {
-  AudioEffectRing::Viz v;
+FLASHMEM void ResonatorDevice::DrawViz(int x, int y, int w, int h) {
+  AudioEffectResonator::Viz v;
   fx.ReadViz(v);
   out_m.Hit(v.out);
   // 48 bands as thin bars (2 px each) across the three left columns, the
@@ -1421,8 +1421,8 @@ FLASHMEM void RingDevice::DrawViz(int x, int y, int w, int h) {
   gfxLine(mx - 4, pyy, mx - 2, pyy);
 }
 
-FLASHMEM void RingDevice::DrawMini(int x, int y, int w, int h) {
-  AudioEffectRing::Viz v;
+FLASHMEM void ResonatorDevice::DrawMini(int x, int y, int w, int h) {
+  AudioEffectResonator::Viz v;
   fx.ReadViz(v);
   out_m.Hit(v.out);
   // a tiny bank: one column per 3 bands
@@ -1437,17 +1437,17 @@ FLASHMEM void RingDevice::DrawMini(int x, int y, int w, int h) {
 }
 
 /////////////////////////////////////////////////////////////////
-// MOSAIC (Granular): grains from the last 4 s of the track, on Misty's
+// SPRAY: grains from the last 4 s of the track, on Misty's
 // engine (AudioEffectClouds, stereo). The engine gives the grains only; the
 // slot's fade mixes them with the dry signal by LEVEL.
 /////////////////////////////////////////////////////////////////
-PROGMEM static const DeviceDef MOSAIC_DEF = {
-  "MOSAIC", "MOS", 8, {"FRZ", ""},
+PROGMEM static const DeviceDef SPRAY_DEF = {
+  "SPRAY", "SPR", 8, {"FRZ", ""},
   {
     {"RATE", 0, 100, 55, UNI, 0, 2, 1, {}, {"EVEN", "RAND"}},
     {"SIZE", 0, 100, 50, UNI},
     {"PITCH", -24, 24, 0, BI},
-    {"SPRAY", 0, 100, 20, UNI},
+    {"SCATR", 0, 100, 20, UNI},
     {"POS", 0, 100, 10, UNI},
     {"SHAPE", 0, 100, 70, UNI},
     {"FDBK", 0, 100, 0, UNI},
@@ -1456,11 +1456,11 @@ PROGMEM static const DeviceDef MOSAIC_DEF = {
   {"GRAIN", ""},
 };
 
-class MosaicDevice : public Device {
+class SprayDevice : public Device {
 public:
-  enum { RATE, SIZE, PITCH, SPRAY, POS, SHAPE, FDBK, LEVEL };
+  enum { RATE, SIZE, PITCH, SCATTER, POS, SHAPE, FDBK, LEVEL };
   static constexpr float BUF_SECS = 4.0f;
-  MosaicDevice();
+  SprayDevice();
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
   bool Activate() override;
@@ -1484,11 +1484,11 @@ private:
   float SizeSecs() const { return 0.01f * powf(100.0f, cur[SIZE] * 0.01f); } // 10 ms .. 1 s
 };
 
-FLASHMEM MosaicDevice::MosaicDevice()
-  : Device(MOSAIC_DEF), fx(size_t(BUF_SECS * AUDIO_SAMPLE_RATE_EXACT), 2) {}
+FLASHMEM SprayDevice::SprayDevice()
+  : Device(SPRAY_DEF), fx(size_t(BUF_SECS * AUDIO_SAMPLE_RATE_EXACT), 2) {}
 
 // called while the stream is not patched in
-FLASHMEM bool MosaicDevice::Activate() {
+FLASHMEM bool SprayDevice::Activate() {
   if (active) return fx.IsReady();
   fx.Acquire();
   fx.setGrainSource(0.0f);
@@ -1498,19 +1498,19 @@ FLASHMEM bool MosaicDevice::Activate() {
   return fx.IsReady();
 }
 
-FLASHMEM void MosaicDevice::Deactivate() {
+FLASHMEM void SprayDevice::Deactivate() {
   if (!active) return;
   fx.Release();
   active = false;
 }
 
-FLASHMEM void MosaicDevice::Apply(int p) {
+FLASHMEM void SprayDevice::Apply(int p) {
   const float v = cur[p] * 0.01f;
   switch (p) {
     case RATE:  fx.setDensity(mode[RATE] ? RateHz() : -RateHz()); break; // neg = even
     case SIZE:  fx.setSize(SizeSecs()); break;
     case PITCH: fx.setPitch(powf(2.0f, cur[PITCH] / 12.0f)); break;
-    case SPRAY: fx.setSpray(v * 0.5f); break;
+    case SCATTER: fx.setSpray(v * 0.5f); break;
     case POS:   fx.setPosition(v); break;
     case SHAPE: fx.setTexture(v); break;
     case FDBK:  fx.setFeedback(v * 0.9f); break;
@@ -1518,7 +1518,7 @@ FLASHMEM void MosaicDevice::Apply(int p) {
   }
 }
 
-FLASHMEM void MosaicDevice::Format(int p, char* buf, size_t n) const {
+FLASHMEM void SprayDevice::Format(int p, char* buf, size_t n) const {
   if (p == RATE) {
     const float hz = 0.5f * powf(80.0f, val[RATE] * 0.01f);
     if (hz < 10.0f) snprintf(buf, n, "%d.%dHz", int(hz), int(hz * 10) % 10);
@@ -1532,7 +1532,7 @@ FLASHMEM void MosaicDevice::Format(int p, char* buf, size_t n) const {
   }
 }
 
-FLASHMEM void MosaicDevice::Action(int a) {
+FLASHMEM void SprayDevice::Action(int a) {
   if (a == 0) {
     frozen = !frozen;
     fx.setFreeze(frozen);
@@ -1540,9 +1540,9 @@ FLASHMEM void MosaicDevice::Action(int a) {
 }
 
 // first look: the last 4 s as a line (now at the right), the window grains
-// are taken from (POS back from now, widened by SPRAY), one dot per active
+// are taken from (POS back from now, widened by SCATTER), one dot per active
 // grain inside it, raised or lowered by PITCH
-FLASHMEM void MosaicDevice::DrawViz(int x, int y, int w, int h) {
+FLASHMEM void SprayDevice::DrawViz(int x, int y, int w, int h) {
   if (!fx.IsReady()) {
     gfxPrint(x + 22, y + h / 2 - 4, PSTR("out of memory"));
     return;
@@ -1550,7 +1550,7 @@ FLASHMEM void MosaicDevice::DrawViz(int x, int y, int w, int h) {
   const int base = y + h - 1;
   gfxDottedLine(x, base, x + w - 1, base, 2);
   const int now = x + w - 1;
-  const float pos = cur[POS] * 0.01f, spray = cur[SPRAY] * 0.005f;
+  const float pos = cur[POS] * 0.01f, spray = cur[SCATTER] * 0.005f;
   const int cxp = now - int(pos * (w - 1));
   const int half = std::max(1, int(spray * (w - 1)));
   gfxLine(cxp - half, base - 2, cxp + half, base - 2);
@@ -1571,7 +1571,7 @@ FLASHMEM void MosaicDevice::DrawViz(int x, int y, int w, int h) {
   }
 }
 
-FLASHMEM void MosaicDevice::DrawMini(int x, int y, int w, int h) {
+FLASHMEM void SprayDevice::DrawMini(int x, int y, int w, int h) {
   const int n = fx.ActiveGrainCount();
   uint32_t r = millis() / 60;
   for (int i = 0; i < n; i++) {
@@ -1581,32 +1581,32 @@ FLASHMEM void MosaicDevice::DrawMini(int x, int y, int w, int h) {
 }
 
 /////////////////////////////////////////////////////////////////
-// Slot catalogue, S4 order. Option 0 of the effect slots is BYPASS.
+// Slot catalogue, in chain order. Option 0 of the effect slots is BYPASS.
 /////////////////////////////////////////////////////////////////
-enum Slot : uint8_t { MATERIAL, GRANULAR, FILTER, COLOR, SPACE, SLOT_COUNT };
+enum Slot : uint8_t { FEED, SPRAY, RESONATOR, DIRT, ECHO, SLOT_COUNT };
 constexpr int MAX_OPTIONS = 2;
 
 struct SlotDef {
   char name[10];
   char tag[4];
-  uint8_t noptions;  // BYPASS + devices that exist now (MATERIAL: no bypass)
+  uint8_t noptions;  // BYPASS + devices that exist now (FEED: no bypass)
   uint8_t planned;   // devices this slot will offer (dots on the chain view)
 };
 
 PROGMEM static const SlotDef SLOT_DEFS[SLOT_COUNT] = {
-  {"MATERIAL", "MAT", 1, 3},  // INPUT (TAPE and DISC to come)
-  {"GRANULAR", "GRN", 2, 1},  // BYPASS, MOSAIC
-  {"RESONATOR", "RES", 2, 1},  // BYPASS, RING (shown as RESONATOR)
-  {"COLOR",    "COL", 2, 1},  // BYPASS, DEFORM
-  {"SPACE",    "SPC", 2, 1},  // BYPASS, SPACE
+  {"FEED",     "FED", 1, 3},  // INPUT (a looper to come)
+  {"SPRAY",    "SPR", 2, 1},  // BYPASS, SPRAY
+  {"RESONATOR", "RES", 2, 1},  // BYPASS, RESONATOR
+  {"DIRT",     "DRT", 2, 1},  // BYPASS, DIRT
+  {"ECHO",     "ECH", 2, 1},  // BYPASS, ECHO
 };
 
-// nullptr = BYPASS. MATERIAL/INPUT is owned by the track, not made here.
+// nullptr = BYPASS. FEED/INPUT is owned by the track, not made here.
 FLASHMEM static Device* MakeDevice(int slot, int option) {
-  if (slot == GRANULAR && option == 1) return new MosaicDevice;
-  if (slot == FILTER && option == 1) return new RingDevice;
-  if (slot == COLOR && option == 1) return new DeformDevice;
-  if (slot == SPACE && option == 1) return new VastDevice;
+  if (slot == SPRAY && option == 1) return new SprayDevice;
+  if (slot == RESONATOR && option == 1) return new ResonatorDevice;
+  if (slot == DIRT && option == 1) return new DirtDevice;
+  if (slot == ECHO && option == 1) return new EchoDevice;
   return nullptr;
 }
 
