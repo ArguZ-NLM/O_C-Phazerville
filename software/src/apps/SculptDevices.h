@@ -1599,12 +1599,21 @@ FLASHMEM void SprayDevice::DrawViz(int x, int y, int w, int h) {
   const float eff = std::min(PosVariation(), std::min(pos, 1.0f - pos));
   const int mid = x + w - 1 - int(pos * (w - 1) + 0.5f), half = std::max(2, int(eff * w + 0.5f));
   const int wl = std::max(x, mid - half), wr = std::min(x + w - 1, mid + half);
-  for (int ex : {wl, wr}) {
-    gfxLine(ex, y, ex, y + 3);
-    gfxLine(ex, base - 3, ex, base);
+  // brackets, their corners rounded by SHAPE (0 square .. 100 round, as the
+  // grains' edges get softer)
+  const int r = std::min((cur[SHAPE] * 3 + 50) / 100, (wr - wl) / 2);
+  constexpr int tick = 5;
+  gfxLine(wl + r, y, wr - r, y);
+  gfxLine(wl + r, base, wr - r, base);
+  gfxLine(wl, y + r, wl, y + tick - 1);
+  gfxLine(wr, y + r, wr, y + tick - 1);
+  gfxLine(wl, base - tick + 1, wl, base - r);
+  gfxLine(wr, base - tick + 1, wr, base - r);
+  for (int i = 1; i < r; i++) {  // quarter circles between them
+    const int d = r - int(sqrtf(float(r * r - (r - i) * (r - i))) + 0.5f);
+    gfxPixel(wl + i, y + d); gfxPixel(wr - i, y + d);
+    gfxPixel(wl + i, base - d); gfxPixel(wr - i, base - d);
   }
-  gfxLine(wl, y, wr, y);
-  gfxLine(wl, base, wr, base);
   // the grains as they play: across from the middle by their scatter, up
   // and down by their own pitch offset around PITCH (all on one line without
   // spread), as wide as they are long on the buffer's scale
@@ -1616,7 +1625,9 @@ FLASHMEM void SprayDevice::DrawViz(int x, int y, int w, int h) {
     const int gx = constrain(mid + int(gv[i].scatter * w) - gw / 2, x + 1, x + w - gw - 1);
     const int gy = constrain(line - int(gv[i].semis * (h / 2 - 4) / 24) - 1, y + 2, base - 4);
     graphics.clearRect(gx - 1, gy - 1, gw + 2, 5);  // a gap around it in the waveform
-    gfxRect(gx, gy, gw, 3);
+    // with FDBK the grains turn hollow: outline only, dark inside
+    if (cur[FDBK] > 0) gfxFrame(gx, gy, gw, 3);
+    else gfxRect(gx, gy, gw, 3);
   }
   if (frozen) {
     gfxPrint(x + w - 25, y + 1, PSTR("FRZ"));
