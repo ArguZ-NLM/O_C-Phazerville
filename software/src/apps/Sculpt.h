@@ -823,17 +823,18 @@ FLASHMEM void AppSculpt::DrawDevice() const {
     }
     gfxPrint(4, 33, PSTR("L/R enc: trigger"));
   }
-  const bool mute_turn = !mod_mode && &d->def != &MIX_DEF && Muted()
-      && (!d->def.actions[1][0] || (millis() / 600) % 2);
+  // MIX's own MUTE label is left out (MUTE is in its settings); the
+  // blinking MUTE below stands for it like on every other page
+  const bool is_mix = &d->def == &MIX_DEF;
+  const bool mute_turn = !mod_mode && Muted()
+      && (is_mix || !d->def.actions[1][0] || (millis() / 600) % 2);
   for (int a = 0; a < 2 && !mod_mode; a++) {
-    if (!d->def.actions[a][0] || (a == 1 && mute_turn)) continue;
+    if (!d->def.actions[a][0] || (a == 1 && (mute_turn || is_mix))) continue;
     const int x = 56 + a * 26; // clear of the page number at 110
     gfxPrint(x, 0, d->def.actions[a]);
+    // lit actions (e.g. FRZ) are inverted
     const int lw = 6 * int(strlen(d->def.actions[a])) + 2;
-    // a muted track blinks MUTE so it can't be missed; other lit actions
-    // (e.g. FRZ) stay inverted
-    const bool blink = &d->def == &MIX_DEF;
-    if (d->ActionLit(a) && (!blink || (millis() / 300) % 2)) gfxInvert(x - 1, 0, lw, 8);
+    if (d->ActionLit(a)) gfxInvert(x - 1, 0, lw, 8);
   }
   // a muted track shows MUTE blinking on every page, in the second action
   // place; where a device has its own action there, the two take turns
