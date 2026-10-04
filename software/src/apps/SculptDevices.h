@@ -871,6 +871,8 @@ private:
 FLASHMEM bool ReelDevice::Activate() {
   if (active) return fx.ready();
   fx.Acquire(MAX_SECS);
+  // IN is the input's own choice: take it over rather than impose ours
+  if (input) val[IN] = cur[IN] = input->val[0];
   ApplyAll();
   active = true;
   return fx.ready();
