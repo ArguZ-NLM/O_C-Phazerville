@@ -1028,15 +1028,16 @@ FLASHMEM void VastDevice::DrawViz(int x, int y, int w, int h) {
   }
 }
 
-// the delay page in small: the echoes on the 6 s line, as tall as the delay
-// LEVEL, and a dot running through them in real time
+// the delay page in small: the echoes on a 1 s line (longer times fill the
+// width), as tall as the delay LEVEL, and a dot running through them in
+// real time
 FLASHMEM void VastDevice::DrawMini(int x, int y, int w, int h) {
   Poll();
   const int base = y + h - 1;
   const int bh = std::max(1, h * cur[DELAY] / 100);
-  auto px = [&](float sec) { return x + int(constrain(sec / MAX_SECS, 0.0f, 1.0f) * (w - 1)); };
+  const float period = tap_secs[0][TAPS - 1], span = std::max(1.0f, period);
+  auto px = [&](float sec) { return x + int(constrain(sec / span, 0.0f, 1.0f) * (w - 1)); };
   for (int t = 0; t < TAPS; t++) gfxLine(px(tap_secs[0][t]), base - bh + 1, px(tap_secs[0][t]), base);
-  const float period = tap_secs[0][TAPS - 1];
   if (period > 0.0f) {
     const float at = fmodf(millis() * 0.001f, period);
     gfxPixel(px(at), base);
@@ -1401,7 +1402,8 @@ FLASHMEM void RingDevice::DrawMini(int x, int y, int w, int h) {
   for (int i = 0; i < w; i++) {
     float m = 0.0f;
     for (int k = i * BANDS / w; k < (i + 1) * BANDS / w; k++) m = std::max(m, v.band[k]);
-    band_m[i] = std::max(sqrtf(std::min(1.0f, m * 4.0f)), band_m[i] * 0.9f);
+    // twice as tall as the page's bars, so the small picture reads
+    band_m[i] = std::max(sqrtf(std::min(1.0f, m * 16.0f)), band_m[i] * 0.9f);
     const int bh = int(band_m[i] * h);
     if (bh > 0) gfxLine(x + i, y + h, x + i, y + h - bh);
   }
