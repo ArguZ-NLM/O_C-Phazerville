@@ -82,6 +82,7 @@ private:
   size_t o_ws = 0, o_wl = 0;
   float o_off = 0.0f;
   int xf = 0;
+  float dub_g = 0.0f;  // overdub fading in / out (~10 ms), so it doesn't click
   volatile State st = EMPTY;
   volatile bool press = false, clear = false, stop = false;
   volatile float speed = 1.0f, start_ = 0.0f, len_ = 1.0f, keep_ = 0.8f, mon = 1.0f, level = 1.0f;
@@ -92,6 +93,7 @@ private:
     len = wpos = ws = wl = 0;
     off = 0.0f;
     xf = 0;
+    dub_g = 0.0f;
     std::fill(hist, hist + HIST, 0);
   }
   void Mark(size_t pos, int16_t a, int16_t b) {
@@ -189,9 +191,14 @@ FASTRUN void AudioEffectReel::update() {
         xf--;
       }
       const size_t i0 = (ws + size_t(off)) % len;
-      if (st == DUB) {
-        const int16_t nl = __SSAT(int32_t(buf[0][i0] * keep) + xl, 16);
-        const int16_t nr = __SSAT(int32_t(buf[1][i0] * keep) + xr, 16);
+      // overdub: the input comes in and the old loop goes down to DUB,
+      // both gliding with dub_g
+      constexpr float dub_step = 1.0f / (0.01f * AUDIO_SAMPLE_RATE_EXACT);
+      dub_g = st == DUB ? std::min(1.0f, dub_g + dub_step) : std::max(0.0f, dub_g - dub_step);
+      if (dub_g > 0.0f) {
+        const float k = 1.0f - dub_g * (1.0f - keep);
+        const int16_t nl = __SSAT(int32_t(buf[0][i0] * k + xl * dub_g), 16);
+        const int16_t nr = __SSAT(int32_t(buf[1][i0] * k + xr * dub_g), 16);
         buf[0][i0] = nl;
         buf[1][i0] = nr;
         Mark(i0, nl, nr);
