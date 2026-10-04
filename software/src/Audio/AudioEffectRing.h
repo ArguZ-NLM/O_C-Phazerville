@@ -56,6 +56,8 @@ private:
   float damp_ = 0.1f, wet_ = 1.0f, env = 0.0f;
   bool choke_ = false;
   Viz viz = {};
+  // per-block scratch, kept here rather than on the small stack
+  float x[AUDIO_BLOCK_SAMPLES], dmp[AUDIO_BLOCK_SAMPLES], sum[2][AUDIO_BLOCK_SAMPLES];
 };
 
 // Runs from flash like the other Sculpt engines (RAM1 is full).
@@ -75,7 +77,6 @@ FLASHMEM void AudioEffectRing::update() {
   const float wet = wet_;
 
   // the mono input and the damping for each sample of the block
-  float x[AUDIO_BLOCK_SAMPLES], dmp[AUDIO_BLOCK_SAMPLES];
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
     const float dl = in[0] ? in[0]->data[n] * q : 0.0f;
     const float dr = in[1] ? in[1]->data[n] * q : 0.0f;
@@ -94,7 +95,7 @@ FLASHMEM void AudioEffectRing::update() {
   // registers; bands far below the loudest one are not heard and skipped
   float gmax = 0.0f;
   for (int b = 0; b < BANDS; b++) gmax = std::max(gmax, gain[b]);
-  float sum[2][AUDIO_BLOCK_SAMPLES] = {};
+  memset(sum, 0, sizeof(sum));
   for (int b = 0; b < BANDS; b++) {
     const float f = coef[b], g = gain[b];
     if (g <= gmax * 1e-3f || g < 1e-4f || f <= 0.0f) {
