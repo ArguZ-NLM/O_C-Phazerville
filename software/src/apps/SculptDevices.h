@@ -825,7 +825,7 @@ FLASHMEM void InputDevice::DrawMini(int x, int y, int w, int h) {
 // through the track's input; IN is the input's source, so it is set here too.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef REEL_DEF = {
-  "REEL", "REL", 7, {"REC", "CLR"},
+  "REEL", "REL", 7, {"REC", "STP"},
   {
     {"IN", 0, 3, 1, LIST, 4, 0, 0, {"L+R", "L", "R", "OFF"}},
     {"SPEED", -200, 200, 100, BI},
@@ -859,6 +859,7 @@ public:
     parts[1] = 0.0f;
     fx.processorUsageMaxReset();
   }
+  void ClearLoop() { fx.Clear(); }  // B held for 3 s
 private:
   AudioEffectReel fx;
   InputDevice* input;
@@ -898,10 +899,11 @@ FLASHMEM void ReelDevice::Format(int p, char* buf, size_t n) const {
   else Device::Format(p, buf, n);
 }
 
-// A: REC -> PLAY -> DUB -> PLAY; B: stop and clear
+// A: REC -> PLAY -> DUB -> PLAY (stopped: play from the start); B: stop
+// (held for 3 s: clear, see the app)
 FLASHMEM void ReelDevice::Action(int a) {
   if (a == 0) fx.Press();
-  else fx.Clear();
+  else fx.Stop();
 }
 
 FLASHMEM bool ReelDevice::ActionLit(int a) const {

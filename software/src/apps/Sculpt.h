@@ -149,6 +149,7 @@ private:
   elapsedMicros tick_timer;
   int8_t track = 0, col = sculpt::ECHO, cursor = 0;
   bool l_held = false, l_used = false;
+  uint32_t clear_hold = 0;  // REEL: when B went down (0 = not held)
   bool editing = false;   // device view: setting grabbed, R enc changes it
   bool edit_mode = false; // the mode was just changed: show its name
   mutable elapsedMillis mode_shown;
@@ -606,6 +607,16 @@ FLASHMEM void AppSculpt::ModulateAll() {
 
 FLASHMEM void AppSculpt::MainLoop() {
   if (active) ReadMIDI();
+  if (clear_hold) {
+    using namespace sculpt;
+    if (!OC::ui.read_immediate(OC::CONTROL_BUTTON_DOWN)) {
+      clear_hold = 0;
+    } else if (millis() - clear_hold >= 3000) {
+      clear_hold = 0;
+      for (int t = 0; t < NUM_TRACKS; t++)
+        if ((t == track || linked) && tracks[t].reel) tracks[t].reel->ClearLoop();
+    }
+  }
   if (active && mod_timer >= 1000) { // follow the sources about once per ms
     mod_timer = 0;
     ModulateAll();
@@ -664,6 +675,9 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
     }
     return;
   }
+  // REEL: B held for 3 s clears the loop (see MainLoop)
+  if (event.control == OC::CONTROL_BUTTON_DOWN && event.type == UI::EVENT_BUTTON_DOWN)
+    clear_hold = (view == DEVICE && !focus_mod && col == SOURCE && tracks[track].choice[SOURCE]) ? millis() | 1 : 0;
   if (event.control == OC::CONTROL_BUTTON_UP || event.control == OC::CONTROL_BUTTON_DOWN) {
     constexpr uint16_t both = OC::CONTROL_BUTTON_UP | OC::CONTROL_BUTTON_DOWN;
     if (event.type == UI::EVENT_BUTTON_DOWN && (event.mask & both) == both) {

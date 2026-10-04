@@ -6,12 +6,13 @@
 
 // Stereo looper for the Sculpt REEL device. The loop lives in PSRAM (up to
 // 16 s; less if memory is short). A press cycles REC -> PLAY -> DUB -> PLAY;
-// the first REC sets the loop length. SPEED plays it at any rate, backwards
+// the first REC sets the loop length. Stop keeps the loop (a press plays it
+// again from the start), Clear empties it. SPEED plays it at any rate, backwards
 // below zero; START / LEN pick the part that loops, with short fades at its
 // ends so the seam doesn't click. MON passes the live input through.
 class AudioEffectReel : public AudioStream {
 public:
-  enum State : uint8_t { EMPTY, REC, PLAY, DUB };
+  enum State : uint8_t { EMPTY, REC, PLAY, DUB, STOPPED };
   static constexpr int HIST = 128;  // picture: level per 1/HIST of the buffer
 
   AudioEffectReel() : AudioStream(2, queue) {}
@@ -40,6 +41,7 @@ public:
   // --- UI thread; taken over at the next block ---
   void Press() { press = true; }
   void Clear() { clear = true; }
+  void Stop() { stop = true; }
   void SetSpeed(float s) { speed = s; }
   void SetWindow(float start, float len) { start_ = start; len_ = len; }
   void SetDub(float keep) { keep_ = keep; }
@@ -81,7 +83,7 @@ private:
   float o_off = 0.0f;
   int xf = 0;
   volatile State st = EMPTY;
-  volatile bool press = false, clear = false;
+  volatile bool press = false, clear = false, stop = false;
   volatile float speed = 1.0f, start_ = 0.0f, len_ = 1.0f, keep_ = 0.8f, mon = 1.0f, level = 1.0f;
   uint8_t hist[HIST] = {};
 
@@ -109,7 +111,12 @@ FASTRUN void AudioEffectReel::update() {
   }
 
   // button presses from the UI
-  if (clear) { clear = false; press = false; Reset(); }
+  if (clear) { clear = false; press = false; stop = false; Reset(); }
+  if (stop) {
+    stop = false;
+    if (st == REC) { len = std::max<size_t>(wpos, AUDIO_BLOCK_SAMPLES); ws = 0; wl = len; }
+    if (st != EMPTY) st = STOPPED;
+  }
   if (press) {
     press = false;
     switch (st) {
@@ -121,6 +128,11 @@ FASTRUN void AudioEffectReel::update() {
         break;
       case PLAY:  st = DUB; break;
       case DUB:   st = PLAY; break;
+      case STOPPED:  // from the start of the window (its end, backwards)
+        off = speed < 0.0f ? wl - 1.0f : 0.0f;
+        xf = 0;
+        st = PLAY;
+        break;
     }
   }
 
