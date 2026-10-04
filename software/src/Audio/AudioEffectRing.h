@@ -91,31 +91,56 @@ FLASHMEM void AudioEffectRing::update() {
     dmp[n] = damp;
   }
 
-  // one band at a time over the whole block, so its state stays in
-  // registers; bands far below the loudest one are not heard and skipped
+  // bands far below the loudest one are not heard and skipped; the rest
+  // run four at a time over the whole block (left and right side apart),
+  // so their state stays in registers and the four can overlap
   float gmax = 0.0f;
   for (int b = 0; b < BANDS; b++) gmax = std::max(gmax, gain[b]);
   memset(sum, 0, sizeof(sum));
-  for (int b = 0; b < BANDS; b++) {
-    const float f = coef[b], g = gain[b];
-    if (g <= gmax * 1e-3f || g < 1e-4f || f <= 0.0f) {
-      lp[b] = bp[b] = 0.0f;
-      continue;
+  for (int side = 0; side < 2; side++) {
+    int act[BANDS / 2 + 3], na = 0;
+    for (int b = side; b < BANDS; b += 2) {
+      if (gain[b] <= gmax * 1e-3f || gain[b] < 1e-4f || coef[b] <= 0.0f) lp[b] = bp[b] = 0.0f;
+      else act[na++] = b;
     }
-    float l = lp[b], v = bp[b], pk = 0.0f;
-    float* acc = sum[b & 1];
-    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
-      l += f * v;
-      const float d = dmp[n];
-      v += f * (x[n] - l - d * v);
-      // damp * bp: unity gain at the band's centre
-      const float y = v * d * g;
-      acc[n] += y;
-      pk = std::max(pk, fabsf(y));
+    while (na & 3) act[na++] = -1;  // padding: a silent band
+    float* acc = sum[side];
+    for (int i = 0; i < na; i += 4) {
+      float f[4], g[4], l[4], v[4], e[4] = {};
+      for (int j = 0; j < 4; j++) {
+        const int b = act[i + j];
+        f[j] = b < 0 ? 0.0f : coef[b];
+        g[j] = b < 0 ? 0.0f : gain[b];
+        l[j] = b < 0 ? 0.0f : lp[b];
+        v[j] = b < 0 ? 0.0f : bp[b];
+      }
+      for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+        const float xn = x[n], d = dmp[n];
+        float y = acc[n];
+#pragma GCC unroll 4
+        for (int j = 0; j < 4; j++) {
+          l[j] += f[j] * v[j];
+          v[j] += f[j] * (xn - l[j] - d * v[j]);
+          y += g[j] * v[j];
+          e[j] += v[j] * v[j];
+        }
+        acc[n] = y;
+      }
+      for (int j = 0; j < 4; j++) {
+        const int b = act[i + j];
+        if (b < 0) continue;
+        lp[b] = l[j];
+        bp[b] = v[j];
+        // band level for the picture: about its peak, from the energy
+        const float pk = sqrtf(2.0f * e[j] / AUDIO_BLOCK_SAMPLES) * damp_ * g[j];
+        viz.band[b] = std::max(viz.band[b], pk);
+      }
     }
-    lp[b] = l;
-    bp[b] = v;
-    viz.band[b] = std::max(viz.band[b], pk);
+  }
+  // damp * bp: unity gain at a band's centre
+  for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+    sum[0][n] *= dmp[n];
+    sum[1][n] *= dmp[n];
   }
 
   float peak_out = 0.0f;
