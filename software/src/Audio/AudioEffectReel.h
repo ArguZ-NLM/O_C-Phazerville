@@ -74,6 +74,12 @@ private:
   int16_t* buf[2] = {};
   size_t cap = 0, len = 0, wpos = 0, ws = 0, wl = 0;
   float off = 0.0f;  // play head, samples into the window
+  // START / LEN changes: the old window keeps playing and fades out while
+  // the new one fades in (one change per fade; the next waits for it)
+  static constexpr int XFADE = 512;  // ~12 ms
+  size_t o_ws = 0, o_wl = 0;
+  float o_off = 0.0f;
+  int xf = 0;
   volatile State st = EMPTY;
   volatile bool press = false, clear = false;
   volatile float speed = 1.0f, start_ = 0.0f, len_ = 1.0f, keep_ = 0.8f, mon = 1.0f, level = 1.0f;
@@ -83,6 +89,7 @@ private:
     st = EMPTY;
     len = wpos = ws = wl = 0;
     off = 0.0f;
+    xf = 0;
     std::fill(hist, hist + HIST, 0);
   }
   void Mark(size_t pos, int16_t a, int16_t b) {
@@ -107,21 +114,47 @@ FASTRUN void AudioEffectReel::update() {
     press = false;
     switch (st) {
       case EMPTY: wpos = 0; std::fill(hist, hist + HIST, 0); st = REC; break;
-      case REC:   len = std::max<size_t>(wpos, AUDIO_BLOCK_SAMPLES); off = 0.0f; st = PLAY; break;
+      case REC:
+        len = std::max<size_t>(wpos, AUDIO_BLOCK_SAMPLES);
+        ws = 0; wl = len; off = 0.0f; xf = 0;
+        st = PLAY;
+        break;
       case PLAY:  st = DUB; break;
       case DUB:   st = PLAY; break;
     }
   }
 
-  // the looping part of the loop (whole samples)
-  if (len) {
-    ws = std::min<size_t>(len - 1, size_t(start_ * len));
-    wl = std::max<size_t>(AUDIO_BLOCK_SAMPLES, std::min<size_t>(len, size_t(len_ * len)));
-    if (off >= wl) off = std::fmod(off, float(wl));
+  // the looping part of the loop (whole samples); a change starts a fade
+  // from the old window to the new one, keeping the play position when it
+  // is inside the new window
+  if (len && st != REC) {
+    const size_t nws = std::min<size_t>(len - 1, size_t(start_ * len));
+    const size_t nwl = std::max<size_t>(AUDIO_BLOCK_SAMPLES, std::min<size_t>(len, size_t(len_ * len)));
+    if ((nws != ws || nwl != wl) && xf == 0) {
+      o_ws = ws; o_wl = wl; o_off = off;
+      const size_t at = (ws + size_t(off)) % len;           // where we play now
+      const size_t into = (at + len - nws) % len;            // ... in the new window
+      ws = nws; wl = nwl;
+      off = into < wl ? float(into) + (off - std::floor(off)) : (speed < 0.0f ? wl - 1.0f : 0.0f);
+      xf = XFADE;
+    }
   }
   const float sp = speed, g = level, m = mon, keep = keep_;
-  const float fade = std::min(256.0f, wl * 0.25f);
   constexpr float q = 1.0f / 32768.0f;
+  // one play head: linear read, faded near its window's ends (the seam)
+  auto read = [&](size_t w0, size_t wn, float o, float& l, float& r) {
+    const size_t i0 = (w0 + size_t(o)) % len, i1 = (i0 + 1) % len;
+    const float fr = o - std::floor(o);
+    const float fade = std::min(256.0f, wn * 0.25f);
+    const float e = std::min(1.0f, std::min(o, wn - o) / fade);
+    l = (buf[0][i0] + fr * (buf[0][i1] - buf[0][i0])) * q * e;
+    r = (buf[1][i0] + fr * (buf[1][i1] - buf[1][i0])) * q * e;
+  };
+  auto step = [&](float& o, size_t wn) {
+    o += sp;
+    while (o >= wn) o -= wn;
+    while (o < 0.0f) o += wn;
+  };
 
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
     const int16_t xl = in[0] ? in[0]->data[n] : 0;
@@ -133,12 +166,17 @@ FASTRUN void AudioEffectReel::update() {
       Mark(wpos, xl, xr);
       if (++wpos >= cap) { len = cap; off = 0.0f; st = PLAY; }
     } else if ((st == PLAY || st == DUB) && len) {
-      // linear read between two samples, faded near the window's ends
-      const size_t i0 = (ws + size_t(off)) % len, i1 = (i0 + 1) % len;
-      const float fr = off - std::floor(off);
-      const float e = std::min(1.0f, std::min(off, wl - off) / fade);
-      yl = (buf[0][i0] + fr * (buf[0][i1] - buf[0][i0])) * q * e;
-      yr = (buf[1][i0] + fr * (buf[1][i1] - buf[1][i0])) * q * e;
+      read(ws, wl, off, yl, yr);
+      if (xf > 0) {  // the old window fading out
+        float ol, orr;
+        read(o_ws, o_wl, o_off, ol, orr);
+        const float k = float(xf) / XFADE;
+        yl += k * (ol - yl);
+        yr += k * (orr - yr);
+        step(o_off, o_wl);
+        xf--;
+      }
+      const size_t i0 = (ws + size_t(off)) % len;
       if (st == DUB) {
         const int16_t nl = __SSAT(int32_t(buf[0][i0] * keep) + xl, 16);
         const int16_t nr = __SSAT(int32_t(buf[1][i0] * keep) + xr, 16);
@@ -146,9 +184,7 @@ FASTRUN void AudioEffectReel::update() {
         buf[1][i0] = nr;
         Mark(i0, nl, nr);
       }
-      off += sp;
-      while (off >= wl) off -= wl;
-      while (off < 0.0f) off += wl;
+      step(off, wl);
     }
     const float ol = yl * g + xl * q * m, orr = yr * g + xr * q * m;
     out[0]->data[n] = __SSAT(int32_t(ol * 32767.0f), 16);
