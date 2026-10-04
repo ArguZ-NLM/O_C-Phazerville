@@ -962,12 +962,12 @@ FLASHMEM void VastDevice::DrawViz(int x, int y, int w, int h) {
     // longest delay). Filled bars: the 4 echoes of the left side, as tall as
     // DELAY; with SPRD up an outlined bar next to each shows the right side.
     // Thin lines further on: the repeats through FDBK, each round shorter
-    // by the FDBK amount.
+    // by the FDBK amount; with SPRD up the right side's repeats next to them.
     if (cur[DELAY] > 0) {
       const int bh = std::max(1, (h - 2) * cur[DELAY] / 100);
       const int tw = w - 8;
       auto px = [&](float sec) { return x + int(constrain(sec / MAX_SECS, 0.0f, 1.0f) * tw); };
-      const float period = tap_secs[0][TAPS - 1];
+      const float period = tap_secs[0][TAPS - 1], period_r = tap_secs[1][TAPS - 1];
       const float fb = std::min(1.0f, cur[FEEDBACK] * 0.01f);
       for (int t = 0; t < TAPS; t++) {
         const int lx = px(tap_secs[0][t]);
@@ -983,7 +983,12 @@ FLASHMEM void VastDevice::DrawViz(int x, int y, int w, int h) {
         for (int t = 0; t < TAPS; t++) {
           const float sec = round * period + tap_secs[0][t];
           if (sec > MAX_SECS) break;
-          gfxLine(px(sec), base - rh + 1, px(sec), base);
+          const int lx = px(sec);
+          gfxLine(lx, base - rh + 1, lx, base);
+          if (cur[SPREAD] > 0) {
+            const int rx = std::max(lx + 2, px(round * period_r + tap_secs[1][t]));
+            gfxDottedLine(rx, base - rh + 1, rx, base, 2);
+          }
           any = true;
         }
         if (!any) break;
