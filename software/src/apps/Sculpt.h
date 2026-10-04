@@ -866,20 +866,22 @@ FLASHMEM void AppSculpt::DrawDevice() const {
   if (linked) {
     gfxPrint(1, 1, PSTR("L+R"));
     gfxInvert(0, 0, 21, 9);
-    gfxPrint(name_x, 1, name);
   } else {
     gfxPrint(1, 1, track ? PSTR("R") : PSTR("L"));
     gfxInvert(0, 0, 9, 9);
-    if (focus_mod) {
-      char buf[8];
-      snprintf(buf, sizeof(buf), "%c %s", 'A' + mod_cursor, d->def.tag); // short: actions follow
-      gfxPrint(name_x, 1, buf);
-    } else {
-      gfxPrint(name_x, 1, name);
-      // e.g. SPACE REVRB on the reverb page
-      const char* sub = d->def.page_title[cursor / 4];
-      if (!mod_mode && sub[0]) gfxPrint(name_x + 6 * int(strlen(name)) + 6, 1, sub);
-    }
+  }
+  if (focus_mod && !linked) {
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%c %s", 'A' + mod_cursor, d->def.tag); // short: actions follow
+    gfxPrint(name_x, 1, buf);
+  } else {
+    gfxPrint(name_x, 1, name);
+    // e.g. SPACE DELAY / SPACE REVRB; left out where it would run into a
+    // BYP or MUTE label that is showing
+    const char* sub = d->def.page_title[cursor / 4];
+    const int sx = name_x + 6 * int(strlen(name)) + 6;
+    const bool busy = (BypassKey() && (tracks[track].bypass >> col & 1)) || Muted();
+    if (!mod_mode && sub[0] && (sx + 6 * int(strlen(sub)) <= 81 || !busy)) gfxPrint(sx, 1, sub);
   }
   if (mod_mode) {
     gfxPrint(64, 1, PSTR("MOD"));

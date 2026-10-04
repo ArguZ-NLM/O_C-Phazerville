@@ -999,7 +999,8 @@ FLASHMEM void VastDevice::DrawViz(int x, int y, int w, int h) {
   } else {
     // page 2, the reverb: two walls that SIZE moves apart from 30% to the
     // edges, and between them a wedge fading out from the middle to both
-    // sides, as tall as LEVEL and reaching towards the walls with DECAY.
+    // sides, as tall as LEVEL and reaching towards the walls with DECAY,
+    // falling off like a real tail (quickly first, then a long low end).
     // TONE fills it in: sparse when dark, solid when bright.
     static const uint8_t bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
     const int cx = x + w / 2, hw = w / 2 - 1;
@@ -1008,7 +1009,8 @@ FLASHMEM void VastDevice::DrawViz(int x, int y, int w, int h) {
     const int len = std::max(2, (wall - 1) * cur[DECAY] / 100);
     const int fill = 3 + (cur[TONE] + 50) * 13 / 100;  // 3..16 of 16
     for (int i = 0; i < len; i++) {
-      const int hh = th * (len - i) / len;
+      constexpr float k = 4.0f, end = 0.0183156f;  // e^-4
+      const int hh = int(th * (expf(-k * i / len) - end) / (1.0f - end) + 0.5f);
       for (int py = base - hh + 1; py <= base; py++) {
         const bool edge = py == base - hh + 1;  // keep the outline readable
         if (edge || bayer[py & 3][(cx + i) & 3] < fill) gfxPixel(cx + i, py);
