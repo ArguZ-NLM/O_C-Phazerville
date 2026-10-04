@@ -1134,11 +1134,13 @@ public:
   }
 private:
   AudioEffectRing fx;
-  float shape[BANDS] = {};   // band gains before the overall level, for the picture
   float band_m[BANDS] = {};
   float coef[BANDS] = {};    // band frequencies as the bank gets them
   Meter out_m;
   void Rebuild();
+  float Base(float k) const;
+  float Bump(float k) const;
+  float View(float k) const;
   float Q() const { return 2.0f * powf(100.0f, cur[DECAY] * 0.01f); } // 2 .. 200
 };
 
@@ -1153,8 +1155,6 @@ FLASHMEM void RingDevice::Rebuild() {
     (1 << 0) | (1 << 2) | (1 << 4) | (1 << 7) | (1 << 9),    // pentatonic
   };
   const uint16_t mask = scale_masks[constrain(cur[SCALE], 0, 3)];
-  const float c = cur[CUT] * 0.01f * (BANDS - 1);
-  const float res = cur[RESO] * 0.01f, slope = cur[SLOPE] * 0.02f, tone = cur[TONE] * 0.02f;
   const float q = Q();
   const float level = 0.5f * (1.0f + 0.2f * log2f(q / 2.0f));
   float f[BANDS], g[BANDS];
@@ -1167,18 +1167,40 @@ FLASHMEM void RingDevice::Rebuild() {
     const float hz = 440.0f * powf(2.0f, (note - 69) / 12.0f);
     f[k] = hz < 8000.0f ? 2.0f * sinf(float(M_PI) * hz / AUDIO_SAMPLE_RATE_EXACT) : 0.0f;
 
-    const float d = k - c;  // bands from the cutoff, 6 per octave
-    const float g_lp = d <= 0.0f ? 1.0f : powf(10.0f, -2.0f * d / 20.0f);
-    const float g_hp = d >= 0.0f ? 1.0f : powf(10.0f, 2.0f * d / 20.0f);
-    const float g_bp = powf(10.0f, -2.0f * fabsf(d) / 20.0f);
-    float gk = slope < 0.0f ? g_bp + (-slope) * (g_lp - g_bp) : g_bp + slope * (g_hp - g_bp);
-    gk *= 1.0f + res * 6.0f * expf(-(d * d) / 2.25f);
-    gk *= powf(2.0f, tone * (k - BANDS / 2) / float(BANDS / 2));
-    shape[k] = gk;
+    const float gk = Base(k) * (1.0f + cur[RESO] * 0.06f * Bump(k));
     g[k] = gk * level;
   }
   memcpy(coef, f, sizeof(coef));
   fx.SetBank(f, g, 1.0f / q, mode[DECAY] == 1, cur[WET] * 0.01f);
+}
+
+// gain of a band (fractional k for the picture) from CUT / SLOPE (12 dB per
+// octave sides, 6 bands an octave) and the TONE tilt, before RESO
+FLASHMEM float RingDevice::Base(float k) const {
+  const float d = k - cur[CUT] * 0.01f * (BANDS - 1);
+  const float slope = cur[SLOPE] * 0.02f;
+  const float g_lp = d <= 0.0f ? 1.0f : powf(10.0f, -2.0f * d / 20.0f);
+  const float g_hp = d >= 0.0f ? 1.0f : powf(10.0f, 2.0f * d / 20.0f);
+  const float g_bp = powf(10.0f, -2.0f * fabsf(d) / 20.0f);
+  const float g = slope < 0.0f ? g_bp + (-slope) * (g_lp - g_bp) : g_bp + slope * (g_hp - g_bp);
+  return g * powf(2.0f, cur[TONE] * 0.02f * (k - BANDS / 2) / float(BANDS / 2));
+}
+
+// the RESO bump around the cutoff, 0..1
+FLASHMEM float RingDevice::Bump(float k) const {
+  const float d = k - cur[CUT] * 0.01f * (BANDS - 1);
+  return expf(-(d * d) / 2.25f);
+}
+
+// height of the shape in the picture, 0..1: the pass band at the top, RESO
+// lowers it to half with the bump staying at the top. Scaled by the most
+// the tilt can reach, not by the curve's own peak, so it doesn't jump
+// while CUT moves between bands.
+FLASHMEM float RingDevice::View(float k) const {
+  const float tone = cur[TONE] * 0.02f;
+  const float tmax = std::max(powf(2.0f, -tone), powf(2.0f, tone * (BANDS - 1 - BANDS / 2) / float(BANDS / 2)));
+  const float res = cur[RESO] * 0.01f;
+  return std::min(1.0f, Base(k) / tmax * (1.0f - 0.5f * res + 0.5f * res * Bump(k)));
 }
 
 FLASHMEM void RingDevice::Format(int p, char* buf, size_t n) const {
@@ -1200,8 +1222,6 @@ FLASHMEM void RingDevice::DrawViz(int x, int y, int w, int h) {
   out_m.Hit(v.out);
   // 48 bands as thin bars (2 px each) across the three left columns, the
   // bank's shape drawn over them and the cutoff marked at the top
-  float smax = 0.01f;
-  for (float sv : shape) smax = std::max(smax, sv);
 
   // with DCAY under the cursor the bank gets struck every 2 s: each band
   // lights up to its shape and rings out in its own time (low bands longer,
@@ -1219,20 +1239,20 @@ FLASHMEM void RingDevice::DrawViz(int x, int y, int w, int h) {
             : constrain(8.0f * 2.0f * q / (coef[k] * AUDIO_SAMPLE_RATE_EXACT), 0.04f, 3.0f);
         env = expf(-(t - held) / tau);
       }
-      lvl = std::max(lvl, env * shape[k] / smax);
+      lvl = std::max(lvl, env * View(k));
     }
     const int bx = x + k * 2;
     const int bh = int(lvl * (h - 2));
     if (bh > 0) gfxLine(bx, y + h - 1, bx, y + h - 1 - bh);
   }
-  // the shape as a solid line from band to band
+  // the shape as a solid line, worked out for every pixel
   int py = 0;
-  for (int k = 0; k < BANDS; k++) {
-    const int sy = y + h - 1 - int(shape[k] / smax * (h - 3));
-    if (k) gfxLine(x + k * 2 - 2, py, x + k * 2, sy);
+  for (int i = 0; i < BANDS * 2 - 1; i++) {
+    const int sy = y + h - 1 - int(View(i * 0.5f) * (h - 3) + 0.5f);
+    if (i) gfxLine(x + i - 1, py, x + i, sy);
     py = sy;
   }
-  const int cx = x + int(cur[CUT] * 0.01f * (BANDS - 1)) * 2;
+  const int cx = x + int(cur[CUT] * 0.01f * (BANDS - 1) * 2 + 0.5f);
   gfxLine(cx - 2, y, cx + 2, y);
   gfxLine(cx, y, cx, y + 2);
   gfxDottedLine(x, y + h - 1, x + BANDS * 2, y + h - 1, 2);
