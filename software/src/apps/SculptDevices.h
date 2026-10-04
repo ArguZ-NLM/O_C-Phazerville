@@ -663,9 +663,11 @@ FLASHMEM void MixDevice::DrawSpectrum(int x, int y, int w, int h) {
 
 FLASHMEM void MixDevice::DrawMini(int x, int y, int w, int h) {
   if (cur[MUTE]) { gfxLine(x, y + h / 2, x + w - 1, y + h / 2); return; }
+  // standing L and R bars: where the track sits in the stereo mix
   const float l = meters[0].Hit(level[0]), r = meters[1].Hit(level[1]);
-  DrawHMeter(x, y, w, h / 2, l);
-  DrawHMeter(x, y + h / 2 + 1, w, h / 2, r);
+  const int bw = (w - 3) / 2;
+  DrawVMeter(x, y, bw, h, l);
+  DrawVMeter(x + w - bw, y, bw, h, r);
 }
 
 /////////////////////////////////////////////////////////////////
@@ -794,15 +796,13 @@ FLASHMEM void InputDevice::DrawViz(int x, int y, int w, int h) {
   }
 }
 
-// two bars for the stereo input, one for a single input, none when off
+// standing bars on the side the signal comes from: both for L+R, the left
+// one for L, the right one for R, none when off
 FLASHMEM void InputDevice::DrawMini(int x, int y, int w, int h) {
   Poll();
-  if (cur[0] == STEREO) {
-    DrawHMeter(x, y, w, h / 2, meters[0].v);
-    DrawHMeter(x, y + h / 2 + 1, w, h / 2, meters[1].v);
-  } else if (cur[0] != OFF) {
-    DrawHMeter(x, y + h / 4, w, h / 2, std::max(meters[0].v, meters[1].v));
-  }
+  const int bw = (w - 3) / 2;
+  if (cur[0] == STEREO || cur[0] == IN1) DrawVMeter(x, y, bw, h, cur[0] == STEREO ? meters[0].v : std::max(meters[0].v, meters[1].v));
+  if (cur[0] == STEREO || cur[0] == IN2) DrawVMeter(x + w - bw, y, bw, h, cur[0] == STEREO ? meters[1].v : std::max(meters[0].v, meters[1].v));
 }
 
 /////////////////////////////////////////////////////////////////
