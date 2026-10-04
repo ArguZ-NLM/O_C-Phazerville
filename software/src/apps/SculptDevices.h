@@ -977,14 +977,21 @@ FLASHMEM void VastDevice::DrawViz(int x, int y, int w, int h) {
       }
     }
   } else {
-    // page 2, the reverb: a fading wedge, as long as DECAY and as tall as
-    // REVRB
+    // page 2, the reverb: a wedge fading out from the middle to both sides,
+    // as long as DECAY and as tall as REVRB, between two walls that SIZE
+    // moves apart from the middle towards the edges
+    const int cx = x + w / 2, hw = w / 2 - 1;
     const int th = (h - 2) * cur[REVERB] / 100;
-    const int len = 12 + (w - 14) * cur[DECAY] / 100;
+    const int len = 4 + (hw - 4) * cur[DECAY] / 100;
     for (int i = 0; i < len; i += 2) {
       const int hh = th * (len - i) / len;
-      if (hh > 0) gfxLine(x + i, base - hh, x + i, base);
+      if (hh <= 0) continue;
+      gfxLine(cx + i, base - hh, cx + i, base);
+      if (i) gfxLine(cx - i, base - hh, cx - i, base);
     }
+    const int wall = 2 + (hw - 2) * cur[SIZE] / 100;
+    gfxLine(cx - wall, y, cx - wall, base);
+    gfxLine(cx + wall, y, cx + wall, base);
   }
   if (vast.frozen()) {
     gfxPrint(x + w - 25, y + 1, PSTR("FRZ"));
