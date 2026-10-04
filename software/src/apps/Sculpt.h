@@ -29,8 +29,8 @@
 // Chain view (home):
 //   R enc  move between the 12 boxes      L enc  change the slot's device
 //                                                (MIX: track level)
-//   L push bypass on/off                  R push open the device
-//   UP / DOWN  the device's two actions (e.g. VAST freeze / clear)
+//   DOWN   bypass on/off (MIX: its band stage)   R push open the device
+//   UP     the device's first action (e.g. SPACE freeze)
 //   X      the track's modulators (MOD A-D) and the clock
 //   UP + DOWN  link / unlink the tracks' controls. Linking copies the track
 //              you are on to the other one; while linked every edit goes to
@@ -550,11 +550,6 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
       if (view == DEVICE) {
         mod_mode = !mod_mode;
         editing = trig_mode = false;
-      } else if (col > MATERIAL && col < MIX_COL) {
-        // bypass toggle; a slot set to no device gets its last one back
-        Track& tr = tracks[track];
-        if (tr.choice[col]) ToggleBypass(col);
-        else SetChoiceLinked(col, tr.last_choice[col]);
       }
     }
     return;
@@ -617,7 +612,13 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
       break;
     case OC::CONTROL_BUTTON_UP:
     case OC::CONTROL_BUTTON_DOWN:
-      if (d && event.control == OC::CONTROL_BUTTON_DOWN && BypassKey()) {
+      if (view == CHAIN && event.control == OC::CONTROL_BUTTON_DOWN) {
+        // bypass toggle of the slot under the cursor (MIX: its band stage);
+        // a slot set to no device gets its last one back
+        Track& tr = tracks[track];
+        if (col == MIX_COL || (col > MATERIAL && tr.choice[col])) ToggleBypass(col);
+        else if (col > MATERIAL) SetChoiceLinked(col, tr.last_choice[col]);
+      } else if (d && event.control == OC::CONTROL_BUTTON_DOWN && BypassKey()) {
         ToggleBypass(col);
       } else if (d) {
         const int a = event.control == OC::CONTROL_BUTTON_UP ? 0 : 1;
@@ -740,7 +741,14 @@ FLASHMEM void AppSculpt::DrawChain() const {
   constexpr int bw = 20, bh = 26, x0 = 7;
   for (int t = 0; t < NUM_TRACKS; t++) {
     const int y = t * (bh + 1);
-    gfxPrint(1, y + 9, t ? PSTR("R") : PSTR("L"));
+    // L / R drawn by hand at the left edge (text can't start left of x 0)
+    static const uint8_t glyph[2][7] = {
+      {0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F},  // L
+      {0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11},  // R
+    };
+    for (int r = 0; r < 7; r++)
+      for (int c = 0; c < 5; c++)
+        if (glyph[t][r] >> (4 - c) & 1) gfxPixel(c, y + 9 + r);
     for (int c = 0; c < COLS; c++) {
       const int x = x0 + c * bw;
       const Track& tr = tracks[t];
@@ -778,8 +786,8 @@ FLASHMEM void AppSculpt::DrawChain() const {
 
   if (linked) {
     // chain link between the track numbers
-    gfxFrame(1, 21, 5, 6);
-    gfxFrame(1, 25, 5, 6);
+    gfxFrame(0, 21, 5, 6);
+    gfxFrame(0, 25, 5, 6);
   }
 
   // status line: what is under the cursor, CPU load
