@@ -1105,10 +1105,10 @@ PROGMEM static const DeviceDef RING_DEF = {
   "RING", "RNG", 8, {"", ""},
   {
     {"CUT", 0, 100, 70, UNI},
+    {"SLOPE", -50, 50, -50, BI},
     {"RESO", 0, 100, 20, UNI},
     {"DCAY", 0, 100, 40, UNI, 0, 2, 0, {}, {"SUST", "CHOKE"}},
     {"PITCH", -24, 24, 0, BI},
-    {"SLOPE", -50, 50, -50, BI},
     {"TONE", -50, 50, 0, BI},
     {"SCALE", 0, 3, 0, LIST, 4, 0, 0, {"CHROM", "MAJOR", "MINOR", "PENTA"}},
     {"WET", 0, 100, 100, UNI},
@@ -1117,7 +1117,7 @@ PROGMEM static const DeviceDef RING_DEF = {
 
 class RingDevice : public Device {
 public:
-  enum { CUT, RESO, DECAY, PITCH, SLOPE, TONE, SCALE, WET };
+  enum { CUT, SLOPE, RESO, DECAY, PITCH, TONE, SCALE, WET };
   static constexpr int BANDS = AudioEffectRing::BANDS;
   RingDevice() : Device(RING_DEF) {}
   AudioStream* in() override { return &fx; }
@@ -1136,6 +1136,8 @@ private:
   AudioEffectRing fx;
   float band_m[BANDS] = {};
   float coef[BANDS] = {};    // band frequencies as the bank gets them
+  int last_decay = -1, last_decay_mode = -1;
+  uint32_t strike_ms = 0;    // when DCAY last changed, for the picture
   Meter out_m;
   void Rebuild();
   float Base(float k) const;
@@ -1171,6 +1173,12 @@ FLASHMEM void RingDevice::Rebuild() {
     g[k] = gk * level;
   }
   memcpy(coef, f, sizeof(coef));
+  // turning DCAY (not its modulation) strikes the picture
+  if (val[DECAY] != last_decay || mode[DECAY] != last_decay_mode) {
+    if (last_decay >= 0) strike_ms = millis();
+    last_decay = val[DECAY];
+    last_decay_mode = mode[DECAY];
+  }
   fx.SetBank(f, g, 1.0f / q, mode[DECAY] == 1, cur[WET] * 0.01f);
 }
 
@@ -1221,14 +1229,13 @@ FLASHMEM void RingDevice::DrawViz(int x, int y, int w, int h) {
   fx.ReadViz(v);
   out_m.Hit(v.out);
   // 48 bands as thin bars (2 px each) across the three left columns, the
-  // bank's shape drawn over them and the cutoff marked at the top
-
-  // with DCAY under the cursor the bank gets struck every 2 s: each band
-  // jumps to its shape and rings out in its own time (low bands longer,
-  // 8x slowed down to be seen, never quicker than a short fade); CHOKE
-  // rings shorter, as the bank is damped once the strike is over
-  const bool ping = view_cursor == DECAY;
-  const float t = (millis() % 2000) * 0.001f;
+  // bank's shape drawn over them and the cutoff marked at the top.
+  // Changing DCAY strikes the bank in the picture: each band jumps to its
+  // shape and rings out in its own time (low bands longer, 8x slowed down
+  // to be seen, never quicker than a short fade); CHOKE rings shorter
+  const uint32_t since = millis() - strike_ms;
+  const bool ping = strike_ms && since < 2000;
+  const float t = since * 0.001f;
   const float q = Q();
   for (int k = 0; k < BANDS; k++) {
     band_m[k] = std::max(sqrtf(std::min(1.0f, v.band[k] * 4.0f)), band_m[k] * 0.9f);
