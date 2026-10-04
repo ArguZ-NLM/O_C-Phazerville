@@ -797,20 +797,21 @@ FLASHMEM void InputDevice::DrawMini(int x, int y, int w, int h) {
 PROGMEM static const DeviceDef VAST_DEF = {
   "SPACE", "VST", 8, {"FRZ", "CLR"}, // the tag stays VST: saved files use it
   {
+    // page 1: the delay, page 2: the reverb and TONE
     {"DELAY", 0, 100, 40, UNI},
     {"TIME", 20, 6000, 450, UNI, 0, 4, 0, {}, {"FREE", "STR", "TRI", "DOT"}},
-    {"REVRB", 0, 100, 30, UNI},
-    {"SIZE", 0, 100, 60, UNI},
     {"FDBK", 0, 100, 45, UNI},
     {"SPRD", 0, 100, 40, UNI, 0, 3, 1, {}, {"PHASE", "PING", "DIFF"}},
-    {"TONE", -50, 50, -10, BI},
+    {"REVRB", 0, 100, 30, UNI},
+    {"SIZE", 0, 100, 60, UNI},
     {"DECAY", 0, 100, 50, UNI},
+    {"TONE", -50, 50, -10, BI},
   }
 };
 
 class VastDevice : public Device {
 public:
-  enum { DELAY, TIME, REVERB, SIZE, FEEDBACK, SPREAD, TONE, DECAY };
+  enum { DELAY, TIME, FEEDBACK, SPREAD, REVERB, SIZE, DECAY, TONE };
   enum { PHASE, PING, DIFFUSE };
   static constexpr int TAPS = AudioEffectVast::TAPS;
   static constexpr float MAX_SECS = 6.0f;
