@@ -1453,7 +1453,7 @@ PROGMEM static const DeviceDef SPRAY_DEF = {
     {"POS", 0, 100, 10, UNI},
     {"SHAPE", 0, 100, 70, UNI},
     {"FDBK", 0, 100, 0, UNI},
-    {"LEVEL", 0, 100, 50, UNI},
+    {"MIX", 0, 100, 50, UNI},  // source <> grains
   },
   {"GRAIN", ""},
 };
@@ -1550,29 +1550,41 @@ FLASHMEM void SprayDevice::DrawViz(int x, int y, int w, int h) {
     return;
   }
   const int base = y + h - 1;
-  gfxDottedLine(x, base, x + w - 1, base, 2);
-  // where grains are read: POS back from now (right edge), widened by SCATR
-  // only as far as the engine does (it never reaches past now or the oldest
-  // audio, so the window narrows towards both ends)
+  // the buffer: the last 4 s as a dotted waveform, now at the right; it
+  // scrolls while recording and stands still when frozen
+  const int cy = y + h / 2;
+  uint8_t hist[AudioEffectClouds::HIST];
+  fx.ReadHistory(hist);
+  for (int k = 0; k < AudioEffectClouds::HIST; k++) {
+    const int cx = x + k * w / AudioEffectClouds::HIST;
+    const int a = int(sqrtf(hist[k] / 255.0f) * (h / 2 - 1));
+    for (int py = cy - a + ((cx + cy - a) & 1); py <= cy + a; py += 2) gfxPixel(cx, py);
+  }
+  // where grains are read: POS back from now, widened by SCATR only as far
+  // as the engine does (never past now or the oldest audio); ticks at the
+  // top and bottom mark it
   const int now = x + w - 1;
   const float pos = cur[POS] * 0.01f, spray = cur[SCATTER] * 0.005f;
   const float eff = std::min(spray, std::min(pos, 1.0f - pos));
   auto px = [&](float back) { return now - int(constrain(back, 0.0f, 1.0f) * (w - 1)); };
   int lo = px(pos + eff), hi = px(pos - eff);
   if (hi - lo < 2) { lo = std::max(x, lo - 1); hi = std::min(now, hi + 1); }
-  gfxLine(lo, base - 2, hi, base - 2);
-  gfxLine(lo, base - 4, lo, base - 1);
-  gfxLine(hi, base - 4, hi, base - 1);
-  // one dot per grain playing, inside the window, raised / lowered by PITCH
-  const int top = y + 2, bottom = base - 7;
-  const int py = (top + bottom) / 2 - cur[PITCH] * ((bottom - top) / 2 - 3) / 24;
+  for (int e : {lo, hi}) {
+    gfxLine(e, y, e, y + 3);
+    gfxLine(e, base - 3, e, base);
+  }
+  gfxLine(lo, y, hi, y);
+  gfxLine(lo, base, hi, base);
+  // one square per grain playing, inside the window, up and down with PITCH
+  const int py = cy - cur[PITCH] * (h / 2 - 4) / 24;
   const int n = fx.ActiveGrainCount();
   uint32_t r = millis() / 60;
   for (int i = 0; i < n; i++) {
     r = r * 1103515245u + 12345u;
-    const int gx = lo + int((r >> 8) % uint32_t(hi - lo + 1));
-    const int gy = constrain(py + int((r >> 20) % 7) - 3, top + 1, bottom - 1);
-    gfxRect(constrain(gx - 1, x, now - 2), gy - 1, 3, 3);
+    const int gx = constrain(lo + int((r >> 8) % uint32_t(hi - lo + 1)) - 1, x, now - 2);
+    const int gy = constrain(py + int((r >> 20) % 9) - 4, y + 2, base - 4);
+    graphics.clearRect(gx - 1, gy - 1, 5, 5);  // a gap around it in the waveform
+    gfxRect(gx, gy, 3, 3);
   }
   if (frozen) {
     gfxPrint(x + w - 25, y + 1, PSTR("FRZ"));

@@ -86,6 +86,13 @@ public:
     // stereo only. spread ∈ [0, 1]: random pan per grain (0 = keep the image)
     void setStereoSpread(float s)    { sspread_  = s; }
 
+    // level of what was recorded, one column per 1/HIST of the buffer, for
+    // a picture of the buffer; stands still while frozen
+    static const int HIST = 128;
+    void ReadHistory(uint8_t* dst) const {
+        for (int k = 0; k < HIST; k++) dst[k] = hist_[(hist_pos_ + k) % HIST]; // oldest first
+    }
+
     uint8_t ActiveGrainCount() const {
         uint8_t n = 0;
         for (const auto& g : grains) if (g.active) n++;
@@ -95,6 +102,10 @@ public:
     void update() override;
 
 private:
+    uint8_t hist_[HIST] = {};
+    int hist_pos_ = 0, hist_peak_ = 0;
+    float hist_blocks_ = 0.0f;
+
     // Overlap normalisation state (audio ISR only).
     float num_grains_ = 0.0f;
     float gain_       = 1.0f;
@@ -227,8 +238,20 @@ FASTRUN void AudioEffectClouds::update() {
                 int32_t s = in[c] ? (int32_t)in[c]->data[i] : 0;
                 if (cur_feedback > 0.0f) s += Clip16(feedback_buf_[c][i]);
                 tmp[i] = (int16_t)(s > 32767 ? 32767 : (s < -32768 ? -32768 : s));
+                const int a = tmp[i] < 0 ? -tmp[i] : tmp[i];
+                if (a > hist_peak_) hist_peak_ = a;
             }
             g_buffer[c].Write(tmp);
+        }
+    }
+
+    if (recorded) {
+        hist_blocks_ += (float)AUDIO_BLOCK_SAMPLES * HIST / (float)buf_size;
+        if (hist_blocks_ >= 1.0f) {
+            hist_blocks_ -= 1.0f;
+            hist_[hist_pos_] = (uint8_t)(hist_peak_ >= 32640 ? 255 : hist_peak_ >> 7);
+            hist_pos_ = (hist_pos_ + 1) % HIST;
+            hist_peak_ = 0;
         }
     }
 
