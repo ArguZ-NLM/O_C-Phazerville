@@ -736,8 +736,10 @@ FASTRUN void InputDevice::update() {
   audio_block_t* out[2] = {allocate(), allocate()};
   if (out[0] && out[1]) {
     static const int16_t silence[AUDIO_BLOCK_SAMPLES] = {};
-    const int16_t* a = in[0] ? in[0]->data : silence;
-    const int16_t* b = in[1] ? in[1]->data : silence;
+    // TEST (Sascha): the module's inputs swapped, to see if they match the
+    // panel that way round
+    const int16_t* a = in[1] ? in[1]->data : silence;
+    const int16_t* b = in[0] ? in[0]->data : silence;
     const uint8_t src = source;
     const int32_t g = static_cast<int32_t>(gain * 16384.0f);   // Q14, up to 2.0
     const int32_t wd = static_cast<int32_t>(width * 16384.0f); // Q14
