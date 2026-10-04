@@ -1215,9 +1215,6 @@ public:
 private:
   AudioEffectRing fx;
   float band_m[BANDS] = {};
-  float coef[BANDS] = {};    // band frequencies as the bank gets them
-  int last_decay = -1, last_decay_mode = -1;
-  uint32_t strike_ms = 0;    // when DCAY last changed, for the picture
   Meter out_m;
   void Rebuild();
   float Base(float k) const;
@@ -1252,13 +1249,6 @@ FLASHMEM void RingDevice::Rebuild() {
     const float gk = Base(k) * (1.0f + cur[RESO] * 0.06f * Bump(k));
     g[k] = gk * level;
   }
-  memcpy(coef, f, sizeof(coef));
-  // turning DCAY (not its modulation) strikes the picture
-  if (val[DECAY] != last_decay || mode[DECAY] != last_decay_mode) {
-    if (last_decay >= 0) strike_ms = millis();
-    last_decay = val[DECAY];
-    last_decay_mode = mode[DECAY];
-  }
   fx.SetBank(f, g, 1.0f / q, mode[DECAY] == 1, cur[WET] * 0.01f);
 }
 
@@ -1280,15 +1270,11 @@ FLASHMEM float RingDevice::Bump(float k) const {
   return expf(-(d * d) / 2.25f);
 }
 
-// height of the shape in the picture, 0..1: the pass band at the top, RESO
-// lowers it to half with the bump staying at the top. Scaled by the most
-// the tilt can reach, not by the curve's own peak, so it doesn't jump
-// while CUT moves between bands.
+// height of the shape in the picture, 0..1: the pass band at half height,
+// RESO lifts the peak at the cutoff up to the top (TONE lifts one end).
+// Fixed scale, so nothing jumps while CUT moves between bands.
 FLASHMEM float RingDevice::View(float k) const {
-  const float tone = cur[TONE] * 0.02f;
-  const float tmax = std::max(powf(2.0f, -tone), powf(2.0f, tone * (BANDS - 1 - BANDS / 2) / float(BANDS / 2)));
-  const float res = cur[RESO] * 0.01f;
-  return std::min(1.0f, Base(k) / tmax * (1.0f - 0.5f * res + 0.5f * res * Bump(k)));
+  return std::min(1.0f, 0.5f * Base(k) * (1.0f + cur[RESO] * 0.01f * Bump(k)));
 }
 
 FLASHMEM void RingDevice::Format(int p, char* buf, size_t n) const {
@@ -1309,24 +1295,11 @@ FLASHMEM void RingDevice::DrawViz(int x, int y, int w, int h) {
   fx.ReadViz(v);
   out_m.Hit(v.out);
   // 48 bands as thin bars (2 px each) across the three left columns, the
-  // bank's shape drawn over them.
-  // Changing DCAY strikes the bank in the picture: each band jumps to its
-  // shape and rings out in its own time (low bands longer, 8x slowed down
-  // to be seen, never quicker than a short fade); CHOKE rings shorter
-  const uint32_t since = millis() - strike_ms;
-  const bool ping = strike_ms && since < 2000;
-  const float t = since * 0.001f;
-  const float q = Q();
+  // bank's shape drawn over them
   for (int k = 0; k < BANDS; k++) {
     band_m[k] = std::max(sqrtf(std::min(1.0f, v.band[k] * 4.0f)), band_m[k] * 0.9f);
-    float lvl = band_m[k];
-    if (ping && coef[k] > 0.0f) {
-      float tau = constrain(8.0f * 2.0f * q / (coef[k] * AUDIO_SAMPLE_RATE_EXACT), 0.12f, 1.8f);
-      if (mode[DECAY] == 1) tau = std::min(tau, 0.12f);
-      lvl = std::max(lvl, expf(-t / tau) * View(k));
-    }
     const int bx = x + k * 2;
-    const int bh = int(lvl * (h - 2));
+    const int bh = int(band_m[k] * (h - 2));
     if (bh > 0) gfxLine(bx, y + h - 1, bx, y + h - 1 - bh);
   }
   // the shape as a solid line, worked out for every pixel
