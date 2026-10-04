@@ -1600,19 +1600,19 @@ FLASHMEM void SprayDevice::DrawViz(int x, int y, int w, int h) {
   const int mid = x + w - 1 - int(pos * (w - 1) + 0.5f), half = std::max(2, int(eff * w + 0.5f));
   const int wl = std::max(x, mid - half), wr = std::min(x + w - 1, mid + half);
   // brackets, their corners rounded by SHAPE (0 square .. 100 round, as the
-  // grains' edges get softer)
+  // grains' edges get softer); drawn pixel by pixel so the corners are exact
   const int r = std::min((cur[SHAPE] * 3 + 50) / 100, (wr - wl) / 2);
   constexpr int tick = 5;
-  gfxLine(wl + r, y, wr - r, y);
-  gfxLine(wl + r, base, wr - r, base);
-  gfxLine(wl, y + r, wl, y + tick - 1);
-  gfxLine(wr, y + r, wr, y + tick - 1);
-  gfxLine(wl, base - tick + 1, wl, base - r);
-  gfxLine(wr, base - tick + 1, wr, base - r);
-  for (int i = 1; i < r; i++) {  // quarter circles between them
-    const int d = r - int(sqrtf(float(r * r - (r - i) * (r - i))) + 0.5f);
-    gfxPixel(wl + i, y + d); gfxPixel(wr - i, y + d);
-    gfxPixel(wl + i, base - d); gfxPixel(wr - i, base - d);
+  for (int px = wl + r; px <= wr - r; px++) { gfxPixel(px, y); gfxPixel(px, base); }
+  for (int k = r; k < tick; k++) {
+    gfxPixel(wl, y + k); gfxPixel(wr, y + k);
+    gfxPixel(wl, base - k); gfxPixel(wr, base - k);
+  }
+  // the corner between them: r 2 = one pixel, r 3 = two, on the diagonal
+  for (int i = 1; i < r; i++) {
+    const int j = r - i;
+    gfxPixel(wl + i, y + j); gfxPixel(wr - i, y + j);
+    gfxPixel(wl + i, base - j); gfxPixel(wr - i, base - j);
   }
   // the grains as they play: across from the middle by their scatter, up
   // and down by their own pitch offset around PITCH (all on one line without
