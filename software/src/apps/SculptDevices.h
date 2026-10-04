@@ -1458,7 +1458,9 @@ PROGMEM static const DeviceDef SPRAY_DEF = {
     {"RATE", -100, 100, 55, BI},
     {"SIZE", 0, 100, 50, UNI, 0, 21, 0},   // mode: size spread, 0..100% in 5% steps
     {"PITCH", -24, 24, 0, BI, 0, 25, 0},  // mode: pitch spread, 0..24 semitones
-    {"POS", 0, 100, 10, UNI, 0, 21, 4},  // mode: position variation, 0..100% in 5% steps
+    // 0 = the oldest audio (left on the picture), 100 = now (right); mode:
+    // position variation, 0..100% in 5% steps
+    {"POS", 0, 100, 50, UNI, 0, 21, 4},
     {"SHAPE", 0, 100, 70, UNI},
     {"FDBK", 0, 100, 0, UNI},
     {"MIX", 0, 100, 50, UNI},  // source <> grains
@@ -1528,7 +1530,7 @@ FLASHMEM void SprayDevice::Apply(int p) {
       fx.setPitch(powf(2.0f, cur[PITCH] / 12.0f));
       fx.setPitchSpread(SpreadSemis());
       break;
-    case POS:   fx.setPosition(v); fx.setSpray(PosVariation()); break;
+    case POS:   fx.setPosition(1.0f - v); fx.setSpray(PosVariation()); break;  // engine: 0 = now
     case SHAPE: fx.setTexture(v); break;
     case FDBK:  fx.setFeedback(v * 0.9f); break;
     case LEVEL: wet = v; break;
@@ -1593,7 +1595,7 @@ FLASHMEM void SprayDevice::DrawViz(int x, int y, int w, int h) {
   // the grain window: POS moves it from now (right) back to the oldest audio
   // (left); its variation widens it, only as far as the engine really
   // scatters (never past now or the oldest audio)
-  const float pos = cur[POS] * 0.01f;
+  const float pos = 1.0f - cur[POS] * 0.01f;  // back from now, like the engine
   const float eff = std::min(PosVariation(), std::min(pos, 1.0f - pos));
   const int mid = x + w - 1 - int(pos * (w - 1) + 0.5f), half = std::max(2, int(eff * w + 0.5f));
   const int wl = std::max(x, mid - half), wr = std::min(x + w - 1, mid + half);
