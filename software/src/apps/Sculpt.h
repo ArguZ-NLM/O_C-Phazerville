@@ -862,21 +862,21 @@ FLASHMEM void AppSculpt::DrawDevice() const {
   // header: track, device, action labels, page; text one pixel down so the
   // inverted boxes have a white row above it. A long device name gives way
   // to its tag when MOD is shown next to it.
-  const int name_x = linked ? 22 : 10;
+  const int name_x = linked ? 24 : 12;
   const char* name = mod_mode && name_x + 6 * int(strlen(d->def.name)) > 62 ? d->def.tag : d->def.name;
   if (linked) {
     gfxPrint(1, 1, PSTR("L+R"));
     gfxInvert(0, 0, 21, 9);
-    gfxPrint(22, 1, name);
+    gfxPrint(name_x, 1, name);
   } else {
     gfxPrint(1, 1, track ? PSTR("R") : PSTR("L"));
     gfxInvert(0, 0, 9, 9);
     if (focus_mod) {
       char buf[8];
       snprintf(buf, sizeof(buf), "%c %s", 'A' + mod_cursor, d->def.tag); // short: actions follow
-      gfxPrint(10, 1, buf);
+      gfxPrint(name_x, 1, buf);
     } else {
-      gfxPrint(10, 1, name);
+      gfxPrint(name_x, 1, name);
     }
   }
   if (mod_mode) {
@@ -895,19 +895,21 @@ FLASHMEM void AppSculpt::DrawDevice() const {
     }
     gfxPrint(4, 33, PSTR("L/R enc: trigger"));
   }
+  // BYP shows only while the slot is bypassed
+  const bool byp_on = BypassKey() && (tracks[track].bypass >> col & 1);
   const bool mute_turn = !mod_mode && Muted()
-      && (!((focus_mod && d->def.actions[1][0]) || BypassKey()) || (millis() / 600) % 2);
+      && (!((focus_mod && d->def.actions[1][0]) || byp_on) || (millis() / 600) % 2);
   for (int a = 0; a < 2 && !mod_mode; a++) {
-    const bool byp = a == 1 && BypassKey();
+    const bool byp = a == 1 && byp_on;
     // slot devices keep their actions (SPACE: FRZ / CLR) off the header;
     // the modulators show theirs (RST, STP, TRG)
     const char* label = byp ? PSTR("BYP") : focus_mod ? d->def.actions[a] : "";
     if (!label[0] || (a == 1 && mute_turn)) continue;
     const int x = 56 + a * 26; // clear of the page number at 110
     gfxPrint(x, 1, label);
-    // lit actions (e.g. FRZ, BYP) are inverted
+    // lit actions (e.g. a modulator's STP) are inverted
     const int lw = 6 * int(strlen(label)) + 2;
-    if (byp ? (tracks[track].bypass >> col & 1) : d->ActionLit(a)) gfxInvert(x - 1, 0, lw, 9);
+    if (!byp && d->ActionLit(a)) gfxInvert(x - 1, 0, lw, 9);
   }
   // a muted track shows MUTE blinking on every page, in the second action
   // place; where a device has its own action there, the two take turns
