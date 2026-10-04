@@ -958,46 +958,44 @@ FLASHMEM void VastDevice::DrawViz(int x, int y, int w, int h) {
   const int base = y + h - 1;
   gfxDottedLine(x, base, x + w - 1, base, 2);
   if (view_page == 0) {
-    // page 1, the delay: echoes on a time line from the left edge, as tall
-    // as DELAY. Filled: the left side; with SPRD up, an outlined bar next to
-    // each shows where the right side's echo lands.
-    // TRIAL: two looks for the synced lengths 1 / 2 / 4 / 8, swapping every
-    // 3 s (A / B in the corner) until one is picked.
-    //  A: fixed patterns  1: 1/4 1/2 3/4 1  2: 1/2 1  4: 1/3 2/3 1  8: 1/3 1
-    //  B: the real echo times (2 s across, longer fills the width), "2"
-    //     thinned to every second echo
+    // page 1, the delay: a fixed time line from the left edge to 6 s (the
+    // longest delay). Filled bars: the 4 echoes of the left side, as tall as
+    // DELAY; with SPRD up an outlined bar next to each shows the right side.
+    // Hollow bars further on: the repeats through FDBK, each round shorter
+    // by the FDBK amount.
+    // TRIAL: the time line swaps every 3 s between A (linear) and B (log,
+    // 20 ms .. 6 s) until one is picked.
     if (cur[DELAY] > 0) {
       const int bh = std::max(1, (h - 2) * cur[DELAY] / 100);
-      float span = 2.0f;
-      for (auto& c : tap_secs) for (float sec : c) span = std::max(span, sec);
       const int tw = w - 8;
       const bool look_a = (millis() / 3000) % 2 == 0;
-      const int div = mode[TIME] == SYNC_FREE ? -1 : DivIndex(cur[TIME], 20, 6000);
-      float pos[TAPS];
-      int np = 0;
-      if (look_a && div >= 5) {
-        static const float pat[4][TAPS] = {
-          {0.25f, 0.5f, 0.75f, 1.0f}, {0.5f, 1.0f}, {1 / 3.0f, 2 / 3.0f, 1.0f}, {1 / 3.0f, 1.0f}};
-        static const int npat[4] = {4, 2, 3, 2};
-        const int i = std::min(div - 5, 3);
-        for (np = 0; np < npat[i]; np++) pos[np] = pat[i][np];
-      } else {
-        for (int t = 0; t < TAPS; t++) {
-          if (div == 6 && !(t & 1)) continue;  // "2": every second echo
-          pos[np++] = tap_secs[0][t] / span;
-        }
-      }
-      // the right side's delay against the left (SPRD in PHASE mode)
-      const float r_ratio = tap_secs[0][TAPS - 1] > 0.0f ? tap_secs[1][TAPS - 1] / tap_secs[0][TAPS - 1] : 1.0f;
-      for (int i = 0; i < np; i++) {
-        const int lx = x + int(pos[i] * tw);
+      auto px = [&](float sec) {
+        float f = look_a ? sec / MAX_SECS
+                         : logf(std::max(sec, 0.02f) / 0.02f) / logf(MAX_SECS / 0.02f);
+        return x + int(constrain(f, 0.0f, 1.0f) * tw);
+      };
+      const float period = tap_secs[0][TAPS - 1];
+      const float fb = std::min(1.0f, cur[FEEDBACK] * 0.01f);
+      for (int t = 0; t < TAPS; t++) {
+        const int lx = px(tap_secs[0][t]);
         gfxRect(lx, base - bh, 2, bh);
-        if (cur[SPREAD] > 0) {
-          const int rx = std::max(lx + 3, x + int(std::min(1.0f, pos[i] * r_ratio) * tw));
-          gfxFrame(rx, base - bh, 2, bh);
-        }
+        if (cur[SPREAD] > 0) gfxFrame(std::max(lx + 3, px(tap_secs[1][t])), base - bh, 2, bh);
       }
-      if (div >= 5 && !vast.frozen()) gfxPrint(x + w - 7, y + 1, look_a ? PSTR("A") : PSTR("B"));
+      // repeats: the whole pattern again after each period
+      float g = fb;
+      for (int round = 1; round < 16 && period > 0.0f; round++, g *= fb) {
+        const int rh = int(bh * g);
+        if (rh < 1) break;
+        bool any = false;
+        for (int t = 0; t < TAPS; t++) {
+          const float sec = round * period + tap_secs[0][t];
+          if (sec > MAX_SECS) break;
+          gfxFrame(px(sec), base - rh, 2, rh);
+          any = true;
+        }
+        if (!any) break;
+      }
+      if (!vast.frozen()) gfxPrint(x + w - 7, y + 1, look_a ? PSTR("A") : PSTR("B"));
     }
   } else {
     // page 2, the reverb: a wedge fading out from the middle to both sides,
