@@ -1532,7 +1532,7 @@ FLASHMEM void SprayDevice::Apply(int p) {
       break;
     case POS:   fx.setPosition(1.0f - v); fx.setSpray(PosVariation()); break;  // engine: 0 = now
     case SHAPE: fx.setTexture(v); break;
-    case FDBK:  fx.setFeedback(v * 0.9f); break;
+    case FDBK:  fx.setFeedback(0.9f * v * v); break;  // gentle start: 25 -> 6%, 50 -> 23%
     case LEVEL: wet = v; break;
   }
 }
