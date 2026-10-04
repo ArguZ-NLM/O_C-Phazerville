@@ -788,10 +788,15 @@ FLASHMEM void InputDevice::DrawViz(int x, int y, int w, int h) {
   DrawVMeter(x + w - 8, y + 1, 6, h - 2, r);
 }
 
+// two bars for the stereo input, one for a single input, none when off
 FLASHMEM void InputDevice::DrawMini(int x, int y, int w, int h) {
   Poll();
-  DrawHMeter(x, y, w, h / 2, meters[0].v);
-  DrawHMeter(x, y + h / 2 + 1, w, h / 2, meters[1].v);
+  if (cur[0] == STEREO) {
+    DrawHMeter(x, y, w, h / 2, meters[0].v);
+    DrawHMeter(x, y + h / 2 + 1, w, h / 2, meters[1].v);
+  } else if (cur[0] != OFF) {
+    DrawHMeter(x, y + h / 4, w, h / 2, std::max(meters[0].v, meters[1].v));
+  }
 }
 
 /////////////////////////////////////////////////////////////////
