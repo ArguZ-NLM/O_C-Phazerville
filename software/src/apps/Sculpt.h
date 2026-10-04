@@ -607,10 +607,10 @@ FLASHMEM void AppSculpt::ModulateAll() {
 
 FLASHMEM void AppSculpt::MainLoop() {
   if (active) ReadMIDI();
-  if (clear_hold) {
+  {
     using namespace sculpt;
-    const bool held = OC::ui.read_immediate(OC::CONTROL_BUTTON_DOWN);
-    const uint32_t ms = millis() - clear_hold;
+    const bool held = clear_hold != 0;
+    const uint32_t ms = held ? millis() - clear_hold : 0;
     // only after a moment, so a short press (stop) shows nothing
     const float hold = held && ms > 250 ? std::min(1.0f, ms / 3000.0f) : 0.0f;
     for (int t = 0; t < NUM_TRACKS; t++) {
@@ -618,7 +618,7 @@ FLASHMEM void AppSculpt::MainLoop() {
       tracks[t].reel->hold = hold;
       if (held && ms >= 3000) tracks[t].reel->ClearLoop();
     }
-    if (!held || ms >= 3000) clear_hold = 0;
+    if (held && ms >= 3000) clear_hold = 0;
   }
   if (active && mod_timer >= 1000) { // follow the sources about once per ms
     mod_timer = 0;
@@ -678,9 +678,14 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
     }
     return;
   }
-  // REEL: B held for 3 s clears the loop (see MainLoop)
-  if (event.control == OC::CONTROL_BUTTON_DOWN && event.type == UI::EVENT_BUTTON_DOWN)
-    clear_hold = (view == DEVICE && !focus_mod && col == SOURCE && tracks[track].choice[SOURCE]) ? millis() | 1 : 0;
+  // REEL: B held for 3 s clears the loop (see MainLoop); followed by the
+  // button's own down / release events
+  if (event.control == OC::CONTROL_BUTTON_DOWN) {
+    if (event.type == UI::EVENT_BUTTON_DOWN)
+      clear_hold = (view == DEVICE && !focus_mod && col == SOURCE && tracks[track].choice[SOURCE]) ? millis() | 1 : 0;
+    else if (event.type == UI::EVENT_BUTTON_PRESS || event.type == UI::EVENT_BUTTON_LONG_RELEASE)
+      clear_hold = 0;
+  }
   if (event.control == OC::CONTROL_BUTTON_UP || event.control == OC::CONTROL_BUTTON_DOWN) {
     constexpr uint16_t both = OC::CONTROL_BUTTON_UP | OC::CONTROL_BUTTON_DOWN;
     if (event.type == UI::EVENT_BUTTON_DOWN && (event.mask & both) == both) {
