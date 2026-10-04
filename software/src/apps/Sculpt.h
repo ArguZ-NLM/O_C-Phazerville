@@ -78,6 +78,8 @@ namespace sculpt {
     uint8_t last_choice[SLOT_COUNT] = {}; // for the bypass toggle
     uint8_t bypass = 0;  // bit per slot (+ MIX_COL: its band stage): passed around
     Device* inst[SLOT_COUNT][MAX_OPTIONS] = {};
+    SculptFade* fade[SLOT_COUNT] = {};  // after each effect slot: bypass fade
+    SculptGate* gate = nullptr;         // before SPACE: its tail rings out
     Modulator* mods[NUM_MODS][MOD_TYPES] = {};
     uint8_t mod_type[NUM_MODS] = {};
     float mod_out[NUM_MODS] = {};
@@ -97,7 +99,9 @@ namespace sculpt {
   // patch cords live on the heap: no RAM1 until Sculpt is first opened
   struct Patch {
     AudioConnection in[NUM_TRACKS][2];
-    AudioConnection link[NUM_TRACKS][SLOT_COUNT][2];
+    // per slot: in -> (gate ->) device, in -> fade dry, device -> fade wet
+    AudioConnection link[NUM_TRACKS][SLOT_COUNT][8];
+    AudioConnection to_mix[NUM_TRACKS][2];
     AudioConnection mix_out[NUM_TRACKS][2];
   };
 
@@ -168,6 +172,7 @@ private:
   sculpt::Device* Twin(sculpt::Device* d) const;
   void Mirror(sculpt::Device* d, int p) const;
   void Repatch(int t);
+  void ApplyBypass(int t);
   void ConnectTrack(int t);
   void DisconnectTrack(int t);
   void ToggleLink();
@@ -196,6 +201,7 @@ FLASHMEM void AppSculpt::Start() {
     tr.input->val[0] = t ? InputDevice::IN2 : InputDevice::IN1;
     tr.input->ApplyAll();
     for (int s = MATERIAL + 1; s < SLOT_COUNT; s++) {
+      if (s == SPACE) tr.gate = new SculptGate;
       for (int o = 0; o < SLOT_DEFS[s].noptions; o++) {
         Device* d = MakeDevice(s, o);
         if (d) {
@@ -205,6 +211,7 @@ FLASHMEM void AppSculpt::Start() {
         }
         tr.inst[s][o] = d;
       }
+      tr.fade[s] = new SculptFade;
       tr.last_choice[s] = SLOT_DEFS[s].noptions > 1 ? 1 : 0;
     }
   }
@@ -240,22 +247,48 @@ FLASHMEM void AppSculpt::Repatch(int t) {
   Track& tr = tracks[t];
   auto& link = patch->link[t];
   AudioNoInterrupts();
-  for (auto& hop : link) for (auto& c : hop) c.disconnect();
+  for (auto& slot : link) for (auto& c : slot) c.disconnect();
+  for (auto& c : patch->to_mix[t]) c.disconnect();
   for (auto& c : patch->mix_out[t]) c.disconnect();
   AudioStream* prev = tr.input;
-  int hop = 0;
   for (int s = MATERIAL + 1; s < SLOT_COUNT; s++) {
     Device* d = tr.current(s);
-    if (!d || !d->in() || tr.bypassed(s)) continue;
-    for (int c = 0; c < 2; c++) link[hop][c].connect(*prev, c, *d->in(), c);
-    prev = d->out();
-    hop++;
+    if (!d || !d->in()) continue;
+    // bypassed slots stay patched; their fade picks dry or wet
+    AudioConnection* l = link[s];
+    AudioStream* feed = prev;
+    if (s == SPACE && tr.gate) {
+      for (int c = 0; c < 2; c++) (l++)->connect(*prev, c, *tr.gate, c);
+      feed = tr.gate;
+    }
+    for (int c = 0; c < 2; c++) (l++)->connect(*feed, c, *d->in(), c);
+    for (int c = 0; c < 2; c++) (l++)->connect(*prev, c, *tr.fade[s], c);
+    for (int c = 0; c < 2; c++) (l++)->connect(*d->out(), c, *tr.fade[s], 2 + c);
+    prev = tr.fade[s];
   }
   // through the track's MIX band stage into the mixer
-  tr.mix->SetBypass(tr.bypass >> MIX_COL & 1);
-  for (int c = 0; c < 2; c++) link[hop][c].connect(*prev, c, *tr.mix->in(), c);
+  for (int c = 0; c < 2; c++) patch->to_mix[t][c].connect(*prev, c, *tr.mix->in(), c);
   for (int c = 0; c < 2; c++) patch->mix_out[t][c].connect(*tr.mix->out(), c, *mixer, t * 2 + c);
   AudioInterrupts();
+  ApplyBypass(t);
+}
+
+// bypass targets for the track's fades: dry only, or for SPACE dry plus
+// the device's output with its input closed, so the tail rings out
+FLASHMEM void AppSculpt::ApplyBypass(int t) {
+  using namespace sculpt;
+  Track& tr = tracks[t];
+  for (int s = MATERIAL + 1; s < SLOT_COUNT; s++) {
+    if (!tr.fade[s]) continue;
+    const bool bp = tr.bypassed(s);
+    if (s == SPACE) {
+      tr.fade[s]->Set(bp ? 1.0f : 0.0f, 1.0f);
+      tr.gate->Set(bp ? 0.0f : 1.0f);
+    } else {
+      tr.fade[s]->Set(bp ? 1.0f : 0.0f, bp ? 0.0f : 1.0f);
+    }
+  }
+  tr.mix->SetBypass(tr.bypass >> MIX_COL & 1);
 }
 
 FLASHMEM void AppSculpt::SetChoice(int t, int s, int option) {
@@ -289,7 +322,8 @@ FLASHMEM void AppSculpt::DisconnectTrack(int t) {
   using namespace sculpt;
   AudioNoInterrupts();
   for (auto& c : patch->in[t]) c.disconnect();
-  for (auto& hop : patch->link[t]) for (auto& c : hop) c.disconnect();
+  for (auto& slot : patch->link[t]) for (auto& c : slot) c.disconnect();
+  for (auto& c : patch->to_mix[t]) c.disconnect();
   for (auto& c : patch->mix_out[t]) c.disconnect();
   AudioInterrupts();
   // disconnected devices stop updating; now they can drop their buffers
@@ -351,7 +385,7 @@ FLASHMEM void AppSculpt::ToggleBypass(int s) {
     if (t != track && !linked) continue;
     if (on) tracks[t].bypass |= bit;
     else tracks[t].bypass &= ~bit;
-    Repatch(t);
+    if (active) ApplyBypass(t);
   }
 }
 
@@ -374,7 +408,7 @@ FLASHMEM void AppSculpt::ToggleLink() {
     }
   }
   b.bypass = a.bypass;
-  Repatch(1 - master);
+  if (active) ApplyBypass(1 - master);
   for (int i = 0; i < NUM_MODS; i++) {
     SetModType(1 - master, i, a.mod_type[i]);
     for (int type = 1; type < MOD_TYPES; type++) {

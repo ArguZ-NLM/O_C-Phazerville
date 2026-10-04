@@ -365,6 +365,92 @@ FLASHMEM void SculptMixer::update() {
 }
 
 /////////////////////////////////////////////////////////////////
+// Bypass fades. SculptFade sits after every effect slot and mixes the
+// slot's input (dry) with the device's output (wet); SculptGate sits in
+// front of a device whose tail rings out when bypassed (SPACE). Both glide
+// to their targets in ~15 ms and pass blocks through untouched once there.
+/////////////////////////////////////////////////////////////////
+constexpr float FADE_STEP = 1.0f / (0.015f * AUDIO_SAMPLE_RATE_EXACT);
+
+FLASHMEM static float Glide(float g, float to) {
+  return to > g ? std::min(to, g + FADE_STEP) : std::max(to, g - FADE_STEP);
+}
+
+class SculptFade : public AudioStream {
+public:
+  SculptFade() : AudioStream(4, queue) {}  // dry L/R, wet L/R
+  void Set(float dry, float wet) { to_dry = dry; to_wet = wet; }
+  void update() override;
+private:
+  audio_block_t* queue[4];
+  volatile float to_dry = 0.0f, to_wet = 1.0f;
+  float g_dry = 0.0f, g_wet = 1.0f;
+};
+
+FLASHMEM void SculptFade::update() {
+  audio_block_t* in[4];
+  for (int i = 0; i < 4; i++) in[i] = receiveReadOnly(i);
+  const float td = to_dry, tw = to_wet;
+  const bool settled = g_dry == td && g_wet == tw;
+  if (settled && (td == 0.0f || tw == 0.0f) && (td + tw) == 1.0f) {
+    // all wet or all dry: pass that side on
+    const int from = td == 0.0f ? 2 : 0;
+    for (int c = 0; c < 2; c++) if (in[from + c]) transmit(in[from + c], c);
+  } else {
+    audio_block_t* out[2] = {allocate(), allocate()};
+    if (out[0] && out[1]) {
+      constexpr float q = 1.0f / 32768.0f;
+      for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+        g_dry = Glide(g_dry, td);
+        g_wet = Glide(g_wet, tw);
+        for (int c = 0; c < 2; c++) {
+          const float d = in[c] ? in[c]->data[n] * q : 0.0f;
+          const float w = in[2 + c] ? in[2 + c]->data[n] * q : 0.0f;
+          out[c]->data[n] = __SSAT(int32_t((d * g_dry + w * g_wet) * 32767.0f), 16);
+        }
+      }
+      transmit(out[0], 0);
+      transmit(out[1], 1);
+    }
+    for (auto b : out) if (b) release(b);
+  }
+  for (auto b : in) if (b) release(b);
+}
+
+class SculptGate : public AudioStream {
+public:
+  SculptGate() : AudioStream(2, queue) {}
+  void Set(float g) { to = g; }
+  void update() override;
+private:
+  audio_block_t* queue[2];
+  volatile float to = 1.0f;
+  float g = 1.0f;
+};
+
+FLASHMEM void SculptGate::update() {
+  audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
+  const float t = to;
+  if (g == t && (t == 0.0f || t == 1.0f)) {
+    // open: pass on; closed: send nothing (silence)
+    if (t == 1.0f) for (int c = 0; c < 2; c++) if (in[c]) transmit(in[c], c);
+  } else {
+    audio_block_t* out[2] = {allocate(), allocate()};
+    if (out[0] && out[1]) {
+      for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+        g = Glide(g, t);
+        for (int c = 0; c < 2; c++)
+          out[c]->data[n] = in[c] ? int16_t(in[c]->data[n] * g) : 0;
+      }
+      transmit(out[0], 0);
+      transmit(out[1], 1);
+    }
+    for (auto b : out) if (b) release(b);
+  }
+  for (auto b : in) if (b) release(b);
+}
+
+/////////////////////////////////////////////////////////////////
 // MIX: level / pan / mute per track (not an audio stage itself)
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef MIX_DEF = {
