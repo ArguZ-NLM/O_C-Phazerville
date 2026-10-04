@@ -674,7 +674,7 @@ FLASHMEM void MixDevice::DrawMini(int x, int y, int w, int h) {
 PROGMEM static const DeviceDef INPUT_DEF = {
   "INPUT", "IN", 3, {"", ""},
   {
-    {"SOURC", 0, 3, 0, LIST, 4, 0, 0, {"STER", "IN1", "IN2", "OFF"}},
+    {"SOURC", 0, 3, 0, LIST, 4, 0, 0, {"L+R", "L", "R", "OFF"}},
     {"GAIN", 0, 200, 100, UNI},
     {"WIDTH", 0, 200, 100, UNI},
   }
@@ -781,11 +781,17 @@ FLASHMEM void InputDevice::DrawViz(int x, int y, int w, int h) {
     const int xx = x + i * ww / 32;
     if (a) gfxLine(xx, cy - a, xx, cy + a);
   }
-  // L / R meters at the right edge
-  gfxFrame(x + w - 18, y, 8, h);
-  gfxFrame(x + w - 9, y, 8, h);
-  DrawVMeter(x + w - 17, y + 1, 6, h - 2, l);
-  DrawVMeter(x + w - 8, y + 1, 6, h - 2, r);
+  // meters at the right edge: L and R for the stereo input, one for a
+  // single input, none when off
+  if (cur[0] == STEREO) {
+    gfxFrame(x + w - 18, y, 8, h);
+    gfxFrame(x + w - 9, y, 8, h);
+    DrawVMeter(x + w - 17, y + 1, 6, h - 2, l);
+    DrawVMeter(x + w - 8, y + 1, 6, h - 2, r);
+  } else if (cur[0] != OFF) {
+    gfxFrame(x + w - 18, y, 17, h);
+    DrawVMeter(x + w - 17, y + 1, 15, h - 2, std::max(l, r));
+  }
 }
 
 // two bars for the stereo input, one for a single input, none when off
