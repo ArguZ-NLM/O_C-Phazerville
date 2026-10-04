@@ -859,28 +859,29 @@ FLASHMEM void AppSculpt::DrawDevice() const {
   if (!d) return;
   const int n = d->num_params();
 
-  // header: track, device, action labels, page. A long device name gives
-  // way to its tag when MOD is shown next to it.
+  // header: track, device, action labels, page; text one pixel down so the
+  // inverted boxes have a white row above it. A long device name gives way
+  // to its tag when MOD is shown next to it.
   const int name_x = linked ? 22 : 10;
   const char* name = mod_mode && name_x + 6 * int(strlen(d->def.name)) > 62 ? d->def.tag : d->def.name;
   if (linked) {
-    gfxPrint(1, 0, PSTR("L+R"));
-    gfxInvert(0, 0, 20, 8);
-    gfxPrint(22, 0, name);
+    gfxPrint(1, 1, PSTR("L+R"));
+    gfxInvert(0, 0, 21, 9);
+    gfxPrint(22, 1, name);
   } else {
-    gfxPrint(1, 0, track ? PSTR("R") : PSTR("L"));
-    gfxInvert(0, 0, 8, 8);
+    gfxPrint(1, 1, track ? PSTR("R") : PSTR("L"));
+    gfxInvert(0, 0, 9, 9);
     if (focus_mod) {
       char buf[8];
       snprintf(buf, sizeof(buf), "%c %s", 'A' + mod_cursor, d->def.tag); // short: actions follow
-      gfxPrint(10, 0, buf);
+      gfxPrint(10, 1, buf);
     } else {
-      gfxPrint(10, 0, name);
+      gfxPrint(10, 1, name);
     }
   }
   if (mod_mode) {
-    gfxPrint(64, 0, PSTR("MOD"));
-    gfxInvert(63, 0, 20, 8);
+    gfxPrint(64, 1, PSTR("MOD"));
+    gfxInvert(63, 0, 20, 9);
   }
   if (trig_mode) {
     // which trigger fires each action
@@ -903,20 +904,20 @@ FLASHMEM void AppSculpt::DrawDevice() const {
     const char* label = byp ? PSTR("BYP") : focus_mod ? d->def.actions[a] : "";
     if (!label[0] || (a == 1 && mute_turn)) continue;
     const int x = 56 + a * 26; // clear of the page number at 110
-    gfxPrint(x, 0, label);
+    gfxPrint(x, 1, label);
     // lit actions (e.g. FRZ, BYP) are inverted
     const int lw = 6 * int(strlen(label)) + 2;
-    if (byp ? (tracks[track].bypass >> col & 1) : d->ActionLit(a)) gfxInvert(x - 1, 0, lw, 8);
+    if (byp ? (tracks[track].bypass >> col & 1) : d->ActionLit(a)) gfxInvert(x - 1, 0, lw, 9);
   }
   // a muted track shows MUTE blinking on every page, in the second action
   // place; where a device has its own action there, the two take turns
   if (mute_turn && (millis() / 300) % 2) {
-    gfxPrint(82, 0, PSTR("MUTE"));
-    gfxInvert(81, 0, 26, 8);
+    gfxPrint(82, 1, PSTR("MUTE"));
+    gfxInvert(81, 0, 26, 9);
   }
   if (n > 4) {
-    gfxPrint(110, 0, cursor / 4 + 1);
-    gfxPrint(116, 0, PSTR("/2"));
+    gfxPrint(110, 1, cursor / 4 + 1);
+    gfxPrint(116, 1, PSTR("/2"));
   }
   gfxLine(0, 9, 127, 9);
 
