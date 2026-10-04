@@ -795,8 +795,7 @@ FLASHMEM void AppSculpt::DrawChain() const {
   Device* d = tr.at(col);
   if (!linked) gfxPrint(0, 56, track ? PSTR("R") : PSTR("L"));
   gfxPrint(8, 56, col == MIX_COL ? PSTR("MIX") : SLOT_DEFS[col].name);
-  // the device name, unless it is the same as the slot's (SPACE); for MIX
-  // where the track sits in the stereo field
+  // the slot name; for MIX where the track sits in the stereo field
   // bypass sits at the right end, the CPU load to its left
   const bool bp = !d || tr.bypassed(col);
   int right = 128;
@@ -811,7 +810,8 @@ FLASHMEM void AppSculpt::DrawChain() const {
     else if (pan > 0) snprintf(buf, sizeof(buf), "RIGHT %d", pan);
     else snprintf(buf, sizeof(buf), "CENTER");
     gfxPrint(32, 56, buf);
-  } else if (strcmp(d->def.name, SLOT_DEFS[col].name)) {
+  } else if (SLOT_DEFS[col].planned > 1 && strcmp(d->def.name, SLOT_DEFS[col].name)) {
+    // the device name only where the slot offers a choice (MATERIAL)
     gfxPrint(62, 56, d->def.name);
   }
   if (!audio_hw()) {
