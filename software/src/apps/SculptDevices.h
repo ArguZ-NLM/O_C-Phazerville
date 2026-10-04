@@ -50,7 +50,7 @@ struct ParamDef {
 };
 
 struct DeviceDef {
-  char name[8];
+  char name[10];
   char tag[4];       // 3 letters for the chain view
   uint8_t nparams;
   char actions[2][5];
@@ -1099,10 +1099,10 @@ FLASHMEM void DeformDevice::DrawMini(int x, int y, int w, int h) {
 }
 
 /////////////////////////////////////////////////////////////////
-// RING (Filter): 48-band resonant filter bank
+// RING (Resonator slot, shown as RESONATOR): 48-band resonant filter bank
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef RING_DEF = {
-  "RING", "RNG", 8, {"", ""},
+  "RESONATOR", "RNG", 8, {"", ""},  // tag kept for saved files
   {
     {"CUT", 0, 100, 70, UNI},
     {"SLOPE", -50, 50, -50, BI},
@@ -1293,7 +1293,7 @@ enum Slot : uint8_t { MATERIAL, GRANULAR, FILTER, COLOR, SPACE, SLOT_COUNT };
 constexpr int MAX_OPTIONS = 2;
 
 struct SlotDef {
-  char name[9];
+  char name[10];
   char tag[4];
   uint8_t noptions;  // BYPASS + devices that exist now (MATERIAL: no bypass)
   uint8_t planned;   // devices this slot will offer (dots on the chain view)
@@ -1302,7 +1302,7 @@ struct SlotDef {
 PROGMEM static const SlotDef SLOT_DEFS[SLOT_COUNT] = {
   {"MATERIAL", "MAT", 1, 3},  // INPUT (TAPE and DISC to come)
   {"GRANULAR", "GRN", 1, 1},  // BYPASS (MOSAIC to come)
-  {"FILTER",   "FLT", 2, 1},  // BYPASS, RING
+  {"RESONATOR", "RES", 2, 1},  // BYPASS, RING (shown as RESONATOR)
   {"COLOR",    "COL", 2, 1},  // BYPASS, DEFORM
   {"SPACE",    "SPC", 2, 1},  // BYPASS, SPACE
 };

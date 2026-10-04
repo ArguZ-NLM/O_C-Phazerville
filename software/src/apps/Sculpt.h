@@ -779,11 +779,14 @@ FLASHMEM void AppSculpt::DrawDevice() const {
   if (!d) return;
   const int n = d->num_params();
 
-  // header: track, device, action labels, page
+  // header: track, device, action labels, page. A long device name gives
+  // way to its tag when MOD is shown next to it.
+  const int name_x = linked ? 22 : 10;
+  const char* name = mod_mode && name_x + 6 * int(strlen(d->def.name)) > 62 ? d->def.tag : d->def.name;
   if (linked) {
     gfxPrint(1, 0, PSTR("1+2"));
     gfxInvert(0, 0, 19, 8);
-    gfxPrint(22, 0, d->def.name);
+    gfxPrint(22, 0, name);
   } else {
     gfxPrint(1, 0, track + 1);
     gfxInvert(0, 0, 7, 8);
@@ -792,7 +795,7 @@ FLASHMEM void AppSculpt::DrawDevice() const {
       snprintf(buf, sizeof(buf), "%c %s", 'A' + mod_cursor, d->def.tag); // short: actions follow
       gfxPrint(10, 0, buf);
     } else {
-      gfxPrint(10, 0, d->def.name);
+      gfxPrint(10, 0, name);
     }
   }
   if (mod_mode) {
