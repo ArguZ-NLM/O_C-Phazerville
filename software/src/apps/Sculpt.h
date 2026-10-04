@@ -865,11 +865,11 @@ FLASHMEM void AppSculpt::DrawDevice() const {
   const char* name = mod_mode && name_x + 6 * int(strlen(d->def.name)) > 62 ? d->def.tag : d->def.name;
   if (linked) {
     gfxPrint(1, 0, PSTR("L+R"));
-    gfxInvert(0, 0, 19, 8);
+    gfxInvert(0, 0, 20, 8);
     gfxPrint(22, 0, name);
   } else {
     gfxPrint(1, 0, track ? PSTR("R") : PSTR("L"));
-    gfxInvert(0, 0, 7, 8);
+    gfxInvert(0, 0, 8, 8);
     if (focus_mod) {
       char buf[8];
       snprintf(buf, sizeof(buf), "%c %s", 'A' + mod_cursor, d->def.tag); // short: actions follow
@@ -895,10 +895,12 @@ FLASHMEM void AppSculpt::DrawDevice() const {
     gfxPrint(4, 33, PSTR("L/R enc: trigger"));
   }
   const bool mute_turn = !mod_mode && Muted()
-      && (!(d->def.actions[1][0] || BypassKey()) || (millis() / 600) % 2);
+      && (!((focus_mod && d->def.actions[1][0]) || BypassKey()) || (millis() / 600) % 2);
   for (int a = 0; a < 2 && !mod_mode; a++) {
     const bool byp = a == 1 && BypassKey();
-    const char* label = byp ? PSTR("BYP") : d->def.actions[a];
+    // slot devices keep their actions (SPACE: FRZ / CLR) off the header;
+    // the modulators show theirs (RST, STP, TRG)
+    const char* label = byp ? PSTR("BYP") : focus_mod ? d->def.actions[a] : "";
     if (!label[0] || (a == 1 && mute_turn)) continue;
     const int x = 56 + a * 26; // clear of the page number at 110
     gfxPrint(x, 0, label);
