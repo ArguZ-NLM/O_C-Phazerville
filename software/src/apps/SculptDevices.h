@@ -954,22 +954,20 @@ FLASHMEM void VastDevice::DrawViz(int x, int y, int w, int h) {
     gfxPrint(x + 22, y + h / 2 - 4, PSTR("out of memory"));
     return;
   }
-  // echoes on a time line (L filled, R outlined), then the reverb tail as a
-  // fading wedge whose length follows DECAY and height the tail level
+  // echoes on a time line from the left edge (L filled, R outlined): where
+  // they sit follows the tap times (square-root scale up to 6 s, so short
+  // times still spread out), how tall they are follows DELAY. Then the
+  // reverb tail as a fading wedge whose length follows DECAY and height the
+  // tail level.
   const int base = y + h - 1, tl_w = w * 2 / 3;
-  float longest = 0.0f;
-  for (auto& c : tap_secs) for (float s : c) longest = std::max(longest, s);
   gfxDottedLine(x, base, x + w - 1, base, 2);
-  gfxLine(x, y + 4, x, base);  // the dry hit
+  const int bh = std::max(1, (h - 2) * cur[DELAY] / 100);
   for (int c = 0; c < 2; c++) {
     for (int t = 0; t < TAPS; t++) {
-      const float lvl = tap_m[c][t].v;
-      const int bh = constrain(int(lvl * (h - 2)), 0, h - 2);
-      const int bx = x + 3 + int(tap_secs[c][t] / longest * (tl_w - 6)) + c * 3 - 3;
-      if (bh > 0) {
-        if (c == 0) gfxRect(bx, base - bh, 2, bh);
-        else gfxFrame(bx, base - bh, 2, bh);
-      }
+      const int bx = x + int(sqrtf(tap_secs[c][t] / MAX_SECS) * (tl_w - 6)) + c * 3;
+      if (cur[DELAY] == 0) continue;
+      if (c == 0) gfxRect(bx, base - bh, 2, bh);
+      else gfxFrame(bx, base - bh, 2, bh);
     }
   }
   const float tail = tail_m.v;

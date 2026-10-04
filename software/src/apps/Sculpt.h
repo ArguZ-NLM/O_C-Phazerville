@@ -757,13 +757,12 @@ FLASHMEM bool AppSculpt::Muted() const {
   return false;
 }
 
-// on an effect slot's page, B (DOWN) bypasses the slot unless the device
-// has its own second action there; on MIX it bypasses the band stage
+// on an effect slot's page B (DOWN) bypasses the slot (SPACE's CLR stays
+// reachable through a trigger); on OUTPUT it bypasses the band stage
 FLASHMEM bool AppSculpt::BypassKey() const {
   using namespace sculpt;
   if (view != DEVICE || focus_mod || col <= MATERIAL || col > MIX_COL) return false;
-  Device* d = Focused();
-  return d && !d->def.actions[1][0];
+  return Focused() != nullptr;
 }
 
 FLASHMEM void AppSculpt::DrawChain() const {
