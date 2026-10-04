@@ -1205,8 +1205,11 @@ FLASHMEM void RingDevice::DrawViz(int x, int y, int w, int h) {
     const int bx = x + k * 2;
     const int bh = int(band_m[k] * (h - 2));
     if (bh > 0) gfxLine(bx, y + h - 1, bx, y + h - 1 - bh);
-    const int sy = y + h - 1 - int(shape[k] / smax * (h - 3));
-    if (k & 1) gfxPixel(bx, sy);
+  }
+  // the shape: a dot in every gap between the bars, so the bars never hide it
+  for (int k = 0; k + 1 < BANDS; k++) {
+    const float sv = 0.5f * (shape[k] + shape[k + 1]);
+    gfxPixel(x + k * 2 + 1, y + h - 1 - int(sv / smax * (h - 3)));
   }
   const int cx = x + int(cur[CUT] * 0.01f * (BANDS - 1)) * 2;
   gfxLine(cx - 2, y, cx + 2, y);

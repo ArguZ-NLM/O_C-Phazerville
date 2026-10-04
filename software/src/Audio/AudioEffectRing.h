@@ -69,44 +69,60 @@ FLASHMEM void AudioEffectRing::update() {
   }
 
   // gains glide a step per block so CUTOFF / SLOPE moves don't click
-  int active[BANDS], na = 0;
-  for (int b = 0; b < BANDS; b++) {
-    gain[b] += 0.3f * (target_gain[b] - gain[b]);
-    if (gain[b] > 1e-4f && coef[b] > 0.0f) active[na++] = b;
-    else lp[b] = bp[b] = 0.0f;
-  }
+  for (int b = 0; b < BANDS; b++) gain[b] += 0.3f * (target_gain[b] - gain[b]);
 
   constexpr float q = 1.0f / 32768.0f;
-  const float wet = wet_, base_damp = damp_;
-  const bool choke = choke_;
-  float pk[BANDS] = {};
-  float peak_out = 0.0f;
+  const float wet = wet_;
 
+  // the mono input and the damping for each sample of the block
+  float x[AUDIO_BLOCK_SAMPLES], dmp[AUDIO_BLOCK_SAMPLES];
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
     const float dl = in[0] ? in[0]->data[n] * q : 0.0f;
     const float dr = in[1] ? in[1]->data[n] * q : 0.0f;
-    const float x = 0.5f * (dl + dr);
-    float damp = base_damp;
-    if (choke) {
+    x[n] = 0.5f * (dl + dr);
+    float damp = damp_;
+    if (choke_) {
       // follow the input; when it is quiet the bands get damped hard
-      const float a = fabsf(x);
+      const float a = fabsf(x[n]);
       env = a > env ? a : env * 0.9995f;
       damp += (1.0f - std::min(1.0f, env * 20.0f)) * 0.5f;
     }
-    float sum[2] = {0.0f, 0.0f};
-    for (int i = 0; i < na; i++) {
-      const int b = active[i];
-      const float f = coef[b];
-      lp[b] += f * bp[b];
-      const float hp = x - lp[b] - damp * bp[b];
-      bp[b] += f * hp;
-      // damp * bp: unity gain at the band's centre
-      const float y = bp[b] * damp * gain[b];
-      sum[b & 1] += y;
-      if ((n & 7) == 0) pk[b] = std::max(pk[b], fabsf(y));
+    dmp[n] = damp;
+  }
+
+  // one band at a time over the whole block, so its state stays in
+  // registers; bands far below the loudest one are not heard and skipped
+  float gmax = 0.0f;
+  for (int b = 0; b < BANDS; b++) gmax = std::max(gmax, gain[b]);
+  float sum[2][AUDIO_BLOCK_SAMPLES] = {};
+  for (int b = 0; b < BANDS; b++) {
+    const float f = coef[b], g = gain[b];
+    if (g <= gmax * 1e-3f || g < 1e-4f || f <= 0.0f) {
+      lp[b] = bp[b] = 0.0f;
+      continue;
     }
-    const float ol = dl + wet * (sum[0] - dl);
-    const float orr = dr + wet * (sum[1] - dr);
+    float l = lp[b], v = bp[b], pk = 0.0f;
+    float* acc = sum[b & 1];
+    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+      l += f * v;
+      const float d = dmp[n];
+      v += f * (x[n] - l - d * v);
+      // damp * bp: unity gain at the band's centre
+      const float y = v * d * g;
+      acc[n] += y;
+      pk = std::max(pk, fabsf(y));
+    }
+    lp[b] = l;
+    bp[b] = v;
+    viz.band[b] = std::max(viz.band[b], pk);
+  }
+
+  float peak_out = 0.0f;
+  for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+    const float dl = in[0] ? in[0]->data[n] * q : 0.0f;
+    const float dr = in[1] ? in[1]->data[n] * q : 0.0f;
+    const float ol = dl + wet * (sum[0][n] - dl);
+    const float orr = dr + wet * (sum[1][n] - dr);
     peak_out = std::max(peak_out, std::max(fabsf(ol), fabsf(orr)));
     out[0]->data[n] = __SSAT(int32_t(ol * 32767.0f), 16);
     out[1]->data[n] = __SSAT(int32_t(orr * 32767.0f), 16);
@@ -116,6 +132,5 @@ FLASHMEM void AudioEffectRing::update() {
   transmit(out[1], 1);
   for (auto b : out) release(b);
   for (auto b : in) if (b) release(b);
-  for (int b = 0; b < BANDS; b++) viz.band[b] = std::max(viz.band[b], pk[b]);
   viz.out = std::max(viz.out, peak_out);
 }
