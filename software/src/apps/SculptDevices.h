@@ -1616,18 +1616,20 @@ FLASHMEM void SprayDevice::DrawViz(int x, int y, int w, int h) {
   }
   // the grains as they play: across from the middle by their scatter, up
   // and down by their own pitch offset around PITCH (all on one line without
-  // spread), as wide as they are long on the buffer's scale
+  // spread), sized by their length
   const int line = cy - cur[PITCH] * (h / 2 - 4) / 24;
   AudioEffectClouds::GrainView gv[AudioEffectClouds::MAX_GRAINS];
   const int n = fx.ReadGrains(gv, AudioEffectClouds::MAX_GRAINS);
   for (int i = 0; i < n; i++) {
+    // as wide as they are long, and taller in proportion (3 .. 11 px)
     const int gw = constrain(int(gv[i].secs / BUF_SECS * w + 0.5f), 2, w / 2);
+    const int gh = constrain(3 + (gw - 2) / 4, 3, 11);
     const int gx = constrain(mid + int(gv[i].scatter * w) - gw / 2, x + 1, x + w - gw - 1);
-    const int gy = constrain(line - int(gv[i].semis * (h / 2 - 4) / 24) - 1, y + 2, base - 4);
-    graphics.clearRect(gx - 1, gy - 1, gw + 2, 5);  // a gap around it in the waveform
+    const int gy = constrain(line - int(gv[i].semis * (h / 2 - 4) / 24) - gh / 2, y + 2, base - gh - 1);
+    graphics.clearRect(gx - 1, gy - 1, gw + 2, gh + 2);  // a gap around it in the waveform
     // with FDBK the grains turn hollow: outline only, dark inside
-    if (cur[FDBK] > 0) gfxFrame(gx, gy, gw, 3);
-    else gfxRect(gx, gy, gw, 3);
+    if (cur[FDBK] > 0) gfxFrame(gx, gy, gw, gh);
+    else gfxRect(gx, gy, gw, gh);
   }
   if (frozen) {
     gfxPrint(x + w - 25, y + 1, PSTR("FRZ"));
