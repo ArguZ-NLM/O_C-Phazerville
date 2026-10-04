@@ -285,7 +285,12 @@ FLASHMEM void AppSculpt::ApplyBypass(int t) {
       tr.fade[s]->Set(bp ? 1.0f : 0.0f, 1.0f);
       tr.gate->Set(bp ? 0.0f : 1.0f);
     } else {
-      tr.fade[s]->Set(bp ? 1.0f : 0.0f, bp ? 0.0f : 1.0f);
+      // a device may mix itself with the dry signal (MOSAIC: LEVEL)
+      const Device* d = tr.current(s);
+      const float w = d ? constrain(d->wet, 0.0f, 1.0f) : 1.0f;
+      if (bp) tr.fade[s]->Set(1.0f, 0.0f);
+      else if (w >= 1.0f) tr.fade[s]->Set(0.0f, 1.0f);
+      else tr.fade[s]->Set(cosf(w * float(M_PI_2)), sinf(w * float(M_PI_2)));
     }
   }
   tr.mix->SetBypass(tr.bypass >> MIX_COL & 1);
@@ -538,6 +543,7 @@ FLASHMEM void AppSculpt::MainLoop() {
   if (active && mod_timer >= 1000) { // follow the sources about once per ms
     mod_timer = 0;
     ModulateAll();
+    for (int t = 0; t < sculpt::NUM_TRACKS; t++) ApplyBypass(t);  // follows MOSAIC LEVEL
   }
   if (!active || stats_timer < 1000) return;
   stats_timer = 0;

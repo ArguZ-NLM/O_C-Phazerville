@@ -33,6 +33,7 @@
 #include "../Audio/AudioEffectDeform.h"
 #include "../Audio/AudioEffectBandz.h"
 #include "../Audio/AudioEffectRing.h"
+#include "../Audio/AudioEffectClouds.h"
 
 namespace sculpt {
 
@@ -142,6 +143,7 @@ public:
   const float* mod_bus = nullptr;        // the track's modulator outputs
   uint8_t mod_bi = 0;                // bit per param: bipolar around val
   bool active = false;
+  float wet = 1.0f;       // the device's share in its slot's fade (MOSAIC: LEVEL)
   uint8_t view_page = 0;  // which page of settings the device view shows
   int8_t view_cursor = 0; // the setting under the cursor there
 
@@ -1387,6 +1389,150 @@ FLASHMEM void RingDevice::DrawMini(int x, int y, int w, int h) {
 }
 
 /////////////////////////////////////////////////////////////////
+// MOSAIC (Granular): grains from the last 4 s of the track, on Misty's
+// engine (AudioEffectClouds, stereo). The engine gives the grains only; the
+// slot's fade mixes them with the dry signal by LEVEL.
+/////////////////////////////////////////////////////////////////
+PROGMEM static const DeviceDef MOSAIC_DEF = {
+  "MOSAIC", "MOS", 8, {"FRZ", ""},
+  {
+    {"RATE", 0, 100, 55, UNI, 0, 2, 1, {}, {"EVEN", "RAND"}},
+    {"SIZE", 0, 100, 50, UNI},
+    {"PITCH", -24, 24, 0, BI},
+    {"SPRAY", 0, 100, 20, UNI},
+    {"POS", 0, 100, 10, UNI},
+    {"SHAPE", 0, 100, 70, UNI},
+    {"FDBK", 0, 100, 0, UNI},
+    {"LEVEL", 0, 100, 50, UNI},
+  },
+  {"GRAIN", ""},
+};
+
+class MosaicDevice : public Device {
+public:
+  enum { RATE, SIZE, PITCH, SPRAY, POS, SHAPE, FDBK, LEVEL };
+  static constexpr float BUF_SECS = 4.0f;
+  MosaicDevice();
+  AudioStream* in() override { return &fx; }
+  AudioStream* out() override { return &fx; }
+  bool Activate() override;
+  void Deactivate() override;
+  bool ok() const override { return fx.IsReady(); }
+  void Apply(int p) override;
+  void Format(int p, char* buf, size_t n) const override;
+  void Action(int a) override;
+  bool ActionLit(int a) const override { return a == 0 && frozen; }
+  void DrawViz(int x, int y, int w, int h) override;
+  void DrawMini(int x, int y, int w, int h) override;
+  void CpuMax(float parts[2]) override {
+    parts[0] = fx.processorUsageMax();
+    parts[1] = 0.0f;
+    fx.processorUsageMaxReset();
+  }
+private:
+  AudioEffectClouds fx;
+  bool frozen = false;
+  float RateHz() const { return 0.5f * powf(80.0f, cur[RATE] * 0.01f); }    // 0.5 .. 40 Hz
+  float SizeSecs() const { return 0.01f * powf(100.0f, cur[SIZE] * 0.01f); } // 10 ms .. 1 s
+};
+
+FLASHMEM MosaicDevice::MosaicDevice()
+  : Device(MOSAIC_DEF), fx(size_t(BUF_SECS * AUDIO_SAMPLE_RATE_EXACT), 2) {}
+
+// called while the stream is not patched in
+FLASHMEM bool MosaicDevice::Activate() {
+  if (active) return fx.IsReady();
+  fx.Acquire();
+  fx.setGrainSource(0.0f);
+  fx.setStereoSpread(0.6f);
+  ApplyAll();
+  active = true;
+  return fx.IsReady();
+}
+
+FLASHMEM void MosaicDevice::Deactivate() {
+  if (!active) return;
+  fx.Release();
+  active = false;
+}
+
+FLASHMEM void MosaicDevice::Apply(int p) {
+  const float v = cur[p] * 0.01f;
+  switch (p) {
+    case RATE:  fx.setDensity(mode[RATE] ? RateHz() : -RateHz()); break; // neg = even
+    case SIZE:  fx.setSize(SizeSecs()); break;
+    case PITCH: fx.setPitch(powf(2.0f, cur[PITCH] / 12.0f)); break;
+    case SPRAY: fx.setSpray(v * 0.5f); break;
+    case POS:   fx.setPosition(v); break;
+    case SHAPE: fx.setTexture(v); break;
+    case FDBK:  fx.setFeedback(v * 0.9f); break;
+    case LEVEL: wet = v; break;
+  }
+}
+
+FLASHMEM void MosaicDevice::Format(int p, char* buf, size_t n) const {
+  if (p == RATE) {
+    const float hz = 0.5f * powf(80.0f, val[RATE] * 0.01f);
+    if (hz < 10.0f) snprintf(buf, n, "%d.%dHz", int(hz), int(hz * 10) % 10);
+    else snprintf(buf, n, "%dHz", int(hz + 0.5f));
+  } else if (p == SIZE) {
+    const int ms = int(10.0f * powf(100.0f, val[SIZE] * 0.01f) + 0.5f);
+    if (ms < 1000) snprintf(buf, n, "%dms", ms);
+    else snprintf(buf, n, "1.0s");
+  } else {
+    Device::Format(p, buf, n);
+  }
+}
+
+FLASHMEM void MosaicDevice::Action(int a) {
+  if (a == 0) {
+    frozen = !frozen;
+    fx.setFreeze(frozen);
+  }
+}
+
+// first look: the last 4 s as a line (now at the right), the window grains
+// are taken from (POS back from now, widened by SPRAY), one dot per active
+// grain inside it, raised or lowered by PITCH
+FLASHMEM void MosaicDevice::DrawViz(int x, int y, int w, int h) {
+  if (!fx.IsReady()) {
+    gfxPrint(x + 22, y + h / 2 - 4, PSTR("out of memory"));
+    return;
+  }
+  const int base = y + h - 1;
+  gfxDottedLine(x, base, x + w - 1, base, 2);
+  const int now = x + w - 1;
+  const float pos = cur[POS] * 0.01f, spray = cur[SPRAY] * 0.005f;
+  const int cxp = now - int(pos * (w - 1));
+  const int half = std::max(1, int(spray * (w - 1)));
+  gfxLine(cxp - half, base - 2, cxp + half, base - 2);
+  gfxLine(cxp - half, base - 4, cxp - half, base - 1);
+  gfxLine(cxp + half, base - 4, cxp + half, base - 1);
+  const int n = fx.ActiveGrainCount();
+  const int py = y + (h - 6) / 2 - cur[PITCH] * ((h - 8) / 2) / 24;
+  uint32_t r = millis() / 60;
+  for (int i = 0; i < n; i++) {
+    r = r * 1103515245u + 12345u;
+    const int gx = cxp - half + int((r >> 8) % uint32_t(2 * half + 1));
+    const int gy = py + int((r >> 20) % 7) - 3;
+    gfxRect(gx - 1, gy - 1, 3, 3);
+  }
+  if (frozen) {
+    gfxPrint(x + w - 25, y + 1, PSTR("FRZ"));
+    gfxInvert(x + w - 26, y, 20, 9);
+  }
+}
+
+FLASHMEM void MosaicDevice::DrawMini(int x, int y, int w, int h) {
+  const int n = fx.ActiveGrainCount();
+  uint32_t r = millis() / 60;
+  for (int i = 0; i < n; i++) {
+    r = r * 1103515245u + 12345u;
+    gfxPixel(x + int((r >> 8) % uint32_t(w)), y + int((r >> 20) % uint32_t(h)));
+  }
+}
+
+/////////////////////////////////////////////////////////////////
 // Slot catalogue, S4 order. Option 0 of the effect slots is BYPASS.
 /////////////////////////////////////////////////////////////////
 enum Slot : uint8_t { MATERIAL, GRANULAR, FILTER, COLOR, SPACE, SLOT_COUNT };
@@ -1401,7 +1547,7 @@ struct SlotDef {
 
 PROGMEM static const SlotDef SLOT_DEFS[SLOT_COUNT] = {
   {"MATERIAL", "MAT", 1, 3},  // INPUT (TAPE and DISC to come)
-  {"GRANULAR", "GRN", 1, 1},  // BYPASS (MOSAIC to come)
+  {"GRANULAR", "GRN", 2, 1},  // BYPASS, MOSAIC
   {"RESONATOR", "RES", 2, 1},  // BYPASS, RING (shown as RESONATOR)
   {"COLOR",    "COL", 2, 1},  // BYPASS, DEFORM
   {"SPACE",    "SPC", 2, 1},  // BYPASS, SPACE
@@ -1409,6 +1555,7 @@ PROGMEM static const SlotDef SLOT_DEFS[SLOT_COUNT] = {
 
 // nullptr = BYPASS. MATERIAL/INPUT is owned by the track, not made here.
 FLASHMEM static Device* MakeDevice(int slot, int option) {
+  if (slot == GRANULAR && option == 1) return new MosaicDevice;
   if (slot == FILTER && option == 1) return new RingDevice;
   if (slot == COLOR && option == 1) return new DeformDevice;
   if (slot == SPACE && option == 1) return new VastDevice;
