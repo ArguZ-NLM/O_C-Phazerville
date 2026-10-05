@@ -38,9 +38,11 @@
 // Device view:
 //   R enc  move between the 8 settings    L enc  the setting's mode
 //   R push grab / let go; grabbed, R enc changes the value
-//   L push modulation for the setting: MOD1 -> MOD2 -> off. L enc amount,
-//          R enc source (MOD1: off, MOD A-H, CV in, CV out, MIDI map, noise;
-//          MOD2: off, MOD A-H), R push unipolar / bipolar; the two add up.
+//   L push modulation for the setting (L push again to leave). It has two
+//          sources that add up, MOD1 and MOD2: R push switches between
+//          them. L enc picks the source, each one unipolar (U) then bipolar
+//          (B): off, MdA U, MdA B, MdB U ... (MOD1 then CV in, CV out, MIDI
+//          maps, noise; MOD2 only MOD A-H). R enc the amount.
 //          MOD1: X held = MIDI learn (move a knob)
 //   X      the MOD view, to set up a modulator; Y / X there come back here
 //   L held action triggers: L enc source for UP's action, R enc for DOWN's
@@ -175,6 +177,28 @@ private:
   uint8_t mod_slot = 0;   // ... of the first or the second source
   // the MOD view opened from a device page (X): where Y / X go back to
   struct { bool on; bool focus_mod; int8_t mod_cursor, cursor; } back = {};
+  // L enc in modulation: each source comes as U then B (off has neither)
+  void StepModOption(sculpt::Device* d, int p, int dir) {
+    const int bit = 1 << p;
+    uint8_t& bi = mod_slot ? d->mod_bi2 : d->mod_bi;
+    auto on = [&]() { return mod_slot ? d->mod_bus2[p] != 0 : d->ModSourceOn(p); };
+    auto source = [&](int s) { if (mod_slot) d->ChangeModSource2(p, s); else d->ChangeModSource(p, s); };
+    for (int n = 0; n < abs(dir); n++) {
+      if (dir > 0) {
+        if (on() && !(bi & bit)) bi |= bit;
+        else {
+          const auto was = std::make_pair(d->mod_in[p].Pack(), mod_slot ? d->mod_bus2[p] : d->mod_bus_sel[p]);
+          source(1);
+          if (was == std::make_pair(d->mod_in[p].Pack(), mod_slot ? d->mod_bus2[p] : d->mod_bus_sel[p])) break;  // the end of the list
+          bi &= ~bit;
+        }
+      } else {
+        if (!on()) break;
+        if (bi & bit) bi &= ~bit;
+        else { source(-1); if (on()) bi |= bit; else bi &= ~bit; }
+      }
+    }
+  }
   void BackToDevice() {
     view = DEVICE;
     focus_mod = back.focus_mod;
@@ -774,11 +798,10 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
     } else if (event.type == UI::EVENT_BUTTON_PRESS) {
       l_held = false;
       if (l_used) return;
-      // L push: modulation, MOD1 (first source) -> MOD2 (second source) -> off
+      // L push: modulation on / off (starting with MOD1)
       if (view == DEVICE) {
         if (trig_mode) trig_mode = false;
         else if (!mod_mode) { mod_mode = true; mod_slot = 0; }
-        else if (mod_slot == 0) mod_slot = 1;
         else mod_mode = false;
         editing = false;
       }
@@ -868,11 +891,7 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
           editing = mod_mode = trig_mode = false;
         }
       } else if (d && mod_mode) {
-        // unipolar / bipolar
-        if (mod_slot) d->mod_bi2 ^= 1 << cursor;
-        else d->mod_bi ^= 1 << cursor;
-        d->Refresh(cursor);
-        Mirror(d, cursor);
+        mod_slot ^= 1;  // MOD1 <-> MOD2
       } else {
         editing = !editing;
         edit_mode = false;
@@ -965,9 +984,8 @@ FLASHMEM void AppSculpt::OnEncoder(const UI::Event &event) {
   }
   if (mod_mode) {
     int8_t& amt = mod_slot ? d->mod_amt2[cursor] : d->mod_amt[cursor];
-    if (left) amt = constrain(amt + dir, -100, 100);
-    else if (mod_slot) d->ChangeModSource2(cursor, dir);
-    else d->ChangeModSource(cursor, dir);
+    if (!left) amt = constrain(amt + dir, -100, 100);
+    else StepModOption(d, cursor, dir);
     d->Refresh(cursor);
     Mirror(d, cursor);
   } else if (left) {
