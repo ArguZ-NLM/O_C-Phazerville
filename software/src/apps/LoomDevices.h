@@ -2021,7 +2021,7 @@ FLASHMEM bool PlayerDevice::FillWave(int64_t v0, size_t span, int w, int fi) con
   if (!streaming) {
     const int16_t* dl = fx.Data(0);
     const int16_t* dr = fx.Data(1);
-    const size_t stop = std::min(wv_end, wv_next + 200000);
+    const size_t stop = wv_end;  // from memory: all of it at once (no visible redraw)
     for (size_t i = wv_next; i < stop; i++) add(i, (dl[i] + dr[i]) / 2);
     wv_next = stop;
   } else {

@@ -241,6 +241,7 @@ private:
   bool active = false;
   bool reload_on_resume = false;  // a preset recall replaced LOOM.BIN
   bool linked = false;
+  int16_t unlinked_in[2] = {-1, -1}, unlinked_spool_in[2] = {0, 0};  // input choices from before the link
   mutable bool dirty = false; // something changed since the last save
   float applied_tempo = 120.0f;
   int cpu = 0;
@@ -560,7 +561,17 @@ FLASHMEM void AppLoom::ToggleBypass(int s) {
 FLASHMEM void AppLoom::ToggleLink() {
   using namespace loom;
   linked = !linked;
-  if (!linked) return;
+  if (!linked) {
+    // each track's own input choice back (as before the link)
+    for (int t = 0; t < NUM_TRACKS && unlinked_in[t] >= 0; t++) {
+      Track& tr = tracks[t];
+      tr.input->val[0] = unlinked_in[t];
+      tr.input->ApplyAll();
+      if (tr.reel) { tr.reel->val[ReelDevice::IN] = unlinked_spool_in[t]; tr.reel->ApplyAll(); }
+    }
+    unlinked_in[0] = unlinked_in[1] = -1;
+    return;
+  }
   const int master = track;
   // the track under the cursor is the master: copy it to the other one
   Track& a = tracks[master];
@@ -603,6 +614,16 @@ FLASHMEM void AppLoom::ToggleLink() {
   b.mix->val[0] = a.mix->val[0]; // level
   b.mix->val[2] = a.mix->val[2]; // mute
   b.mix->ApplyAll();
+  // linked = one stereo pair: track L hears the left input, track R the
+  // right one (their own choices come back on unlinking)
+  for (int t = 0; t < NUM_TRACKS; t++) {
+    Track& tr = tracks[t];
+    unlinked_in[t] = tr.input->val[0];
+    unlinked_spool_in[t] = tr.reel ? tr.reel->val[ReelDevice::IN] : 0;
+    tr.input->val[0] = t ? InputDevice::IN2 : InputDevice::IN1;
+    tr.input->ApplyAll();
+    if (tr.reel) { tr.reel->val[ReelDevice::IN] = t ? InputDevice::IN2 : InputDevice::IN1; tr.reel->ApplyAll(); }
+  }
   track = 0; // the cursor lives on row 1 while linked
 }
 
