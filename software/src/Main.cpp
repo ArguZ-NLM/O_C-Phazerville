@@ -242,6 +242,11 @@ public:
 static BufferPrint crash_capture;
 
 static uint32_t boot_srsr = 0;
+// how far the last run got: kept in RAM2, which a restart doesn't clear;
+// logged to BOOT.LOG on the next start with the reset reason
+DMAMEM static volatile uint32_t trace_magic, trace_stage, trace_ms;
+static uint32_t prev_stage = 0, prev_ms = 0;
+static void Trace(uint32_t stage) { trace_magic = 0xB007CAFE; trace_stage = stage; trace_ms = millis(); }
 
 static bool watchdog_armed = false;
 FLASHMEM static void watchdog_arm() {
@@ -272,6 +277,8 @@ FLASHMEM void setup() {
 #if defined(__IMXRT1062__)
   boot_srsr = SRC_SRSR;
   SRC_SRSR = boot_srsr;
+  if (trace_magic == 0xB007CAFE) { prev_stage = trace_stage; prev_ms = trace_ms; }
+  Trace(1);
 #endif
   Serial.begin(9600);
 
@@ -403,7 +410,20 @@ FLASHMEM void setup() {
 #endif
 
   // initialize LittleFS for config files
+  Trace(2);
   PhzConfig::Init();
+  Trace(3);
+  {  // the last run and why this one started
+    File bl = PhzConfig::myfs.open("BOOT.LOG", FILE_READ);
+    const bool big = bl && bl.size() > 4096;
+    if (bl) bl.close();
+    if (big) PhzConfig::myfs.remove("BOOT.LOG");
+    bl = PhzConfig::myfs.open("BOOT.LOG", FILE_WRITE);
+    if (bl) {
+      bl.printf("boot: SRSR %08lx; last run reached stage %lu at %lu ms\n", boot_srsr, prev_stage, prev_ms);
+      bl.close();
+    }
+  }
 
 #if defined(__IMXRT1062__)
   if (crash_capture.len) {
@@ -455,7 +475,9 @@ FLASHMEM void setup() {
   }
 #endif
 
+  Trace(4);
   firstrun |= !OC::app_switcher.Init(reset_settings || firstrun);
+  Trace(5);
 #if defined(ARDUINO_TEENSY41) && defined(AUDIO_INTERFACE)
   OC::AudioIO::OutputStream();
 #endif
@@ -471,6 +493,7 @@ FLASHMEM void setup() {
     OC::start_calibration();
 
   OC::app_switcher.current_app()->DispatchAppEvent(OC::APP_EVENT_RESUME);
+  Trace(6);
 
 #if defined(__IMXRT1062__)
   watchdog_arm();
@@ -577,7 +600,9 @@ void FASTRUN loop() {
 
 #ifdef MTP_INTERFACE
     // handle MTP Disk requests
+    Trace(20);  // in MTP
     MTP.loop();
+    Trace(10);  // main loop
 #endif
 
     static size_t cap_idx = 0;
@@ -590,7 +615,7 @@ void FASTRUN loop() {
         switch (cmd) {
 #if defined(__IMXRT1062__)
           case 'K':  // the crash log the firmware keeps after a crash
-            for (const char* fn : {"CRASH.OLD", "CRASH.LOG"}) {
+            for (const char* fn : {"BOOT.LOG", "CRASH.LOG"}) {
               File cl = PhzConfig::myfs.open(fn, FILE_READ);
               Serial.printf("--- %s %s ---\n", fn, cl ? "" : "(none)");
               if (!cl) continue;
