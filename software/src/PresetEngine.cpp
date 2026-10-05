@@ -82,10 +82,12 @@ enum ContentFlags : uint8_t {
   CONTENT_BANK    = 1 << 0,
   CONTENT_SCENERY = 1 << 1,
   CONTENT_CAPTAIN = 1 << 2,
+  CONTENT_LOOM    = 1 << 3,  // the Loom app's settings (LOOM.BIN)
 };
 static_assert(int(CONTENT_BANK) == int(REPLACES_BANK) &&
               int(CONTENT_SCENERY) == int(REPLACES_SCENERY) &&
-              int(CONTENT_CAPTAIN) == int(REPLACES_CAPTAIN),
+              int(CONTENT_CAPTAIN) == int(REPLACES_CAPTAIN) &&
+              int(CONTENT_LOOM) == int(REPLACES_LOOM),
               "RecallReplaces mirrors ContentFlags");
 
 static uint32_t lfs_block_bytes() {
@@ -809,6 +811,8 @@ FLASHMEM bool SaveSlot(uint8_t slot) {
   watchdog_feed();
   if (cw_plan_file(w, 'C', PhzConfig::myfs, "CAPTAIN.DAT")) flags |= CONTENT_CAPTAIN;
   watchdog_feed();
+  if (cw_plan_file(w, 'L', PhzConfig::myfs, "LOOM.BIN")) flags |= CONTENT_LOOM;
+  watchdog_feed();
   ph[3] = wall.lap_ms();
 
   PhzConfig::load_config();
@@ -1003,6 +1007,11 @@ FLASHMEM static void recall_stage_files(uint8_t slot, bool from_container,
         section_to_file(f, *e, "CAPTAIN.DAT", PhzConfig::myfs);
       watchdog_feed();
     }
+    // Loom reads its file again on resume, so it goes straight to disk
+    if ((flags & CONTENT_LOOM) && (e = find_section(sec, n, 'L')) != nullptr) {
+      section_to_file(f, *e, "LOOM.BIN", PhzConfig::myfs);
+      watchdog_feed();
+    }
     f.close();
     return;
   }
@@ -1070,7 +1079,7 @@ FLASHMEM bool RecallSlot(uint8_t slot) {
     return recall_refused(slot, "OLD PRESET");
   }
 
-  recall_replacing = (uint8_t)(flags & (CONTENT_BANK | CONTENT_SCENERY | CONTENT_CAPTAIN));
+  recall_replacing = (uint8_t)(flags & (CONTENT_BANK | CONTENT_SCENERY | CONTENT_CAPTAIN | CONTENT_LOOM));
   if (boot_recall) recall_replacing &= (uint8_t)~CONTENT_CAPTAIN;
   recall_replacing |= RECALL_SUSPEND;
   app_switcher.current_app()->DispatchAppEvent(APP_EVENT_SUSPEND);

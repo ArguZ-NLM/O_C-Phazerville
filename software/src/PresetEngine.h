@@ -28,6 +28,7 @@ enum RecallReplaces : uint8_t {
   REPLACES_BANK    = 1 << 0,
   REPLACES_SCENERY = 1 << 1,
   REPLACES_CAPTAIN = 1 << 2,
+  REPLACES_LOOM    = 1 << 3,
   RECALL_SUSPEND   = 1 << 7,
 };
 uint8_t RecallReplacing();

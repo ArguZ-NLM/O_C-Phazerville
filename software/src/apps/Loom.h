@@ -67,6 +67,7 @@
 #include "../OC_gpio.h"
 #include "../HSMIDI.h"
 #include "../PhzConfig.h"
+#include "../PresetEngine.h"
 #include "LoomDevices.h"
 #include "LoomMods.h"
 
@@ -238,6 +239,7 @@ private:
   elapsedMicros mod_timer;
   uint8_t chord_releases = 0; // UP/DOWN releases to swallow after UP+DOWN
   bool active = false;
+  bool reload_on_resume = false;  // a preset recall replaced LOOM.BIN
   bool linked = false;
   mutable bool dirty = false; // something changed since the last save
   float applied_tempo = 120.0f;
@@ -609,6 +611,11 @@ FLASHMEM void AppLoom::Resume() {
   AudioEffectClouds::grain_limit = 8;
   using namespace loom;
   if (!audio_hw() || active) return;
+  if (reload_on_resume) {  // a preset was recalled: its settings
+    reload_on_resume = false;
+    LoadFile();
+    dirty = false;
+  }
   if (!patch) patch = new Patch;
   active = true;
   for (int t = 0; t < NUM_TRACKS; t++) ConnectTrack(t);
@@ -628,6 +635,12 @@ FLASHMEM void AppLoom::Suspend() {
   for (int t = 0; t < NUM_TRACKS; t++) DisconnectTrack(t);
   active = false;
   l_held = false;
+  // a preset recall that brings Loom's settings: no point saving the ones
+  // about to be replaced; they are read in again on resume
+  if (OC::PresetEngine::RecallReplacing() & OC::PresetEngine::REPLACES_LOOM) {
+    reload_on_resume = true;
+    return;
+  }
   if (dirty) SaveFile();
 }
 
