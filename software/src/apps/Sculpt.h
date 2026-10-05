@@ -38,11 +38,12 @@
 // Device view:
 //   R enc  move between the 8 settings    L enc  the setting's mode
 //   R push grab / let go; grabbed, R enc changes the value
-//   X      modulation for the setting: MOD1 -> MOD2 -> off. L enc amount,
+//   L push modulation for the setting: MOD1 -> MOD2 -> off. L enc amount,
 //          R enc source (MOD1: off, MOD A-H, CV in, CV out, MIDI map, noise;
 //          MOD2: off, MOD A-H), R push unipolar / bipolar; the two add up.
 //          MOD1: X held = MIDI learn (move a knob)
-//   L push action triggers: L enc source for UP's action, R enc for DOWN's
+//   X      the MOD view, to set up a modulator; Y / X there come back here
+//   L held action triggers: L enc source for UP's action, R enc for DOWN's
 //          (gate in, CV in as gate, MIDI map), L push / Y to leave
 //   Y      back                           UP / DOWN  actions
 // MOD view (4 modulators per track, plus the clock):
@@ -172,6 +173,15 @@ private:
   mutable elapsedMillis mode_shown;
   bool mod_mode = false;  // device view: L enc amount, R enc source
   uint8_t mod_slot = 0;   // ... of the first or the second source
+  // the MOD view opened from a device page (X): where Y / X go back to
+  struct { bool on; bool focus_mod; int8_t mod_cursor, cursor; } back = {};
+  void BackToDevice() {
+    view = DEVICE;
+    focus_mod = back.focus_mod;
+    mod_cursor = back.mod_cursor;
+    cursor = back.cursor;
+    back.on = false;
+  }
   bool trig_mode = false; // device view: L / R enc trigger source per action
   elapsedMicros mod_timer;
   uint8_t chord_releases = 0; // UP/DOWN releases to swallow after UP+DOWN
@@ -756,13 +766,21 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
       l_used = false;
     } else if (event.type == UI::EVENT_BUTTON_LONG_RELEASE) {
       l_held = false;
+      // L held (and not used with R enc for a mode): the action triggers page
+      if (!l_used && view == DEVICE && !editing) {
+        trig_mode = !trig_mode;
+        mod_mode = false;
+      }
     } else if (event.type == UI::EVENT_BUTTON_PRESS) {
       l_held = false;
       if (l_used) return;
-      // L push: the action triggers page
+      // L push: modulation, MOD1 (first source) -> MOD2 (second source) -> off
       if (view == DEVICE) {
-        trig_mode = !trig_mode;
-        editing = mod_mode = false;
+        if (trig_mode) trig_mode = false;
+        else if (!mod_mode) { mod_mode = true; mod_slot = 0; }
+        else if (mod_slot == 0) mod_slot = 1;
+        else mod_mode = false;
+        editing = false;
       }
     }
     return;
@@ -862,18 +880,19 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
       break;
     case OC::CONTROL_BUTTON_Y:
       if (view == DEVICE && trig_mode) trig_mode = false;
+      else if (view == MODS && back.on) BackToDevice();
       else view = (view == DEVICE && focus_mod) ? MODS : CHAIN;
       editing = mod_mode = false;
       break;
     case OC::CONTROL_BUTTON_X:
-      // X: modulation, MOD1 (first source) -> MOD2 (second source) -> off
+      // device page: the MOD view, coming back to this page afterwards
       if (view == DEVICE) {
-        if (!mod_mode) { mod_mode = true; mod_slot = 0; }
-        else if (mod_slot == 0) mod_slot = 1;
-        else mod_mode = false;
-        editing = trig_mode = false;
+        back = {true, focus_mod, mod_cursor, cursor};
+        view = MODS;
+        editing = mod_mode = trig_mode = false;
       }
-      else if (view == CHAIN) view = MODS;
+      else if (view == CHAIN) { view = MODS; back.on = false; }
+      else if (view == MODS && back.on) BackToDevice();
       else if (view == MODS) view = CHAIN;
       break;
     case OC::CONTROL_BUTTON_UP:
