@@ -35,6 +35,7 @@
 #include "../Audio/AudioEffectResonator.h"
 #include "../Audio/AudioEffectClouds.h"
 #include "../Audio/AudioEffectReel.h"
+#include <SD.h>
 
 namespace sculpt {
 
@@ -860,6 +861,16 @@ public:
     fx.processorUsageMaxReset();
   }
   void ClearLoop() { fx.Clear(); cleared_at = millis() | 1; hold = 0.0f; }  // B held for 3 s
+  // saving the loop to the SD card (the app writes it, A held for 2 s)
+  const int16_t* LoopData(int c) const { return fx.Data(c); }
+  size_t LoopLength() const {
+    const auto st = fx.state();
+    return st == AudioEffectReel::EMPTY || st == AudioEffectReel::REC ? 0 : fx.Length();
+  }
+  float save_hold = 0.0f;   // how far A has been held towards saving, 0..1
+  float saving = -1.0f;     // writing: progress 0..1, else < 0
+  char saved_name[16] = {}; // the file it went to ...
+  uint32_t saved_at = 0;    // ... and when
   float hold = 0.0f;        // how far B has been held towards clearing, 0..1 (set by the app)
   uint32_t cleared_at = 0;  // when it was cleared, for the picture
 private:
@@ -961,6 +972,20 @@ FLASHMEM void ReelDevice::DrawViz(int x, int y, int w, int h) {
   const int cl = std::max(x, hx - 1), cr = std::min(x + w - 1, hx + 1);
   graphics.clearRect(cl, y + 1, cr - cl + 1, h - 2);
   gfxLine(hx, y + 1, hx, base - 1);
+  // saving: A held fills a bar, then the file is written, then its name
+  if (save_hold > 0.0f || saving >= 0.0f || (saved_at && millis() - saved_at < 1500)) {
+    char t[24];
+    int fill = 0;
+    if (saving >= 0.0f) { snprintf(t, sizeof(t), "SAVING %d%%", int(saving * 100)); fill = int(saving * 76); }
+    else if (save_hold > 0.0f) { snprintf(t, sizeof(t), "SAVE LOOP"); fill = int(save_hold * 76); }
+    else snprintf(t, sizeof(t), "%s", saved_name[0] ? saved_name : "SD ERROR");
+    graphics.clearRect(x + w / 2 - 40, cy - 7, 80, 15);
+    gfxFrame(x + w / 2 - 40, cy - 7, 80, 15);
+    gfxPrint(x + w / 2 - 3 * int(strlen(t)), cy - 3, t);
+    if (fill) gfxInvert(x + w / 2 - 38, cy - 5, fill, 11);
+    else gfxInvert(x + w / 2 - 39, cy - 6, 78, 13);
+    return;
+  }
   // B held: the loop is wiped away from the right as the 3 s run out
   if (hold > 0.0f) {
     const int wipe = std::min(w, int(hold * w + 0.5f));
@@ -1001,6 +1026,381 @@ FLASHMEM void ReelDevice::DrawMini(int x, int y, int w, int h) {
   const int hx = constrain(x + int(fx.HeadPos() * (w - 1)), x, x + w - 1);
   gfxInvert(hx, y, 1, h);
   if (st == AudioEffectReel::REC && (millis() / 300) % 2) gfxInvert(x, y, w, h);
+}
+
+/////////////////////////////////////////////////////////////////
+// Loop files on the SD card: /SCULPT/*.WAV, 16-bit PCM, mono or stereo.
+// Reading and writing happen in small steps from the main loop, so the
+// screen keeps going and the audio interrupt is never held up.
+/////////////////////////////////////////////////////////////////
+constexpr char LOOP_DIR[] = "/SCULPT";
+constexpr int MAX_FILES = 48, NAME_LEN = 16;
+constexpr size_t IO_CHUNK = 2048;  // sample frames per step
+
+FLASHMEM static void PutLE(uint8_t* p, uint32_t v, int n) {
+  for (int i = 0; i < n; i++) p[i] = uint8_t(v >> (8 * i));
+}
+
+// writes a buffer pair as a stereo WAV, a step at a time
+struct WavWriter {
+  File f;
+  const int16_t* src[2] = {};
+  size_t n = 0, done = 0;
+  bool busy = false;
+  char name[NAME_LEN] = {};
+
+  FLASHMEM bool Begin(const int16_t* l, const int16_t* r, size_t frames) {
+    if (!SDcard_Ready || !frames) return false;
+    if (!SD.exists(LOOP_DIR)) SD.mkdir(LOOP_DIR);
+    char path[40];
+    for (int k = 1; k < 1000; k++) {  // the next free LOOPnnn.WAV
+      snprintf(name, sizeof(name), "LOOP%03d.WAV", k);
+      snprintf(path, sizeof(path), "%s/%s", LOOP_DIR, name);
+      if (!SD.exists(path)) break;
+    }
+    f = SD.open(path, FILE_WRITE);
+    if (!f) return false;
+    uint8_t h[44] = {'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'A', 'V', 'E',
+                     'f', 'm', 't', ' ', 16, 0, 0, 0, 1, 0, 2, 0};
+    const uint32_t bytes = frames * 4;
+    PutLE(h + 4, 36 + bytes, 4);
+    PutLE(h + 24, 44100, 4);
+    PutLE(h + 28, 44100 * 4, 4);
+    PutLE(h + 32, 4, 2);
+    PutLE(h + 34, 16, 2);
+    memcpy(h + 36, "data", 4);
+    PutLE(h + 40, bytes, 4);
+    f.write(h, 44);
+    src[0] = l; src[1] = r; n = frames; done = 0; busy = true;
+    return true;
+  }
+  // returns true when finished
+  FLASHMEM bool Step() {
+    if (!busy) return true;
+    static int16_t tmp[IO_CHUNK * 2];
+    const size_t k = std::min(IO_CHUNK, n - done);
+    for (size_t i = 0; i < k; i++) {
+      tmp[2 * i] = src[0][done + i];
+      tmp[2 * i + 1] = src[1][done + i];
+    }
+    f.write(reinterpret_cast<uint8_t*>(tmp), k * 4);
+    done += k;
+    if (done >= n) { f.close(); busy = false; return true; }
+    return false;
+  }
+  float Progress() const { return n ? float(done) / n : 1.0f; }
+};
+
+/////////////////////////////////////////////////////////////////
+// PLAYER (Source): plays a WAV from the SD card. The file is loaded into
+// PSRAM (up to 16 s, like REEL) and played by the same engine: START / END
+// pick the loop, SPEED plays it at any rate (backwards below zero), XFADE
+// is the fade at the loop ends. START / END zoom the picture (their mode)
+// and, with SNAP on, land on the quietest point nearby.
+/////////////////////////////////////////////////////////////////
+PROGMEM static const DeviceDef PLAYER_DEF = {
+  "PLAYER", "PLY", 7, {"PLAY", "TOP"},
+  {
+    {"FILE", 0, MAX_FILES - 1, 0, UNI},
+    {"SPEED", -200, 200, 100, BI},
+    {"START", 0, 10000, 0, UNI, 0, 4, 0, {}, {"1x", "4x", "16x", "64x"}},
+    {"END", 0, 10000, 10000, UNI, 0, 4, 0, {}, {"1x", "4x", "16x", "64x"}},
+    {"SNAP", 0, 1, 0, LIST, 2, 0, 0, {"OFF", "ON"}},
+    {"XFADE", 0, 100, 20, UNI},
+    {"LEVEL", 0, 100, 100, UNI},
+  },
+  {"", ""},
+};
+
+class PlayerDevice : public Device {
+public:
+  enum { FILE_, SPEED, START, END, SNAP, XFADE, LEVEL };
+  static constexpr float MAX_SECS = 16.0f;
+  PlayerDevice() : Device(PLAYER_DEF) {}
+  AudioStream* in() override { return &fx; }
+  AudioStream* out() override { return &fx; }
+  bool Activate() override;
+  void Deactivate() override;
+  bool ok() const override { return fx.ready(); }
+  void Apply(int p) override;
+  int Step(int p, int v, int dir) const override;
+  void Format(int p, char* buf, size_t n) const override;
+  void Action(int a) override;
+  bool ActionLit(int a) const override { return a == 0 && fx.state() == AudioEffectReel::PLAY; }
+  void DrawViz(int x, int y, int w, int h) override;
+  void DrawMini(int x, int y, int w, int h) override;
+  void CpuMax(float parts[2]) override {
+    parts[0] = fx.processorUsageMax();
+    parts[1] = 0.0f;
+    fx.processorUsageMaxReset();
+  }
+  // main loop: loading in steps
+  void Idle();
+  // the files in /SCULPT, sorted; Select picks one by name (after a save)
+  void Scan();
+  void Select(const char* name);
+
+private:
+  AudioEffectReel fx;
+  char names[MAX_FILES][NAME_LEN] = {};
+  int nfiles = 0, loaded = -1;
+  // loading
+  File lf;
+  bool loading = false, too_long = false;
+  int chans = 2;
+  size_t frames = 0, got = 0;
+  float rate = 1.0f;  // file rate / 44.1 kHz
+  void Load(int i);
+  void Window();
+  size_t SnapQuiet(size_t at) const;
+};
+
+FLASHMEM void PlayerDevice::Scan() {
+  nfiles = 0;
+  if (!SDcard_Ready) return;
+  File dir = SD.open(LOOP_DIR);
+  if (!dir) return;
+  while (nfiles < MAX_FILES) {
+    File e = dir.openNextFile();
+    if (!e) break;
+    const char* nm = e.name();
+    const size_t l = strlen(nm);
+    if (!e.isDirectory() && l > 4 && l < NAME_LEN && !strcasecmp(nm + l - 4, ".WAV"))
+      snprintf(names[nfiles++], NAME_LEN, "%s", nm);
+    e.close();
+  }
+  dir.close();
+  for (int i = 1; i < nfiles; i++)  // sorted by name (LOOP001, LOOP002, ...)
+    for (int j = i; j > 0 && strcmp(names[j - 1], names[j]) > 0; j--) {
+      char t[NAME_LEN];
+      memcpy(t, names[j], NAME_LEN); memcpy(names[j], names[j - 1], NAME_LEN); memcpy(names[j - 1], t, NAME_LEN);
+    }
+}
+
+FLASHMEM void PlayerDevice::Select(const char* name) {
+  Scan();
+  for (int i = 0; i < nfiles; i++)
+    if (!strcmp(names[i], name)) { val[FILE_] = cur[FILE_] = i; break; }
+  loaded = -1;
+  if (active) Load(cur[FILE_]);
+}
+
+// called while the stream is not patched in
+FLASHMEM bool PlayerDevice::Activate() {
+  if (active) return fx.ready();
+  fx.Acquire(MAX_SECS);
+  fx.SetMonitor(0.0f);
+  Scan();
+  active = true;
+  loaded = -1;
+  ApplyAll();
+  return fx.ready();
+}
+
+FLASHMEM void PlayerDevice::Deactivate() {
+  if (!active) return;
+  if (loading) { lf.close(); loading = false; }
+  fx.Release();
+  loaded = -1;
+  active = false;
+}
+
+// reads the WAV header, then Idle() fills the buffer
+FLASHMEM void PlayerDevice::Load(int i) {
+  if (loading) { lf.close(); loading = false; }
+  fx.BeginLoad();
+  loaded = i;
+  too_long = false;
+  if (i >= nfiles || !fx.ready()) return;
+  char path[40];
+  snprintf(path, sizeof(path), "%s/%s", LOOP_DIR, names[i]);
+  lf = SD.open(path, FILE_READ);
+  if (!lf) return;
+  uint8_t h[12];
+  if (lf.read(h, 12) != 12 || memcmp(h, "RIFF", 4) || memcmp(h + 8, "WAVE", 4)) { lf.close(); return; }
+  int bits = 0; uint32_t srate = 44100; chans = 0;
+  while (lf.available()) {  // walk the chunks to fmt and data
+    uint8_t c[8];
+    if (lf.read(c, 8) != 8) break;
+    const uint32_t sz = c[4] | c[5] << 8 | c[6] << 16 | uint32_t(c[7]) << 24;
+    if (!memcmp(c, "fmt ", 4)) {
+      uint8_t fm[16];
+      lf.read(fm, 16);
+      if (sz > 16) lf.seek(lf.position() + sz - 16);
+      chans = fm[2];
+      srate = fm[4] | fm[5] << 8 | fm[6] << 16 | uint32_t(fm[7]) << 24;
+      bits = fm[14];
+      if ((fm[0] | fm[1] << 8) != 1) bits = 0;  // PCM only
+    } else if (!memcmp(c, "data", 4)) {
+      if (bits != 16 || chans < 1 || chans > 2) break;
+      frames = sz / (2 * chans);
+      if (frames > fx.Capacity()) { frames = fx.Capacity(); too_long = true; }
+      got = 0;
+      rate = srate / 44100.0f;
+      loading = true;
+      return;
+    } else {
+      lf.seek(lf.position() + sz + (sz & 1));
+    }
+  }
+  lf.close();
+}
+
+FLASHMEM void PlayerDevice::Idle() {
+  if (!active) return;
+  if (loaded != cur[FILE_] && !loading) Load(cur[FILE_]);
+  if (!loading) return;
+  static int16_t tmp[IO_CHUNK * 2];
+  const size_t k = std::min(IO_CHUNK, frames - got);
+  const size_t rd = lf.read(reinterpret_cast<uint8_t*>(tmp), k * 2 * chans) / (2 * chans);
+  int16_t* l = fx.Data(0);
+  int16_t* r = fx.Data(1);
+  for (size_t i = 0; i < rd; i++) {
+    l[got + i] = tmp[i * chans];
+    r[got + i] = tmp[i * chans + (chans - 1)];
+  }
+  fx.MarkRange(got, got + rd);
+  got += rd;
+  if (rd < k || got >= frames) {
+    lf.close();
+    loading = false;
+    fx.FinishLoad(got);
+    ApplyAll();
+  }
+}
+
+// the quietest sample within ~5 ms of a position (a soft place to cut)
+FLASHMEM size_t PlayerDevice::SnapQuiet(size_t at) const {
+  const size_t n = fx.Length();
+  if (!n) return at;
+  const size_t r = 220, lo = at > r ? at - r : 0, hi = std::min(n - 1, at + r);
+  size_t best = at;
+  int quiet = INT32_MAX;
+  for (size_t i = lo; i <= hi; i++) {
+    const int a = abs(fx.Data(0)[i]) + abs(fx.Data(1)[i]);
+    if (a < quiet) { quiet = a; best = i; }
+  }
+  return best;
+}
+
+FLASHMEM void PlayerDevice::Window() {
+  const size_t n = fx.Length();
+  if (!n) return;
+  size_t a = size_t(uint64_t(cur[START]) * n / 10000), b = size_t(uint64_t(cur[END]) * n / 10000);
+  if (cur[SNAP]) { a = SnapQuiet(a); b = SnapQuiet(b); }
+  if (b <= a + AUDIO_BLOCK_SAMPLES) b = std::min(n, a + AUDIO_BLOCK_SAMPLES * 2);
+  fx.SetWindowSamples(a, b - a);
+}
+
+FLASHMEM void PlayerDevice::Apply(int p) {
+  switch (p) {
+    case FILE_: break;  // Idle() loads it
+    case SPEED: fx.SetSpeed(cur[SPEED] * 0.01f * rate); break;
+    case START: case END: case SNAP: Window(); break;
+    case XFADE: fx.SetSeam(16.0f + cur[XFADE] * 0.01f * 8800.0f); break;  // up to ~200 ms
+    case LEVEL: fx.SetLevel(cur[LEVEL] * 0.01f); break;
+  }
+}
+
+// START / END: steps get finer with the zoom (1% at 1x .. ~0.02% at 64x)
+FLASHMEM int PlayerDevice::Step(int p, int v, int dir) const {
+  if (p == START || p == END) {
+    static const int step[4] = {100, 25, 6, 2};
+    return v + dir * step[mode[p] & 3];
+  }
+  return v + dir;
+}
+
+FLASHMEM void PlayerDevice::Format(int p, char* buf, size_t n) const {
+  if (p == FILE_) {
+    if (!nfiles) snprintf(buf, n, "none");
+    else snprintf(buf, n, "%d", std::min<int>(val[FILE_], nfiles - 1) + 1);
+  } else if (p == START || p == END) {
+    snprintf(buf, n, "%d.%d%%", val[p] / 100, (val[p] % 100) / 10);
+  } else if (p == SPEED) {
+    snprintf(buf, n, "%d%%", val[p]);
+  } else {
+    Device::Format(p, buf, n);
+  }
+}
+
+// A: play / stop; B: back to the start
+FLASHMEM void PlayerDevice::Action(int a) {
+  const auto st = fx.state();
+  if (a == 0) {
+    if (st == AudioEffectReel::PLAY) fx.Stop();
+    else if (st == AudioEffectReel::STOPPED) fx.Press();
+  } else if (st == AudioEffectReel::PLAY || st == AudioEffectReel::STOPPED) {
+    fx.Stop();
+    fx.Press();
+  }
+}
+
+// the sample as a waveform with the loop bracketed and the play head; with
+// the cursor on START or END the picture zooms in around that point
+FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
+  const int base = y + h - 1, cy = y + h / 2;
+  if (!fx.ready()) { gfxPrint(x + 22, cy - 4, PSTR("out of memory")); return; }
+  if (!SDcard_Ready) { gfxPrint(x + 34, cy - 4, PSTR("no SD card")); return; }
+  if (!nfiles) { gfxPrint(x + 4, cy - 4, PSTR("no WAV in /SCULPT")); return; }
+  const int fi = std::min<int>(cur[FILE_], nfiles - 1);
+  if (loading) {
+    char t[24];
+    snprintf(t, sizeof(t), "loading %d%%", frames ? int(got * 100 / frames) : 0);
+    gfxPrint(x + 28, cy - 4, t);
+    return;
+  }
+  const size_t n = fx.Length();
+  gfxPrint(x, y, names[fi]);
+  if (too_long) gfxPrint(x + w - 24, y, PSTR("16s"));
+  if (!n) { gfxPrint(x + 28, cy - 4, PSTR("can't read")); return; }
+  // what part of the sample is on screen
+  const bool zoomed = view_cursor == START || view_cursor == END;
+  static const int zf[4] = {1, 4, 16, 64};
+  const int z = zoomed ? zf[mode[view_cursor] & 3] : 1;
+  const size_t span = std::max<size_t>(w, n / z);
+  const size_t focus = zoomed ? size_t(uint64_t(cur[view_cursor]) * n / 10000) : n / 2;
+  const size_t v0 = std::min(n - std::min(n, span), focus > span / 2 ? focus - span / 2 : 0);
+  auto sx = [&](size_t pos) { return x + int((int64_t(pos) - int64_t(v0)) * (w - 1) / int64_t(span)); };
+  const int wy = y + 9, wh = h - 9, wc = wy + wh / 2;
+  for (int c = 0; c < w; c++) {
+    const size_t a = v0 + size_t(c) * span / w, b = v0 + size_t(c + 1) * span / w;
+    const int pk = fx.Peak(a, std::max(a + 1, b), std::max<size_t>(1, (b - a) / 24));
+    const int amp = int(sqrtf(pk / 32768.0f) * (wh / 2 - 1));
+    gfxLine(x + c, wc - amp, x + c, wc + amp);
+  }
+  // the loop's edges and the head
+  float fa, fb;
+  fx.Window(fa, fb);
+  for (const float f : {fa, fb}) {
+    const int ex = sx(size_t(f * n));
+    if (ex < x || ex >= x + w) continue;
+    graphics.clearRect(std::max(x, ex - 1), wy, std::min(3, x + w - std::max(x, ex - 1)), wh);
+    gfxLine(ex, wy, ex, base);
+  }
+  if (fx.state() == AudioEffectReel::PLAY) {
+    const int hx = sx(size_t(fx.HeadPos() * n));
+    if (hx >= x && hx < x + w) gfxInvert(hx, wy, 1, wh);
+  }
+  if (zoomed && z > 1) {
+    char t[6];
+    snprintf(t, sizeof(t), "%dx", z);
+    gfxPrint(x + w - 6 * int(strlen(t)), base - 7, t);
+  }
+}
+
+FLASHMEM void PlayerDevice::DrawMini(int x, int y, int w, int h) {
+  const int cy = y + h / 2;
+  if (!fx.Length()) { gfxDottedLine(x, cy, x + w - 1, cy, 2); return; }
+  constexpr int HIST = AudioEffectReel::HIST;
+  uint8_t hist[HIST];
+  fx.ReadHistory(hist);
+  for (int i = 0; i < w; i++) {
+    const int a = int(sqrtf(hist[i * HIST / w] / 255.0f) * (h / 2));
+    gfxLine(x + i, cy - a, x + i, cy + a);
+  }
+  if (fx.state() == AudioEffectReel::PLAY)
+    gfxInvert(constrain(x + int(fx.HeadPos() * (w - 1)), x, x + w - 1), y, 1, h);
 }
 
 /////////////////////////////////////////////////////////////////
@@ -1854,7 +2254,7 @@ struct SlotDef {
 };
 
 PROGMEM static const SlotDef SLOT_DEFS[SLOT_COUNT] = {
-  {"SOURCE",   "SRC", 2, 2},  // INPUT, REEL (owned by the track, not made here)
+  {"SOURCE",   "SRC", 3, 3},  // INPUT, REEL, PLAYER (owned by the track, not made here)
   {"SPRAY",    "SPR", 2, 1},  // BYPASS, SPRAY
   {"RESONATOR", "RES", 2, 1},  // BYPASS, RESONATOR
   {"TEXTURE",  "TEX", 2, 1},  // BYPASS, TEXTURE

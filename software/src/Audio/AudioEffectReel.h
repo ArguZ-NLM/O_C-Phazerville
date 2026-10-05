@@ -43,12 +43,38 @@ public:
   void Clear() { clear = true; }
   void Stop() { stop = true; }
   void SetSpeed(float s) { speed = s; }
-  void SetWindow(float start, float len) { start_ = start; len_ = len; }
+  void SetWindow(float start, float len) { start_ = start; len_ = len; exact = false; }
+  // the window in whole samples (the player sets its edges exactly)
+  void SetWindowSamples(size_t start, size_t length) { ex_ws = start; ex_wl = length; exact = true; }
+  void SetSeam(float samples) { seam = std::max(16.0f, samples); }  // fade at the loop ends
   void SetDub(float keep) { keep_ = keep; }
   void SetMonitor(float m) { mon = m; }
   void SetLevel(float l) { level = l; }
 
   State state() const { return st; }
+  size_t Length() const { return len; }
+  size_t Capacity() const { return cap; }
+  // --- the player loads into, and REEL saves from, the buffer directly
+  // (main loop; while loading the engine stays silent)
+  int16_t* Data(int c) { return buf[c]; }
+  const int16_t* Data(int c) const { return buf[c]; }
+  void BeginLoad() { st = EMPTY; len = 0; std::fill(hist, hist + HIST, 0); }
+  void MarkRange(size_t from, size_t to) {  // picture levels of loaded audio
+    for (size_t i = from; i < to; i++) Mark(i, buf[0][i], buf[1][i]);
+  }
+  void FinishLoad(size_t n) {
+    off = 0.0f; xf = 0; ws = 0; wl = n;
+    len = n;
+    st = n ? STOPPED : EMPTY;
+  }
+  // loudest sample between two positions (reads every step-th), for a
+  // zoomed picture
+  int Peak(size_t from, size_t to, size_t step) const {
+    int pk = 0;
+    for (size_t i = from; i < to && i < len; i += step)
+      pk = std::max(pk, std::max(abs(buf[0][i]), abs(buf[1][i])));
+    return pk;
+  }
   float LoopSecs() const { return len / AUDIO_SAMPLE_RATE_EXACT; }
   // where the play / record head is, as a fraction of the loop (REC: of
   // the buffer)
@@ -86,6 +112,9 @@ private:
   volatile State st = EMPTY;
   volatile bool press = false, clear = false, stop = false;
   volatile float speed = 1.0f, start_ = 0.0f, len_ = 1.0f, keep_ = 0.8f, mon = 1.0f, level = 1.0f;
+  volatile float seam = 256.0f;
+  volatile size_t ex_ws = 0, ex_wl = 0;
+  volatile bool exact = false;
   uint8_t hist[HIST] = {};
 
   void Reset() {
@@ -142,8 +171,9 @@ FASTRUN void AudioEffectReel::update() {
   // from the old window to the new one, keeping the play position when it
   // is inside the new window
   if (len && st != REC) {
-    const size_t nws = std::min<size_t>(len - 1, size_t(start_ * len));
-    const size_t nwl = std::max<size_t>(AUDIO_BLOCK_SAMPLES, std::min<size_t>(len, size_t(len_ * len)));
+    const size_t nws = std::min<size_t>(len - 1, exact ? ex_ws : size_t(start_ * len));
+    const size_t nwl = std::max<size_t>(AUDIO_BLOCK_SAMPLES,
+                                        std::min<size_t>(len, exact ? ex_wl : size_t(len_ * len)));
     if ((nws != ws || nwl != wl) && xf == 0) {
       o_ws = ws; o_wl = wl; o_off = off;
       const size_t at = (ws + size_t(off)) % len;           // where we play now
@@ -159,7 +189,7 @@ FASTRUN void AudioEffectReel::update() {
   auto read = [&](size_t w0, size_t wn, float o, float& l, float& r) {
     const size_t i0 = (w0 + size_t(o)) % len, i1 = (i0 + 1) % len;
     const float fr = o - std::floor(o);
-    const float fade = std::min(256.0f, wn * 0.25f);
+    const float fade = std::min(float(seam), wn * 0.25f);
     const float e = std::min(1.0f, std::min(o, wn - o) / fade);
     l = (buf[0][i0] + fr * (buf[0][i1] - buf[0][i0])) * q * e;
     r = (buf[1][i0] + fr * (buf[1][i1] - buf[1][i0])) * q * e;

@@ -74,6 +74,8 @@ namespace sculpt {
   struct Track {
     InputDevice* input = nullptr;
     ReelDevice* reel = nullptr;    // SOURCE option 1: a looper after the input
+    PlayerDevice* player = nullptr;  // SOURCE option 2: a WAV from the SD card
+    WavWriter writer;              // saving REEL's loop to the SD card
     MixDevice* mix = nullptr;
     uint8_t choice[SLOT_COUNT] = {};
     uint8_t last_choice[SLOT_COUNT] = {}; // for the bypass toggle
@@ -90,7 +92,11 @@ namespace sculpt {
     Modulator* mod(int i) const { return mods[i][mod_type[i]]; }
 
     Device* current(int s) const {
-      if (s == SOURCE) return choice[SOURCE] && reel ? static_cast<Device*>(reel) : input;
+      if (s == SOURCE) {
+        if (choice[SOURCE] == 1 && reel) return reel;
+        if (choice[SOURCE] == 2 && player) return player;
+        return input;
+      }
       return inst[s][choice[s]];
     }
     bool bypassed(int s) const { return s < SLOT_COUNT && (bypass >> s & 1); }
@@ -149,6 +155,8 @@ private:
   elapsedMicros tick_timer;
   int8_t track = 0, col = sculpt::ECHO, cursor = 0;
   bool l_held = false, l_used = false;
+  bool loop_save_held = false;  // REEL: A is down (held 2 s saves the loop) ...
+  uint32_t loop_save_hold = 0;  // ... since then
   bool save_held = false;   // chain view: Y is down (held 2 s saves) ...
   uint32_t save_hold = 0, saved_at = 0;  // ... since then; when the save happened
   bool clear_held = false;  // REEL: B is down on the REEL page ...
@@ -214,6 +222,9 @@ FLASHMEM void AppSculpt::Start() {
     tr.reel->Defaults();
     tr.reel->val[ReelDevice::IN] = tr.input->val[0];
     tr.reel->ApplyAll();
+    tr.player = new PlayerDevice;
+    tr.player->mod_bus = tr.mod_out;
+    tr.player->Defaults();
     for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
       if (s == ECHO) tr.gate = new SculptGate;
       for (int o = 0; o < SLOT_DEFS[s].noptions; o++) {
@@ -265,9 +276,11 @@ FLASHMEM void AppSculpt::Repatch(int t) {
   for (auto& c : patch->to_mix[t]) c.disconnect();
   for (auto& c : patch->mix_out[t]) c.disconnect();
   AudioStream* prev = tr.input;
-  if (tr.choice[SOURCE] && tr.reel) {  // REEL records and plays after the input
+  if (tr.choice[SOURCE] == 1 && tr.reel) {  // REEL records and plays after the input
     for (int c = 0; c < 2; c++) link[SOURCE][c].connect(*tr.input, c, *tr.reel->in(), c);
     prev = tr.reel->out();
+  } else if (tr.choice[SOURCE] == 2 && tr.player) {  // PLAYER instead of the input
+    prev = tr.player->out();
   }
   for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
     Device* d = tr.current(s);
@@ -610,6 +623,36 @@ FLASHMEM void AppSculpt::ModulateAll() {
 
 FLASHMEM void AppSculpt::MainLoop() {
   if (active) ReadMIDI();
+  {
+    using namespace sculpt;
+    // REEL: A held 2 s starts writing the loop; the files go in steps
+    const uint32_t ms = loop_save_held ? millis() - loop_save_hold : 0;
+    for (int t = 0; t < NUM_TRACKS; t++) {
+      Track& tr = tracks[t];
+      if (!tr.reel) continue;
+      const bool mine = t == track || linked;
+      tr.reel->save_hold = mine && loop_save_held && ms > 250 ? std::min(1.0f, ms / 2000.0f) : 0.0f;
+      if (mine && loop_save_held && ms >= 2000 && !tr.writer.busy) {
+        tr.reel->saved_name[0] = 0;
+        if (tr.writer.Begin(tr.reel->LoopData(0), tr.reel->LoopData(1), tr.reel->LoopLength()))
+          tr.reel->saving = 0.0f;
+        else
+          tr.reel->saved_at = millis() | 1;  // shows SD ERROR
+      }
+      if (tr.writer.busy) {
+        const bool done = tr.writer.Step();
+        tr.reel->saving = tr.writer.Progress();
+        if (done) {
+          tr.reel->saving = -1.0f;
+          snprintf(tr.reel->saved_name, sizeof(tr.reel->saved_name), "%s", tr.writer.name);
+          tr.reel->saved_at = millis() | 1;
+          if (tr.player) tr.player->Select(tr.writer.name);  // ready in PLAYER
+        }
+      }
+      if (tr.player && tr.choice[SOURCE] == 2) tr.player->Idle();
+    }
+    if (loop_save_held && ms >= 2000) loop_save_held = false;
+  }
   if (save_held && millis() - save_hold >= 2000) {
     save_held = false;
     SaveFile();  // a short audio stop while the flash is written
@@ -688,6 +731,15 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
   }
   // REEL: B held for 3 s clears the loop (see MainLoop); followed by the
   // button's own down / release events
+  // REEL: A held for 2 s writes the loop to the SD card (see MainLoop)
+  if (event.control == OC::CONTROL_BUTTON_UP) {
+    if (event.type == UI::EVENT_BUTTON_DOWN) {
+      loop_save_held = view == DEVICE && !focus_mod && col == SOURCE && tracks[track].choice[SOURCE] == 1;
+      loop_save_hold = millis();
+    } else if (event.type == UI::EVENT_BUTTON_PRESS || event.type == UI::EVENT_BUTTON_LONG_RELEASE) {
+      loop_save_held = false;
+    }
+  }
   // chain view: Y held for 2 s saves the settings (see MainLoop)
   if (event.control == OC::CONTROL_BUTTON_Y) {
     if (event.type == UI::EVENT_BUTTON_DOWN) {
@@ -699,7 +751,7 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
   }
   if (event.control == OC::CONTROL_BUTTON_DOWN) {
     if (event.type == UI::EVENT_BUTTON_DOWN) {
-      clear_held = view == DEVICE && !focus_mod && col == SOURCE && tracks[track].choice[SOURCE];
+      clear_held = view == DEVICE && !focus_mod && col == SOURCE && tracks[track].choice[SOURCE] == 1;
       clear_hold = millis();
     } else if (event.type == UI::EVENT_BUTTON_PRESS || event.type == UI::EVENT_BUTTON_LONG_RELEASE) {
       clear_held = false;
@@ -909,7 +961,8 @@ FLASHMEM void AppSculpt::DrawChain() const {
       // picture, or BP when bypassed
       // SOURCE is named after what it does: IN (input) or REC (REEL)
       const char* tag = c == MIX_COL ? PSTR("OUT")
-                      : c == SOURCE ? (tr.choice[SOURCE] ? PSTR("REC") : PSTR("IN"))
+                      : c == SOURCE ? (tr.choice[SOURCE] == 1 ? PSTR("REC")
+                                       : tr.choice[SOURCE] == 2 ? PSTR("PLY") : PSTR("IN"))
                       : SLOT_DEFS[c].tag;
       gfxPrint(x + 1 + (bw - 1 - 6 * int(strlen(tag))) / 2, y + 3, tag);
       if (!d) gfxPrint(x + 1 + (bw - 1 - 12) / 2, y + 14, PSTR("BP"));
@@ -929,7 +982,7 @@ FLASHMEM void AppSculpt::DrawChain() const {
   const Track& tr = tracks[track];
   Device* d = tr.at(col);
   if (!linked) gfxPrint(0, 56, track ? PSTR("R") : PSTR("L"));
-  // the slot name; SOURCE names its source (INPUT or REEL)
+  // the slot name; SOURCE names its source (INPUT, REEL or PLAYER)
   gfxPrint(8, 56, col == MIX_COL ? PSTR("OUTPUT")
                   : col == SOURCE && d ? d->def.name : SLOT_DEFS[col].name);
   // bypass (when on) at the right end; the CPU load always left of its place
@@ -1204,6 +1257,7 @@ FLASHMEM void AppSculpt::ForEachDevice(F f) const {
   for (auto& tr : tracks) {
     f(tr.input);
     if (tr.reel) f(tr.reel);
+    if (tr.player) f(tr.player);
     f(tr.mix);
     for (int s = SOURCE + 1; s < SLOT_COUNT; s++)
       for (auto d : tr.inst[s]) if (d) f(d);
@@ -1241,6 +1295,7 @@ FLASHMEM void AppSculpt::SaveFile() const {
   for (auto& tr : tracks) f.write(&tr.bypass, 1);
   // REEL's settings (older files end before); the recording isn't kept
   for (auto& tr : tracks) WriteDevice(f, tr.reel);
+  for (auto& tr : tracks) WriteDevice(f, tr.player);
   f.close();
   fs.remove(SAVE_FILE);
   fs.rename(SAVE_TMP, SAVE_FILE);
@@ -1296,7 +1351,9 @@ FLASHMEM void AppSculpt::LoadFile() {
       uint8_t b = 0;
       if (f.read(&b, 1) == 1) tr.bypass = b & ~1;  // SOURCE can't be bypassed
     }
-    for (auto& tr : tracks) if (!ReadDevice(f, tr.reel)) break;
+    bool more = true;
+    for (auto& tr : tracks) if (more && !ReadDevice(f, tr.reel)) more = false;
+    for (auto& tr : tracks) if (more && !ReadDevice(f, tr.player)) more = false;
   }
   f.close();
   linked = lk;
