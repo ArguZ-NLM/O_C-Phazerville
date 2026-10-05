@@ -69,7 +69,11 @@ void AppBase::Draw(UiMode ui_mode) const
   }
 
   // Loom uses Z held for its own clock page
+#ifdef LOOM_ONLY
+  if (false) {  // Loom firmware: no Z overlay (no app menu / I/O settings)
+#else
   if (z_button_hold && id() != TWOCCS("LM")) {
+#endif
     graphics.clearRect(0, 0, 128, 10);
     graphics.clearRect(0, 10, 9, 44);
     graphics.clearRect(119, 10, 9, 44);
