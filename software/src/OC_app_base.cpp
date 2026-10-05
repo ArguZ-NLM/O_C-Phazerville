@@ -68,7 +68,8 @@ void AppBase::Draw(UiMode ui_mode) const
     DrawScreensaver();
   }
 
-  if (z_button_hold) {
+  // Sculpt uses Z held for its own clock page
+  if (z_button_hold && id() != TWOCCS("SP")) {
     graphics.clearRect(0, 0, 128, 10);
     graphics.clearRect(0, 10, 9, 44);
     graphics.clearRect(119, 10, 9, 44);

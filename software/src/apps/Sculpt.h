@@ -203,6 +203,8 @@ private:
   uint8_t mod_slot = 0;   // ... of the first or the second source
   // the MOD view opened from a device page (X): where Y / X go back to
   struct { bool on; bool focus_mod; int8_t mod_cursor, cursor; } back = {};
+  // the clock page opened by holding Z: where Y goes back to
+  struct { bool on; ViewMode view; bool focus_mod; int8_t mod_cursor, cursor; } clock_back = {};
   // L enc in modulation: each source comes as U then B (off has neither)
   void StepModOption(sculpt::Device* d, int p, int dir) {
     const int bit = 1 << p;
@@ -862,8 +864,17 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
   using namespace sculpt;
   dirty = true;
   if (event.control == OC::CONTROL_BUTTON_Z) {
-    // anywhere in the app: clock start / stop
-    if (event.type == UI::EVENT_BUTTON_PRESS) clock_running ? ClockStop() : ClockStart();
+    // anywhere in the app: clock start / stop; held: the clock page
+    if (event.type == UI::EVENT_BUTTON_PRESS) {
+      clock_running ? ClockStop() : ClockStart();
+    } else if (event.type == UI::EVENT_BUTTON_LONG_PRESS && !(view == DEVICE && focus_mod && mod_cursor == CLK_CURSOR)) {
+      clock_back = {true, view, focus_mod, mod_cursor, cursor};
+      view = DEVICE;
+      focus_mod = true;
+      mod_cursor = CLK_CURSOR;
+      cursor = 0;
+      editing = mod_mode = trig_mode = out_editing = false;
+    }
     return;
   }
   if (event.control == OC::CONTROL_BUTTON_L) {
@@ -986,12 +997,19 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
     case OC::CONTROL_BUTTON_Y:
       if (view == MODS && out_editing) out_editing = false;
       else if (view == DEVICE && trig_mode) trig_mode = false;
+      else if (view == DEVICE && clock_back.on && focus_mod && mod_cursor == CLK_CURSOR) {
+        view = clock_back.view;
+        focus_mod = clock_back.focus_mod;
+        mod_cursor = clock_back.mod_cursor;
+        cursor = clock_back.cursor;
+        clock_back.on = false;
+      }
       else if (view == MODS && back.on) BackToDevice();
       else view = (view == DEVICE && focus_mod) ? MODS : CHAIN;
       editing = mod_mode = false;
       break;
     case OC::CONTROL_BUTTON_X:
-      out_editing = false;
+      out_editing = clock_back.on = false;
       // device page: the MOD view, coming back to this page afterwards
       if (view == DEVICE) {
         back = {true, focus_mod, mod_cursor, cursor};
