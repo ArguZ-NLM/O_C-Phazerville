@@ -55,6 +55,11 @@ public:
     Reset();
   }
   bool ready() const { return buf[0] && buf[1]; }
+  void Debug(char* buf_, size_t n) const {
+    snprintf(buf_, n, "MEM st %d win %u+%u set %u+%u pend %d %u+%u into %u+%u h %u f %u off %d",
+             int(st), unsigned(ws), unsigned(wl), unsigned(ex_ws), unsigned(ex_wl), int(pend), unsigned(p_ws), unsigned(p_wl),
+             unsigned(lt_ws), unsigned(lt_wl), unsigned(xh_l), unsigned(xf_l), int(off));
+  }
   volatile uint8_t pick = 0;  // 0 stereo, 1 the left side on both, 2 the right side
   float CapSecs() const { return cap / AUDIO_SAMPLE_RATE_EXACT; }
 

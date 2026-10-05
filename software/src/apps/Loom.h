@@ -950,6 +950,12 @@ FLASHMEM void AppLoom::MainLoop() {
   AudioProcessorUsageMaxReset();
   AudioMemoryUsageMaxReset();
   Serial.printf("  load:%s\n", loom::load_note);
+  for (int t = 0; t < loom::NUM_TRACKS; t++) {
+    if (!loom::tracks[t].player || loom::tracks[t].choice[loom::SOURCE] != 2) continue;
+    char dbg[200];
+    loom::tracks[t].player->Debug(dbg, sizeof(dbg));
+    Serial.printf("  PLY%c %s\n", t ? 'R' : 'L', dbg);
+  }
   // modulated settings: value, result, both sources (amount, MOD, u/b)
   for (int t = 0; t < loom::NUM_TRACKS; t++) {
     const loom::Track& tr = loom::tracks[t];

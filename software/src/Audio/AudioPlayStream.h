@@ -83,6 +83,12 @@ public:
   bool Playing() const { return playing; }
   float HeadPos() const { return frames ? float(pos / frames) : 0.0f; }
   bool Underran() { const bool u = underrun; underrun = false; return u; }
+  void Debug(char* buf, size_t n) const {
+    snprintf(buf, n, "STRM play %d win %u-%u set %u-%u into %u-%u h %u pos %u cache %u+%u %u+%u ring %u+%u",
+             int(playing), unsigned(ws), unsigned(we), unsigned(nws), unsigned(nwe), unsigned(lt_a), unsigned(lt_b),
+             unsigned(h_l), unsigned(pos), unsigned(cs[0]), unsigned(cn[0]), unsigned(cs[1]), unsigned(cn[1]),
+             unsigned(rs), unsigned(rn));
+  }
 
   // what the main loop should read next: the cache (for the loop's start),
   // else the ring ahead of the head. Returns false when both are full.

@@ -1346,6 +1346,7 @@ public:
   void SetFile(const char* folder, const char* name);
   const char* Folder() const { return dir; }
   void SetPick(uint8_t p) { fx.pick = p; }
+  void Debug(char* buf, size_t n) const { if (streaming) stream.Debug(buf, n); else fx.Debug(buf, n); }
   float XfadeFrames() const {
     const float v = cur[XFADE] * 0.01f;
     return 16.0f + v * v * AUDIO_SAMPLE_RATE_EXACT;
