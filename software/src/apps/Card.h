@@ -105,7 +105,10 @@ FLASHMEM void AppCard::Loop() {
 // the top line: whether a program on the computer has the card open (an MTP
 // session; it can't tell which program - macOS's photo import counts too)
 FLASHMEM void AppCard::DrawMenu() const {
-  const bool on = serving && static_cast<bool>(MTP);
+  // a session open, and the USB line really there: cable in (VBUS), the bus
+  // not asleep - pulling the cable doesn't end the session by itself
+  const bool line = (USB1_OTGSC & USB_OTGSC_BSV) && !(USB1_PORTSC1 & USB_PORTSC1_SUSP);
+  const bool on = serving && line && static_cast<bool>(MTP);
   gfxPrint(0, 1, !SDcard_Ready ? "CARD  no SD card" : on ? "CARD  connected" : "CARD  waiting...");
   if (on) gfxInvert(0, 0, 128, 9);
   gfxLine(0, 10, 127, 10);
