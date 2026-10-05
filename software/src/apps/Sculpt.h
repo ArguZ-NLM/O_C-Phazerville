@@ -736,7 +736,7 @@ FLASHMEM float AppSculpt::OutLevel(int o) const {
 
 FLASHMEM void AppSculpt::WriteOutputs() {
   for (int o = 0; o < sculpt::NUM_CV_OUTS && o < DAC_CHANNEL_COUNT; o++)
-    HS::frame.Out(DAC_CHANNEL(o), int(OutLevel(o) * 10.0f * ONE_OCTAVE));  // ONE_OCTAVE = 1 V
+    HS::frame.Out(DAC_CHANNEL(o), int(OutLevel(o) * 8.5f * ONE_OCTAVE));  // measured: 8.5 "volts" give 10 V at the jack
 }
 
 FLASHMEM void AppSculpt::MainLoop() {
