@@ -185,6 +185,8 @@ public:
   // a setting's mode as text; modes past the 4 named ones are shown by the
   // device (e.g. a number)
   virtual void FormatMode(int p, char* buf, size_t n) const;
+  // the name shown above a setting (some name themselves after their mode)
+  virtual const char* Name(int p) const { return param(p).name; }
   virtual void Action(int a) {}
   virtual bool ActionLit(int a) const { return false; }
   virtual void DrawViz(int x, int y, int w, int h) {}
@@ -2236,6 +2238,11 @@ PROGMEM static const DeviceDef ECHO_DEF = {
 
 class EchoDevice : public Device {
 public:
+  // the delay's and the reverb's level is named after its mode: MIX / SEND
+  const char* Name(int p) const override {
+    if (p == 0 || p == 4) return mode[p] ? "SEND" : "MIX";
+    return Device::Name(p);
+  }
   enum { DELAY, TIME, FEEDBACK, SPREAD, REVERB, SIZE, DECAY, TONE };
   enum { PHASE, PING, DIFFUSE };
   static constexpr int TAPS = AudioEffectEcho::TAPS;
