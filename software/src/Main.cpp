@@ -361,8 +361,13 @@ FLASHMEM void setup() {
 
   // first sign of life
   GRAPHICS_BEGIN_FRAME(true);
-  graphics.setPrintPos(52, 28);  // Loom test firmware: a plain name
+#ifdef LOOM_ONLY
+  loom::DrawWave();
+  loom::DrawTitle();
+#else
+  graphics.setPrintPos(52, 28);
   graphics.print("LOOM");
+#endif
   GRAPHICS_END_FRAME();
 
 #if defined(ARDUINO_TEENSY41)
@@ -487,7 +492,18 @@ FLASHMEM void setup() {
   OC::PresetBusUI::Init();
   OC::PresetEngine::BootRecall();
 
-  // (no welcome splash in the Loom test firmware)
+#ifdef LOOM_ONLY
+  // boot picture: the moving wave with LOOM over it, 2.5 s
+  if (!start_cal) {
+    const uint32_t t0 = millis();
+    while (millis() - t0 < 2500) {
+      GRAPHICS_BEGIN_FRAME(true);
+      loom::DrawWave();
+      loom::DrawTitle();
+      GRAPHICS_END_FRAME();
+    }
+  }
+#endif
 
   if (start_cal)
     OC::start_calibration();

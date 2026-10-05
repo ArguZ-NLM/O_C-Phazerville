@@ -321,6 +321,20 @@ FLASHMEM bool BuildSingleAppData(uint16_t app_id, AppData &out) {
   return false;
 }
 
+// the next app in the list, as the app menu would switch (Loom firmware:
+// Loom <-> CARD)
+FLASHMEM void SwitchToNextApp() {
+  CORE::app_isr_enabled = false;
+  delay(1);
+  app_switcher.current_app()->DispatchAppEvent(APP_EVENT_SUSPEND);
+  const size_t idx = (app_container.IndexOfAppByID(global_settings.current_app_id) + 1) % app_container.num_apps();
+  app_switcher.set_current_app(idx);
+  FreqMeasure.end();
+  OC::DigitalInputs::reInit();
+  app_switcher.current_app()->DispatchAppEvent(APP_EVENT_RESUME);
+  CORE::app_isr_enabled = true;
+}
+
 FLASHMEM void SaveAppData() {
   SaveGlobalSettings(); // yeah, why not
   BuildAppData(app_data);

@@ -66,7 +66,9 @@ namespace OC {
 // triage all code (minus any dangling static parts).
 
 static AppContainer<void // this space intentionally left blank
+#ifndef LOOM_ONLY  // Loom firmware: no Phazerville settings / menu apps
   , AppSettings
+#endif
 #ifndef NO_HEMISPHERE
   #ifdef ARDUINO_TEENSY41
   , AppQuadrants
@@ -143,17 +145,25 @@ static AppContainer<void // this space intentionally left blank
 #if defined(ENABLE_APP_LOOM) && defined(ARDUINO_TEENSY41)
   , AppLoom
 #endif
+#ifndef LOOM_ONLY
   , AppScaleEditor
+#endif
 #ifndef NO_HEMISPHERE
   , AppWaveformEditor
 #endif
+#ifndef LOOM_ONLY
   , AppBackup
+#endif
 > app_container;
 
 static_assert(decltype(app_container)::TotalAppDataStorageSize() < AppData::kAppDataSize,
               "Apps use too much EEPROM space!");
 
-#ifdef CARD_APP
+#if defined(LOOM_ONLY) && defined(CARD_APP)
+static constexpr int DEFAULT_APP_INDEX = 1;  // Loom, after Card
+#elif defined(LOOM_ONLY)
+static constexpr int DEFAULT_APP_INDEX = 0;
+#elif defined(CARD_APP)
 static constexpr int DEFAULT_APP_INDEX = 2;  // Loom, after Settings and Card
 #else
 static constexpr int DEFAULT_APP_INDEX = 1;

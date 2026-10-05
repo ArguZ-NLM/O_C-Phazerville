@@ -36,10 +36,18 @@
 # define APPS_SERIAL_PRINTLN(...)
 #endif
 
+#ifdef ENABLE_APP_LOOM
+namespace loom {
+void DrawWave();   // the NLM wave (screensaver, boot picture)
+void DrawTitle();  // a big LOOM in the middle
+}
+#endif
+
 namespace OC {
 
 void draw_save_message(uint8_t c);
 void SaveAppData();
+void SwitchToNextApp();  // straight to the next app in the list (no menu)
 
 static inline void save_app_data() { SaveAppData(); }
 

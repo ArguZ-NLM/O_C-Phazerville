@@ -1923,7 +1923,41 @@ struct Drift {
 };
 }
 
-FLASHMEM void AppLoom::DrawScreensaver() const {
+FLASHMEM void AppLoom::DrawScreensaver() const { loom::DrawWave(); }
+
+// a big LOOM in the middle, on a black box (boot picture)
+FLASHMEM void loom::DrawTitle() {
+  constexpr int W = 18, H = 26, T = 4, GAP = 6;
+  constexpr int X0 = (128 - (4 * W + 3 * GAP)) / 2, Y0 = (64 - H) / 2;
+  graphics.clearRect(X0 - 5, Y0 - 5, 4 * W + 3 * GAP + 10, H + 10);
+  gfxFrame(X0 - 5, Y0 - 5, 4 * W + 3 * GAP + 10, H + 10);
+  auto rect = [](int x, int y, int w, int h) { gfxRect(x, y, w, h); };
+  int x = X0;
+  // L
+  rect(x, Y0, T, H);
+  rect(x, Y0 + H - T, W, T);
+  x += W + GAP;
+  // O O (corners cut a little)
+  for (int k = 0; k < 2; k++, x += W + GAP) {
+    rect(x + 2, Y0, W - 4, T);
+    rect(x + 2, Y0 + H - T, W - 4, T);
+    rect(x, Y0 + 2, T, H - 4);
+    rect(x + W - T, Y0 + 2, T, H - 4);
+    rect(x + 1, Y0 + 1, T, T);
+    rect(x + W - T - 1, Y0 + 1, T, T);
+    rect(x + 1, Y0 + H - T - 1, T, T);
+    rect(x + W - T - 1, Y0 + H - T - 1, T, T);
+  }
+  // M: two legs and the V between them, T pixels thick
+  rect(x, Y0, T, H);
+  rect(x + W - T, Y0, T, H);
+  for (int d = 0; d < T; d++) {
+    gfxLine(x + d, Y0, x + W / 2 - 1 + d / 2, Y0 + H / 2 + 1);
+    gfxLine(x + W - 1 - d, Y0, x + W / 2 - d / 2, Y0 + H / 2 + 1);
+  }
+}
+
+FLASHMEM void loom::DrawWave() {
   using namespace loom;
   constexpr float L = 2.5f, AMP = 0.7f, F = 130.0f;
   // how far back each of the 13 long lines goes (x L), left to right: a

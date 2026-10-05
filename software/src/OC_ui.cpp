@@ -188,6 +188,23 @@ UiMode Ui::DispatchEvents(const RuntimeSlot &appslot) {
     const bool a_hold = (event.mask & CONTROL_BUTTON_A);
 
     // --- Handle global hotkeys
+#ifdef LOOM_ONLY
+    // Loom firmware: no app menu, no I/O settings. Z held + R push switches
+    // between Loom and CARD; Z held + L push starts the screensaver
+    if (UI::EVENT_BUTTON_DOWN == event.type && z_hold) {
+      if (CONTROL_BUTTON_R == event.control) {
+        SetButtonIgnoreMask();
+        SwitchToNextApp();
+        break;
+      }
+      if (CONTROL_BUTTON_L == event.control) {
+        screensaver_ = true;
+        SetButtonIgnoreMask();
+        break;
+      }
+    }
+    (void)a_hold; (void)z_extras;
+#else
     if (UI::EVENT_BUTTON_DOWN == event.type) {
       // Hold Z or A and push right encoder for main menu
       if (CONTROL_BUTTON_R == event.control && (z_hold || a_hold)) {
@@ -213,6 +230,7 @@ UiMode Ui::DispatchEvents(const RuntimeSlot &appslot) {
         break;
       }
     }
+#endif
 
     if (UI_MODE_SCREENSAVER == app->DispatchEvent(event)) {
       screensaver_ = true;
@@ -251,8 +269,10 @@ UiMode Ui::Splashscreen(bool &reset_settings, uint8_t phase) {
       mode = UI_MODE_MENU;
       if (read_immediate(CONTROL_BUTTON_L))
         mode = UI_MODE_CALIBRATE;
+#ifndef LOOM_ONLY  // Loom firmware: no app menu
       if (read_immediate(CONTROL_BUTTON_R))
         mode = UI_MODE_APP_SETTINGS;
+#endif
 
       reset_settings =
       #if defined(NORTHERNLIGHT) && !defined(IO_10V)
@@ -262,6 +282,15 @@ UiMode Ui::Splashscreen(bool &reset_settings, uint8_t phase) {
       #endif
 
       GRAPHICS_BEGIN_FRAME(true);
+#ifdef LOOM_ONLY
+      // nothing held: the Loom boot picture (the wave and LOOM)
+      if (mode == UI_MODE_MENU && !reset_settings) {
+        loom::DrawWave();
+        loom::DrawTitle();
+        GRAPHICS_END_FRAME();
+        continue;
+      }
+#endif
 
       menu::DefaultTitleBar::Draw();
       graphics.print(OC::Strings::HardwareName(OC::Buchla200eHardware(), DAC_is_inverted));
@@ -274,7 +303,9 @@ UiMode Ui::Splashscreen(bool &reset_settings, uint8_t phase) {
 
       y += menu::kMenuLineH;
       graphics.setPrintPos(menu::kIndentDx, y + menu::kTextDy);
+#ifndef LOOM_ONLY
       graphics.print("[R] => Main Menu");
+#endif
       if (UI_MODE_APP_SETTINGS == mode)
         graphics.invertRect(menu::kIndentDx, y, 128, menu::kMenuLineH);
 
