@@ -1650,7 +1650,7 @@ FLASHMEM void AppLoom::DrawClockPage() const {
 FLASHMEM void AppLoom::DrawLinkLabel(int x, int y) const {
   gfxPrint(x, y, PSTR("L"));
   // the first square sits in the L's open corner; R where it was in L+R
-  for (const int sx : {x + 3, x + 7}) {
+  for (const int sx : {x + 4, x + 8}) {
     if (link_stereo) gfxRect(sx, y + 2, 3, 3);
     else gfxFrame(sx, y + 2, 3, 3);
   }
