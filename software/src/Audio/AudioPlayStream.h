@@ -136,6 +136,7 @@ private:
   volatile bool xfade_loop = false;
   volatile size_t nws = 0, nwe = 0;  // the window asked for (SetWindow)
   float win_g = 1.0f;                // dip while the window changes
+  float ur_g = 1.0f, last_l = 0.0f, last_r = 0.0f;  // underrun glide
   volatile size_t h_l = 0;           // the crossfade half in use (changes away from the seam)
   bool pending_cache = false;
 
@@ -195,7 +196,8 @@ FASTRUN void AudioPlayStream::update() {
     const size_t i = size_t(p);
     int16_t l0 = 0, r0 = 0, l1, r1;
     float yl = 0.0f, yr = 0.0f;
-    if (Frame(i, l0, r0)) {
+    const bool got_frame = Frame(i, l0, r0);
+    if (got_frame) {
       if (!Frame(i + 1 < b || xh ? i + 1 : a, l1, r1)) { l1 = l0; r1 = r0; }
       const float fr = float(p - double(i));
       const float o = float(p - double(a));
@@ -218,6 +220,11 @@ FASTRUN void AudioPlayStream::update() {
     } else {
       underrun = true;
     }
+    // the card behind (or the buffers starting over after a jump): glide
+    // down on the last sound instead of dropping to silence, back up after
+    if (got_frame) { ur_g = std::min(1.0f, ur_g + 1.0f / (0.003f * AUDIO_SAMPLE_RATE_EXACT)); last_l = yl; last_r = yr; }
+    else { ur_g = std::max(0.0f, ur_g - 1.0f / (0.002f * AUDIO_SAMPLE_RATE_EXACT)); yl = last_l; yr = last_r; }
+    yl *= ur_g; yr *= ur_g;
     out[0]->data[n] = __SSAT(int32_t(yl * run_g * win_g * 32767.0f), 16);
     out[1]->data[n] = __SSAT(int32_t(yr * run_g * win_g * 32767.0f), 16);
     p += sp;
