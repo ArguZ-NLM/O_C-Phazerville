@@ -697,22 +697,6 @@ void FASTRUN loop() {
 #endif
 
             // TODO:
-          // remote panel (testing): a short press of A / B / X / Y ('+' '-'
-          // 'u' 'y'), L / R push ('[' ']'), L / R encoder ('," "." / '<' '>')
-          case '+': case '-': case 'u': case 'y': case '[': case ']': {
-            const uint16_t c = cmd == '+' ? OC::CONTROL_BUTTON_A : cmd == '-' ? OC::CONTROL_BUTTON_B
-                             : cmd == 'u' ? OC::CONTROL_BUTTON_X : cmd == 'y' ? OC::CONTROL_BUTTON_Y
-                             : cmd == '[' ? OC::CONTROL_BUTTON_L : OC::CONTROL_BUTTON_R;
-            OC::ui.Inject(UI::EVENT_BUTTON_DOWN, c, 0, 0);
-            OC::ui.Inject(UI::EVENT_BUTTON_PRESS, c, 0, 0);
-            break;
-          }
-          case ',': case '.':
-            OC::ui.Inject(UI::EVENT_ENCODER, OC::CONTROL_ENCODER_L, cmd == '.' ? 1 : -1, 0);
-            break;
-          case '<': case '>':
-            OC::ui.Inject(UI::EVENT_ENCODER, OC::CONTROL_ENCODER_R, cmd == '>' ? 1 : -1, 0);
-            break;
           case '(': OC::PresetEngine::RequestSave(0); break;
           case ')': OC::PresetEngine::RequestRecall(0); break;
           case '{': OC::PresetEngine::RequestSave(1); break;
@@ -733,6 +717,22 @@ void FASTRUN loop() {
             break;
 #endif
           // also in release builds: lets the flash script save state first
+          // remote panel (testing): a short press of A / B / X / Y ('+' '-'
+          // 'u' 'y'), L / R push ('[' ']'), L / R encoder ('," "." / '<' '>')
+          case '+': case '-': case 'u': case 'y': case '[': case ']': {
+            const uint16_t c = cmd == '+' ? OC::CONTROL_BUTTON_A : cmd == '-' ? OC::CONTROL_BUTTON_B
+                             : cmd == 'u' ? OC::CONTROL_BUTTON_X : cmd == 'y' ? OC::CONTROL_BUTTON_Y
+                             : cmd == '[' ? OC::CONTROL_BUTTON_L : OC::CONTROL_BUTTON_R;
+            OC::ui.Inject(UI::EVENT_BUTTON_DOWN, c, 0, 0);
+            OC::ui.Inject(UI::EVENT_BUTTON_PRESS, c, 0, 0);
+            break;
+          }
+          case ',': case '.':
+            OC::ui.Inject(UI::EVENT_ENCODER, OC::CONTROL_ENCODER_L, cmd == '.' ? 1 : -1, 0);
+            break;
+          case '<': case '>':
+            OC::ui.Inject(UI::EVENT_ENCODER, OC::CONTROL_ENCODER_R, cmd == '>' ? 1 : -1, 0);
+            break;
           case 'g':
             SaveFromUSB();
             break;
