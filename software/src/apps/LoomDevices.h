@@ -1320,6 +1320,8 @@ private:
   void List();
   // streaming (files too long for fx)
   bool streaming = false, analysing = false;
+  bool indexing = false;   // streaming, and the level index still being read
+  uint32_t indexed_at = 0;
   size_t data_off = 0, done = 0;  // where the samples start in the file; analysis progress
   uint8_t* idx = nullptr;         // level per IDX_FRAMES frames, for the picture
   size_t idx_n = 0;
@@ -1514,7 +1516,7 @@ FLASHMEM void PlayerDevice::Load(int i) {
   fx.BeginLoad();
   loaded = i;
   loaded_mode = mode[FILE_];
-  too_long = clipped = false;
+  too_long = clipped = indexing = false;
   if (!keep_exact) ex_valid = false;  // a new file: from the settings
   keep_exact = false;
   if (i >= nfiles || !fx.ready()) return;
@@ -1576,8 +1578,14 @@ FLASHMEM void PlayerDevice::Load(int i) {
         fx.Resize(size_t(MAX_SECS * AUDIO_SAMPLE_RATE_EXACT)) || fx.Resize(size_t(2 * AUDIO_SAMPLE_RATE_EXACT));
         too_long = true; frames = fx.Capacity(); loading = true; return;
       }
+      // streams straight away; the level index (the overview picture) is
+      // read alongside, a little at a time
       done = 0;
-      analysing = true;
+      indexing = true;
+      streaming = true;
+      stream.Open(frames);
+      EdgesToSettings();
+      ApplyAll();
       return;
     } else {
       lf.seek(lf.position() + sz + (sz & 1));
@@ -1661,6 +1669,19 @@ FLASHMEM void PlayerDevice::Idle() {
       const size_t rd = ReadFrames(l, r, count);
       stream.Filled(rd);
       if (rd < count) break;
+    }
+    // the level index, one chunk every 5 ms (~9x faster than it plays)
+    if (indexing && millis() - indexed_at >= 5) {
+      indexed_at = millis();
+      lf.seek(data_off + done * size_t(bytes) * chans);
+      const size_t rd = ReadFrames(tl, tr, std::min(IO_CHUNK, frames - done));
+      for (size_t i = 0; i < rd; i++) {
+        const size_t e = (done + i) / IDX_FRAMES;
+        const uint8_t pk = uint8_t(std::min(255, std::max(abs(tl[i]), abs(tr[i])) >> 7));
+        if (e < idx_n && pk > idx[e]) idx[e] = pk;
+      }
+      done += rd;
+      if (!rd || done >= frames) indexing = false;
     }
   }
 }
