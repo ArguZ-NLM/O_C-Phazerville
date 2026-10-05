@@ -1927,10 +1927,10 @@ FLASHMEM void AppLoom::DrawScreensaver() const { loom::DrawWave(); }
 
 // a big LOOM in the middle, on a black box (boot picture)
 FLASHMEM void loom::DrawTitle() {
-  constexpr int W = 18, H = 26, T = 4, GAP = 6;
+  constexpr int W = 12, H = 17, T = 3, GAP = 4;
   constexpr int X0 = (128 - (4 * W + 3 * GAP)) / 2, Y0 = (64 - H) / 2;
-  graphics.clearRect(X0 - 5, Y0 - 5, 4 * W + 3 * GAP + 10, H + 10);
-  gfxFrame(X0 - 5, Y0 - 5, 4 * W + 3 * GAP + 10, H + 10);
+  graphics.clearRect(X0 - 4, Y0 - 4, 4 * W + 3 * GAP + 8, H + 8);
+  gfxFrame(X0 - 4, Y0 - 4, 4 * W + 3 * GAP + 8, H + 8);
   auto rect = [](int x, int y, int w, int h) { gfxRect(x, y, w, h); };
   int x = X0;
   // L
@@ -1943,10 +1943,10 @@ FLASHMEM void loom::DrawTitle() {
     rect(x + 2, Y0 + H - T, W - 4, T);
     rect(x, Y0 + 2, T, H - 4);
     rect(x + W - T, Y0 + 2, T, H - 4);
-    rect(x + 1, Y0 + 1, T, T);
-    rect(x + W - T - 1, Y0 + 1, T, T);
-    rect(x + 1, Y0 + H - T - 1, T, T);
-    rect(x + W - T - 1, Y0 + H - T - 1, T, T);
+    rect(x + 1, Y0 + 1, T - 1, T - 1);
+    rect(x + W - T, Y0 + 1, T - 1, T - 1);
+    rect(x + 1, Y0 + H - T, T - 1, T - 1);
+    rect(x + W - T, Y0 + H - T, T - 1, T - 1);
   }
   // M: two legs and the V between them, T pixels thick
   rect(x, Y0, T, H);

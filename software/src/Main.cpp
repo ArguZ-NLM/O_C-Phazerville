@@ -493,10 +493,10 @@ FLASHMEM void setup() {
   OC::PresetEngine::BootRecall();
 
 #ifdef LOOM_ONLY
-  // boot picture: the moving wave with LOOM over it, 2.5 s
+  // boot picture: the moving wave with LOOM over it, 4 s
   if (!start_cal) {
     const uint32_t t0 = millis();
-    while (millis() - t0 < 2500) {
+    while (millis() - t0 < 4000) {
       GRAPHICS_BEGIN_FRAME(true);
       loom::DrawWave();
       loom::DrawTitle();
