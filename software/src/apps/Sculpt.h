@@ -1254,9 +1254,9 @@ FLASHMEM void AppSculpt::DrawDevice() const {
       PrintCentred(x, 43, buf);
     } else {
       PrintCentred(x, 43, pd.name);
-      // has modes: a small square, right of a 5-letter name
+      // has modes: a small square (a 5-letter name: just outside its column)
       if (pd.nmodes) {
-        if (strlen(pd.name) >= 5) gfxLine(x + 31, 43, x + 31, 44);
+        if (strlen(pd.name) >= 5) gfxRect(x + 33, 43, 2, 2);  // in the gap before the next name
         else gfxRect(x + 29, 43, 2, 2);
       }
     }
