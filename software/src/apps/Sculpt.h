@@ -69,7 +69,6 @@
 #include "../PhzConfig.h"
 #include "SculptDevices.h"
 #include "SculptMods.h"
-#include "SculptLogo.h"
 
 namespace sculpt {
   constexpr int NUM_TRACKS = 2;
@@ -1880,35 +1879,59 @@ void AppSculpt::DrawDebugInfo() const { }
 
 FLASHMEM void AppSculpt::DrawMenu() const { BaseView(); }
 
-// screensaver: the NLM logo drifting slowly from side to side and coming
-// nearer / going away (scaled 30..60 px high), its columns rippling like the
-// wave it shows. Each screen pixel is lit when enough of the logo pixels it
-// covers are inked, so thin lines survive the scaling.
+// screensaver: the NLM wave, drawn as a 3D wire mesh (so it stays sharp at
+// any size): a sheet with two troughs at the front, flattening and fading
+// out towards the back. It comes nearer / goes away (fewer grid lines when
+// far), drifts from side to side and the wave slowly travels through it.
 FLASHMEM void AppSculpt::DrawScreensaver() const {
-  using namespace sculpt;
   const float t = millis() * 0.001f;
-  const int h = 45 + int(roundf(15.0f * sinf(t * 2.0f * float(M_PI) / 17.0f)));  // 30..60, 17 s
-  const int w = NLM_LOGO_W * h / NLM_LOGO_H;
+  const float scale = 0.62f + 0.23f * sinf(t * 2.0f * float(M_PI) / 17.0f);  // 0.39..0.85, 17 s
+  const float phase = t * 0.6f;
+  const int step = scale > 0.6f ? 1 : 2;  // far away: every other line
+  // the mesh spans x -43..43, y -38..34 at scale 1
+  const float half_w = 43.0f * scale;
   const float p = fmodf(t / 20.0f, 2.0f);  // 20 s one way
-  const int x0 = int((p < 1.0f ? p : 2.0f - p) * (128 - w) + 0.5f);
-  const int y0 = (64 - h) / 2;
-  const float amp = 2.0f * h / 60.0f;  // the ripple shrinks with the logo
-  auto ink = [](int x, int y) {
-    return (pgm_read_byte(&NLM_LOGO[y * NLM_LOGO_BPR + (x >> 3)]) >> (7 - (x & 7))) & 1;
+  const float cx = half_w + (p < 1.0f ? p : 2.0f - p) * (128.0f - 2.0f * half_w);
+  const float cy = 32.0f - 2.0f * scale;
+  auto at = [&](float u, float v, float& x, float& y) {
+    const float down = 0.5f - 0.5f * cosf(4.0f * float(M_PI) * u + 0.5f * float(M_PI) + phase);
+    const float a = 16.0f * powf(1.0f - v, 1.8f);
+    x = cx + (u * 46.0f + v * 40.0f - 43.0f) * scale;
+    y = cy + (18.0f - u * 10.0f - v * 46.0f + a * down) * scale;
   };
-  for (int tx = 0; tx < w; tx++) {
-    const int sx0 = tx * NLM_LOGO_W / w, sx1 = std::max((tx + 1) * NLM_LOGO_W / w, sx0 + 1);
-    const int dy = int(roundf(amp * sinf(tx * 0.15f * 60.0f / h - t * 2.0f)));
-    for (int ty = 0; ty < h; ty++) {
-      const int sy0 = ty * NLM_LOGO_H / h, sy1 = std::max((ty + 1) * NLM_LOGO_H / h, sy0 + 1);
-      int n = 0;
-      for (int y = sy0; y < sy1; y++)
-        for (int x = sx0; x < sx1; x++) n += ink(x, y);
-      // lit at 22% coverage
-      if (n * 100 >= 22 * (sx1 - sx0) * (sy1 - sy0)) {
-        const int yy = y0 + ty + dy;
-        if (yy >= 0 && yy < 64) gfxPixel(x0 + tx, yy);
-      }
+  // a line from (x0,y0) to (x1,y1) at depth v; past v 0.55 more and more
+  // of its pixels are left out (the fade to the back)
+  auto line = [](float x0, float y0, float x1, float y1, float v) {
+    const int n = int(std::max(fabsf(x1 - x0), fabsf(y1 - y0))) + 1;
+    const int fade = v > 0.55f ? int((v - 0.55f) / 0.45f * 16.0f) : 0;
+    for (int i = 0; i <= n; i++) {
+      const int x = int(roundf(x0 + (x1 - x0) * i / n)), y = int(roundf(y0 + (y1 - y0) * i / n));
+      if (x < 0 || x > 127 || y < 0 || y > 63) continue;
+      if (fade && ((x * 7 + y * 13) & 15) < fade) continue;
+      gfxPixel(x, y);
+    }
+  };
+  constexpr int S = 48;  // segments per line
+  for (int j = 0; j < 6; j += step) {  // across, the front part only
+    const float v = j / 5.0f * 0.55f;
+    float px, py;
+    at(0.0f, v, px, py);
+    for (int k = 1; k <= S; k++) {
+      float x, y;
+      at(float(k) / S, v, x, y);
+      line(px, py, x, y, v);
+      px = x; py = y;
+    }
+  }
+  for (int i = 0; i < 11; i += step) {  // front to back, fading
+    const float u = i / 10.0f;
+    float px, py;
+    at(u, 0.0f, px, py);
+    for (int k = 1; k <= S; k++) {
+      float x, y;
+      at(u, float(k) / S, x, y);
+      line(px, py, x, y, float(k) / S);
+      px = x; py = y;
     }
   }
 }
