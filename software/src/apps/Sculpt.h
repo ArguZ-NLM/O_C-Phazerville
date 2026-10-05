@@ -907,7 +907,10 @@ FLASHMEM void AppSculpt::DrawChain() const {
 
       // the slot's name at the top, always; underneath its device's little
       // picture, or BP when bypassed
-      const char* tag = c == MIX_COL ? PSTR("OUT") : SLOT_DEFS[c].tag;
+      // SOURCE is named after what it does: IN (input) or REC (REEL)
+      const char* tag = c == MIX_COL ? PSTR("OUT")
+                      : c == SOURCE ? (tr.choice[SOURCE] ? PSTR("REC") : PSTR("IN"))
+                      : SLOT_DEFS[c].tag;
       gfxPrint(x + 1 + (bw - 1 - 6 * int(strlen(tag))) / 2, y + 3, tag);
       if (!d) gfxPrint(x + 1 + (bw - 1 - 12) / 2, y + 14, PSTR("BP"));
       else if (d->ok()) d->DrawMini(x + 2, y + 13, bw - 3, 10);
