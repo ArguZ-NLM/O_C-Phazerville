@@ -1260,7 +1260,7 @@ FLASHMEM void AppSculpt::DrawDevice() const {
         else gfxRect(x + 29, 43, 2, 2);
       }
     }
-    if (d->Modded(p) && !(sel && mod_mode)) { // modulated: small wave mark
+    if (d->ModsLive(p) && !(sel && mod_mode)) { // modulated: small wave mark
       gfxPixel(x + 27, 49); gfxPixel(x + 28, 48); gfxPixel(x + 29, 49); gfxPixel(x + 30, 48);
     }
 
@@ -1299,7 +1299,7 @@ FLASHMEM void AppSculpt::DrawDevice() const {
       if (len > 0) gfxRect(c, 61, len, 2);
       else if (len < 0) gfxRect(c + len, 61, -len, 2);
       // where modulation puts it: a notch through the bar (room under the number)
-      if (d->Modded(p)) gfxInvert(c + d->cur[p] * 15 / std::max(1, (int)pd.max), 60, 1, 4);
+      if (d->ModsLive(p)) gfxInvert(c + d->cur[p] * 15 / std::max(1, (int)pd.max), 60, 1, 4);
     } else if (pd.kind == LIST) {
       for (int k = 0; k < pd.nlabels; k++) {
         const int bx = x + 1 + k * 7;
@@ -1308,7 +1308,7 @@ FLASHMEM void AppSculpt::DrawDevice() const {
       }
     } else {
       gfxRect(x + 1, 61, (d->val[p] - pd.min) * 29 / span, 2);
-      if (d->Modded(p)) {
+      if (d->ModsLive(p)) {
         const int mx = x + 1 + (d->cur[p] - pd.min) * 29 / span;
         gfxInvert(mx, 60, 1, 4);
       }

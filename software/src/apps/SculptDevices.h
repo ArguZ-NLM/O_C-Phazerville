@@ -197,6 +197,14 @@ public:
   bool Bipolar(int p) const { return mod_bi & (1 << p); }
   bool Bipolar2(int p) const { return mod_bi2 & (1 << p); }
   bool Modded(int p) const { return mod_amt[p] || mod_amt2[p]; }
+  // a source with an amount that really moves the setting (not off, not an
+  // empty MOD slot)
+  bool ModLive(int p, int k) const {
+    if (k) return mod_amt2[p] && mod_bus2[p] && mod_bus && mod_bus[mod_bus2[p] - 1] >= 0.0f;
+    return mod_amt[p] && ModSourceOn(p)
+           && !(mod_bus_sel[p] && mod_bus && mod_bus[mod_bus_sel[p] - 1] < 0.0f);
+  }
+  bool ModsLive(int p) const { return ModLive(p, 0) || ModLive(p, 1); }
   int Modulated(int p) const;
   void Refresh(int p);   // recompute cur[p] and apply it
   void Modulate();       // follow the CV inputs
@@ -224,9 +232,7 @@ FLASHMEM void Device::Defaults() {
 FLASHMEM int Device::Modulated(int p) const {
   const ParamDef& d = param(p);
   // a MOD slot with no modulator in it (-1) counts as no source
-  const bool one = mod_amt[p] && ModSourceOn(p)
-                   && !(mod_bus_sel[p] && mod_bus && mod_bus[mod_bus_sel[p] - 1] < 0.0f);
-  const bool two = mod_amt2[p] && mod_bus2[p] && mod_bus && mod_bus[mod_bus2[p] - 1] >= 0.0f;
+  const bool one = ModLive(p, 0), two = ModLive(p, 1);
   if (!one && !two) return val[p];
   // the two sources add up, each by its own amount
   float sum = 0.0f;
