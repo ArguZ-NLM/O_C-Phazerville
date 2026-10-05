@@ -1879,83 +1879,66 @@ void AppSculpt::DrawDebugInfo() const { }
 
 FLASHMEM void AppSculpt::DrawMenu() const { BaseView(); }
 
-// screensaver: the NLM wave as a 3D wire mesh, sharp at any size: a sheet
-// with two troughs at the front, flattening and fading out towards the back,
-// seen like the logo. The camera flies into it (24 s), fading in at the start
-// and out at the end, then starts again far away; the wave slowly travels.
+// screensaver: the NLM wave as a 3D wire mesh, seen like the logo and
+// filling the screen: a sheet with two troughs at the front, flattening
+// towards the back. The camera sways around it a little (side to side, up
+// and down) at a fixed distance; lines nearer to it are drawn bold. The wave
+// slowly travels.
 FLASHMEM void AppSculpt::DrawScreensaver() const {
-  constexpr float L = 2.5f, AMP = 0.7f, F = 130.0f, PERIOD = 24.0f;
-  constexpr float CAMX = -3.0f, CAMY = 3.0f, CAMZ = -2.0f;
-  static const float cyw = cosf(0.7854f), syw = sinf(0.7854f);    // yaw 45
-  static const float cpt = cosf(0.7854f), spt = sinf(0.7854f);    // pitch 45
-  static const float crl = cosf(-0.2618f), srl = sinf(-0.2618f);  // roll -15
+  constexpr float L = 2.5f, AMP = 0.7f, F = 130.0f, DIST = 5.1f;
+  constexpr float AIMX = 0.0f, AIMY = -0.3f, AIMZ = L * 0.33f;
   const float t = millis() * 0.001f;
-  const float s = fmodf(t, PERIOD) / PERIOD;  // 0..1 through the flight
-  const float d = -7.0f + s * 11.5f;          // camera moved along its view
+  const float yaw = 0.7854f + 0.12f * sinf(t * 0.21f);           // 45 +- 7 deg
+  const float pitch = 0.7854f + 0.087f * sinf(t * 0.17f + 1.0f);  // 45 +- 5 deg
+  const float cyw = cosf(yaw), syw = sinf(yaw), cpt = cosf(pitch), spt = sinf(pitch);
+  static const float crl = cosf(-0.2618f), srl = sinf(-0.2618f);  // roll -15
   const float phase = t * 0.5f;
-  // the whole picture fades in / out (fraction of pixels left out, 0..16)
-  const int fade_all = s < 0.1f ? int((0.1f - s) * 160.0f) : s > 0.85f ? int((s - 0.85f) * 106.0f) : 0;
 
-  // world -> camera space
-  auto cam = [&](float x, float y, float z, float& X, float& Y, float& Z) {
-    x -= CAMX; y -= CAMY; z -= CAMZ;
-    const float x1 = x * cyw - z * syw, z1 = x * syw + z * cyw;
-    const float y1 = y * cpt + z1 * spt, z2 = -y * spt + z1 * cpt;
-    X = x1 * crl - y1 * srl;
-    Y = x1 * srl + y1 * crl;
-    Z = z2;
-  };
-  // the point the camera flies towards stays in the middle of the screen
-  static float ax = 0, ay = 0, az = 0;
-  static bool aimed = false;
-  if (!aimed) { cam(0.0f, -0.2f, L * 0.35f, ax, ay, az); aimed = true; }
-
-  // a point of the sheet: across u -1..1, depth z 0..L; false if behind us
-  auto at = [&](float u, float z, float& sx, float& sy) {
+  // a point of the sheet (across u -1..1, depth z 0..L) on the screen, and
+  // how far from the camera it is
+  auto at = [&](float u, float z, float& sx, float& sy, float& depth) {
     const float down = 0.5f - 0.5f * cosf(2.0f * float(M_PI) * (u + 1.0f) + 0.5f * float(M_PI) + phase);
     const float k = std::max(0.0f, 1.0f - z / L);
-    float X, Y, Z;
-    cam(u, -AMP * powf(k, 1.6f) * down, z, X, Y, Z);
-    Z -= d;
-    if (Z < 0.1f) return false;
-    sx = 64.0f - F * (X - ax) / Z;
-    sy = 32.0f - F * (Y - ay) / Z;
-    return true;
+    const float x = u - AIMX, y = -AMP * powf(k, 1.6f) * down - AIMY, zz = z - AIMZ;
+    const float x1 = x * cyw - zz * syw, z1 = x * syw + zz * cyw;
+    const float y1 = y * cpt + z1 * spt, Z = -y * spt + z1 * cpt + DIST;
+    const float X = x1 * crl - y1 * srl, Y = x1 * srl + y1 * crl;
+    sx = 64.0f - F * X / Z;
+    sy = 32.0f - F * Y / Z;
+    depth = Z;
   };
-  // past 55% of the depth more and more pixels are left out
-  auto line = [&](float x0, float y0, float x1, float y1, float z) {
-    if (fabsf(x1 - x0) > 400.0f || fabsf(y1 - y0) > 400.0f) return;  // too close to the camera
+  // nearer than DIST - 0.45: two pixels wide
+  auto line = [](float x0, float y0, float z0, float x1, float y1, float z1) {
     const int n = int(std::max(fabsf(x1 - x0), fabsf(y1 - y0))) + 1;
-    const int fade = std::min(16, (z > 0.55f * L ? int((z / L - 0.55f) / 0.45f * 16.0f) : 0) + fade_all);
     for (int i = 0; i <= n; i++) {
       const int x = int(roundf(x0 + (x1 - x0) * i / n)), y = int(roundf(y0 + (y1 - y0) * i / n));
-      if (x < 0 || x > 127 || y < 0 || y > 63) continue;
-      if (fade && ((x * 7 + y * 13) & 15) < fade) continue;
-      gfxPixel(x, y);
+      const bool bold = z0 + (z1 - z0) * i / n < DIST - 0.45f;
+      for (int dx = 0; dx <= bold; dx++)
+        for (int dy = 0; dy <= bold; dy++)
+          if (x + dx >= 0 && x + dx < 128 && y + dy >= 0 && y + dy < 64) gfxPixel(x + dx, y + dy);
     }
   };
   constexpr int S = 40;  // segments per line
   for (int j = 0; j < 8; j++) {  // across, on the front 60%
     const float z = j / 7.0f * 0.6f * L;
-    float px = 0, py = 0;
-    bool prev = at(-1.0f, z, px, py);
+    float px, py, pz;
+    at(-1.0f, z, px, py, pz);
     for (int k = 1; k <= S; k++) {
-      float x, y;
-      const bool ok = at(-1.0f + 2.0f * k / S, z, x, y);
-      if (ok && prev) line(px, py, x, y, z);
-      px = x; py = y; prev = ok;
+      float x, y, d;
+      at(-1.0f + 2.0f * k / S, z, x, y, d);
+      line(px, py, pz, x, y, d);
+      px = x; py = y; pz = d;
     }
   }
   for (int i = 0; i < 13; i++) {  // front to back
     const float u = -1.0f + 2.0f * i / 12.0f;
-    float px = 0, py = 0;
-    bool prev = at(u, 0.0f, px, py);
+    float px, py, pz;
+    at(u, 0.0f, px, py, pz);
     for (int k = 1; k <= S; k++) {
-      const float z = L * k / S;
-      float x, y;
-      const bool ok = at(u, z, x, y);
-      if (ok && prev) line(px, py, x, y, z);
-      px = x; py = y; prev = ok;
+      float x, y, d;
+      at(u, L * k / S, x, y, d);
+      line(px, py, pz, x, y, d);
+      px = x; py = y; pz = d;
     }
   }
 }
