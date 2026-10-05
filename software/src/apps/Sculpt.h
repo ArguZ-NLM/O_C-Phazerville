@@ -865,10 +865,12 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
   using namespace sculpt;
   dirty = true;
   if (event.control == OC::CONTROL_BUTTON_Z) {
-    // anywhere in the app: clock start / stop; held: the clock page
+    // anywhere in the app: clock start / stop; held: the clock page, on
+    // letting go (Z held + an encoder push is a shortcut, which swallows
+    // the release)
     if (event.type == UI::EVENT_BUTTON_PRESS) {
       clock_running ? ClockStop() : ClockStart();
-    } else if (event.type == UI::EVENT_BUTTON_LONG_PRESS && !(view == DEVICE && focus_mod && mod_cursor == CLK_CURSOR)) {
+    } else if (event.type == UI::EVENT_BUTTON_LONG_RELEASE && !(view == DEVICE && focus_mod && mod_cursor == CLK_CURSOR)) {
       clock_back = {true, view, focus_mod, mod_cursor, cursor};
       view = DEVICE;
       focus_mod = true;
