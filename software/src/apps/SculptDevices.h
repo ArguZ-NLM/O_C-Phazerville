@@ -108,10 +108,10 @@ FLASHMEM static void FormatDiv(int idx, uint8_t mode, char* buf, size_t n) {
 constexpr int TRIG_SOURCES = 1 + 4 + 8 + MIDIMAP_MAX;
 
 FLASHMEM static void FormatTrig(int src, char* buf, size_t n) {
-  if (src <= 0) snprintf(buf, n, "-");
+  if (src <= 0) snprintf(buf, n, "none");
   else if (src <= 4) snprintf(buf, n, "TR%d", src);
   else if (src <= 12) snprintf(buf, n, "CV%d", src - 4);
-  else snprintf(buf, n, "M%d", src - 12);
+  else snprintf(buf, n, "MIDI%d", src - 12);
 }
 
 FLASHMEM static bool TrigGate(int src) {

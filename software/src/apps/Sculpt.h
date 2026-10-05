@@ -1042,18 +1042,18 @@ FLASHMEM void AppSculpt::DrawDevice() const {
     gfxInvert(63, 0, 20, 9);
   }
   if (trig_mode) {
-    // which trigger fires each action
+    // which outside signal presses A / B for you: a gate (TR1-4), a CV
+    // input used as a gate, or a MIDI mapping; the knobs pick them
     gfxFrame(0, 10, 128, 32);
     for (int a = 0; a < 2; a++) {
-      char src[6], buf[16];
+      char src[8], buf[24];
       FormatTrig(d->act_trig[a], src, sizeof(src));
       const char* act = d->def.actions[a][0] ? d->def.actions[a] : "-";
-      snprintf(buf, sizeof(buf), "%s %s:%s", a ? "X" : "A", act, src);  // the panel names them A and X
+      snprintf(buf, sizeof(buf), "%s %-5s <- %s", a ? "B" : "A", act, src);
       gfxPrint(4, 13 + a * 10, buf);
     }
-    gfxPrint(4, 33, PSTR("L/R enc: trigger"));
-  }
-  // BYP shows only while the slot is bypassed
+    gfxPrint(4, 33, PSTR("L knob: A  R knob: B"));
+  }  // BYP shows only while the slot is bypassed
   const bool byp_on = BypassKey() && (tracks[track].bypass >> col & 1);
   const bool mute_turn = !mod_mode && Muted()
       && (!((focus_mod && d->def.actions[1][0]) || byp_on) || (millis() / 600) % 2);
