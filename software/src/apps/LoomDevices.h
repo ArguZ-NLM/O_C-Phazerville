@@ -2238,11 +2238,6 @@ PROGMEM static const DeviceDef ECHO_DEF = {
 
 class EchoDevice : public Device {
 public:
-  // the delay's and the reverb's level is named after its mode: MIX / SEND
-  const char* Name(int p) const override {
-    if (p == 0 || p == 4) return mode[p] ? "SEND" : "MIX";
-    return Device::Name(p);
-  }
   enum { DELAY, TIME, FEEDBACK, SPREAD, REVERB, SIZE, DECAY, TONE };
   enum { PHASE, PING, DIFFUSE };
   static constexpr int TAPS = AudioEffectEcho::TAPS;
