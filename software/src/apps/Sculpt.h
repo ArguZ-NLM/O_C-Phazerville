@@ -134,14 +134,21 @@ namespace sculpt {
   constexpr int NUM_CV_OUTS = 8;
   constexpr int OUT_CURSOR = CLK_CURSOR + 1;
   constexpr int LAST_CURSOR = OUT_CURSOR + NUM_CV_OUTS - 1;
-  // what each CV output A-H sends (0-10 V): off, track L's MOD A-D, track
-  // R's MOD A-D, the shared E-H, or the clock as a gate
+  // what each CV output A-H sends (0-10 V): track L's MOD A-D, track R's
+  // MOD A-D, the shared (L+R) E-H or the clock as a gate. Three groups
+  // (L / R / LR, the L knob) of up to five (the R knob); off (0) is only
+  // left from older files
   enum { OUT_OFF, OUT_L = 1, OUT_R = 5, OUT_SHARED = 9, OUT_CLOCK = 13, OUT_SOURCES };
   // by default A-D = track L's MOD A-D, E-H = track R's
   uint8_t cv_out_src[NUM_CV_OUTS] = {OUT_L, OUT_L + 1, OUT_L + 2, OUT_L + 3, OUT_R, OUT_R + 1, OUT_R + 2, OUT_R + 3};
+  uint8_t cv_out_bypass = 0;  // bit per output: 0 V, source kept
+  constexpr uint8_t OUT_GROUP_START[3] = {OUT_L, OUT_R, OUT_SHARED};
+  constexpr uint8_t OUT_GROUP_SIZE[3] = {4, 4, 5};
+  inline int OutGroup(int s) { return s >= OUT_SHARED ? 2 : s >= OUT_R ? 1 : 0; }
+  inline int OutIndex(int s) { return s >= OUT_L ? s - OUT_GROUP_START[OutGroup(s)] : 0; }
   FLASHMEM void FormatOutSource(int s, char* buf, size_t n, bool long_name) {
     if (s >= OUT_CLOCK) snprintf(buf, n, long_name ? "clock (beats)" : "CK");
-    else if (s >= OUT_SHARED) snprintf(buf, n, long_name ? "shared MOD %c" : "%c", 'E' + s - OUT_SHARED);
+    else if (s >= OUT_SHARED) snprintf(buf, n, long_name ? "L+R MOD %c" : "LR%c", 'E' + s - OUT_SHARED);
     else if (s >= OUT_R) snprintf(buf, n, long_name ? "track R MOD %c" : "R%c", 'A' + s - OUT_R);
     else if (s >= OUT_L) snprintf(buf, n, long_name ? "track L MOD %c" : "L%c", 'A' + s - OUT_L);
     else snprintf(buf, n, long_name ? "off" : "--");
@@ -189,6 +196,7 @@ private:
   bool clear_held = false;  // REEL: B is down on the REEL page ...
   uint32_t clear_hold = 0;  // ... since then
   bool editing = false;   // device view: setting grabbed, R enc changes it
+  bool out_editing = false;  // CV outputs page: output grabbed, R enc picks its modulator
   bool edit_mode = false; // the mode was just changed: show its name
   mutable elapsedMillis mode_shown;
   bool mod_mode = false;  // device view: L enc amount, R enc source
@@ -727,6 +735,7 @@ FLASHMEM float AppSculpt::OutLevel(int o) const {
   using namespace sculpt;
   const int s = cv_out_src[o];
   float v = -1.0f;
+  if (cv_out_bypass & (1 << o)) return 0.0f;
   if (s >= OUT_CLOCK) v = clock_running && tempo_clock->out < 0.5f ? 1.0f : 0.0f;
   else if (s >= OUT_SHARED) v = tracks[0].mod_out[NUM_MODS + s - OUT_SHARED];
   else if (s >= OUT_R) v = tracks[1].mod_out[s - OUT_R];
@@ -870,6 +879,8 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
     } else if (event.type == UI::EVENT_BUTTON_PRESS) {
       l_held = false;
       if (l_used) return;
+      // CV outputs page: L push bypasses the output (0 V)
+      if (view == MODS && mod_cursor >= OUT_CURSOR) cv_out_bypass ^= 1 << (mod_cursor - OUT_CURSOR);
       // L push: modulation on / off (starting with MOD1)
       if (view == DEVICE) {
         if (trig_mode) trig_mode = false;
@@ -948,7 +959,9 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
   }
   switch (event.control) {
     case OC::CONTROL_BUTTON_R:
-      if (view == MODS) {
+      if (view == MODS && mod_cursor >= OUT_CURSOR) {
+        out_editing = !out_editing;
+      } else if (view == MODS) {
         focus_mod = true;
         if (Focused()) {
           view = DEVICE;
@@ -970,12 +983,14 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
       }
       break;
     case OC::CONTROL_BUTTON_Y:
-      if (view == DEVICE && trig_mode) trig_mode = false;
+      if (view == MODS && out_editing) out_editing = false;
+      else if (view == DEVICE && trig_mode) trig_mode = false;
       else if (view == MODS && back.on) BackToDevice();
       else view = (view == DEVICE && focus_mod) ? MODS : CHAIN;
       editing = mod_mode = false;
       break;
     case OC::CONTROL_BUTTON_X:
+      out_editing = false;
       // device page: the MOD view, coming back to this page afterwards
       if (view == DEVICE) {
         back = {true, focus_mod, mod_cursor, cursor};
@@ -1023,10 +1038,19 @@ FLASHMEM void AppSculpt::OnEncoder(const UI::Event &event) {
   }
   if (view == MODS) {
     if (!left) {
-      mod_cursor = constrain(mod_cursor + dir, 0, LAST_CURSOR);
+      if (out_editing) {
+        // the modulator within the output's group
+        uint8_t& s = cv_out_src[mod_cursor - OUT_CURSOR];
+        const int g = OutGroup(s);
+        s = OUT_GROUP_START[g] + constrain(OutIndex(s) + dir, 0, OUT_GROUP_SIZE[g] - 1);
+      } else {
+        mod_cursor = constrain(mod_cursor + dir, 0, LAST_CURSOR);
+      }
     } else if (mod_cursor >= OUT_CURSOR) {
+      // L / R / LR, keeping the letter's place (A-D <-> E-H)
       uint8_t& s = cv_out_src[mod_cursor - OUT_CURSOR];
-      s = constrain(s + dir, 0, OUT_SOURCES - 1);
+      const int g = constrain(OutGroup(s) + dir, 0, 2);
+      s = OUT_GROUP_START[g] + std::min<int>(OutIndex(s), OUT_GROUP_SIZE[g] - 1);
     } else if (mod_cursor < CLK_CURSOR) {
       SetModType(track, mod_cursor, ModType(track, mod_cursor) + dir);
       if (linked && mod_cursor < NUM_MODS) SetModType(1 - track, mod_cursor, ModType(track, mod_cursor));
@@ -1431,17 +1455,30 @@ FLASHMEM void AppSculpt::DrawOutputs() const {
     char buf[8];
     snprintf(buf, sizeof(buf), "%c", 'A' + o);
     gfxPrint(x + 2, y + 2, buf);
-    FormatOutSource(cv_out_src[o], buf, sizeof(buf), false);
-    gfxPrint(x + bw - 2 - 6 * int(strlen(buf)), y + 2, buf);
-    // 0..10 V across the box
-    gfxFrame(x + 2, y + 12, bw - 5, 6);
+    const bool byp = cv_out_bypass & (1 << o);
+    if (byp) snprintf(buf, sizeof(buf), "BP");
+    else FormatOutSource(cv_out_src[o], buf, sizeof(buf), false);
+    const int w = 6 * int(strlen(buf));
+    gfxPrint(x + bw - 2 - w, y + 2, buf);
+    // 0..10 V across the box (dotted while bypassed)
+    gfxFrame(x + 2, y + 12, bw - 5, 6, byp);
     const int fill = int(OutLevel(o) * (bw - 7) + 0.5f);
     if (fill > 0) gfxRect(x + 3, y + 13, fill, 4);
-    if (OUT_CURSOR + o == mod_cursor) gfxInvert(x + 1, y + 1, 9, 9);
+    if (OUT_CURSOR + o == mod_cursor) {
+      gfxInvert(x + 1, y + 1, 9, 9);
+      if (out_editing) gfxInvert(x + bw - 3 - w, y + 1, w + 1, 9);  // grabbed
+    }
   }
+  const int o = mod_cursor - OUT_CURSOR;
   char buf[24];
-  FormatOutSource(cv_out_src[mod_cursor - OUT_CURSOR], buf, sizeof(buf), true);
-  gfxPrint(0, 56, buf);
+  FormatOutSource(cv_out_src[o], buf, sizeof(buf), true);
+  if (cv_out_bypass & (1 << o)) {
+    char b2[24];
+    snprintf(b2, sizeof(b2), "BYP %s", buf);
+    gfxPrint(0, 56, b2);
+  } else {
+    gfxPrint(0, 56, buf);
+  }
 }
 
 /////////////////////////////////////////////////////////////////
@@ -1600,8 +1637,9 @@ FLASHMEM void AppSculpt::SaveFile() const {
   for (int i = 0; i < NUM_MODS; i++)
     for (int type = 1; type < MOD_TYPES; type++) WriteDevice(f, shared_mods[i][type]);
   // ... and what the CV outputs send
-  f.write("C", 1);
+  f.write("D", 1);
   f.write(cv_out_src, NUM_CV_OUTS);
+  f.write(&cv_out_bypass, 1);
   f.close();
   fs.remove(SAVE_FILE);
   fs.rename(SAVE_TMP, SAVE_FILE);
@@ -1696,8 +1734,11 @@ FLASHMEM void AppSculpt::LoadFile() {
           shared_type[i] = types[i] < MOD_TYPES && shared_mods[i][types[i]] ? types[i] : 0;
         }
         uint8_t outs[NUM_CV_OUTS];
-        if (okm && f.read(&mark, 1) == 1 && mark == 'C' && f.read(outs, NUM_CV_OUTS) == NUM_CV_OUTS)
+        // 'C': sources; 'D': sources + bypass bits
+        if (okm && f.read(&mark, 1) == 1 && (mark == 'C' || mark == 'D') && f.read(outs, NUM_CV_OUTS) == NUM_CV_OUTS) {
           for (int o = 0; o < NUM_CV_OUTS; o++) cv_out_src[o] = outs[o] < OUT_SOURCES ? outs[o] : 0;
+          if (mark == 'D') f.read(&cv_out_bypass, 1);
+        }
       }
     }
   }
