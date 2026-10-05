@@ -1328,6 +1328,13 @@ FLASHMEM void AppSculpt::SaveFile() const {
     f.write(&a, 1); f.write(fd, a);
     f.write(&b, 1); f.write(fn, b);
   }
+  // ... and START / END to the sample
+  f.write("X", 1);
+  for (auto& tr : tracks) {
+    uint32_t e[2] = {0, 0};
+    if (tr.player) { e[0] = tr.player->EdgeAt(PlayerDevice::START); e[1] = tr.player->EdgeAt(PlayerDevice::END); }
+    f.write(reinterpret_cast<uint8_t*>(e), 8);
+  }
   f.close();
   fs.remove(SAVE_FILE);
   fs.rename(SAVE_TMP, SAVE_FILE);
@@ -1392,6 +1399,14 @@ FLASHMEM void AppSculpt::LoadFile() {
       if (!more || f.read(&a, 1) != 1 || a >= sizeof(fd) || f.read(fd, a) != a ||
           f.read(&b, 1) != 1 || b >= sizeof(fn) || f.read(fn, b) != b) { more = false; break; }
       if (tr.player && a) tr.player->SetFile(fd, fn);
+    }
+    char mark = 0;
+    if (more && f.read(&mark, 1) == 1 && mark == 'X') {
+      for (auto& tr : tracks) {
+        uint32_t e[2];
+        if (f.read(reinterpret_cast<uint8_t*>(e), 8) != 8) break;
+        if (tr.player && e[1] > e[0]) tr.player->RestoreEdges(e[0], e[1]);
+      }
     }
   }
   f.close();

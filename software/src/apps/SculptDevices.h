@@ -1126,8 +1126,8 @@ PROGMEM static const DeviceDef PLAYER_DEF = {
     {"LOOP", 0, 1, 1, LIST, 2, 0, 0, {"OFF", "ON"}},
     {"LEVEL", 0, 100, 100, UNI},
     {"SPEED", 0, 200, 100, UNI, 0, 2, 0, {}, {"FWD", "REV"}},  // mode: direction
-    {"START", 0, 10000, 0, UNI, 0, 5, 0},       // mode: zoom 1x .. 128x
-    {"END", 0, 10000, 10000, UNI, 0, 5, 0},
+    {"START", 0, 10000, 0, UNI, 0, 8, 0},       // mode: zoom 1x .. 16k
+    {"END", 0, 10000, 10000, UNI, 0, 8, 0},
     {"XFADE", 0, 100, 20, UNI},
     {"SNAP", 0, 1, 0, LIST, 2, 0, 0, {"OFF", "ON"}},
   },
@@ -1153,7 +1153,17 @@ public:
   void FormatMode(int p, char* buf, size_t n) const override;
   void Action(int a) override;
   bool ActionLit(int a) const override { return a == 0 && Playing(); }
-  static int Zoom(int m) { static const int zf[5] = {1, 4, 16, 64, 128}; return zf[std::min(m, 4)]; }
+  static int Zoom(int m) {
+    static const int zf[8] = {1, 4, 16, 64, 256, 1024, 4096, 16384};
+    return zf[std::min(m, 7)];
+  }
+  // START / END to the sample (the settings hold them to 0.01%); kept with
+  // the folder and file in the saved settings
+  mutable uint32_t ex_pos[2] = {0, 0};
+  mutable bool ex_valid = false;
+  bool keep_exact = false;  // set when the saved settings bring them
+  void RestoreEdges(uint32_t a, uint32_t b) { ex_pos[0] = a; ex_pos[1] = b; ex_valid = true; keep_exact = true; loaded = -1; }
+  size_t EdgeAt(int p) const;  // START / END in frames
   void DrawViz(int x, int y, int w, int h) override;
   void DrawMini(int x, int y, int w, int h) override;
   void CpuMax(float parts[2]) override {
@@ -1364,6 +1374,8 @@ FLASHMEM void PlayerDevice::Load(int i) {
   fx.BeginLoad();
   loaded = i;
   too_long = false;
+  if (!keep_exact) ex_valid = false;  // a new file: from the settings
+  keep_exact = false;
   if (i >= nfiles || !fx.ready()) return;
   char path[128];
   snprintf(path, sizeof(path), "%s/%s", strcmp(dir, "/") ? dir : "", names[i]);
@@ -1517,10 +1529,18 @@ FLASHMEM size_t PlayerDevice::SnapQuiet(size_t at) const {
   return best;
 }
 
+// to the sample when set by hand; from the setting when it is modulated
+// (or nothing finer is known)
+FLASHMEM size_t PlayerDevice::EdgeAt(int p) const {
+  const size_t n = Frames();
+  if (ex_valid && cur[p] == val[p]) return std::min<size_t>(n, ex_pos[p == END]);
+  return size_t(uint64_t(cur[p]) * n / 10000);
+}
+
 FLASHMEM void PlayerDevice::Window() {
   const size_t n = Frames();
   if (!n) return;
-  size_t a = size_t(uint64_t(cur[START]) * n / 10000), b = size_t(uint64_t(cur[END]) * n / 10000);
+  size_t a = EdgeAt(START), b = EdgeAt(END);
   if (cur[SNAP]) { a = SnapQuiet(a); b = SnapQuiet(b); }
   if (b <= a + AUDIO_BLOCK_SAMPLES) b = std::min(n, a + AUDIO_BLOCK_SAMPLES * 2);
   if (streaming) stream.SetWindow(a, b);
@@ -1548,8 +1568,15 @@ FLASHMEM void PlayerDevice::Apply(int p) {
 // START / END: steps get finer with the zoom (1% at 1x .. ~0.02% at 64x)
 FLASHMEM int PlayerDevice::Step(int p, int v, int dir) const {
   if (p == START || p == END) {
-    static const int step[5] = {100, 25, 6, 2, 1};
-    return v + dir * step[std::min<int>(mode[p], 4)];
+    // one pixel of the picture at the current zoom (down to one sample)
+    const size_t n = Frames();
+    if (!n) return v + dir * 100;
+    const size_t span = std::max<size_t>(128, n / Zoom(mode[p]));
+    const int64_t px = std::max<int64_t>(1, int64_t(span / 128));
+    if (!ex_valid) { ex_pos[0] = EdgeAt(START); ex_pos[1] = EdgeAt(END); ex_valid = true; }
+    uint32_t& e = ex_pos[p == END];
+    e = uint32_t(constrain(int64_t(e) + dir * px, int64_t(0), int64_t(n)));
+    return int(uint64_t(e) * 10000 / n);
   }
   return v + dir;
 }
@@ -1558,8 +1585,12 @@ FLASHMEM void PlayerDevice::Format(int p, char* buf, size_t n) const {
   if (p == FILE_) {
     if (!nfiles) snprintf(buf, n, "none");
     else snprintf(buf, n, "%d", std::min<int>(val[FILE_], nfiles - 1) + 1);
-  } else if (p == START || p == END) {
-    snprintf(buf, n, "%d.%d%%", val[p] / 100, (val[p] % 100) / 10);
+  } else if (p == START || p == END) {  // seconds into the file, to the ms
+    const size_t fr = Frames();
+    if (!fr) { snprintf(buf, n, "%d%%", val[p] / 100); return; }
+    const uint32_t ms = uint32_t(uint64_t(EdgeAt(p)) * 1000 / uint64_t(AUDIO_SAMPLE_RATE_EXACT * rate));
+    if (ms < 10000) snprintf(buf, n, "%lu.%03lu", ms / 1000, ms % 1000);
+    else snprintf(buf, n, "%lu.%02lu", ms / 1000, (ms % 1000) / 10);
   } else if (p == SPEED) {
     snprintf(buf, n, "%d%%", val[p]);
   } else {
@@ -1569,7 +1600,12 @@ FLASHMEM void PlayerDevice::Format(int p, char* buf, size_t n) const {
 
 // START / END: their zoom
 FLASHMEM void PlayerDevice::FormatMode(int p, char* buf, size_t n) const {
-  if (p == START || p == END) snprintf(buf, n, "%dx", Zoom(mode[p]));
+  if (p == START || p == END) {
+    const int z = Zoom(mode[p]);
+    if (z >= 1024) snprintf(buf, n, "%dk", z / 1024);
+    else snprintf(buf, n, "%dx", z);
+    return;
+  }
   else Device::FormatMode(p, buf, n);
 }
 
@@ -1616,7 +1652,8 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
     if (streaming) right -= 14;
     char zt[6] = {};
     if (z > 1) {
-      snprintf(zt, sizeof(zt), "%dx", z);
+      if (z >= 1024) snprintf(zt, sizeof(zt), "%dk", z / 1024);
+      else snprintf(zt, sizeof(zt), "%dx", z);
       right -= 6 * int(strlen(zt)) + 2;
       gfxPrint(right + 2, y, zt);
     }
@@ -1630,11 +1667,23 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
     if (!late || (millis() / 200) % 2) gfxPrint(x + w - 12, y, late ? PSTR("!!") : PSTR("SD"));
   }
   if (!n) { gfxPrint(x + 28, cy - 4, PSTR("can't read")); return; }
-  const size_t span = std::max<size_t>(w, n / z);
-  // the point being set stays in the middle of the screen; past the file's
-  // ends there is a dotted line
-  const int64_t focus = zoomed ? int64_t(uint64_t(cur[view_cursor]) * n / 10000) : int64_t(n / 2);
-  const int64_t v0 = zoomed ? focus - int64_t(span / 2) : 0;
+  // zoomed: the point being set stays in the middle (down to a sample per
+  // pixel); otherwise the START..END section with a little room, or the whole
+  // file. Past the file's ends there is a dotted line.
+  const size_t ea0 = EdgeAt(START), eb0 = EdgeAt(END);
+  size_t span;
+  int64_t v0;
+  if (zoomed) {
+    span = std::max<size_t>(w, n / z);
+    v0 = int64_t(EdgeAt(view_cursor)) - int64_t(span / 2);
+  } else if (eb0 > ea0 && (ea0 > 0 || eb0 < n)) {
+    const size_t sec = eb0 - ea0, room = sec / 16;
+    span = std::max<size_t>(w, sec + 2 * room);
+    v0 = int64_t(ea0) - int64_t(room);
+  } else {
+    span = std::max<size_t>(w, n);
+    v0 = 0;
+  }
   auto sx = [&](size_t pos) { return x + int((int64_t(pos) - v0) * (w - 1) / int64_t(span)); };
   const int wy = y + 9, wh = h - 9, wc = wy + wh / 2;
   for (int c = 0; c < w; c++) {
@@ -1651,7 +1700,7 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
   // the loop's edges and the head
   size_t ea, eb;
   if (streaming) {
-    ea = size_t(uint64_t(cur[START]) * n / 10000); eb = size_t(uint64_t(cur[END]) * n / 10000);
+    ea = ea0; eb = eb0;
   } else {
     float fa, fb;
     fx.Window(fa, fb);
