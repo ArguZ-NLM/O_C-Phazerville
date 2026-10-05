@@ -107,7 +107,7 @@ FLASHMEM void AppCard::Loop() {
 FLASHMEM void AppCard::DrawMenu() const {
   // a session open, and the USB line really there: cable in (VBUS), the bus
   // not asleep - pulling the cable doesn't end the session by itself
-  const bool line = (USB1_OTGSC & USB_OTGSC_BSV) && !(USB1_PORTSC1 & USB_PORTSC1_SUSP);
+  const bool line = (USB1_OTGSC & (1u << 11)) && !(USB1_PORTSC1 & USB_PORTSC1_SUSP);  // OTGSC bit 11: B-session valid
   const bool on = serving && line && static_cast<bool>(MTP);
   gfxPrint(0, 1, !SDcard_Ready ? "CARD  no SD card" : on ? "CARD  connected" : "CARD  waiting...");
   if (on) gfxInvert(0, 0, 128, 9);
