@@ -87,7 +87,7 @@ namespace sculpt {
     SculptGate* gate = nullptr;         // before ECHO: its tail rings out
     Modulator* mods[NUM_MODS][MOD_TYPES] = {};
     uint8_t mod_type[NUM_MODS] = {};
-    float mod_out[NUM_MODS] = {};
+    float mod_out[MOD_BUSES] = {};  // MOD A-D, then a copy of the shared E-H
 
     Modulator* mod(int i) const { return mods[i][mod_type[i]]; }
 
@@ -119,6 +119,11 @@ namespace sculpt {
   SculptMixer* mixer = nullptr;
   ClockDevice* tempo_clock = nullptr;
   Patch* patch = nullptr;
+  // MOD E-H: shared by both tracks (in the MOD view's second page)
+  Modulator* shared_mods[NUM_MODS][MOD_TYPES] = {};
+  uint8_t shared_type[NUM_MODS] = {};
+  // MOD view cursor: 0-3 the track's A-D, 4-7 the shared E-H, then CLOCK
+  constexpr int CLK_CURSOR = 2 * NUM_MODS;
 
   bool audio_hw() { return I2S2_Audio_ADC && I2S2_Audio_DAC; }
 }
@@ -165,6 +170,7 @@ private:
   bool edit_mode = false; // the mode was just changed: show its name
   mutable elapsedMillis mode_shown;
   bool mod_mode = false;  // device view: L enc amount, R enc source
+  uint8_t mod_slot = 0;   // ... of the first or the second source
   bool trig_mode = false; // device view: L / R enc trigger source per action
   elapsedMicros mod_timer;
   uint8_t chord_releases = 0; // UP/DOWN releases to swallow after UP+DOWN
@@ -180,6 +186,18 @@ private:
   void LoadFile();
   template <typename F> void ForEachDevice(F f) const;
   sculpt::Device* Focused() const { return FocusOn(track); }
+  // modulator i (0-7) as seen from track t: its row of types and its type
+  static sculpt::Modulator** ModRow(int t, int i) {
+    return i < sculpt::NUM_MODS ? sculpt::tracks[t].mods[i] : sculpt::shared_mods[i - sculpt::NUM_MODS];
+  }
+  static uint8_t& ModType(int t, int i) {
+    return i < sculpt::NUM_MODS ? sculpt::tracks[t].mod_type[i] : sculpt::shared_type[i - sculpt::NUM_MODS];
+  }
+  static sculpt::Modulator* ModAt(int t, int i) {
+    if (i >= sculpt::CLK_CURSOR) return sculpt::tempo_clock;
+    return ModRow(t, i)[ModType(t, i)];
+  }
+  bool SharedFocus() const { return focus_mod && mod_cursor >= sculpt::NUM_MODS && mod_cursor < sculpt::CLK_CURSOR; }
   void SetModType(int t, int i, int type);
   void DrawMods() const;
   void SetChoice(int t, int s, int option);
@@ -201,8 +219,7 @@ private:
 };
 
 FLASHMEM sculpt::Device* AppSculpt::FocusOn(int t) const {
-  if (focus_mod && mod_cursor == sculpt::NUM_MODS) return sculpt::tempo_clock;
-  return focus_mod ? sculpt::tracks[t].mod(mod_cursor) : sculpt::tracks[t].at(col);
+  return focus_mod ? ModAt(t, mod_cursor) : sculpt::tracks[t].at(col);
 }
 
 FLASHMEM void AppSculpt::Start() {
@@ -381,7 +398,7 @@ FLASHMEM sculpt::Device* AppSculpt::Twin(sculpt::Device* d) const {
   using namespace sculpt;
   if (!linked || !d) return nullptr;
   Device* tw = FocusOn(1 - track);
-  return (tw && &tw->def == &d->def) ? tw : nullptr;
+  return (tw && tw != d && &tw->def == &d->def) ? tw : nullptr;  // shared: no twin
 }
 
 // copy one parameter to the twin; input source and pan stay per track
@@ -397,21 +414,28 @@ FLASHMEM void AppSculpt::Mirror(sculpt::Device* d, int p) const {
   tw->mod_in[p] = d->mod_in[p];
   tw->mod_bus_sel[p] = d->mod_bus_sel[p];
   tw->mod_bi = (tw->mod_bi & ~(1 << p)) | (d->mod_bi & (1 << p));
+  tw->mod_amt2[p] = d->mod_amt2[p];
+  tw->mod_bus2[p] = d->mod_bus2[p];
+  tw->mod_bi2 = (tw->mod_bi2 & ~(1 << p)) | (d->mod_bi2 & (1 << p));
   tw->Refresh(p);
 }
 
 FLASHMEM void AppSculpt::SetModType(int t, int i, int type) {
   using namespace sculpt;
-  Track& tr = tracks[t];
+  Modulator** row = ModRow(t, i);
   type = constrain(type, 0, MOD_TYPES - 1);
-  if (type && !tr.mods[i][type]) {
+  if (type && !row[type]) {
     Modulator* m = MakeModulator(type);
-    m->mod_bus = tr.mod_out;
+    // a shared one's own settings take MOD A-D from track L
+    m->mod_bus = tracks[i < NUM_MODS ? t : 0].mod_out;
     m->Defaults();
-    tr.mods[i][type] = m;
+    row[type] = m;
   }
-  tr.mod_type[i] = type;
-  if (!type) tr.mod_out[i] = 0.0f;
+  ModType(t, i) = type;
+  if (!type) {
+    if (i < NUM_MODS) tracks[t].mod_out[i] = 0.0f;
+    else for (auto& tr : tracks) tr.mod_out[i] = 0.0f;
+  }
 }
 
 FLASHMEM void AppSculpt::SetChoiceLinked(int s, int option) {
@@ -595,6 +619,15 @@ FLASHMEM void AppSculpt::ModulateAll() {
     applied_tempo = tempo_bpm;
     ForEachDevice([](Device* d) { d->TempoChanged(); });
   }
+  // the shared ones: FOLLOW hears the louder track
+  ctx.in_level = std::max(tracks[0].input->level, tracks[1].input->level);
+  ctx.out_level = std::max(mixer->level[0], mixer->level[1]);
+  for (int i = 0; i < NUM_MODS; i++) {
+    Modulator* m = shared_mods[i][shared_type[i]];
+    if (!m) continue;
+    m->Run(ctx);
+    for (auto& tr : tracks) tr.mod_out[NUM_MODS + i] = m->out;
+  }
   for (int t = 0; t < NUM_TRACKS; t++) {
     Track& tr = tracks[t];
     ctx.in_level = tr.input->level;
@@ -618,6 +651,9 @@ FLASHMEM void AppSculpt::ModulateAll() {
     for (int i = 0; i < NUM_MODS; i++) {
       if (Modulator* m = tr.mod(i)) m->RunTriggers(ctx.edges);
     }
+  }
+  for (int i = 0; i < NUM_MODS; i++) {
+    if (Modulator* m = shared_mods[i][shared_type[i]]) m->RunTriggers(ctx.edges);
   }
 }
 
@@ -722,8 +758,11 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
     } else if (event.type == UI::EVENT_BUTTON_PRESS) {
       l_held = false;
       if (l_used) return;
+      // L push: MOD (first source) -> MOD 2 (second source) -> off
       if (view == DEVICE) {
-        mod_mode = !mod_mode;
+        if (!mod_mode) { mod_mode = true; mod_slot = 0; }
+        else if (mod_slot == 0) mod_slot = 1;
+        else mod_mode = false;
         editing = trig_mode = false;
       }
     }
@@ -808,7 +847,8 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
         }
       } else if (d && mod_mode) {
         // unipolar / bipolar
-        d->mod_bi ^= 1 << cursor;
+        if (mod_slot) d->mod_bi2 ^= 1 << cursor;
+        else d->mod_bi ^= 1 << cursor;
         d->Refresh(cursor);
         Mirror(d, cursor);
       } else {
@@ -822,7 +862,7 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
       editing = mod_mode = false;
       break;
     case OC::CONTROL_BUTTON_X:
-      if (view == DEVICE && mod_mode && d) MidiLearn(d);
+      if (view == DEVICE && mod_mode && d) { if (!mod_slot) MidiLearn(d); }
       else if (view == DEVICE) { trig_mode = !trig_mode; editing = false; }
       else if (view == CHAIN) view = MODS;
       else if (view == MODS) view = CHAIN;
@@ -864,11 +904,10 @@ FLASHMEM void AppSculpt::OnEncoder(const UI::Event &event) {
   }
   if (view == MODS) {
     if (!left) {
-      mod_cursor = constrain(mod_cursor + dir, 0, NUM_MODS);
-    } else if (mod_cursor < NUM_MODS) {
-      const int type = tracks[track].mod_type[mod_cursor] + dir;
-      SetModType(track, mod_cursor, type);
-      if (linked) SetModType(1 - track, mod_cursor, tracks[track].mod_type[mod_cursor]);
+      mod_cursor = constrain(mod_cursor + dir, 0, CLK_CURSOR);
+    } else if (mod_cursor < CLK_CURSOR) {
+      SetModType(track, mod_cursor, ModType(track, mod_cursor) + dir);
+      if (linked && mod_cursor < NUM_MODS) SetModType(1 - track, mod_cursor, ModType(track, mod_cursor));
     }
     return;
   }
@@ -897,7 +936,9 @@ FLASHMEM void AppSculpt::OnEncoder(const UI::Event &event) {
     return;
   }
   if (mod_mode) {
-    if (left) d->mod_amt[cursor] = constrain(d->mod_amt[cursor] + dir, -100, 100);
+    int8_t& amt = mod_slot ? d->mod_amt2[cursor] : d->mod_amt[cursor];
+    if (left) amt = constrain(amt + dir, -100, 100);
+    else if (mod_slot) d->ChangeModSource2(cursor, dir);
     else d->ChangeModSource(cursor, dir);
     d->Refresh(cursor);
     Mirror(d, cursor);
@@ -1034,16 +1075,18 @@ FLASHMEM void AppSculpt::DrawDevice() const {
   // header: track, device, action labels, page; text one pixel down so the
   // inverted boxes have a white row above it. A long device name gives way
   // to its tag when MOD is shown next to it.
-  const int name_x = linked ? 24 : 12;
+  // a shared modulator (MOD E-H) belongs to both tracks: L+R
+  const bool both = linked || SharedFocus();
+  const int name_x = both ? 24 : 12;
   const char* name = mod_mode && name_x + 6 * int(strlen(d->def.name)) > 62 ? d->def.tag : d->def.name;
-  if (linked) {
+  if (both) {
     gfxPrint(1, 1, PSTR("L+R"));
     gfxInvert(0, 0, 21, 9);
   } else {
     gfxPrint(1, 1, track ? PSTR("R") : PSTR("L"));
     gfxInvert(0, 0, 9, 9);
   }
-  if (focus_mod && !linked) {
+  if (focus_mod && mod_cursor < CLK_CURSOR) {
     char buf[8];
     snprintf(buf, sizeof(buf), "%c %s", 'A' + mod_cursor, d->def.tag); // short: actions follow
     gfxPrint(name_x, 1, buf);
@@ -1057,8 +1100,9 @@ FLASHMEM void AppSculpt::DrawDevice() const {
     if (!mod_mode && sub[0] && (sx + 6 * int(strlen(sub)) <= 81 || !busy)) gfxPrint(sx, 1, sub);
   }
   if (mod_mode) {
-    gfxPrint(64, 1, PSTR("MOD"));
-    gfxInvert(63, 0, 20, 9);
+    // MOD1 / MOD2: the first or the second source (L push steps through)
+    gfxPrint(64, 1, mod_slot ? PSTR("MOD2") : PSTR("MOD1"));
+    gfxInvert(63, 0, 26, 9);
   }
   if (trig_mode) {
     // which outside signal presses A / B for you: a gate (TR1-4), a CV
@@ -1122,7 +1166,11 @@ FLASHMEM void AppSculpt::DrawDevice() const {
     char buf[8];
 
     // name row (in modulation mode: the source for the selected setting)
-    if (sel && mod_mode) {
+    if (sel && mod_mode && mod_slot) {
+      if (d->mod_bus2[p]) snprintf(buf, sizeof(buf), "Md%c %c", 'A' + d->mod_bus2[p] - 1, d->Bipolar2(p) ? 'B' : 'U');
+      else snprintf(buf, sizeof(buf), "off");
+      PrintCentred(x, 43, buf);
+    } else if (sel && mod_mode) {
       const HS::CVInputMap& in = d->mod_in[p];
       const bool learn = !d->mod_bus_sel[p] && in.source_type() == HS::CVInputMap::TYPE_MIDI
         && HS::frame.MIDIState.mapping[in.index()].learning();
@@ -1137,14 +1185,14 @@ FLASHMEM void AppSculpt::DrawDevice() const {
       PrintCentred(x, 43, pd.name);
       if (pd.nmodes) gfxRect(x + 29, 43, 2, 2); // has modes (hold L + turn R)
     }
-    if (d->mod_amt[p]) { // modulated: small wave mark
+    if (d->Modded(p)) { // modulated: small wave mark
       gfxPixel(x + 27, 49); gfxPixel(x + 28, 48); gfxPixel(x + 29, 49); gfxPixel(x + 30, 48);
     }
 
     // value row
     const bool show_mode = sel && pd.nmodes
       && ((editing && l_held) || (edit_mode && mode_shown < 1500));
-    if (sel && mod_mode) snprintf(buf, sizeof(buf), "%+d%%", d->mod_amt[p]);
+    if (sel && mod_mode) snprintf(buf, sizeof(buf), "%+d%%", mod_slot ? d->mod_amt2[p] : d->mod_amt[p]);
     else if (show_mode) d->FormatMode(p, buf, sizeof(buf));
     else d->Format(p, buf, sizeof(buf));
     PrintCentred(x, 52, buf);
@@ -1157,7 +1205,7 @@ FLASHMEM void AppSculpt::DrawDevice() const {
       gfxPixel(c, 60);
       if (len > 0) gfxRect(c, 61, len, 2);
       else if (len < 0) gfxRect(c + len, 61, -len, 2);
-      if (d->mod_amt[p]) gfxLine(c + d->cur[p] * 15 / std::max(1, (int)pd.max), 58, c + d->cur[p] * 15 / std::max(1, (int)pd.max), 60);
+      if (d->Modded(p)) gfxLine(c + d->cur[p] * 15 / std::max(1, (int)pd.max), 58, c + d->cur[p] * 15 / std::max(1, (int)pd.max), 60);
     } else if (pd.kind == LIST) {
       for (int k = 0; k < pd.nlabels; k++) {
         const int bx = x + 1 + k * 7;
@@ -1166,7 +1214,7 @@ FLASHMEM void AppSculpt::DrawDevice() const {
       }
     } else {
       gfxRect(x + 1, 61, (d->val[p] - pd.min) * 29 / span, 2);
-      if (d->mod_amt[p]) {
+      if (d->Modded(p)) {
         const int mx = x + 1 + (d->cur[p] - pd.min) * 29 / span;
         gfxLine(mx, 58, mx, 60);
       }
@@ -1175,24 +1223,29 @@ FLASHMEM void AppSculpt::DrawDevice() const {
   }
 }
 
+// two pages of four plus CLOCK: the track's A-D, then the shared E-H
 FLASHMEM void AppSculpt::DrawMods() const {
   using namespace sculpt;
-  const Track& tr = tracks[track];
-  if (linked) gfxPrint(1, 0, PSTR("L+R"));
+  const int page = mod_cursor < NUM_MODS ? 0 : 1;
+  if (linked || page) gfxPrint(1, 0, PSTR("L+R"));
   else gfxPrint(1, 0, track ? PSTR("R") : PSTR("L"));
-  gfxPrint(linked ? 24 : 12, 0, PSTR("MODULATORS"));
+  gfxPrint(linked || page ? 24 : 12, 0, page ? PSTR("SHARED") : PSTR("MODULATORS"));
   if (Muted() && (millis() / 300) % 2) {
     gfxPrint(104, 0, PSTR("MUTE"));
     gfxInvert(103, 0, 25, 8);
+  } else {
+    gfxPrint(110, 0, page + 1);
+    gfxPrint(116, 0, PSTR("/2"));
   }
   gfxLine(0, 9, 127, 9);
   constexpr int bw = 25;
-  for (int i = 0; i <= NUM_MODS; i++) {
-    const int x = i * bw + 1;
-    Modulator* m = i < NUM_MODS ? tr.mod(i) : tempo_clock;
+  for (int b = 0; b <= NUM_MODS; b++) {
+    const int i = b < NUM_MODS ? page * NUM_MODS + b : CLK_CURSOR;
+    const int x = b * bw + 1;
+    Modulator* m = ModAt(track, i);
     char buf[8];
     // fixed labels; the type is named in the bottom line
-    if (i < NUM_MODS) snprintf(buf, sizeof(buf), "-%c-", 'A' + i);
+    if (i < CLK_CURSOR) snprintf(buf, sizeof(buf), "-%c-", 'A' + i);
     else snprintf(buf, sizeof(buf), "CLK");
     gfxPrint(x + (bw - 1 - 6 * int(strlen(buf))) / 2, 12, buf);
     if (m) {
@@ -1203,7 +1256,7 @@ FLASHMEM void AppSculpt::DrawMods() const {
     }
     if (i == mod_cursor) gfxInvert(x, 11, bw - 1, 9);
   }
-  Modulator* m = mod_cursor < NUM_MODS ? tr.mod(mod_cursor) : tempo_clock;
+  Modulator* m = ModAt(track, mod_cursor);
   gfxPrint(0, 56, m ? m->def.name : PSTR("off"));
   gfxPrint(80, 56, PSTR("Y:back"));
 }
@@ -1214,7 +1267,9 @@ FLASHMEM void AppSculpt::DrawMods() const {
 namespace sculpt {
   constexpr char SAVE_FILE[] = "SCULPT.BIN";
   constexpr char SAVE_TMP[] = "SCULPT.TMP";
-  constexpr uint8_t SAVE_VERSION = 2;  // 2: modulator types sorted by name
+  // 2: modulator types sorted by name; 3: second mod source, MOD E-H
+  constexpr uint8_t SAVE_VERSION = 3;
+  static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
   // mod source/bus select, then bipolar bits and action triggers
@@ -1232,8 +1287,11 @@ namespace sculpt {
       f.write(&d->mod_amt[p], 1);
       f.write(&src, 2);
       f.write(&d->mod_bus_sel[p], 1);
+      f.write(&d->mod_amt2[p], 1);
+      f.write(&d->mod_bus2[p], 1);
     }
     f.write(&d->mod_bi, 1);
+    f.write(&d->mod_bi2, 1);
     f.write(d->act_trig, 2);
   }
 
@@ -1257,18 +1315,24 @@ namespace sculpt {
       int16_t v; uint8_t md; int8_t amt; uint16_t src; uint8_t bus;
       if (f.read(&v, 2) != 2 || f.read(&md, 1) != 1 || f.read(&amt, 1) != 1
           || f.read(&src, 2) != 2 || f.read(&bus, 1) != 1) return false;
+      int8_t amt2 = 0; uint8_t bus2 = 0;
+      if (load_version >= 3 && (f.read(&amt2, 1) != 1 || f.read(&bus2, 1) != 1)) return false;
       if (!use) continue;
+      d->mod_amt2[p] = constrain(amt2, -100, 100);
+      d->mod_bus2[p] = bus2 <= MOD_BUSES ? bus2 : 0;
       const ParamDef& pd = d->param(p);
       d->val[p] = constrain(v, pd.min, pd.max);
       d->mode[p] = pd.nmodes ? constrain(md, 0, pd.nmodes - 1) : 0;
       d->mod_amt[p] = constrain(amt, -100, 100);
       d->mod_in[p].Unpack(src);
-      d->mod_bus_sel[p] = bus <= 4 ? bus : 0;
+      d->mod_bus_sel[p] = bus <= MOD_BUSES ? bus : 0;
     }
-    uint8_t bi, trig[2];
-    if (f.read(&bi, 1) != 1 || f.read(trig, 2) != 2) return false;
+    uint8_t bi, bi2 = 0, trig[2];
+    if (f.read(&bi, 1) != 1 || (load_version >= 3 && f.read(&bi2, 1) != 1)
+        || f.read(trig, 2) != 2) return false;
     if (use) {
       d->mod_bi = bi;
+      d->mod_bi2 = bi2;
       for (int a = 0; a < 2; a++) d->act_trig[a] = trig[a] < TRIG_SOURCES ? trig[a] : 0;
     }
     return true;
@@ -1289,6 +1353,8 @@ FLASHMEM void AppSculpt::ForEachDevice(F f) const {
     for (auto& slot : tr.mods)
       for (auto m : slot) if (m) f(m);
   }
+  for (auto& slot : shared_mods)
+    for (auto m : slot) if (m) f(m);
 }
 
 FLASHMEM void AppSculpt::SaveFile() const {
@@ -1335,6 +1401,11 @@ FLASHMEM void AppSculpt::SaveFile() const {
     if (tr.player) { e[0] = tr.player->EdgeAt(PlayerDevice::START); e[1] = tr.player->EdgeAt(PlayerDevice::END); }
     f.write(reinterpret_cast<uint8_t*>(e), 8);
   }
+  // ... and the shared MOD E-H
+  f.write("S", 1);
+  f.write(shared_type, NUM_MODS);
+  for (int i = 0; i < NUM_MODS; i++)
+    for (int type = 1; type < MOD_TYPES; type++) WriteDevice(f, shared_mods[i][type]);
   f.close();
   fs.remove(SAVE_FILE);
   fs.rename(SAVE_TMP, SAVE_FILE);
@@ -1349,10 +1420,11 @@ FLASHMEM void AppSculpt::LoadFile() {
   char magic[3];
   uint8_t version = 0, lk = 0;
   if (f.read(magic, 3) != 3 || memcmp(magic, "SCU", 3) || f.read(&version, 1) != 1
-      || (version != SAVE_VERSION && version != 1) || f.read(&lk, 1) != 1) {
+      || version < 1 || version > SAVE_VERSION || f.read(&lk, 1) != 1) {
     f.close();
     return;
   }
+  load_version = version;
   bool ok = ReadDevice(f, tempo_clock);
   for (int t = 0; t < NUM_TRACKS && ok; t++) {
     Track& tr = tracks[t];
@@ -1388,7 +1460,8 @@ FLASHMEM void AppSculpt::LoadFile() {
     col = ui[2] < COLS ? ui[2] : ECHO;
     cursor = ui[3] < MAX_PARAMS ? ui[3] : 0;
     focus_mod = ui[4];
-    mod_cursor = ui[5] <= NUM_MODS ? ui[5] : 0;
+    mod_cursor = ui[5] <= CLK_CURSOR ? ui[5] : 0;
+    if (version < 3 && mod_cursor == NUM_MODS) mod_cursor = CLK_CURSOR;  // CLOCK was 5th
     for (auto& tr : tracks) {
       uint8_t b = 0;
       if (f.read(&b, 1) == 1) tr.bypass = b & ~1;  // SOURCE can't be bypassed
@@ -1409,6 +1482,17 @@ FLASHMEM void AppSculpt::LoadFile() {
         uint32_t e[2];
         if (f.read(reinterpret_cast<uint8_t*>(e), 8) != 8) break;
         if (tr.player && e[1] > e[0]) tr.player->RestoreEdges(e[0], e[1]);
+      }
+      uint8_t types[NUM_MODS];
+      if (f.read(&mark, 1) == 1 && mark == 'S' && f.read(types, NUM_MODS) == NUM_MODS) {
+        bool okm = true;
+        for (int i = 0; i < NUM_MODS && okm; i++) {
+          for (int type = 1; type < MOD_TYPES && okm; type++) {
+            if (f.peek() == 1 && !shared_mods[i][type]) SetModType(0, NUM_MODS + i, type);
+            okm = ReadDevice(f, shared_mods[i][type]);
+          }
+          shared_type[i] = types[i] < MOD_TYPES && shared_mods[i][types[i]] ? types[i] : 0;
+        }
       }
     }
   }

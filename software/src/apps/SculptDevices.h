@@ -63,6 +63,9 @@ struct DeviceDef {
 };
 
 constexpr int MAX_PARAMS = 8;
+// modulator outputs a setting can pick: the track's MOD A-D, then the
+// shared MOD E-H (the same for both tracks)
+constexpr int MOD_BUSES = 8;
 
 // rising edges since the last modulator tick: bits 0-3 gate inputs,
 // bits 4-11 CV inputs as gates. Set in the ISR, taken in the main loop.
@@ -140,11 +143,16 @@ public:
   // modulation source: the same picker the Quadrants applets use (CV inputs,
   // CV outputs, MIDI maps, noise)
   HS::CVInputMap mod_in[MAX_PARAMS];
-  uint8_t mod_bus_sel[MAX_PARAMS] = {}; // 1..4 = the track's MOD A-D instead
+  uint8_t mod_bus_sel[MAX_PARAMS] = {}; // 1..8 = MOD A-H instead
+  // a second source on top of the first, so modulations can be mixed (e.g.
+  // 40 % of MOD A plus 20 % of MOD G); only the modulators
+  int8_t mod_amt2[MAX_PARAMS] = {};
+  uint8_t mod_bus2[MAX_PARAMS] = {};    // 0 = off, 1..8 = MOD A-H
   uint8_t act_trig[2] = {};              // trigger sources for the 2 actions
   bool act_prev[2] = {};
   const float* mod_bus = nullptr;        // the track's modulator outputs
   uint8_t mod_bi = 0;                // bit per param: bipolar around val
+  uint8_t mod_bi2 = 0;               // the same for the second source
   bool active = false;
   float wet = 1.0f;       // the device's share in its slot's fade (SPRAY: LEVEL)
   uint8_t view_page = 0;  // which page of settings the device view shows
@@ -187,12 +195,15 @@ public:
   void Nudge(int p, int dir);
   void NudgeMode(int p, int dir);
   bool Bipolar(int p) const { return mod_bi & (1 << p); }
+  bool Bipolar2(int p) const { return mod_bi2 & (1 << p); }
+  bool Modded(int p) const { return mod_amt[p] || mod_amt2[p]; }
   int Modulated(int p) const;
   void Refresh(int p);   // recompute cur[p] and apply it
   void Modulate();       // follow the CV inputs
   void RunTriggers(uint16_t edges);  // fire actions from their triggers
   void CopyFrom(const Device& d);
   void ChangeModSource(int p, int dir);
+  void ChangeModSource2(int p, int dir);
   void ModSourceName(int p, char* buf, size_t n) const;
   bool ModSourceOn(int p) const { return mod_bus_sel[p] || mod_in[p].enabled(); }
 };
@@ -203,19 +214,32 @@ FLASHMEM void Device::Defaults() {
   for (int p = 0; p < num_params(); p++) {
     val[p] = cur[p] = param(p).def;
     mode[p] = param(p).defmode;
-    mod_amt[p] = 0;
+    mod_amt[p] = mod_amt2[p] = 0;
+    mod_bus2[p] = 0;
     mod_in[p].SetInput(p); // setting n listens to CV n by default
   }
-  mod_bi = 0;
+  mod_bi = mod_bi2 = 0;
 }
 
 FLASHMEM int Device::Modulated(int p) const {
   const ParamDef& d = param(p);
-  if (!mod_amt[p] || !ModSourceOn(p)) return val[p];
-  float c = (mod_bus_sel[p] && mod_bus) ? mod_bus[mod_bus_sel[p] - 1]
-                                        : constrain(mod_in[p].InF(), -1.0f, 1.0f);
-  if (Bipolar(p)) c = 2.0f * c - 1.0f;
-  const int v = val[p] + int(mod_amt[p] * 0.01f * c * (d.max - d.min));
+  const bool one = mod_amt[p] && ModSourceOn(p);
+  const bool two = mod_amt2[p] && mod_bus2[p] && mod_bus;
+  if (!one && !two) return val[p];
+  // the two sources add up, each by its own amount
+  float sum = 0.0f;
+  if (one) {
+    float c = (mod_bus_sel[p] && mod_bus) ? mod_bus[mod_bus_sel[p] - 1]
+                                          : constrain(mod_in[p].InF(), -1.0f, 1.0f);
+    if (Bipolar(p)) c = 2.0f * c - 1.0f;
+    sum += mod_amt[p] * c;
+  }
+  if (two) {
+    float c = mod_bus[mod_bus2[p] - 1];
+    if (Bipolar2(p)) c = 2.0f * c - 1.0f;
+    sum += mod_amt2[p] * c;
+  }
+  const int v = val[p] + int(sum * 0.01f * (d.max - d.min));
   return constrain(v, d.min, d.max);
 }
 
@@ -230,7 +254,7 @@ FLASHMEM void Device::ApplyAll() {
 
 FLASHMEM void Device::Modulate() {
   for (int p = 0; p < num_params(); p++) {
-    if (!mod_amt[p] && cur[p] == val[p]) continue;
+    if (!Modded(p) && cur[p] == val[p]) continue;
     const int m = Modulated(p);
     if (m != cur[p]) {
       cur[p] = m;
@@ -251,12 +275,15 @@ FLASHMEM void Device::CopyFrom(const Device& d) {
   memcpy(mod_amt, d.mod_amt, sizeof(mod_amt));
   for (int p = 0; p < MAX_PARAMS; p++) mod_in[p] = d.mod_in[p];
   memcpy(mod_bus_sel, d.mod_bus_sel, sizeof(mod_bus_sel));
+  memcpy(mod_amt2, d.mod_amt2, sizeof(mod_amt2));
+  memcpy(mod_bus2, d.mod_bus2, sizeof(mod_bus2));
+  mod_bi2 = d.mod_bi2;
   memcpy(act_trig, d.act_trig, sizeof(act_trig));
   mod_bi = d.mod_bi;
   ApplyAll();
 }
 
-// source list: off, MOD A-D, then the CVInputMap list (CV in, CV out, MIDI
+// source list: off, MOD A-H, then the CVInputMap list (CV in, CV out, MIDI
 // maps, noise)
 FLASHMEM void Device::ChangeModSource(int p, int dir) {
   HS::CVInputMap& in = mod_in[p];
@@ -264,14 +291,20 @@ FLASHMEM void Device::ChangeModSource(int p, int dir) {
   if (bus) {
     const int b = bus + dir;
     if (b < 1) { bus = 0; in.Unpack(0); }            // -> off
-    else if (b > 4) { bus = 0; in.SetInput(0); }     // -> CV 1
+    else if (b > MOD_BUSES) { bus = 0; in.SetInput(0); }  // -> CV 1
     else bus = b;
   } else if (!in.enabled()) {
     if (dir > 0) bus = 1;                            // off -> MOD A
   } else {
     in.ChangeSource(dir);
-    if (!in.enabled()) bus = 4;                      // CV 1 -> MOD D
+    if (!in.enabled()) bus = MOD_BUSES;              // CV 1 -> MOD H
   }
+  Refresh(p);
+}
+
+// the second source: off, MOD A-H
+FLASHMEM void Device::ChangeModSource2(int p, int dir) {
+  mod_bus2[p] = constrain(mod_bus2[p] + dir, 0, MOD_BUSES);
   Refresh(p);
 }
 
