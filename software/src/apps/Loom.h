@@ -1863,7 +1863,7 @@ namespace loom {
       int8_t amt2 = 0; uint8_t bus2 = 0;
       if (load_version >= 3 && (f.read(&amt2, 1) != 1 || f.read(&bus2, 1) != 1)) return false;
       if (!use) continue;
-      // THRUM gained SPRD before MIX: an older file's MIX (its 7th) goes to 8th
+      // SPRAY gained SPRD before MIX: an older file's MIX (its 7th) goes to 8th
       const int q = p;
       if (remap_spr && p == 6) p = 7;
       d->mod_amt2[p] = constrain(amt2, -100, 100);

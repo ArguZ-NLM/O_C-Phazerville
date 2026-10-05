@@ -1260,7 +1260,7 @@ struct WavWriter {
 // the sample, START / END then within it; back to STRM puts them back.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef PLAYER_DEF = {
-  "SHUTTLE", "PLY", 8, {"PLAY", "TOP"},  // was PLAYER
+  "PLAYER", "PLY", 8, {"PLAY", "TOP"},
   {
     {"FILE", 0, MAX_FILES - 1, 0, UNI, 0, 2, 0, {}, {"STRM", "MEM"}},
     {"LOOP", 0, 1, 1, LIST, 2, 0, 0, {"OFF", "ON"}},
@@ -2205,7 +2205,7 @@ FLASHMEM void PlayerDevice::DrawMini(int x, int y, int w, int h) {
 // ECHO: hybrid delay + reverb
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef ECHO_DEF = {
-  "REPEAT", "ECO", 8, {"FRZ", "CLR"},  // was ECHO
+  "ECHO", "ECO", 8, {"FRZ", "CLR"},
   {
     // page 1: the delay, page 2: the reverb and TONE
     {"LEVEL", 0, 100, 40, UNI},  // the delay's
@@ -2468,7 +2468,7 @@ FLASHMEM void EchoDevice::DrawMini(int x, int y, int w, int h) {
 // TEXTURE: fold, drive, crush, tilt, envelope-following noise
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef DIRT_DEF = {
-  "SLUB", "TEX", 8, {"", ""},  // was TEXTURE
+  "TEXTURE", "TEX", 8, {"", ""},
   {
     {"DRIVE", 0, 100, 30, UNI},
     {"FOLD", 0, 100, 0, UNI},
@@ -2663,7 +2663,7 @@ FLASHMEM void DirtDevice::DrawMini(int x, int y, int w, int h) {
 // RESONATOR: 48-band resonant filter bank
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef RESONATOR_DEF = {
-  "REED", "RES", 8, {"", ""},  // was RESONATOR
+  "RESONATOR", "RES", 8, {"", ""},
   {
     {"CUT", 0, 100, 70, UNI},
     {"SLOPE", -50, 50, -50, BI},
@@ -2834,7 +2834,7 @@ FLASHMEM void ResonatorDevice::DrawMini(int x, int y, int w, int h) {
 // slot's fade mixes them with the dry signal by LEVEL.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef SPRAY_DEF = {
-  "THRUM", "SPR", 8, {"FRZ", ""},  // was SPRAY (tag SPR kept for saved files)
+  "SPRAY", "SPR", 8, {"FRZ", ""},
   {
     // left of the middle: P (periodic), right: R (random), middle: no grains
     {"RATE", -100, 100, 55, BI},
@@ -3054,10 +3054,10 @@ struct SlotDef {
 
 PROGMEM static const SlotDef SLOT_DEFS[SLOT_COUNT] = {
   {"SOURCE",   "SRC", 3, 3},  // INPUT, SPOOL, PLAYER (owned by the track, not made here)
-  {"THRUM",    "THR", 2, 1},  // BYPASS, THRUM (grains)
-  {"REED",     "REED", 2, 1},  // BYPASS, REED (resonator)
-  {"SLUB",     "SLUB", 2, 1},  // BYPASS, SLUB (texture)
-  {"REPEAT",   "RPT", 2, 1},  // BYPASS, REPEAT (echo)
+  {"SPRAY",    "SPR", 2, 1},  // BYPASS, SPRAY
+  {"RESONATOR", "RES", 2, 1},  // BYPASS, RESONATOR
+  {"TEXTURE",  "TEX", 2, 1},  // BYPASS, TEXTURE
+  {"ECHO",     "ECO", 2, 1},  // BYPASS, ECHO
 };
 
 // nullptr = BYPASS. SOURCE/INPUT is owned by the track, not made here.
