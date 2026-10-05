@@ -128,8 +128,23 @@ namespace sculpt {
   Modulator* shared_mods[NUM_MODS][MOD_TYPES] = {};
   uint8_t shared_type[NUM_MODS] = {};
   char load_note[160] = "";  // how the last settings load went (USB stats)
-  // MOD view cursor: 0-3 the track's A-D, 4-7 the shared E-H, then CLOCK
+  // MOD view cursor: 0-3 the track's A-D, 4-7 the shared E-H, then CLOCK,
+  // then the 8 CV outputs (page 3)
   constexpr int CLK_CURSOR = 2 * NUM_MODS;
+  constexpr int NUM_CV_OUTS = 8;
+  constexpr int OUT_CURSOR = CLK_CURSOR + 1;
+  constexpr int LAST_CURSOR = OUT_CURSOR + NUM_CV_OUTS - 1;
+  // what each CV output A-H sends (0-10 V): off, track L's MOD A-D, track
+  // R's MOD A-D, the shared E-H, or the clock as a gate
+  enum { OUT_OFF, OUT_L = 1, OUT_R = 5, OUT_SHARED = 9, OUT_CLOCK = 13, OUT_SOURCES };
+  uint8_t cv_out_src[NUM_CV_OUTS] = {};
+  FLASHMEM void FormatOutSource(int s, char* buf, size_t n, bool long_name) {
+    if (s >= OUT_CLOCK) snprintf(buf, n, long_name ? "clock (beats)" : "CK");
+    else if (s >= OUT_SHARED) snprintf(buf, n, long_name ? "shared MOD %c" : "%c", 'E' + s - OUT_SHARED);
+    else if (s >= OUT_R) snprintf(buf, n, long_name ? "track R MOD %c" : "R%c", 'A' + s - OUT_R);
+    else if (s >= OUT_L) snprintf(buf, n, long_name ? "track L MOD %c" : "L%c", 'A' + s - OUT_L);
+    else snprintf(buf, n, long_name ? "off" : "--");
+  }
 
   bool audio_hw() { return I2S2_Audio_ADC && I2S2_Audio_DAC; }
 }
@@ -231,12 +246,16 @@ private:
     return i < sculpt::NUM_MODS ? sculpt::tracks[t].mod_type[i] : sculpt::shared_type[i - sculpt::NUM_MODS];
   }
   static sculpt::Modulator* ModAt(int t, int i) {
-    if (i >= sculpt::CLK_CURSOR) return sculpt::tempo_clock;
+    if (i > sculpt::CLK_CURSOR) return nullptr;  // the CV outputs
+    if (i == sculpt::CLK_CURSOR) return sculpt::tempo_clock;
     return ModRow(t, i)[ModType(t, i)];
   }
   bool SharedFocus() const { return focus_mod && mod_cursor >= sculpt::NUM_MODS && mod_cursor < sculpt::CLK_CURSOR; }
   void SetModType(int t, int i, int type);
   void DrawMods() const;
+  void DrawOutputs() const;
+  float OutLevel(int o) const;
+  void WriteOutputs();
   void SetChoice(int t, int s, int option);
   void SetChoiceLinked(int s, int option);
   void ToggleBypass(int s);
@@ -697,6 +716,26 @@ FLASHMEM void AppSculpt::ModulateAll() {
   for (int i = 0; i < NUM_MODS; i++) {
     if (Modulator* m = shared_mods[i][shared_type[i]]) m->RunTriggers(ctx.edges);
   }
+  WriteOutputs();
+}
+
+// the CV outputs: 0..1 -> 0..10 V, calibrated
+FLASHMEM float AppSculpt::OutLevel(int o) const {
+  using namespace sculpt;
+  const int s = cv_out_src[o];
+  float v = -1.0f;
+  if (s >= OUT_CLOCK) v = clock_running && tempo_clock->out < 0.5f ? 1.0f : 0.0f;
+  else if (s >= OUT_SHARED) v = tracks[0].mod_out[NUM_MODS + s - OUT_SHARED];
+  else if (s >= OUT_R) v = tracks[1].mod_out[s - OUT_R];
+  else if (s >= OUT_L) v = tracks[0].mod_out[s - OUT_L];
+  return constrain(v, 0.0f, 1.0f);  // empty slot (-1) or off: 0 V
+}
+
+FLASHMEM void AppSculpt::WriteOutputs() {
+  for (int o = 0; o < sculpt::NUM_CV_OUTS && o < DAC_CHANNEL_COUNT; o++) {
+    const int32_t pitch = int32_t(OutLevel(o) * 10.0f * (12 << 7));  // 12 << 7 = 1 V
+    OC::DAC::set(o, OC::DAC::PitchToScaledDAC(o, pitch, OC::VOLTAGE_SCALING_1V_PER_OCT, false));
+  }
 }
 
 FLASHMEM void AppSculpt::MainLoop() {
@@ -983,7 +1022,10 @@ FLASHMEM void AppSculpt::OnEncoder(const UI::Event &event) {
   }
   if (view == MODS) {
     if (!left) {
-      mod_cursor = constrain(mod_cursor + dir, 0, CLK_CURSOR);
+      mod_cursor = constrain(mod_cursor + dir, 0, LAST_CURSOR);
+    } else if (mod_cursor >= OUT_CURSOR) {
+      uint8_t& s = cv_out_src[mod_cursor - OUT_CURSOR];
+      s = constrain(s + dir, 0, OUT_SOURCES - 1);
     } else if (mod_cursor < CLK_CURSOR) {
       SetModType(track, mod_cursor, ModType(track, mod_cursor) + dir);
       if (linked && mod_cursor < NUM_MODS) SetModType(1 - track, mod_cursor, ModType(track, mod_cursor));
@@ -1340,6 +1382,7 @@ FLASHMEM void AppSculpt::DrawDevice() const {
 // two pages of four plus CLOCK: the track's A-D, then the shared E-H
 FLASHMEM void AppSculpt::DrawMods() const {
   using namespace sculpt;
+  if (mod_cursor >= OUT_CURSOR) { DrawOutputs(); return; }
   const int page = mod_cursor < NUM_MODS ? 0 : 1;
   if (linked || page) gfxPrint(1, 0, PSTR("L+R"));
   else gfxPrint(1, 0, track ? PSTR("R") : PSTR("L"));
@@ -1349,7 +1392,7 @@ FLASHMEM void AppSculpt::DrawMods() const {
     gfxInvert(103, 0, 25, 8);
   } else {
     gfxPrint(110, 0, page + 1);
-    gfxPrint(116, 0, PSTR("/2"));
+    gfxPrint(116, 0, PSTR("/3"));
   }
   gfxLine(0, 9, 127, 9);
   constexpr int bw = 25;
@@ -1373,6 +1416,31 @@ FLASHMEM void AppSculpt::DrawMods() const {
   Modulator* m = ModAt(track, mod_cursor);
   gfxPrint(0, 56, m ? m->def.name : PSTR("off"));
   gfxPrint(80, 56, PSTR("Y:back"));
+}
+
+// page 3: the 8 CV outputs, each with its source and its voltage as a bar
+FLASHMEM void AppSculpt::DrawOutputs() const {
+  using namespace sculpt;
+  gfxPrint(1, 0, PSTR("CV OUTPUTS"));
+  gfxPrint(110, 0, PSTR("3/3"));
+  gfxLine(0, 9, 127, 9);
+  constexpr int bw = 32, bh = 21;
+  for (int o = 0; o < NUM_CV_OUTS; o++) {
+    const int x = (o % 4) * bw, y = 11 + (o / 4) * (bh + 1);
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%c", 'A' + o);
+    gfxPrint(x + 2, y + 2, buf);
+    FormatOutSource(cv_out_src[o], buf, sizeof(buf), false);
+    gfxPrint(x + bw - 2 - 6 * int(strlen(buf)), y + 2, buf);
+    // 0..10 V across the box
+    gfxFrame(x + 2, y + 12, bw - 5, 6);
+    const int fill = int(OutLevel(o) * (bw - 7) + 0.5f);
+    if (fill > 0) gfxRect(x + 3, y + 13, fill, 4);
+    if (OUT_CURSOR + o == mod_cursor) gfxInvert(x + 1, y + 1, 9, 9);
+  }
+  char buf[24];
+  FormatOutSource(cv_out_src[mod_cursor - OUT_CURSOR], buf, sizeof(buf), true);
+  gfxPrint(0, 56, buf);
 }
 
 /////////////////////////////////////////////////////////////////
@@ -1530,6 +1598,9 @@ FLASHMEM void AppSculpt::SaveFile() const {
   f.write(shared_type, NUM_MODS);
   for (int i = 0; i < NUM_MODS; i++)
     for (int type = 1; type < MOD_TYPES; type++) WriteDevice(f, shared_mods[i][type]);
+  // ... and what the CV outputs send
+  f.write("O", 1);
+  f.write(cv_out_src, NUM_CV_OUTS);
   f.close();
   fs.remove(SAVE_FILE);
   fs.rename(SAVE_TMP, SAVE_FILE);
@@ -1590,7 +1661,7 @@ FLASHMEM void AppSculpt::LoadFile() {
     col = ui[2] < COLS ? ui[2] : ECHO;
     cursor = ui[3] < MAX_PARAMS ? ui[3] : 0;
     focus_mod = ui[4];
-    mod_cursor = ui[5] <= CLK_CURSOR ? ui[5] : 0;
+    mod_cursor = ui[5] <= LAST_CURSOR ? ui[5] : 0;
     if (version < 3 && mod_cursor == NUM_MODS) mod_cursor = CLK_CURSOR;  // CLOCK was 5th
     for (auto& tr : tracks) {
       uint8_t b = 0;
@@ -1623,6 +1694,9 @@ FLASHMEM void AppSculpt::LoadFile() {
           }
           shared_type[i] = types[i] < MOD_TYPES && shared_mods[i][types[i]] ? types[i] : 0;
         }
+        uint8_t outs[NUM_CV_OUTS];
+        if (okm && f.read(&mark, 1) == 1 && mark == 'O' && f.read(outs, NUM_CV_OUTS) == NUM_CV_OUTS)
+          for (int o = 0; o < NUM_CV_OUTS; o++) cv_out_src[o] = outs[o] < OUT_SOURCES ? outs[o] : 0;
       }
     }
   }
