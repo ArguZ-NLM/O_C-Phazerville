@@ -1912,7 +1912,7 @@ FLASHMEM void AppSculpt::DrawScreensaver() const {
     sy = 32.0f - F * Y / zc;
     depth = Z;
   };
-  // the nearest part (closer than 82% of the aim distance): two pixels wide
+  // the nearest part (closer than 88% of the aim distance): two pixels wide
   auto line = [&](float x0, float y0, float z0, float x1, float y1, float z1) {
     if (z0 < 0.1f || z1 < 0.1f) return;  // behind / at the camera
     if (fabsf(x1 - x0) > 400.0f || fabsf(y1 - y0) > 400.0f) return;
@@ -1920,7 +1920,7 @@ FLASHMEM void AppSculpt::DrawScreensaver() const {
     for (int i = 0; i <= n; i++) {
       const int x = int(roundf(x0 + (x1 - x0) * i / n)), y = int(roundf(y0 + (y1 - y0) * i / n));
       if (fade_all && ((x * 7 + y * 13) & 15) < fade_all) continue;
-      const bool bold = z0 + (z1 - z0) * i / n < dist * 0.82f;
+      const bool bold = z0 + (z1 - z0) * i / n < dist * 0.88f;
       for (int dx = 0; dx <= bold; dx++)
         for (int dy = 0; dy <= bold; dy++)
           if (x + dx >= 0 && x + dx < 128 && y + dy >= 0 && y + dy < 64) gfxPixel(x + dx, y + dy);
