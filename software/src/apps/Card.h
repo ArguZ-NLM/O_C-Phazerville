@@ -96,10 +96,7 @@ FLASHMEM void AppCard::Loop() {
     del_held = false;
     char path[160];
     snprintf(path, sizeof(path), "%s/%s", strcmp(dir, "/") ? dir : "", names[sel]);
-    if (SD.remove(path)) {
-      MTP.send_removeObjectEvent(0, path);  // so the computer's list updates
-      deleted_at = millis() | 1;
-    }
+    if (SD.remove(path)) deleted_at = millis() | 1;  // the computer sees it on its next refresh
     List();
   }
   if (millis() - listed_at > 2000) List();  // new files show up by themselves
