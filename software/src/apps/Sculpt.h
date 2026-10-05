@@ -1880,18 +1880,35 @@ void AppSculpt::DrawDebugInfo() const { }
 
 FLASHMEM void AppSculpt::DrawMenu() const { BaseView(); }
 
-// screensaver: the NLM logo drifting slowly from side to side, its columns
-// rippling like the wave it shows
+// screensaver: the NLM logo drifting slowly from side to side and coming
+// nearer / going away (scaled 30..60 px high), its columns rippling like the
+// wave it shows. Each screen pixel is lit when enough of the logo pixels it
+// covers are inked, so thin lines survive the scaling.
 FLASHMEM void AppSculpt::DrawScreensaver() const {
   using namespace sculpt;
   const float t = millis() * 0.001f;
+  const int h = 45 + int(roundf(15.0f * sinf(t * 2.0f * float(M_PI) / 17.0f)));  // 30..60, 17 s
+  const int w = NLM_LOGO_W * h / NLM_LOGO_H;
   const float p = fmodf(t / 20.0f, 2.0f);  // 20 s one way
-  const int x0 = int((p < 1.0f ? p : 2.0f - p) * (128 - NLM_LOGO_W) + 0.5f);
-  for (int x = 0; x < NLM_LOGO_W; x++) {
-    const int dy = 2 + int(roundf(2.0f * sinf(x * 0.15f - t * 2.0f)));  // 0..4
-    for (int y = 0; y < NLM_LOGO_H; y++) {
-      if (pgm_read_byte(&NLM_LOGO[y * NLM_LOGO_BPR + (x >> 3)]) & (0x80 >> (x & 7)))
-        gfxPixel(x0 + x, y + dy);
+  const int x0 = int((p < 1.0f ? p : 2.0f - p) * (128 - w) + 0.5f);
+  const int y0 = (64 - h) / 2;
+  const float amp = 2.0f * h / 60.0f;  // the ripple shrinks with the logo
+  auto ink = [](int x, int y) {
+    return (pgm_read_byte(&NLM_LOGO[y * NLM_LOGO_BPR + (x >> 3)]) >> (7 - (x & 7))) & 1;
+  };
+  for (int tx = 0; tx < w; tx++) {
+    const int sx0 = tx * NLM_LOGO_W / w, sx1 = std::max((tx + 1) * NLM_LOGO_W / w, sx0 + 1);
+    const int dy = int(roundf(amp * sinf(tx * 0.15f * 60.0f / h - t * 2.0f)));
+    for (int ty = 0; ty < h; ty++) {
+      const int sy0 = ty * NLM_LOGO_H / h, sy1 = std::max((ty + 1) * NLM_LOGO_H / h, sy0 + 1);
+      int n = 0;
+      for (int y = sy0; y < sy1; y++)
+        for (int x = sx0; x < sx1; x++) n += ink(x, y);
+      // lit at 22% coverage
+      if (n * 100 >= 22 * (sx1 - sx0) * (sy1 - sy0)) {
+        const int yy = y0 + ty + dy;
+        if (yy >= 0 && yy < 64) gfxPixel(x0 + tx, yy);
+      }
     }
   }
 }
