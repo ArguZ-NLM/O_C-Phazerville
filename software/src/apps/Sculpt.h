@@ -1905,7 +1905,15 @@ struct Drift {
 FLASHMEM void AppSculpt::DrawScreensaver() const {
   using namespace sculpt;
   constexpr float L = 2.5f, AMP = 0.7f, F = 130.0f;
-  constexpr float LEN = 0.7f * L;  // drawn: the front 70% (the shape keeps L)
+  // how far back each of the 13 long lines goes (x L), left to right: a
+  // ragged back edge, the right side reaching further, like the logo
+  static const float LEN[13] = {0.50f, 0.54f, 0.52f, 0.56f, 0.55f, 0.58f, 0.56f,
+                                0.60f, 0.62f, 0.66f, 0.76f, 0.82f, 0.86f};
+  auto len_at = [](float u) {  // between the lines
+    const float f = (u + 1.0f) * 6.0f;
+    const int i = std::min(11, int(f));
+    return L * (LEN[i] + (LEN[i + 1] - LEN[i]) * (f - i));
+  };
   constexpr float CAM_CUBE = 0.8f, AIM_CUBE = 0.25f;  // half sizes
   static Drift cam_drift[3], aim_drift[3];
   const uint32_t now = millis();
@@ -1948,14 +1956,15 @@ FLASHMEM void AppSculpt::DrawScreensaver() const {
     }
   };
   constexpr int S = 40;  // segments per line
-  for (int j = 0; j < 8; j++) {  // across, close together at the front, spreading out to 60% of the way back
-    const float z = powf(j / 7.0f, 1.7f) * 0.6f * L;
+  for (int j = 0; j < 8; j++) {  // across: close together at the front, sparse at the back, only where the long lines reach
+    const float z = powf(j / 7.0f, 2.3f) * 0.8f * L;
     float px = 0, py = 0;
     bool prev = at(-1.0f, z, px, py);
     for (int k = 1; k <= S; k++) {
       float x, y;
-      const bool ok = at(-1.0f + 2.0f * k / S, z, x, y);
-      if (ok && prev) line(px, py, x, y);
+      const float u = -1.0f + 2.0f * k / S;
+      const bool ok = at(u, z, x, y);
+      if (ok && prev && z <= len_at(u - 1.0f / S)) line(px, py, x, y);
       px = x; py = y; prev = ok;
     }
   }
@@ -1965,7 +1974,7 @@ FLASHMEM void AppSculpt::DrawScreensaver() const {
     bool prev = at(u, 0.0f, px, py);
     for (int k = 1; k <= S; k++) {
       float x, y;
-      const bool ok = at(u, LEN * k / S, x, y);
+      const bool ok = at(u, LEN[i] * L * k / S, x, y);
       if (ok && prev) line(px, py, x, y);
       px = x; py = y; prev = ok;
     }
