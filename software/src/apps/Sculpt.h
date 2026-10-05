@@ -263,6 +263,7 @@ private:
   void SetModType(int t, int i, int type);
   void DrawMods() const;
   void DrawOutputs() const;
+  static void DrawClockMark(int x, int y);
   float OutLevel(int o) const;
   void WriteOutputs();
   void SetChoice(int t, int s, int option);
@@ -1282,6 +1283,8 @@ FLASHMEM void AppSculpt::DrawDevice() const {
   if (mute_turn && (millis() / 300) % 2) {
     gfxPrint(82, 1, PSTR("MUTE"));
     gfxInvert(81, 0, 26, 9);
+  } else {
+    DrawClockMark(103, 2);
   }
   if (n > 4) {
     gfxPrint(110, 1, cursor / 4 + 1);
@@ -1412,6 +1415,7 @@ FLASHMEM void AppSculpt::DrawMods() const {
   if (linked || page) gfxPrint(1, 0, PSTR("L+R"));
   else gfxPrint(1, 0, track ? PSTR("R") : PSTR("L"));
   gfxPrint(linked || page ? 24 : 12, 0, page ? PSTR("SHARED") : PSTR("MODULATORS"));
+  DrawClockMark(96, 1);
   if (Muted() && (millis() / 300) % 2) {
     gfxPrint(104, 0, PSTR("MUTE"));
     gfxInvert(103, 0, 25, 8);
@@ -1443,10 +1447,21 @@ FLASHMEM void AppSculpt::DrawMods() const {
   gfxPrint(80, 56, PSTR("Y:back"));
 }
 
+// the clock in the top line: a play triangle while it runs, a square when
+// stopped (Z), 5 x 5 px from x, y
+FLASHMEM void AppSculpt::DrawClockMark(int x, int y) {
+  if (sculpt::clock_running) {
+    for (int i = 0; i < 3; i++) gfxLine(x + i, y + i, x + i, y + 4 - i);
+  } else {
+    gfxRect(x, y, 5, 5);
+  }
+}
+
 // page 3: the 8 CV outputs, each with its source and its voltage as a bar
 FLASHMEM void AppSculpt::DrawOutputs() const {
   using namespace sculpt;
   gfxPrint(1, 0, PSTR("CV OUTPUTS"));
+  DrawClockMark(96, 1);
   gfxPrint(110, 0, PSTR("3/3"));
   gfxLine(0, 9, 127, 9);
   constexpr int bw = 32, bh = 21;
