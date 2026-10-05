@@ -33,6 +33,7 @@
 #include "../Audio/AudioEffectDirt.h"
 #include "../Audio/AudioEffectBandz.h"
 #include "../Audio/AudioEffectResonator.h"
+#include "../Audio/AudioEffectModalResonator.h"
 #include "../Audio/AudioEffectClouds.h"
 #include "../Audio/AudioEffectReel.h"
 #include "../Audio/AudioPlayStream.h"
@@ -3043,7 +3044,124 @@ FLASHMEM void SprayDevice::DrawMini(int x, int y, int w, int h) {
 // Slot catalogue, in chain order. Option 0 of the effect slots is BYPASS.
 /////////////////////////////////////////////////////////////////
 enum Slot : uint8_t { SOURCE, SPRAY, RESONATOR, TEXTURE, ECHO, SLOT_COUNT };
-constexpr int MAX_OPTIONS = 2;
+constexpr int MAX_OPTIONS = 3;
+
+/////////////////////////////////////////////////////////////////
+// MODAL (Resonator slot, 2nd choice): a struck object, like the ModalRes
+// applet: 12 sharply tuned modes (the partials of a string, bar or bell)
+// that ring on, excited by the track (L+R) and by A (HIT). Odd modes left,
+// even right, as far apart as SPRD.
+/////////////////////////////////////////////////////////////////
+PROGMEM static const DeviceDef MODAL_DEF = {
+  "MODAL", "MDL", 7, {"HIT", ""},
+  {
+    {"NOTE", 0, 72, 36, UNI},      // C0 .. C6, C3 in the middle
+    {"STRUC", 0, 100, 70, UNI},    // 0 tube, 50 string (harmonic), 100 bell
+    {"BRITE", 0, 100, 60, UNI},    // how long the upper partials ring
+    {"DAMP", 0, 100, 65, UNI},     // short knock .. long sustain
+    {"POS", 0, 100, 25, UNI},      // where it is struck (which partials sound)
+    {"SPRD", 0, 100, 70, UNI},     // odd / even partials apart
+    {"WET", 0, 100, 100, UNI},
+  },
+  {"", ""},
+};
+
+class ModalDevice : public Device {
+public:
+  enum { NOTE, STRUC, BRITE, DAMP, POS, SPRD, WET };
+  ModalDevice() : Device(MODAL_DEF), sum_l(in_mix, 0, fx, 0) {
+    in_mix.gain(0, 0.5f); in_mix.gain(1, 0.5f); in_mix.gain(2, 0.0f); in_mix.gain(3, 0.0f);
+  }
+  AudioStream* in() override { return &in_mix; }   // L + R summed
+  AudioStream* out() override { return &fx; }     // odd modes left, even right
+  bool Activate() override { fx.Acquire(); fx.setSplit(true); ApplyAll(); active = true; return true; }
+  void Apply(int p) override;
+  void Action(int a) override { if (a == 0) { fx.strike(1.0f); hit_at = millis() | 1; } }
+  void Format(int p, char* buf, size_t n) const override;
+  void DrawViz(int x, int y, int w, int h) override;
+  void DrawMini(int x, int y, int w, int h) override;
+  void CpuMax(float parts[2]) override {
+    parts[0] = fx.processorUsageMax();
+    parts[1] = 0.0f;
+    fx.processorUsageMaxReset();
+  }
+private:
+  AudioMixer4 in_mix;
+  AudioEffectModalResonator fx;
+  AudioConnection sum_l;
+  Meter out_m;
+  uint32_t hit_at = 0;
+  float Hz() const { return 16.352f * powf(2.0f, cur[NOTE] / 12.0f); }  // C0 = 16.35 Hz
+  // the partials as the engine places them (its stiffness model), for the picture
+  void Partials(float ratio[12], float gain[12]) const;
+};
+
+FLASHMEM void ModalDevice::Apply(int p) {
+  if (p == WET) { wet = cur[WET] * 0.01f; return; }
+  if (p == SPRD) { fx.setSpread(cur[SPRD] * 0.01f); return; }
+  fx.updateCoeffs(Hz(), cur[STRUC] * 0.01f, cur[BRITE] * 0.01f, cur[DAMP] * 0.01f, cur[POS] * 0.01f);
+}
+
+FLASHMEM void ModalDevice::Format(int p, char* buf, size_t n) const {
+  if (p == NOTE) {
+    static const char* const names[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+    snprintf(buf, n, "%s%d", names[val[NOTE] % 12], val[NOTE] / 12);
+  } else {
+    Device::Format(p, buf, n);
+  }
+}
+
+FLASHMEM void ModalDevice::Partials(float ratio[12], float gain[12]) const {
+  const float structure = cur[STRUC] * 0.01f, bright = cur[BRITE] * 0.01f;
+  float stiffness = structure * 1.55f - 0.05f, stretch = 1.0f;
+  float q_loss = bright * (2.0f - bright) * 0.85f + 0.15f, q = 1.0f;
+  const float q_rate = structure * (2.0f - structure) * 0.1f;
+  const float pos = cur[POS] * 0.01f * 0.98f + 0.01f;
+  for (int k = 0; k < 12; k++) {
+    ratio[k] = stretch;
+    const float sg = sinf(float(M_PI) * pos * (k + 1));
+    gain[k] = sg * sg * q;  // struck there, and how long it rings next to the lowest
+    stretch += stiffness;
+    stiffness *= stiffness < 0.0f ? 0.93f : 0.98f;
+    q_loss += q_rate * (1.0f - q_loss);
+    q *= q_loss;
+  }
+}
+
+// the partials as lines along a pitch scale (6 octaves across): height =
+// how strongly it is struck and how long it rings; a hit flashes them
+FLASHMEM void ModalDevice::DrawViz(int x, int y, int w, int h) {
+  float r[12], g[12];
+  Partials(r, g);
+  const int ww = w - 8;
+  out_m.Hit(fx.readOutputPeak() / 32768.0f);
+  const float lo = 16.352f;  // C0 at the left edge, C6 at the right
+  for (int k = 0; k < 12; k++) {
+    const float hz = Hz() * r[k];
+    const float pos = log2f(hz / lo) / 6.0f;
+    if (pos < 0.0f || pos > 1.0f) continue;
+    const int px = x + int(pos * (ww - 1));
+    const int ph = std::max(1, int(sqrtf(std::min(1.0f, g[k])) * (h - 2)));
+    gfxLine(px, y + h - 1, px, y + h - ph);
+    if (k == 0) gfxRect(px - 1, y + h - ph - 2, 3, 2);  // the fundamental
+  }
+  gfxDottedLine(x, y + h - 1, x + ww - 1, y + h - 1, 3);
+  if (hit_at && millis() - hit_at < 120) gfxRect(x, y, 4, 4);
+  gfxFrame(x + w - 4, y, 4, h);
+  DrawVMeter(x + w - 4, y, 4, h, out_m.v);
+}
+
+FLASHMEM void ModalDevice::DrawMini(int x, int y, int w, int h) {
+  float r[12], g[12];
+  Partials(r, g);
+  for (int k = 0; k < 12; k++) {
+    const float pos = log2f(r[k]) / 4.0f;  // 4 octaves above the fundamental
+    if (pos > 1.0f) continue;
+    const int px = x + int(pos * (w - 1));
+    const int ph = std::max(1, int(sqrtf(std::min(1.0f, g[k])) * h));
+    gfxLine(px, y + h - 1, px, y + h - ph);
+  }
+}
 
 struct SlotDef {
   char name[10];
@@ -3055,7 +3173,7 @@ struct SlotDef {
 PROGMEM static const SlotDef SLOT_DEFS[SLOT_COUNT] = {
   {"SOURCE",   "SRC", 3, 3},  // INPUT, SPOOL, PLAYER (owned by the track, not made here)
   {"SPRAY",    "SPR", 2, 1},  // BYPASS, SPRAY
-  {"RESONATOR", "RES", 2, 1},  // BYPASS, RESONATOR
+  {"RESONATOR", "RES", 3, 1},  // BYPASS, RESONATOR (filter bank), MODAL (struck object)
   {"TEXTURE",  "TEX", 2, 1},  // BYPASS, TEXTURE
   {"ECHO",     "ECO", 2, 1},  // BYPASS, ECHO
 };
@@ -3064,6 +3182,7 @@ PROGMEM static const SlotDef SLOT_DEFS[SLOT_COUNT] = {
 FLASHMEM static Device* MakeDevice(int slot, int option) {
   if (slot == SPRAY && option == 1) return new SprayDevice;
   if (slot == RESONATOR && option == 1) return new ResonatorDevice;
+  if (slot == RESONATOR && option == 2) return new ModalDevice;
   if (slot == TEXTURE && option == 1) return new DirtDevice;
   if (slot == ECHO && option == 1) return new EchoDevice;
   return nullptr;

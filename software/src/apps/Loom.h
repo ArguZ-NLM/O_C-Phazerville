@@ -1802,7 +1802,8 @@ namespace loom {
   constexpr char SAVE_FILE[] = "LOOM.BIN";
   constexpr char SAVE_TMP[] = "LOOM.TMP";
   // 2: modulator types sorted by name; 3: second mod source, MOD E-H
-  constexpr uint8_t SAVE_VERSION = 3;
+  // 4: three choices per effect slot (RESONATOR: MODAL)
+  constexpr uint8_t SAVE_VERSION = 4;
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -2007,7 +2008,8 @@ FLASHMEM void AppLoom::LoadFile() {
     }
     ok = ReadDevice(f, tr.input) && ReadDevice(f, tr.mix);
     for (int s = SOURCE + 1; s < SLOT_COUNT && ok; s++)
-      for (int o = 0; o < MAX_OPTIONS && ok; o++) ok = ReadDevice(f, tr.inst[s][o]);
+      const int opts = version >= 4 ? MAX_OPTIONS : 2;  // older files: two per slot
+      for (int o = 0; o < opts && ok; o++) ok = ReadDevice(f, tr.inst[s][o]);
     stage = 10 * t + 1;
     if (!ok || f.read(types, NUM_MODS) != NUM_MODS) { ok = false; break; }
     stage = 10 * t + 2;
