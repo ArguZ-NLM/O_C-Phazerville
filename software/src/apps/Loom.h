@@ -1649,11 +1649,12 @@ FLASHMEM void AppLoom::DrawClockPage() const {
 // view between them, filled for STEREO, hollow for DUAL MONO
 FLASHMEM void AppLoom::DrawLinkLabel(int x, int y) const {
   gfxPrint(x, y, PSTR("L"));
-  for (const int sx : {x + 7, x + 11}) {
+  // the first square sits in the L's open corner; R where it was in L+R
+  for (const int sx : {x + 3, x + 7}) {
     if (link_stereo) gfxRect(sx, y + 2, 3, 3);
     else gfxFrame(sx, y + 2, 3, 3);
   }
-  gfxPrint(x + 14, y, PSTR("R"));
+  gfxPrint(x + 12, y, PSTR("R"));
 }
 
 // the clock in the top line: a play triangle while it runs, a square when
