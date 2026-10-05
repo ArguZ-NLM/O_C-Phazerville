@@ -1608,7 +1608,13 @@ FLASHMEM void AppLoom::DrawDevice() const {
       else snprintf(buf, sizeof(buf), strlen(src) > 3 ? "%d%s" : "%d %s", mod_slot + 1, src);
       PrintCentred(x, 43, buf);
     } else {
-      const char* nm = d->Name(p);
+      // the upper row is the mode's (the left knob): its name for a moment
+      // after it changed, else the setting's name; the number stays below
+      const bool show_mode = sel && pd.nmodes
+        && ((editing && l_held) || (edit_mode && mode_shown < 1500));
+      char mb[8];
+      if (show_mode) d->FormatMode(p, mb, sizeof(mb));
+      const char* nm = show_mode ? mb : d->Name(p);
       PrintCentred(x, 43, nm);
       // has modes: a small square (a 5-letter name: just outside its column)
       if (pd.nmodes) {
@@ -1620,11 +1626,8 @@ FLASHMEM void AppLoom::DrawDevice() const {
       gfxPixel(x + 27, 49); gfxPixel(x + 28, 48); gfxPixel(x + 29, 49); gfxPixel(x + 30, 48);
     }
 
-    // value row
-    const bool show_mode = sel && pd.nmodes
-      && ((editing && l_held) || (edit_mode && mode_shown < 1500));
+    // value row: always the number
     if (sel && mod_mode) snprintf(buf, sizeof(buf), "%+d%%", mod_slot ? d->mod_amt2[p] : d->mod_amt[p]);
-    else if (show_mode) d->FormatMode(p, buf, sizeof(buf));
     else d->Format(p, buf, sizeof(buf));
     PrintCentred(x, 52, buf);
     if (sel && (editing || mod_mode)) gfxInvert(x, 51, 32, 9);
