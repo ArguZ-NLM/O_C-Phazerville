@@ -1250,9 +1250,25 @@ FLASHMEM void AppSculpt::DrawDevice() const {
     PrintCentred(x, 52, buf);
     if (sel && (editing || mod_mode)) gfxInvert(x, 51, 32, 9);
 
-    // value bar, plus a tick where modulation puts it right now
+    // value bar, plus a tick where modulation puts it right now. In
+    // modulation: the two sources instead, 1 above 2, from the middle by
+    // their amount (- to the left); bipolar ones spread both ways
     const int span = std::max(1, pd.max - pd.min);
-    if (pd.kind == BI) {
+    if (mod_mode) {
+      const int c = x + 15;
+      gfxLine(c, 60, c, 62);
+      for (int k = 0; k < 2; k++) {
+        const int amt = k ? d->mod_amt2[p] : d->mod_amt[p];
+        const bool on = k ? d->mod_bus2[p] && d->mod_bus : d->ModSourceOn(p);
+        if (!amt || !on) continue;
+        const int len = std::max(1, abs(amt) * 14 / 100);
+        const bool bi = k ? d->Bipolar2(p) : d->Bipolar(p);
+        const int ry = 60 + 2 * k;
+        if (bi) gfxLine(c - len, ry, c + len, ry);
+        else if (amt > 0) gfxLine(c, ry, c + len, ry);
+        else gfxLine(c - len, ry, c, ry);
+      }
+    } else if (pd.kind == BI) {
       const int c = x + 15, len = d->val[p] * 15 / std::max(1, (int)pd.max);
       gfxPixel(c, 60);
       if (len > 0) gfxRect(c, 61, len, 2);
