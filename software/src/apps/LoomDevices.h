@@ -2031,14 +2031,10 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
     }
   }
   // the loop's edges and the head
-  size_t ea, eb;
-  if (streaming) {
-    ea = ea0; eb = eb0;
-  } else {
-    float fa, fb;
-    fx.Window(fa, fb);
-    ea = size_t(fa * n); eb = size_t(fb * n);
-  }
+  // where they are set (a new loop waits for the old one to come round,
+  // the lines show the new one at once); SNAP shown for files in memory
+  size_t ea = ea0, eb = eb0;
+  if (!streaming && cur[SNAP]) { ea = SnapQuiet(ea); eb = SnapQuiet(eb); }
   for (const size_t e : {ea, eb}) {
     const int ex = sx(e);
     if (ex < x || ex >= x + w) continue;
