@@ -1880,73 +1880,93 @@ void AppSculpt::DrawDebugInfo() const { }
 FLASHMEM void AppSculpt::DrawMenu() const { BaseView(); }
 
 // screensaver: the NLM wave as a 3D wire mesh: a sheet with two troughs at
-// the front, flattening towards the back. Each flight starts with the logo
-// filling the screen and flies into it (16 s, fading in and out), while the
-// camera sways a little (side to side, up and down); the lines nearest to it
-// are drawn bold. The wave slowly travels.
+// the front, flattening towards the back, seen like the logo. The camera
+// floats inside a cube (left / right, up / down, forward / back, three slow
+// random glides) and looks at a point that wanders the same way inside a
+// smaller cube. The wave slowly travels.
+namespace sculpt {
+// glides from one random value in -1..1 to the next, a new one every 3-7 s
+struct Drift {
+  float from = 0.0f, to = 0.0f;
+  uint32_t start = 0, len = 1;
+  float At(uint32_t now) {
+    if (now - start >= len) {
+      from = to;
+      to = random(-1000, 1001) * 0.001f;
+      start = now;
+      len = 3000 + random(4000);
+    }
+    const float x = float(now - start) / len;
+    return from + (to - from) * x * x * (3.0f - 2.0f * x);  // smooth start and stop
+  }
+};
+}
+
 FLASHMEM void AppSculpt::DrawScreensaver() const {
-  constexpr float L = 2.5f, AMP = 0.7f, F = 130.0f, PERIOD = 16.0f;
-  constexpr float AIMX = 0.0f, AIMY = -0.3f, AIMZ = L * 0.33f;
-  const float t = millis() * 0.001f;
-  const float s = fmodf(t, PERIOD) / PERIOD;  // 0..1 through the flight
-  const float dist = 5.0f - s * 3.0f;         // to the point we fly towards
-  // the whole picture fades in / out (fraction of pixels left out, 0..16)
-  const int fade_all = s < 0.08f ? int((0.08f - s) * 200.0f) : s > 0.85f ? int((s - 0.85f) * 106.0f) : 0;
-  const float yaw = 0.7854f + 0.12f * sinf(t * 0.21f);           // 45 +- 7 deg
-  const float pitch = 0.7854f + 0.087f * sinf(t * 0.17f + 1.0f);  // 45 +- 5 deg
-  const float cyw = cosf(yaw), syw = sinf(yaw), cpt = cosf(pitch), spt = sinf(pitch);
-  static const float crl = cosf(-0.2618f), srl = sinf(-0.2618f);  // roll -15
+  using namespace sculpt;
+  constexpr float L = 2.5f, AMP = 0.7f, F = 130.0f;
+  constexpr float CAM_CUBE = 0.8f, AIM_CUBE = 0.25f;  // half sizes
+  static Drift cam_drift[3], aim_drift[3];
+  const uint32_t now = millis();
+  const float t = now * 0.001f;
   const float phase = t * 0.5f;
 
-  // a point of the sheet (across u -1..1, depth z 0..L) on the screen, and
-  // how far from the camera it is
-  auto at = [&](float u, float z, float& sx, float& sy, float& depth) {
+  // the logo view: looking at (0, -0.3, 0.83) from 5 units away, down 45
+  // degrees and turned 45; both points drift around these
+  float aim[3] = {0.0f, -0.3f, L * 0.33f}, cam[3] = {-2.5f, 3.24f, -1.67f};
+  for (int a = 0; a < 3; a++) {
+    aim[a] += AIM_CUBE * aim_drift[a].At(now);
+    cam[a] += CAM_CUBE * cam_drift[a].At(now);
+  }
+  // turn and tilt so the camera looks at the aim point
+  const float dx = aim[0] - cam[0], dy = aim[1] - cam[1], dz = aim[2] - cam[2];
+  const float yaw = atan2f(dx, dz), pitch = atan2f(-dy, sqrtf(dx * dx + dz * dz));
+  const float cyw = cosf(yaw), syw = sinf(yaw), cpt = cosf(pitch), spt = sinf(pitch);
+  static const float crl = cosf(-0.2618f), srl = sinf(-0.2618f);  // roll -15
+
+  // a point of the sheet (across u -1..1, depth z 0..L) on the screen;
+  // false when it is behind the camera
+  auto at = [&](float u, float z, float& sx, float& sy) {
     const float down = 0.5f - 0.5f * cosf(2.0f * float(M_PI) * (u + 1.0f) + 0.5f * float(M_PI) + phase);
     const float k = std::max(0.0f, 1.0f - z / L);
-    const float x = u - AIMX, y = -AMP * powf(k, 1.6f) * down - AIMY, zz = z - AIMZ;
+    const float x = u - cam[0], y = -AMP * powf(k, 1.6f) * down - cam[1], zz = z - cam[2];
     const float x1 = x * cyw - zz * syw, z1 = x * syw + zz * cyw;
-    const float y1 = y * cpt + z1 * spt, Z = -y * spt + z1 * cpt + dist;
+    const float y1 = y * cpt + z1 * spt, Z = -y * spt + z1 * cpt;
+    if (Z < 0.1f) return false;
     const float X = x1 * crl - y1 * srl, Y = x1 * srl + y1 * crl;
-    const float zc = std::max(Z, 0.1f);
-    sx = 64.0f - F * X / zc;
-    sy = 32.0f - F * Y / zc;
-    depth = Z;
+    sx = 64.0f - F * X / Z;
+    sy = 32.0f - F * Y / Z;
+    return true;
   };
-  // the nearest part (closer than 88% of the aim distance): two pixels wide
-  auto line = [&](float x0, float y0, float z0, float x1, float y1, float z1) {
-    if (z0 < 0.1f || z1 < 0.1f) return;  // behind / at the camera
+  auto line = [](float x0, float y0, float x1, float y1) {
     if (fabsf(x1 - x0) > 400.0f || fabsf(y1 - y0) > 400.0f) return;
     const int n = int(std::max(fabsf(x1 - x0), fabsf(y1 - y0))) + 1;
     for (int i = 0; i <= n; i++) {
       const int x = int(roundf(x0 + (x1 - x0) * i / n)), y = int(roundf(y0 + (y1 - y0) * i / n));
-      if (fade_all && ((x * 7 + y * 13) & 15) < fade_all) continue;
-      const bool bold = z0 + (z1 - z0) * i / n < dist * 0.88f;
-      for (int dx = 0; dx <= bold; dx++)
-        for (int dy = 0; dy <= bold; dy++)
-          if (x + dx >= 0 && x + dx < 128 && y + dy >= 0 && y + dy < 64) gfxPixel(x + dx, y + dy);
+      if (x >= 0 && x < 128 && y >= 0 && y < 64) gfxPixel(x, y);
     }
   };
   constexpr int S = 40;  // segments per line
   for (int j = 0; j < 8; j++) {  // across, on the front 60%
     const float z = j / 7.0f * 0.6f * L;
-    float px, py, pz;
-    at(-1.0f, z, px, py, pz);
+    float px = 0, py = 0;
+    bool prev = at(-1.0f, z, px, py);
     for (int k = 1; k <= S; k++) {
-      float x, y, d;
-      at(-1.0f + 2.0f * k / S, z, x, y, d);
-      line(px, py, pz, x, y, d);
-      px = x; py = y; pz = d;
+      float x, y;
+      const bool ok = at(-1.0f + 2.0f * k / S, z, x, y);
+      if (ok && prev) line(px, py, x, y);
+      px = x; py = y; prev = ok;
     }
   }
   for (int i = 0; i < 13; i++) {  // front to back
     const float u = -1.0f + 2.0f * i / 12.0f;
-    float px, py, pz;
-    at(u, 0.0f, px, py, pz);
+    float px = 0, py = 0;
+    bool prev = at(u, 0.0f, px, py);
     for (int k = 1; k <= S; k++) {
-      float x, y, d;
-      at(u, L * k / S, x, y, d);
-      line(px, py, pz, x, y, d);
-      px = x; py = y; pz = d;
+      float x, y;
+      const bool ok = at(u, L * k / S, x, y);
+      if (ok && prev) line(px, py, x, y);
+      px = x; py = y; prev = ok;
     }
   }
 }
