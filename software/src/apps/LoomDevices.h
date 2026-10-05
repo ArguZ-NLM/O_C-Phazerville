@@ -1315,8 +1315,10 @@ public:
   // every frame (from the card when streaming) and started over when the
   // view moves
   mutable int zoom_edge = START;  // the edge the zoomed picture centres on
-  mutable int64_t wv_v0 = -1;
-  mutable size_t wv_span = 0, wv_next = 0, wv_end = 0;
+  mutable bool wv_any = false;  // something is cached (wv_v0 means something)
+  mutable int64_t wv_v0 = 0;
+  mutable size_t wv_span = 0;
+  mutable int wv_fa = 0, wv_fb = 0;  // the columns read so far
   mutable int wv_file = -1;
   mutable int16_t wv_lo[128], wv_hi[128];
   bool FillWave(int64_t v0, size_t span, int w, int fi) const;  // true when complete
@@ -1998,16 +2000,14 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
     // read; the level bars where not yet (or, streaming, more than ~45 s
     // across: too much to read from the card)
     const bool can = !streaming || span <= size_t(AUDIO_SAMPLE_RATE_EXACT * rate * 45.0f);
-    const bool done = can && FillWave(v0, span, w, fi);
-    const int filled = !can ? 0 : done ? w
-      : int((int64_t(wv_next) - v0) * w / int64_t(span));
+    if (can) FillWave(v0, span, w, fi);
     for (int c = 0; c < w; c++) {
       const int64_t a = v0 + int64_t(c) * int64_t(span) / w, b = v0 + int64_t(c + 1) * int64_t(span) / w;
       if (b <= 0 || a >= int64_t(n)) {
         if (c % 2 == 0) gfxPixel(x + c, wc);
         continue;
       }
-      if (c < filled && wv_lo[c] <= wv_hi[c]) {
+      if (can && c >= wv_fa && c < wv_fb && wv_lo[c] <= wv_hi[c]) {
         const int y0 = wc - int(wv_hi[c] / 32768.0f * (wh / 2 - 1)), y1 = wc - int(wv_lo[c] / 32768.0f * (wh / 2 - 1));
         gfxLine(x + c, y0, x + c, y1);
         continue;
@@ -2059,40 +2059,67 @@ FLASHMEM int PlayerDevice::Samples(size_t a, size_t count, int16_t* mono) const 
   return int(rd);
 }
 
-// fills wv_lo / wv_hi for this view, a slice per call (a few ms): from
-// memory 200k frames, from the card 16k; a new view starts over
+// fills wv_lo / wv_hi for this view, column by column (span / w frames
+// each): from memory all at once, from the card ~16k frames per call. When
+// the view only slides (START / END moved) the columns already read move
+// along and only the new ones are read; a new zoom or file starts over.
+// Columns wv_fa..wv_fb-1 are valid.
 FLASHMEM bool PlayerDevice::FillWave(int64_t v0, size_t span, int w, int fi) const {
   const int64_t n = int64_t(Frames());
-  if (v0 != wv_v0 || span != wv_span || fi != wv_file) {
-    wv_v0 = v0; wv_span = span; wv_file = fi;
-    wv_next = size_t(std::max<int64_t>(0, v0));
-    wv_end = size_t(std::min<int64_t>(n, v0 + int64_t(span)));
-    for (int c = 0; c < w; c++) { wv_lo[c] = 32767; wv_hi[c] = -32768; }
-  }
-  if (wv_next >= wv_end) return true;
-  auto add = [&](size_t i, int v) {
-    const int c = constrain(int((int64_t(i) - v0) * w / int64_t(span)), 0, w - 1);
-    if (v < wv_lo[c]) wv_lo[c] = int16_t(v);
-    if (v > wv_hi[c]) wv_hi[c] = int16_t(v);
-  };
-  if (!streaming) {
-    const int16_t* dl = fx.Data(0);
-    const int16_t* dr = fx.Data(1);
-    const size_t stop = wv_end;  // from memory: all of it at once (no visible redraw)
-    for (size_t i = wv_next; i < stop; i++) add(i, (dl[i] + dr[i]) / 2);
-    wv_next = stop;
-  } else {
-    static int16_t l[256], r[256];
-    auto* self = const_cast<PlayerDevice*>(this);
-    self->lf.seek(data_off + wv_next * size_t(bytes) * chans);
-    for (int k = 0; k < 64 && wv_next < wv_end; k++) {
-      const size_t rd = self->ReadFrames(l, r, std::min<size_t>(256, wv_end - wv_next));
-      if (!rd) { wv_next = wv_end; break; }
-      for (size_t i = 0; i < rd; i++) add(wv_next + i, (l[i] + r[i]) / 2);
-      wv_next += rd;
+  const int64_t cw = std::max<int64_t>(1, int64_t(span) / w);
+  const int64_t shift = wv_any ? v0 - wv_v0 : 0;
+  if (!wv_any || span != wv_span || fi != wv_file || shift % cw || llabs(shift / cw) >= w) {
+    wv_span = span; wv_file = fi; wv_fa = wv_fb = 0; wv_any = true;
+  } else if (shift) {
+    const int k = int(shift / cw);  // columns the picture moves left
+    if (k > 0) {
+      memmove(wv_lo, wv_lo + k, (w - k) * sizeof(int16_t));
+      memmove(wv_hi, wv_hi + k, (w - k) * sizeof(int16_t));
+    } else {
+      memmove(wv_lo - k, wv_lo, (w + k) * sizeof(int16_t));
+      memmove(wv_hi - k, wv_hi, (w + k) * sizeof(int16_t));
     }
+    wv_fa = constrain(wv_fa - k, 0, w);
+    wv_fb = constrain(wv_fb - k, 0, w);
+    if (wv_fa >= wv_fb) wv_fa = wv_fb = 0;
   }
-  return wv_next >= wv_end;
+  wv_v0 = v0;
+  // one column: its lowest / highest (empty past the file's ends)
+  static int16_t l[256], r[256];
+  auto* self = const_cast<PlayerDevice*>(this);
+  auto fill = [&](int c) {
+    const int64_t a = std::max<int64_t>(0, v0 + c * cw), b = std::min<int64_t>(n, v0 + (c + 1) * cw);
+    int mn = 32767, mx = -32768;
+    if (!streaming) {
+      const int16_t* dl = fx.Data(0);
+      const int16_t* dr = fx.Data(1);
+      for (int64_t i = a; i < b; i++) {
+        const int v = (dl[i] + dr[i]) / 2;
+        mn = std::min(mn, v); mx = std::max(mx, v);
+      }
+    } else if (b > a) {
+      self->lf.seek(data_off + size_t(a) * size_t(bytes) * chans);
+      for (int64_t i = a; i < b;) {
+        const size_t rd = self->ReadFrames(l, r, size_t(std::min<int64_t>(256, b - i)));
+        if (!rd) break;
+        for (size_t k = 0; k < rd; k++) {
+          const int v = (l[k] + r[k]) / 2;
+          mn = std::min(mn, v); mx = std::max(mx, v);
+        }
+        i += rd;
+      }
+    }
+    wv_lo[c] = int16_t(mn); wv_hi[c] = int16_t(mx);
+    return b > a ? b - a : 0;
+  };
+  // grow the valid stretch: to the right first, then to the left
+  int64_t budget = streaming ? 16384 : INT64_MAX;
+  while (budget > 0 && (wv_fb < w || wv_fa > 0)) {
+    if (wv_fa == wv_fb) { wv_fa = wv_fb = 0; }
+    if (wv_fb < w) budget -= std::max<int64_t>(1, fill(wv_fb++));
+    else budget -= std::max<int64_t>(1, fill(--wv_fa));
+  }
+  return wv_fa == 0 && wv_fb == w;
 }
 
 // loudest between two frames, from memory or (streaming) the level index
