@@ -1261,7 +1261,7 @@ PROGMEM static const DeviceDef PLAYER_DEF = {
     {"SPEED", 0, 200, 100, UNI, 0, 2, 0, {}, {"FWD", "REV"}},  // mode: direction
     {"START", 0, 10000, 0, UNI, 0, 10, 0},      // mode: zoom, all .. 0.3 ms across
     {"END", 0, 10000, 10000, UNI, 0, 10, 0},
-    {"XFADE", 0, 100, 20, UNI},
+    {"FADE", 0, 100, 20, UNI, 0, 2, 0, {}, {"CROSS", "INOUT"}},  // the loop's seam
     {"SNAP", 0, 1, 0, LIST, 2, 0, 0, {"OFF", "ON"}},
   },
   {"", ""},
@@ -1826,11 +1826,11 @@ FLASHMEM void PlayerDevice::Apply(int p) {
       Window();
       break;
     case SNAP: Window(); break;
-    case XFADE:  // a crossfade up to 1 s (finer at the short end)
+    case XFADE:  // up to 1 s (finer at the short end); CROSS or INOUT (a dip)
       fx.SetSeam(XfadeFrames());
       stream.SetSeam(XfadeFrames());
-      fx.SetCrossfade(true);
-      stream.SetCrossfade(true);
+      fx.SetCrossfade(mode[XFADE] == 0);
+      stream.SetCrossfade(mode[XFADE] == 0);
       break;
     case LEVEL: fx.SetLevel(cur[LEVEL] * 0.01f); stream.SetLevel(cur[LEVEL] * 0.01f); break;
   }
@@ -2044,12 +2044,18 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
     graphics.clearRect(std::max(x, ex - 1), wy, std::min(3, x + w - std::max(x, ex - 1)), wh);
     gfxLine(ex, wy, ex, base);
   }
-  // the crossfade: the end fading out (a line falling into END) and the part
-  // fading in (rising into START from before it, or over the loop's start)
+  // the seam: the part fading out (a falling line) and the part fading in
+  // (a rising one). CROSS: centred on END and START (an X over each line),
+  // or, with no room around them, before END / after START; INOUT: the dip
   if (eb > ea && cur[LOOP]) {
-    bool pre = false;
-    const size_t xl = streaming ? stream.XfLen(ea, eb) : AudioEffectReel::XfLen(XfadeFrames(), ea, eb - ea, pre);
-    if (xl > 1) {
+    size_t h = 0, f = 0;
+    if (mode[XFADE] == 0) {
+      if (streaming) { h = stream.Half(ea, eb); f = stream.XfLen(ea, eb); }
+      else AudioEffectReel::XfPlan(XfadeFrames(), ea, eb - ea, n, h, f);
+    } else {
+      f = std::min<size_t>(size_t(XfadeFrames()), (eb - ea) / 4);
+    }
+    if (h > 1 || f > 1) {
       auto ramp = [&](size_t f0, size_t f1, bool up) {
         const int x0 = sx(f0), x1 = sx(f1);
         if (x1 <= x0) return;
@@ -2059,9 +2065,13 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
           gfxPixel(px, yy);
         }
       };
-      ramp(eb - xl, eb, false);                      // out, into END
-      if (pre) ramp(ea - xl, ea, true);              // in, from before START
-      else ramp(ea, ea + xl, true);                  // in, over the loop's start
+      if (h > 1) {
+        ramp(eb - h, eb + h, false);  // out, centred on END
+        ramp(ea - h, ea + h, true);   // in, centred on START
+      } else {
+        ramp(eb - f, eb, false);      // out, into END
+        ramp(ea, ea + f, true);       // in, after START
+      }
     }
   }
   if (Playing()) {

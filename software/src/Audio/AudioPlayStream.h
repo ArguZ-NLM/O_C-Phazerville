@@ -51,8 +51,17 @@ public:
   void SetLevel(float l) { level = l; }
   void SetSeam(float s) { seam = std::max(16.0f, s); }
   void SetCrossfade(bool on) { xfade_loop = on; }
-  // the crossfade's length: at most half the loop and what the cache holds
+  // the crossfade, centred on the edges: h either side of END into h either
+  // side of START (the cache then starts h before START); 0 when there is
+  // too little room, then XfLen: the last f frames into the loop's first f
+  size_t Half(size_t a, size_t b) const {
+    if (!(xfade_loop && loop_)) return 0;
+    const size_t h = std::min<size_t>({size_t(seam / 2), (b - a) / 2, a, frames > b ? frames - b : 0,
+                                       cache_cap > 128 ? cache_cap / 2 - 64 : 0});
+    return h >= 16 ? h : 0;
+  }
   size_t XfLen(size_t a, size_t b) const {
+    if (!(xfade_loop && loop_) || Half(a, b)) return 0;
     return std::min<size_t>({size_t(seam), (b - a) / 2, cache_cap > 64 ? cache_cap - 64 : 0});
   }
   void Play() { pos = double(ws); playing = true; }
@@ -69,8 +78,9 @@ public:
   bool Next(int16_t*& l, int16_t*& r, size_t& at, size_t& count, size_t chunk) {
     if (!frames) return false;
     // the loop's start into the cache
-    if (cs != ws) { __disable_irq(); cs = ws; cn = 0; __enable_irq(); }
-    const size_t cache_want = std::min(cache_cap, we - ws);
+    const size_t c0 = ws - Half(ws, we);  // centred crossfade: from h before START
+    if (cs != c0) { __disable_irq(); cs = c0; cn = 0; __enable_irq(); }
+    const size_t cache_want = std::min(cache_cap, we - c0);
     if (cn < cache_want) {
       at = cs + cn; count = std::min(chunk, cache_want - cn);
       l = cache[0] + cn; r = cache[1] + cn;
@@ -87,9 +97,10 @@ public:
       __disable_irq(); const size_t d = from - 1024 - rs; rs += d; rn -= d; __enable_irq();
     }
     const size_t next = rs + rn;
-    if (next >= we || rn + chunk > ring_cap - 1024) return false;
+    const size_t stop = std::min<size_t>(frames, we + Half(ws, we));  // past END for the crossfade
+    if (next >= stop || rn + chunk > ring_cap - 1024) return false;
     at = next;
-    count = std::min(chunk, we - next);
+    count = std::min(chunk, stop - next);
     // the ring wraps: hand out the part up to its end
     const size_t slot = next % ring_cap;
     count = std::min(count, ring_cap - slot);
@@ -140,8 +151,9 @@ FASTRUN void AudioPlayStream::update() {
   // crossfade seam (looping): the last xl frames before END fade into the
   // loop's first xl frames (from the cache); then on from just after them
   const bool xon = xfade_loop && loop_;
-  const size_t xl_ = xon ? XfLen(a, b) : 0;
-  const double xs = double(b) - double(xl_);
+  const size_t xh = Half(a, b);           // centred
+  const size_t xl_ = xh ? 0 : XfLen(a, b); // else: the loop's own start
+  const double xs = double(b) - double(xh ? xh : xl_);
   double p = pos;
   constexpr float run_step = 1.0f / (0.005f * AUDIO_SAMPLE_RATE_EXACT);
   const bool on = playing && !retrig;
@@ -151,20 +163,20 @@ FASTRUN void AudioPlayStream::update() {
     int16_t l0 = 0, r0 = 0, l1, r1;
     float yl = 0.0f, yr = 0.0f;
     if (Frame(i, l0, r0)) {
-      if (!Frame(i + 1 < b ? i + 1 : a, l1, r1)) { l1 = l0; r1 = r0; }
+      if (!Frame(i + 1 < b || xh ? i + 1 : a, l1, r1)) { l1 = l0; r1 = r0; }
       const float fr = float(p - double(i));
       const float o = float(p - double(a));
       const float e = xon ? 1.0f : std::min(1.0f, std::min(o, wl - o) / fade);  // the seam
       yl = (l0 + fr * (l1 - l0)) * g * e;
       yr = (r0 + fr * (r1 - r0)) * g * e;
-      if (xon && xl_ > 1 && p >= xs) {
+      if (xon && (xh || xl_ > 1) && p >= xs) {
         const double into = p - xs;
-        const size_t k = a + size_t(into);
+        const size_t k = a - xh + size_t(into);
         int16_t il0, ir0, il1, ir1;
         if (Frame(k, il0, ir0)) {
           if (!Frame(k + 1, il1, ir1)) { il1 = il0; ir1 = ir0; }
           const float fk = float(into - std::floor(into));
-          const float t = float(into / double(xl_));
+          const float t = float(into / double(xh ? 2 * xh : xl_));
           const float go = cosf(t * 1.5707963f), gi = sinf(t * 1.5707963f);
           yl = yl * go + (il0 + fk * (il1 - il0)) * g * gi;
           yr = yr * go + (ir0 + fk * (ir1 - ir0)) * g * gi;
@@ -176,7 +188,9 @@ FASTRUN void AudioPlayStream::update() {
     out[0]->data[n] = __SSAT(int32_t(yl * run_g * 32767.0f), 16);
     out[1]->data[n] = __SSAT(int32_t(yr * run_g * 32767.0f), 16);
     p += sp;
-    if (p >= double(b)) {
+    if (xh && p >= double(b + xh)) {
+      p = double(a + xh) + (p - double(b + xh));  // centred crossfade: on from after it
+    } else if (!xh && p >= double(b)) {
       p = double(a) + double(xl_) + (p - double(b));  // crossfade: on from after the faded-in part
       if (!loop_) { playing = false; run_g = 0.0f; p = double(a); }  // once through
     }

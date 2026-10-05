@@ -71,13 +71,14 @@ public:
   // PLAYER: looping forward, the seam is a real crossfade (the loop's end
   // plays into what leads up to its start) instead of a dip
   void SetCrossfade(bool on) { xfade_loop = on; }
-  // the crossfade's length and where its incoming part comes from: before
-  // START (pre = true) or, when there is too little before it, the first
-  // part of the loop itself (the loop then wraps to just after it)
-  static size_t XfLen(float seam, size_t ws, size_t wl, bool& pre) {
-    size_t f = std::min<size_t>(size_t(seam), wl / 2);
-    pre = ws >= f;
-    return f;
+  // the crossfade, centred on the loop's edges: h frames either side of
+  // END cross into h either side of START. Where the file has too little
+  // before START or after END, h shrinks; when nothing is left (h 0) it
+  // falls back to fading the last f frames into the loop's own first f.
+  static void XfPlan(float seam, size_t ws, size_t wl, size_t len, size_t& h, size_t& f) {
+    h = std::min<size_t>({size_t(seam / 2), wl / 2, ws, len > ws + wl ? len - ws - wl : 0});
+    if (h < 16) h = 0;
+    f = h ? 0 : std::min<size_t>(size_t(seam), wl / 2);
   }
   void SetDub(float keep) { keep_ = keep; }
   void SetMonitor(float m) { mon = m; }
@@ -235,11 +236,10 @@ FASTRUN void AudioEffectReel::update() {
   // the crossfade seam (looping forward): over the last xl frames of the
   // window the loop's end fades out while the frames leading into START
   // (or the loop's own beginning) fade in, equal power
-  bool xpre = true;
   const bool xon = xfade_loop && loop_ && sp > 0.0f && len && st != REC;
-  const size_t xl_ = xon ? XfLen(seam, ws, wl, xpre) : 0;
-  const float xlf = float(xl_);
-  const float wrap = xon && !xpre ? float(wl - xl_) : float(wl);  // inside: wraps to just after the faded-in part
+  size_t xh = 0, xf_in = 0;
+  if (xon) XfPlan(seam, ws, wl, len, xh, xf_in);
+  const float xhf = float(xh), xff = float(xf_in);
   // one play head: linear read, faded near its window's ends (the seam)
   auto read = [&](size_t w0, size_t wn, float o, float& l, float& r) {
     const size_t i0 = (w0 + size_t(o)) % len, i1 = (i0 + 1) % len;
@@ -271,10 +271,13 @@ FASTRUN void AudioEffectReel::update() {
       constexpr float run_step = 1.0f / (0.005f * AUDIO_SAMPLE_RATE_EXACT);
       run_g = (st == PLAY || st == DUB) ? std::min(1.0f, run_g + run_step) : std::max(0.0f, run_g - run_step);
       read(ws, wl, off, yl, yr);
-      if (xon && xl_ > 1 && off >= wl - xlf) {
-        // in the crossfade: the incoming part, read like the main head
-        const float t = (off - (wl - xlf)) / xlf;
-        const float src = xpre ? float(ws) - xlf + (off - (wl - xlf)) : float(ws) + (off - (wl - xlf));
+      // in the crossfade: the incoming part, read like the main head
+      // (centred: from h before START; else the loop's own start)
+      const bool in_xf = xon && (xh ? off >= wl - xhf : (xf_in > 1 && off >= wl - xff));
+      if (in_xf) {
+        const float into = off - (wl - (xh ? xhf : xff));
+        const float t = into / (xh ? 2.0f * xhf : xff);
+        const float src = xh ? float(ws) - xhf + into : float(ws) + into;
         const size_t i0 = (size_t(src) + len) % len, i1 = (i0 + 1) % len;
         const float fr = src - std::floor(src);
         const float il = (buf[0][i0] + fr * (buf[0][i1] - buf[0][i0])) * q;
@@ -309,10 +312,12 @@ FASTRUN void AudioEffectReel::update() {
       }
       // not looping: once round, stop (the seam has faded it out already)
       bool went_round;
-      if (xon) {  // the crossfade seam: inside, round to just after the faded-in part
+      if (xon) {  // the crossfade seam: on from where the faded-in part ended
         off += sp;
-        went_round = off >= wl;
-        while (off >= wl) off -= wrap;
+        const float end = xh ? wl + xhf : wl;
+        const float back = xh ? wl : wl - xff;
+        went_round = off >= end;
+        while (off >= end) off -= back;
       } else {
         went_round = step(off, wl);
       }
