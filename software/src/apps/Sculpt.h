@@ -1907,8 +1907,8 @@ FLASHMEM void AppSculpt::DrawScreensaver() const {
   constexpr float L = 2.5f, AMP = 0.7f, F = 130.0f;
   // how far back each of the 13 long lines goes (x L), left to right: a
   // ragged back edge, the right side reaching further, like the logo
-  static const float LEN[13] = {0.50f, 0.54f, 0.52f, 0.56f, 0.55f, 0.58f, 0.56f,
-                                0.60f, 0.62f, 0.66f, 0.76f, 0.82f, 0.86f};
+  static const float LEN[13] = {0.72f, 0.77f, 0.74f, 0.80f, 0.79f, 0.83f, 0.80f,
+                                0.86f, 0.89f, 0.94f, 1.09f, 1.17f, 1.23f};
   auto len_at = [](float u) {  // between the lines
     const float f = (u + 1.0f) * 6.0f;
     const int i = std::min(11, int(f));
@@ -1957,7 +1957,7 @@ FLASHMEM void AppSculpt::DrawScreensaver() const {
   };
   constexpr int S = 40;  // segments per line
   for (int j = 0; j < 8; j++) {  // across: close together at the front, sparse at the back, only where the long lines reach
-    const float z = powf(j / 7.0f, 2.3f) * 0.8f * L;
+    const float z = powf(j / 7.0f, 2.3f) * 1.15f * L;
     float px = 0, py = 0;
     bool prev = at(-1.0f, z, px, py);
     for (int k = 1; k <= S; k++) {
