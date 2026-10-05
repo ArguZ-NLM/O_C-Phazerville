@@ -697,21 +697,21 @@ void FASTRUN loop() {
 #endif
 
             // TODO:
-          case '+':
-          case '-':
-            // simulate UP and DOWN buttons
+          // remote panel (testing): a short press of A / B / X / Y ('+' '-'
+          // 'u' 'y'), L / R push ('[' ']'), L / R encoder ('," "." / '<' '>')
+          case '+': case '-': case 'u': case 'y': case '[': case ']': {
+            const uint16_t c = cmd == '+' ? OC::CONTROL_BUTTON_A : cmd == '-' ? OC::CONTROL_BUTTON_B
+                             : cmd == 'u' ? OC::CONTROL_BUTTON_X : cmd == 'y' ? OC::CONTROL_BUTTON_Y
+                             : cmd == '[' ? OC::CONTROL_BUTTON_L : OC::CONTROL_BUTTON_R;
+            OC::ui.Inject(UI::EVENT_BUTTON_DOWN, c, 0, 0);
+            OC::ui.Inject(UI::EVENT_BUTTON_PRESS, c, 0, 0);
             break;
-          case '[':
-          case ']':
-            // simulate Encoder button press
+          }
+          case ',': case '.':
+            OC::ui.Inject(UI::EVENT_ENCODER, OC::CONTROL_ENCODER_L, cmd == '.' ? 1 : -1, 0);
             break;
-          case ',':
-          case '.':
-            // simulate Left Encoder turn
-            break;
-          case '<':
-          case '>':
-            // simulate Right Encoder turn
+          case '<': case '>':
+            OC::ui.Inject(UI::EVENT_ENCODER, OC::CONTROL_ENCODER_R, cmd == '>' ? 1 : -1, 0);
             break;
           case '(': OC::PresetEngine::RequestSave(0); break;
           case ')': OC::PresetEngine::RequestRecall(0); break;
