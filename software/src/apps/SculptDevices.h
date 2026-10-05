@@ -1614,13 +1614,20 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
   static const int zf[4] = {1, 4, 16, 64};
   const int z = zoomed ? zf[mode[view_cursor] & 3] : 1;
   const size_t span = std::max<size_t>(w, n / z);
-  const size_t focus = zoomed ? size_t(uint64_t(cur[view_cursor]) * n / 10000) : n / 2;
-  const size_t v0 = std::min(n - std::min(n, span), focus > span / 2 ? focus - span / 2 : 0);
-  auto sx = [&](size_t pos) { return x + int((int64_t(pos) - int64_t(v0)) * (w - 1) / int64_t(span)); };
+  // the point being set stays in the middle of the screen; past the file's
+  // ends there is a dotted line
+  const int64_t focus = zoomed ? int64_t(uint64_t(cur[view_cursor]) * n / 10000) : int64_t(n / 2);
+  const int64_t v0 = zoomed ? focus - int64_t(span / 2) : 0;
+  auto sx = [&](size_t pos) { return x + int((int64_t(pos) - v0) * (w - 1) / int64_t(span)); };
   const int wy = y + 9, wh = h - 9, wc = wy + wh / 2;
   for (int c = 0; c < w; c++) {
-    const size_t a = v0 + size_t(c) * span / w, b = v0 + size_t(c + 1) * span / w;
-    const int pk = PeakAt(a, std::max(a + 1, b));
+    const int64_t a = v0 + int64_t(c) * int64_t(span) / w, b = v0 + int64_t(c + 1) * int64_t(span) / w;
+    if (b <= 0 || a >= int64_t(n)) {
+      if (c % 2 == 0) gfxPixel(x + c, wc);
+      continue;
+    }
+    const size_t ca = size_t(std::max<int64_t>(0, a)), cb = size_t(std::min<int64_t>(int64_t(n), b));
+    const int pk = PeakAt(ca, std::max(ca + 1, cb));
     const int amp = int(sqrtf(pk / 32768.0f) * (wh / 2 - 1));
     gfxLine(x + c, wc - amp, x + c, wc + amp);
   }
