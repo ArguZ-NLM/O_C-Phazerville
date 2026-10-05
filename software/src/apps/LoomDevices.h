@@ -1286,6 +1286,9 @@ private:
   int16_t Sample(const uint8_t* p) const;
   size_t ReadFrames(int16_t* l, int16_t* r, size_t n);  // from lf, converted
   int PeakAt(size_t a, size_t b) const;                 // picture: loudest in a..b
+  // picture: the wave's lowest and highest (L+R)/2 in each of w columns
+  // from a, span frames across; false if it can't be read
+  bool MinMax(int64_t a, size_t span, int w, int16_t* lo, int16_t* hi) const;
   int nfiles = 0, loaded = -1;
   // loading
   File lf;
@@ -1800,6 +1803,20 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
         if (c >= 0 && c < w) gfxRect(x + c - 1, wc - int(mono[i - first] / 32768.0f * (wh / 2 - 1)) - 1, 3, 3);
       }
     }
+  } else if (span <= size_t(w) * (streaming ? 16 : 128)) {
+    // zoomed in (up to 128 frames a column, 16 from the card): the wave's
+    // real shape, its lowest to highest point in each column
+    static int16_t lo[128], hi[128];
+    const bool ok = MinMax(v0, span, w, lo, hi);
+    for (int c = 0; c < w; c++) {
+      const int64_t a = v0 + int64_t(c) * int64_t(span) / w, b = v0 + int64_t(c + 1) * int64_t(span) / w;
+      if (!ok || b <= 0 || a >= int64_t(n)) {
+        if (c % 2 == 0) gfxPixel(x + c, wc);
+        continue;
+      }
+      const int y0 = wc - int(hi[c] / 32768.0f * (wh / 2 - 1)), y1 = wc - int(lo[c] / 32768.0f * (wh / 2 - 1));
+      gfxLine(x + c, y0, x + c, y1);
+    }
   } else {
   for (int c = 0; c < w; c++) {
       const int64_t a = v0 + int64_t(c) * int64_t(span) / w, b = v0 + int64_t(c + 1) * int64_t(span) / w;
@@ -1848,6 +1865,39 @@ FLASHMEM int PlayerDevice::Samples(size_t a, size_t count, int16_t* mono) const 
   const size_t rd = self->ReadFrames(l, r, count);
   for (size_t i = 0; i < rd; i++) mono[i] = int16_t((l[i] + r[i]) / 2);
   return int(rd);
+}
+
+// lowest / highest per column; each column also takes in the frame before
+// it, so neighbouring columns join up
+FLASHMEM bool PlayerDevice::MinMax(int64_t a, size_t span, int w, int16_t* lo, int16_t* hi) const {
+  const int64_t n = int64_t(Frames());
+  static int16_t l[256], r[256];
+  auto* self = const_cast<PlayerDevice*>(this);
+  for (int c = 0; c < w; c++) {
+    int64_t c0 = a + int64_t(c) * int64_t(span) / w - 1, c1 = a + int64_t(c + 1) * int64_t(span) / w;
+    c0 = std::max<int64_t>(0, c0);
+    c1 = std::min<int64_t>(n, std::max(c1, c0 + 1));
+    int mn = 32767, mx = -32768;
+    if (!streaming) {
+      const int16_t* dl = fx.Data(0);
+      const int16_t* dr = fx.Data(1);
+      for (int64_t i = c0; i < c1; i++) {
+        const int v = (dl[i] + dr[i]) / 2;
+        mn = std::min(mn, v); mx = std::max(mx, v);
+      }
+    } else if (c1 > c0) {
+      self->lf.seek(data_off + size_t(c0) * size_t(bytes) * chans);
+      const size_t rd = self->ReadFrames(l, r, std::min<size_t>(256, size_t(c1 - c0)));
+      if (!rd) return false;
+      for (size_t i = 0; i < rd; i++) {
+        const int v = (l[i] + r[i]) / 2;
+        mn = std::min(mn, v); mx = std::max(mx, v);
+      }
+    }
+    if (mn > mx) mn = mx = 0;
+    lo[c] = int16_t(mn); hi[c] = int16_t(mx);
+  }
+  return true;
 }
 
 // loudest between two frames, from memory or (streaming) the level index
