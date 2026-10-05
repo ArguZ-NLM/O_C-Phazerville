@@ -622,14 +622,17 @@ FLASHMEM void ClockDevice::DrawMini(int x, int y, int w, int h) {
 constexpr int NUM_MODS = 4;
 constexpr int MOD_TYPES = 5;
 
-PROGMEM static const char MOD_TYPE_TAGS[MOD_TYPES][4] = {"-", "WAV", "RND", "ENV", "FOL"};
+// by name: ADSR, FOLLOW, RANDOM, WAVE (files from before the sort used
+// WAVE, RANDOM, ADSR, FOLLOW: OLD_MOD_TYPE maps them)
+PROGMEM static const char MOD_TYPE_TAGS[MOD_TYPES][4] = {"-", "ENV", "FOL", "RND", "WAV"};
+constexpr uint8_t OLD_MOD_TYPE[MOD_TYPES] = {0, 4, 3, 1, 2};
 
 FLASHMEM static Modulator* MakeModulator(int type) {
   switch (type) {
-    case 1: return new WaveMod;
-    case 2: return new RandomMod;
-    case 3: return new AdsrMod;
-    case 4: return new FollowMod;
+    case 1: return new AdsrMod;
+    case 2: return new FollowMod;
+    case 3: return new RandomMod;
+    case 4: return new WaveMod;
     default: return nullptr;
   }
 }

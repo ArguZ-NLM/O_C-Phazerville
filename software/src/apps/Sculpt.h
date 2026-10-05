@@ -1214,7 +1214,7 @@ FLASHMEM void AppSculpt::DrawMods() const {
 namespace sculpt {
   constexpr char SAVE_FILE[] = "SCULPT.BIN";
   constexpr char SAVE_TMP[] = "SCULPT.TMP";
-  constexpr uint8_t SAVE_VERSION = 1;
+  constexpr uint8_t SAVE_VERSION = 2;  // 2: modulator types sorted by name
 
   // per device: tag, count, then per setting value/mode/mod amount/
   // mod source/bus select, then bipolar bits and action triggers
@@ -1349,7 +1349,7 @@ FLASHMEM void AppSculpt::LoadFile() {
   char magic[3];
   uint8_t version = 0, lk = 0;
   if (f.read(magic, 3) != 3 || memcmp(magic, "SCU", 3) || f.read(&version, 1) != 1
-      || version != SAVE_VERSION || f.read(&lk, 1) != 1) {
+      || (version != SAVE_VERSION && version != 1) || f.read(&lk, 1) != 1) {
     f.close();
     return;
   }
@@ -1369,12 +1369,15 @@ FLASHMEM void AppSculpt::LoadFile() {
       for (int o = 0; o < MAX_OPTIONS && ok; o++) ok = ReadDevice(f, tr.inst[s][o]);
     if (!ok || f.read(types, NUM_MODS) != NUM_MODS) { ok = false; break; }
     for (int i = 0; i < NUM_MODS && ok; i++) {
-      for (int type = 1; type < MOD_TYPES && ok; type++) {
+      for (int slot = 1; slot < MOD_TYPES && ok; slot++) {
+        // version 1 kept them in the old order
+        const int type = version == 1 ? OLD_MOD_TYPE[slot] : slot;
         // create the modulator before reading into it
         if (f.peek() == 1 && !tr.mods[i][type]) SetModType(t, i, type);
         ok = ReadDevice(f, tr.mods[i][type]);
       }
-      tr.mod_type[i] = types[i] < MOD_TYPES ? types[i] : 0;
+      const int ty = types[i] < MOD_TYPES ? types[i] : 0;
+      tr.mod_type[i] = version == 1 ? OLD_MOD_TYPE[ty] : ty;
       if (tr.mod_type[i] && !tr.mod(i)) tr.mod_type[i] = 0;
     }
   }
