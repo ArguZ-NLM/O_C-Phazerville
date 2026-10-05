@@ -2007,8 +2007,8 @@ FLASHMEM void AppLoom::LoadFile() {
       tr.last_choice[s] = last[s] < SLOT_DEFS[s].noptions ? last[s] : 0;
     }
     ok = ReadDevice(f, tr.input) && ReadDevice(f, tr.mix);
+    const int opts = version >= 4 ? MAX_OPTIONS : 2;  // older files: two per slot
     for (int s = SOURCE + 1; s < SLOT_COUNT && ok; s++)
-      const int opts = version >= 4 ? MAX_OPTIONS : 2;  // older files: two per slot
       for (int o = 0; o < opts && ok; o++) ok = ReadDevice(f, tr.inst[s][o]);
     stage = 10 * t + 1;
     if (!ok || f.read(types, NUM_MODS) != NUM_MODS) { ok = false; break; }
