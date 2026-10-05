@@ -1236,9 +1236,8 @@ FLASHMEM void AppSculpt::DrawDevice() const {
       PrintCentred(x, 43, pd.name);
       if (pd.nmodes) gfxRect(x + 29, 43, 2, 2); // has modes (hold L + turn R)
     }
-    if (d->Modded(p)) { // modulated: small wave mark (in modulation: above the u / b)
-      const int my = sel && mod_mode ? 43 : 48;
-      gfxPixel(x + 27, my + 1); gfxPixel(x + 28, my); gfxPixel(x + 29, my + 1); gfxPixel(x + 30, my);
+    if (d->Modded(p) && !(sel && mod_mode)) { // modulated: small wave mark
+      gfxPixel(x + 27, 49); gfxPixel(x + 28, 48); gfxPixel(x + 29, 49); gfxPixel(x + 30, 48);
     }
 
     // value row
