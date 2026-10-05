@@ -265,11 +265,11 @@ static constexpr uint32_t HEADER_SIZE = 12;
 FLASHMEM
 void Init()
 {
-#ifdef MTP_INTERFACE
+#if defined(MTP_INTERFACE) && !defined(CARD_APP)  // (the CARD app sets it up)
   MTP.begin();
 #endif
   if (SDcard_Ready) {
-#ifdef MTP_INTERFACE
+#if defined(MTP_INTERFACE) && !defined(CARD_APP)
     MTP.addFilesystem(SD, "SD_Card");
 #endif
     SERIAL_PRINTLN("SD card available for preset storage");
@@ -285,7 +285,7 @@ void Init()
 
   if (myfs.blockBytes() > 8192) myfs.setMetadataMax(8192);
 
-#ifdef MTP_INTERFACE
+#if defined(MTP_INTERFACE) && !defined(CARD_APP)
   MTP.addFilesystem(myfs, "Internal_LFS");
 #endif
 

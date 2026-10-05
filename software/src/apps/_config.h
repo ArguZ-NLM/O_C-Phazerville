@@ -46,6 +46,9 @@ namespace menu = OC::menu;
 #include "Sculpt.h"
 #endif
 #include "Backup.h"
+#ifdef CARD_APP
+#include "Card.h"
+#endif
 #include "SETTINGS.h"
 
 
@@ -142,6 +145,9 @@ static AppContainer<void // this space intentionally left blank
   , AppWaveformEditor
 #endif
   , AppBackup
+#ifdef CARD_APP
+  , AppCard
+#endif
 > app_container;
 
 static_assert(decltype(app_container)::TotalAppDataStorageSize() < AppData::kAppDataSize,

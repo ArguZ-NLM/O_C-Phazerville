@@ -598,7 +598,7 @@ void FASTRUN loop() {
     if (ui.ticks() - last_redraw_time > REDRAW_TIMEOUT_MS)
       MENU_REDRAW = 1;
 
-#ifdef MTP_INTERFACE
+#if defined(MTP_INTERFACE) && !defined(CARD_APP)  // (the CARD app does it itself)
     // handle MTP Disk requests
     Trace(20);  // in MTP
     MTP.loop();
