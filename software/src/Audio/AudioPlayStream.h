@@ -195,7 +195,11 @@ FASTRUN void AudioPlayStream::update() {
     const double p0 = pos;
     // (with two caches the new start is read while the old one plays; only
     // the last moments before the seam keep what they have)
-    const bool away = p0 < double(we) - double(std::max(h, size_t(h_l))) - AUDIO_BLOCK_SAMPLES * 4;
+    const size_t wlen = we - ws;
+    const double margin = std::min<double>(AUDIO_BLOCK_SAMPLES * 4, wlen / 4);
+    const bool stale = h_l > wlen / 2;  // the loop got shorter than its crossfade
+    const bool away = stale || wlen < AUDIO_BLOCK_SAMPLES * 8 ||
+                      p0 < double(we) - double(std::max(h, size_t(h_l))) - margin;
     if ((h != h_l || nws != lt_a || nwe != lt_b) && away) { h_l = h; lt_a = nws; lt_b = nwe; }
     if (!xfade_loop || !loop_) h_l = 0;
     if (!loop_) { lt_a = ws; lt_b = we; }

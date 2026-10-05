@@ -263,7 +263,10 @@ FASTRUN void AudioEffectReel::update() {
     size_t h, f;
     XfPlan(seam, ws, wl, len, h, f, tws, twl);
     const float zone = float(wl) - float(xh_l ? xh_l : xf_l);
-    if (off < zone || (h == xh_l && f == xf_l && tws == lt_ws && twl == lt_wl)) {
+    // a plan that doesn't fit this window any more (it got short) is
+    // replaced at once, else it could never be replaced
+    const bool stale = xh_l > wl / 2 || xf_l > wl / 2 || lt_wl == 0;
+    if (off < zone || stale || (h == xh_l && f == xf_l && tws == lt_ws && twl == lt_wl)) {
       xh_l = h; xf_l = f; lt_ws = tws; lt_wl = twl;
     }
   } else {
