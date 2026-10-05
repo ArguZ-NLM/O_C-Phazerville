@@ -1920,9 +1920,9 @@ FLASHMEM void AppSculpt::DrawScreensaver() const {
   const float t = now * 0.001f;
   const float phase = t * 0.5f;
 
-  // the logo view: looking at (0, -0.3, 0.7) from 3 units away, down 45
+  // the logo view: looking at (0, -0.3, 0.7) from 2.4 units away, down 45
   // degrees and turned 45; both points drift around these
-  float aim[3] = {0.0f, -0.3f, 0.7f}, cam[3] = {-1.5f, 1.82f, -0.8f};
+  float aim[3] = {0.0f, -0.3f, 0.7f}, cam[3] = {-1.2f, 1.4f, -0.5f};
   for (int a = 0; a < 3; a++) {
     aim[a] += AIM_CUBE * aim_drift[a].At(now);
     cam[a] += CAM_CUBE * cam_drift[a].At(now);
