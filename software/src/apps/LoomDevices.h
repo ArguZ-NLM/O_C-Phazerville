@@ -1221,6 +1221,7 @@ class PlayerDevice : public Device {
 public:
   enum { FILE_, LOOP, LEVEL, SPEED, START, END, XFADE, SNAP };
   static constexpr float MAX_SECS = 16.0f;
+  static constexpr size_t MIN_BUF = 11025;  // 0.25 s: the buffer before a file
   // longer files stream from the card (AudioPlayStream) into fx's input,
   // which fx passes through (its MON), so the device has one output
   static constexpr int IDX_FRAMES = 256;  // frames per entry of the level index
@@ -1464,7 +1465,9 @@ FLASHMEM void PlayerDevice::DrawBrowser(int x, int y, int w, int h) const {
 // called while the stream is not patched in
 FLASHMEM bool PlayerDevice::Activate() {
   if (active) return fx.ready();
-  fx.Acquire(MAX_SECS);
+  // a small buffer to start with; a file gets one its own size when it is
+  // opened (streamed files keep the small one)
+  fx.Resize(MIN_BUF);
   fx.SetMonitor(1.0f);  // passes the stream through
   Scan();
   active = true;
@@ -1528,14 +1531,23 @@ FLASHMEM void PlayerDevice::Load(int i) {
       frames = sz / (bytes * chans);
       rate = srate / 44100.0f;
       got = 0;
-      if (frames <= fx.Capacity()) { loading = true; return; }
-      // too long for memory: stream it, after one pass for the level index
+      // up to 16 s: into memory, in a buffer of the file's own length
+      if (frames <= size_t(MAX_SECS * AUDIO_SAMPLE_RATE_EXACT) && fx.Resize(std::max<size_t>(frames, MIN_BUF))) {
+        loading = true;
+        return;
+      }
+      // too long for memory (or no room): stream it, after one pass for the
+      // level index; memory only for the pass-through
+      fx.Resize(MIN_BUF);
       data_off = lf.position();
       if (!stream.ready()) stream.Acquire(4.0f, 1.0f);
       if (idx) extmem_free(idx);
       idx_n = frames / IDX_FRAMES + 1;
       idx = static_cast<uint8_t*>(extmem_calloc(idx_n, 1));
-      if (!stream.ready() || !idx) { too_long = true; frames = fx.Capacity(); loading = true; return; }
+      if (!stream.ready() || !idx) {  // no room to stream either: the start of it
+        fx.Resize(size_t(MAX_SECS * AUDIO_SAMPLE_RATE_EXACT)) || fx.Resize(size_t(2 * AUDIO_SAMPLE_RATE_EXACT));
+        too_long = true; frames = fx.Capacity(); loading = true; return;
+      }
       done = 0;
       analysing = true;
       return;

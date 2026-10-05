@@ -30,6 +30,24 @@ public:
     }
     return 0.0f;
   }
+  // a buffer of exactly n frames, also while patched in: the new one is
+  // swapped in between two audio updates (the loop starts over empty);
+  // false if it doesn't fit (the old one is kept)
+  bool Resize(size_t n) {
+    if (n == cap && ready()) return true;
+    int16_t* l = static_cast<int16_t*>(extmem_calloc(n, sizeof(int16_t)));
+    int16_t* r = l ? static_cast<int16_t*>(extmem_calloc(n, sizeof(int16_t))) : nullptr;
+    if (!l || !r) { if (l) extmem_free(l); return false; }
+    int16_t* old[2];
+    AudioNoInterrupts();
+    old[0] = buf[0]; old[1] = buf[1];
+    buf[0] = l; buf[1] = r;
+    cap = n;
+    Reset();
+    AudioInterrupts();
+    for (auto b : old) if (b) extmem_free(b);
+    return true;
+  }
   void Release() {
     for (auto& b : buf) { if (b) extmem_free(b); b = nullptr; }
     cap = 0;
