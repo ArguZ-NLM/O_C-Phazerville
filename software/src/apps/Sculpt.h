@@ -759,6 +759,7 @@ FLASHMEM void AppSculpt::MainLoop() {
     int(usage), int(usage * 10) % 10, AudioMemoryUsageMax(), OC::AudioIO::AUDIO_MEMORY);
   AudioProcessorUsageMaxReset();
   AudioMemoryUsageMaxReset();
+  Serial.printf("  load:%s\n", sculpt::load_note);
   // modulated settings: value, result, both sources (amount, MOD, u/b)
   for (int t = 0; t < sculpt::NUM_TRACKS; t++) {
     const sculpt::Track& tr = sculpt::tracks[t];
@@ -1372,6 +1373,7 @@ namespace sculpt {
   // 2: modulator types sorted by name; 3: second mod source, MOD E-H
   constexpr uint8_t SAVE_VERSION = 3;
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
+  static char load_note[160] = "";             // how the last load went (USB stats)
 
   // per device: tag, count, then per setting value/mode/mod amount/
   // mod source/bus select, then bipolar bits and action triggers
@@ -1528,6 +1530,7 @@ FLASHMEM void AppSculpt::LoadFile() {
   }
   load_version = version;
   bool ok = ReadDevice(f, tempo_clock);
+  int stage = 0;
   for (int t = 0; t < NUM_TRACKS && ok; t++) {
     Track& tr = tracks[t];
     uint8_t choice[SLOT_COUNT], last[SLOT_COUNT], types[NUM_MODS];
@@ -1541,7 +1544,9 @@ FLASHMEM void AppSculpt::LoadFile() {
     ok = ReadDevice(f, tr.input) && ReadDevice(f, tr.mix);
     for (int s = SOURCE + 1; s < SLOT_COUNT && ok; s++)
       for (int o = 0; o < MAX_OPTIONS && ok; o++) ok = ReadDevice(f, tr.inst[s][o]);
+    stage = 10 * t + 1;
     if (!ok || f.read(types, NUM_MODS) != NUM_MODS) { ok = false; break; }
+    stage = 10 * t + 2;
     for (int i = 0; i < NUM_MODS && ok; i++) {
       for (int slot = 1; slot < MOD_TYPES && ok; slot++) {
         // version 1 kept them in the old order
@@ -1554,6 +1559,9 @@ FLASHMEM void AppSculpt::LoadFile() {
       tr.mod_type[i] = version == 1 ? OLD_MOD_TYPE[ty] : ty;
       if (tr.mod_type[i] && !tr.mod(i)) tr.mod_type[i] = 0;
     }
+    stage = 10 * t + 3;
+    snprintf(load_note + strlen(load_note), sizeof(load_note) - strlen(load_note), " t%d types %d%d%d%d->%d%d%d%d",
+             t, types[0], types[1], types[2], types[3], tr.mod_type[0], tr.mod_type[1], tr.mod_type[2], tr.mod_type[3]);
   }
   uint8_t ui[6];
   if (ok && f.read(ui, sizeof(ui)) == sizeof(ui)) {
@@ -1598,6 +1606,8 @@ FLASHMEM void AppSculpt::LoadFile() {
       }
     }
   }
+  snprintf(load_note + strlen(load_note), sizeof(load_note) - strlen(load_note), " v%d ok %d stage %d pos %d/%d",
+           version, ok, stage, int(f.position()), int(f.size()));
   f.close();
   linked = lk;
   if (linked) track = 0;
@@ -1607,6 +1617,7 @@ FLASHMEM void AppSculpt::LoadFile() {
   }
   ForEachDevice([](Device* d) { d->ApplyAll(); });
   Serial.printf("Sculpt: settings loaded%s\n", ok ? "" : " (partly)");
+
 }
 
 FLASHMEM void AppSculpt::View() const {

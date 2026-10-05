@@ -625,6 +625,21 @@ void FASTRUN loop() {
               cl.close();
             }
             break;
+          case 'Q': {  // Sculpt's settings file, in hex
+            File sf = PhzConfig::myfs.open("SCULPT.BIN", FILE_READ);
+            Serial.printf("--- SCULPT.BIN %d bytes ---\n", sf ? int(sf.size()) : -1);
+            if (!sf) break;
+            uint8_t b[32];
+            int n;
+            while ((n = sf.read(b, sizeof(b))) > 0) {
+              for (int i = 0; i < n; i++) Serial.printf("%02X", b[i]);
+              Serial.println();
+              delay(2);
+            }
+            sf.close();
+            Serial.println("--- end ---");
+            break;
+          }
 #endif
 #ifdef PRINT_DEBUG
           case 'z':
