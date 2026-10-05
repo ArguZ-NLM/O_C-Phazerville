@@ -1058,6 +1058,17 @@ constexpr char LOOP_DIR[] = "/SCULPT";
 constexpr int MAX_FILES = 48, NAME_LEN = 80;
 constexpr size_t IO_CHUNK = 2048;  // sample frames per step
 
+// a file name for the screen: without .wav, and when longer than `fit`
+// characters cut in the middle ("first..last"), so both ends stay readable
+FLASHMEM static void ShortName(const char* nm, int fit, char* out, size_t cap) {
+  int l = int(strlen(nm));
+  if (l > 4 && !strcasecmp(nm + l - 4, ".WAV")) l -= 4;
+  fit = std::max(3, std::min(fit, int(cap) - 1));
+  if (l <= fit) { snprintf(out, cap, "%.*s", l, nm); return; }
+  const int head = (fit - 2 + 1) / 2, tail = fit - 2 - head;
+  snprintf(out, cap, "%.*s..%.*s", head, nm, tail, nm + l - tail);
+}
+
 FLASHMEM static void PutLE(uint8_t* p, uint32_t v, int n) {
   for (int i = 0; i < n; i++) p[i] = uint8_t(v >> (8 * i));
 }
@@ -1339,7 +1350,14 @@ FLASHMEM void PlayerDevice::DrawBrowser(int x, int y, int w, int h) const {
   const int first = constrain(bsel - rows / 2, 0, std::max(0, bcount - rows));
   for (int r = 0; r < rows && first + r < bcount; r++) {
     const int i = first + r;
-    snprintf(t, sizeof(t), "%.19s%s", bn[i], bfolder[i] && strcmp(bn[i], "..") ? "/" : "");
+    if (bfolder[i]) {
+      const bool up = !strcmp(bn[i], "..");
+      char f[20];
+      ShortName(bn[i], 19 - !up, f, sizeof(f));
+      snprintf(t, sizeof(t), "%s%s", f, up ? "" : "/");
+    } else {
+      ShortName(bn[i], 20, t, sizeof(t));
+    }
     const int ry = y + 13 + r * 8;
     gfxPrint(x + 2, ry, t);
     if (i == bsel) gfxInvert(x, ry - 1, w, 9);
@@ -1662,7 +1680,7 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
       gfxPrint(right + 2, y, zt);
     }
     char nm[24];
-    snprintf(nm, sizeof(nm), "%.*s", std::max(0, (right - x) / 6 - 1), names[fi]);  // as much as fits
+    ShortName(names[fi], (right - x) / 6 - 1, nm, sizeof(nm));
     gfxPrint(x, y, nm);
   }
   if (too_long) gfxPrint(x + w - 24, y, PSTR("16s"));
