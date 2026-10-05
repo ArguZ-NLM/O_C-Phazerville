@@ -243,7 +243,7 @@ private:
   bool active = false;
   bool reload_on_resume = false;  // a preset recall replaced LOOM.BIN
   bool linked = false;
-  bool link_stereo = false;  // linked as STEREO (else DUAL MONO)
+  bool link_stereo = false;  // linked as SPLIT (else TWIN)
   uint32_t link_note_at = 0;   // when the link mode changed (shown briefly)
   int16_t unlinked_in[2] = {-1, -1}, unlinked_spool_in[2] = {0, 0};  // input choices from before the link
   // the other track's PLAYER from before the link (its own file comes back)
@@ -282,7 +282,7 @@ private:
   void DrawMods() const;
   void DrawOutputs() const;
   static void DrawClockMark(int x, int y);
-  void DrawLinkLabel(int x, int y) const;  // L, two squares (filled: STEREO), R
+  void DrawLinkLabel(int x, int y) const;  // L, two squares (filled: SPLIT), R
   float OutLevel(int o) const;
   void WriteOutputs();
   void SetChoice(int t, int s, int option);
@@ -498,7 +498,7 @@ FLASHMEM void AppLoom::Mirror(loom::Device* d, int p) const {
   using namespace loom;
   Device* tw = Twin(d);
   if (!tw) return;
-  // PLAYER's FILE goes along only when linked as STEREO (one file for both)
+  // PLAYER's FILE goes along only when linked as SPLIT (one file for both)
   if (!focus_mod && col == SOURCE && p == 0 && !(d == tracks[track].player && link_stereo)) return;
   if (!focus_mod && col == MIX_COL && p == 1) return;
   tw->val[p] = d->val[p];
@@ -589,10 +589,10 @@ FLASHMEM void AppLoom::ToggleBypass(int s) {
   }
 }
 
-// UP+DOWN cycles: off -> STEREO -> DUAL MONO -> off. Linked, the controls
-// of both tracks are the same; STEREO also makes them one stereo pair (track
+// UP+DOWN cycles: off -> SPLIT -> TWIN -> off. Linked, the controls
+// of both tracks are the same; SPLIT also makes them one stereo pair (track
 // L the left input / left side of the PLAYER's file, track R the right),
-// DUAL MONO keeps each track's own input and file.
+// TWIN keeps each track's own input and file.
 FLASHMEM void AppLoom::ToggleLink() {
   using namespace loom;
   if (!linked) {
@@ -606,7 +606,7 @@ FLASHMEM void AppLoom::ToggleLink() {
   } else if (link_stereo) {
     StereoOff();
     link_stereo = false;
-    SetPans(0, 0);  // DUAL MONO: both in the middle
+    SetPans(0, 0);  // TWIN: both in the middle
   } else {
     linked = false;
     if (unlinked_pan[0] != INT16_MIN) SetPans(unlinked_pan[0], unlinked_pan[1]);  // their own again
@@ -688,7 +688,7 @@ FLASHMEM void AppLoom::LinkCopy() {
   track = 0; // the cursor lives on row 1 while linked
 }
 
-// STEREO: track L all to the left output, track R all to the right
+// SPLIT: track L all to the left output, track R all to the right
 FLASHMEM void AppLoom::SetPans(int l, int r) {
   using namespace loom;
   tracks[0].mix->val[MixDevice::PAN] = l;
@@ -706,12 +706,12 @@ FLASHMEM void AppLoom::RouteStereo(bool on) {
 
 FLASHMEM void AppLoom::StereoOn(int master) {
   using namespace loom;
-  SetPans(-50, 50);  // STEREO: track L hard left, track R hard right
+  SetPans(-50, 50);  // SPLIT: track L hard left, track R hard right
   RouteStereo(true);
   Track& a = tracks[master];
   Track& b = tracks[1 - master];
   // linked = one stereo pair: track L hears the left input, track R the
-  // right one (their own choices come back with DUAL MONO / unlinking)
+  // right one (their own choices come back with TWIN / unlinking)
   for (int t = 0; t < NUM_TRACKS; t++) {
     Track& tr = tracks[t];
     unlinked_in[t] = tr.input->val[0];
@@ -1365,7 +1365,7 @@ FLASHMEM void AppLoom::DrawChain() const {
   }
 
   if (linked) {
-    // two squares between L and R: filled = STEREO, hollow = DUAL MONO
+    // two squares between L and R: filled = SPLIT, hollow = TWIN
     for (const int sy : {21, 27}) {
       if (link_stereo) gfxRect(0, sy, 5, 5);
       else gfxFrame(0, sy, 5, 5);
@@ -1414,7 +1414,7 @@ FLASHMEM void AppLoom::DrawDevice() const {
   const int name_x = both ? 24 : 12;
   const char* name = mod_mode && name_x + 6 * int(strlen(d->def.name)) > 62 ? d->def.tag : d->def.name;
   if (both) {
-    // linked STEREO shows L|R, DUAL MONO (and the shared mods) L+R
+    // linked: L, squares, R; the shared mods L+R
     if (linked && !SharedFocus()) DrawLinkLabel(1, 1);
     else gfxPrint(1, 1, PSTR("L+R"));
     gfxInvert(0, 0, 21, 9);
@@ -1673,7 +1673,7 @@ FLASHMEM void AppLoom::DrawClockPage() const {
 }
 
 // linked tracks in the top line: L and R with the two squares of the chain
-// view between them, filled for STEREO, hollow for DUAL MONO
+// view between them, filled for SPLIT, hollow for TWIN
 FLASHMEM void AppLoom::DrawLinkLabel(int x, int y) const {
   gfxPrint(x, y, PSTR("L"));
   // stacked like in the chain view, between L and R (R where it was in L+R)
@@ -1846,7 +1846,7 @@ FLASHMEM void AppLoom::SaveFile() const {
   if (!f) return;
   f.write("SCU", 3);  // the file's mark since it was Sculpt; kept so all files load
   f.write(&SAVE_VERSION, 1);
-  const uint8_t lk = linked ? (link_stereo ? 2 : 1) : 0;  // 2 = STEREO
+  const uint8_t lk = linked ? (link_stereo ? 2 : 1) : 0;  // 2 = SPLIT
   f.write(&lk, 1);
   WriteDevice(f, tempo_clock);
   for (auto& tr : tracks) {
@@ -2017,7 +2017,7 @@ FLASHMEM void AppLoom::LoadFile() {
   linked = lk != 0;
   link_stereo = lk == 2;
   if (linked) track = 0;
-  // STEREO: each PLAYER its own side (the rest is in the saved settings)
+  // SPLIT: each PLAYER its own side (the rest is in the saved settings)
   if (link_stereo && tracks[0].player && tracks[1].player) {
     tracks[0].player->SetPick(1);
     tracks[1].player->SetPick(2);
@@ -2040,7 +2040,7 @@ FLASHMEM void AppLoom::View() const {
   // the link mode, for a moment after it changed: in a box with a double
   // outline (like the boot picture's LOOM, smaller)
   if (link_note_at && millis() - link_note_at < 1200) {
-    const char* txt = !linked ? PSTR("UNLINKED") : link_stereo ? PSTR("STEREO") : PSTR("DUAL MONO");
+    const char* txt = !linked ? PSTR("UNLINKED") : link_stereo ? PSTR("SPLIT") : PSTR("TWIN");
     const int tw = 6 * int(strlen(txt)), bw = tw + 14, bx = (128 - bw) / 2;
     graphics.clearRect(bx, 21, bw, 19);
     gfxFrame(bx, 21, bw, 19);
