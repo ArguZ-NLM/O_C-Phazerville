@@ -243,6 +243,7 @@ public:
   void Tick(const ModCtx& ctx) override;
   void Format(int p, char* buf, size_t n) const override;
   void Action(int a) override { if (a == 0) Step(); }
+  void DrawViz(int x, int y, int w, int h) override;
 private:
   float steps[16];
   uint8_t pos = 0;
@@ -275,6 +276,35 @@ FLASHMEM void RandomMod::Tick(const ModCtx& ctx) {
   const float tau = 0.0005f + s * s * 1.0f;
   smooth += (target - smooth) * std::min(1.0f, ctx.dt / tau);
   out = 0.5f + (smooth - 0.5f) * cur[P_AMT] * 0.01f + cur[P_OFFS] * 0.01f;
+}
+
+// LEN set: the sequence as bars, the current step lit, the output (with its
+// glide) as a line over them; free: the last steps going by as bars
+FLASHMEM void RandomMod::DrawViz(int x, int y, int w, int h) {
+  const int ww = w - 8, top = y + 1, hh = h - 3;
+  auto val = [&](float s) { return constrain(0.5f + (s - 0.5f) * cur[P_AMT] * 0.01f + cur[P_OFFS] * 0.01f, 0.0f, 1.0f); };
+  auto yy = [&](float v) { return top + hh - int(v * hh + 0.5f); };
+  const int len = cur[P_LEN];
+  if (len > 0) {
+    const int bw = ww / len;
+    for (int i = 0; i < len; i++) {
+      const int bx = x + i * bw, by = yy(val(steps[i]));
+      if (i == pos) gfxRect(bx + 1, by, std::max(1, bw - 2), top + hh - by + 1);
+      else gfxFrame(bx + 1, by, std::max(1, bw - 2), top + hh - by + 1);
+    }
+  } else {
+    // the history, sampled as steps (~1 s across)
+    for (int i = 0; i < HIST; i++) {
+      const float v = hist[(hist_pos + i) % HIST];
+      const int xx = x + i * ww / HIST;
+      gfxDottedLine(xx, yy(v), xx, top + hh, 2);
+    }
+  }
+  // the output now, as a line across, so the glide shows
+  gfxDottedLine(x, yy(out), x + ww - 1, yy(out), 2);
+  const int bh = int(out * h);
+  gfxFrame(x + w - 4, y, 4, h);
+  if (bh > 0) gfxRect(x + w - 4, y + h - bh, 4, bh);
 }
 
 FLASHMEM void RandomMod::Format(int p, char* buf, size_t n) const {
@@ -431,8 +461,11 @@ public:
   enum { P_INPUT, P_AMT, P_RISE, P_FALL, P_GAIN, P_OFFS };
   FollowMod() : Modulator(FOLLOW_DEF) {}
   void Tick(const ModCtx& ctx) override;
+  void DrawViz(int x, int y, int w, int h) override;
 private:
   float env = 0.0f;
+  float in_hist[HIST] = {};  // the level coming in, alongside hist (the output)
+  float in_peak = 0.0f;
 };
 
 FLASHMEM void FollowMod::Tick(const ModCtx& ctx) {
@@ -440,6 +473,28 @@ FLASHMEM void FollowMod::Tick(const ModCtx& ctx) {
   const float tau = lvl > env ? Seconds(cur[P_RISE], 0.001f, 1.0f) : Seconds(cur[P_FALL], 0.005f, 3.0f);
   env += (lvl - env) * std::min(1.0f, ctx.dt / tau);
   out = env * cur[P_AMT] * 0.01f + cur[P_OFFS] * 0.01f;
+  in_peak = std::max(in_peak, std::min(1.0f, lvl));
+  // Run() moves hist_pos after this; keep the input in step with it
+  if (hist_t + ctx.dt >= 1.0f / HIST) { in_hist[hist_pos] = in_peak; in_peak = 0.0f; }
+}
+
+// the level coming in as faint bars going by, the follower's output as a
+// solid line over them (~1 s across)
+FLASHMEM void FollowMod::DrawViz(int x, int y, int w, int h) {
+  const int ww = w - 8, top = y + 1, hh = h - 3;
+  auto yy = [&](float v) { return top + hh - int(constrain(v, 0.0f, 1.0f) * hh + 0.5f); };
+  int py = -1;
+  for (int i = 0; i < HIST; i++) {
+    const int k = (hist_pos + i) % HIST;
+    const int xx = x + i * ww / HIST;
+    gfxDottedLine(xx, yy(in_hist[k]), xx, top + hh, 3);
+    const int cy = yy(hist[k]);
+    if (py >= 0) gfxLine(xx - ww / HIST, py, xx, cy); else gfxPixel(xx, cy);
+    py = cy;
+  }
+  const int bh = int(out * h);
+  gfxFrame(x + w - 4, y, 4, h);
+  if (bh > 0) gfxRect(x + w - 4, y + h - bh, 4, bh);
 }
 
 /////////////////////////////////////////////////////////////////
