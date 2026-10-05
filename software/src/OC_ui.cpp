@@ -183,6 +183,8 @@ UiMode Ui::DispatchEvents(const RuntimeSlot &appslot) {
 #endif
 
     const bool z_hold = (event.mask & CONTROL_BUTTON_Z);
+    // Sculpt keeps Z for its clock: only Z + R push (app menu) stays
+    const bool z_extras = app->id() != TWOCCS("SP");
     const bool a_hold = (event.mask & CONTROL_BUTTON_A);
 
     // --- Handle global hotkeys
@@ -193,13 +195,13 @@ UiMode Ui::DispatchEvents(const RuntimeSlot &appslot) {
         break;
       }
       // Hold Z or A and push left encoder for IO settings menu
-      if (CONTROL_BUTTON_L == event.control && (z_hold || a_hold)) {
+      if (CONTROL_BUTTON_L == event.control && ((z_hold && z_extras) || a_hold)) {
         app->EditIOSettings();
         SetButtonIgnoreMask();
         continue;
       }
       // Hold Z and push A for screensaver (not available on O_C without VOR button)
-      if (CONTROL_BUTTON_A == event.control && z_hold) {
+      if (CONTROL_BUTTON_A == event.control && z_hold && z_extras) {
         screensaver_ = true;
         SetButtonIgnoreMask();
         break;
