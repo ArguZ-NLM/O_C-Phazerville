@@ -1651,8 +1651,8 @@ FLASHMEM void AppLoom::DrawLinkLabel(int x, int y) const {
   gfxPrint(x, y, PSTR("L"));
   // stacked like in the chain view, between L and R (R where it was in L+R)
   for (const int sy : {y, y + 4}) {
-    if (link_stereo) gfxRect(x + 7, sy, 3, 3);
-    else gfxFrame(x + 7, sy, 3, 3);
+    if (link_stereo) gfxRect(x + 8, sy, 3, 3);
+    else gfxFrame(x + 8, sy, 3, 3);
   }
   gfxPrint(x + 12, y, PSTR("R"));
 }
