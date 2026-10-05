@@ -398,6 +398,8 @@ public:
   volatile float gain[2][2] = {{0.8f, 0.8f}, {0.8f, 0.8f}}; // [track][L/R]
   volatile float level[2] = {}; // last block's peak per track, for FOLLOW
   float peak[2][2] = {};  // held until read, [track][L/R]
+  volatile bool mute = false;   // the whole output, fading over ~15 ms
+  float mute_g = 1.0f;
   void update() override;
   void ReadPeaks(float out[2][2]) {
     AudioNoInterrupts();
@@ -436,6 +438,14 @@ FASTRUN void LoomMixer::update() {
     }
     level[0] = blk[0];
     level[1] = blk[1];
+    if (mute || mute_g < 1.0f) {  // fade the sum out / back in
+      const float to = mute ? 0.0f : 1.0f, step = 1.0f / (0.015f * AUDIO_SAMPLE_RATE_EXACT);
+      for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+        mute_g = to > mute_g ? std::min(to, mute_g + step) : std::max(to, mute_g - step);
+        acc[0][n] = int32_t(acc[0][n] * mute_g);
+        acc[1][n] = int32_t(acc[1][n] * mute_g);
+      }
+    }
     for (int c = 0; c < 2; c++)
       for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) out[c]->data[n] = __SSAT(acc[c][n], 16);
     transmit(out[0], 0);
@@ -1269,6 +1279,7 @@ public:
   }
   // main loop: loading in steps
   void Idle();
+  bool Busy() const { return loading || analysing; }  // reading the file in
   // the WAVs in the current folder, sorted; Select picks one in /LOOM by
   // name (after a save), SetFile any folder + name (from the settings)
   void Scan();

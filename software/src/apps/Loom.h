@@ -782,6 +782,11 @@ FLASHMEM void AppLoom::MainLoop() {
       }
       if (tr.player && tr.choice[SOURCE] == 2) tr.player->Idle();
     }
+    // the output is muted while a PLAYER reads a file in (the card reading
+    // made a high whine on the output)
+    bool busy = false;
+    for (auto& tr : tracks) busy |= tr.player && tr.choice[SOURCE] == 2 && tr.player->Busy();
+    mixer->mute = busy;
     if (loop_save_held && ms >= 2000) loop_save_held = false;
   }
   if (save_held && millis() - save_hold >= 2000) {
