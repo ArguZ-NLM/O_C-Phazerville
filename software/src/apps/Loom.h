@@ -1649,10 +1649,10 @@ FLASHMEM void AppLoom::DrawClockPage() const {
 // view between them, filled for STEREO, hollow for DUAL MONO
 FLASHMEM void AppLoom::DrawLinkLabel(int x, int y) const {
   gfxPrint(x, y, PSTR("L"));
-  // the first square sits in the L's open corner; R where it was in L+R
-  for (const int sx : {x + 4, x + 8}) {
-    if (link_stereo) gfxRect(sx, y + 2, 3, 3);
-    else gfxFrame(sx, y + 2, 3, 3);
+  // stacked like in the chain view, between L and R (R where it was in L+R)
+  for (const int sy : {y, y + 4}) {
+    if (link_stereo) gfxRect(x + 7, sy, 3, 3);
+    else gfxFrame(x + 7, sy, 3, 3);
   }
   gfxPrint(x + 12, y, PSTR("R"));
 }
