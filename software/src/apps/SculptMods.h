@@ -51,6 +51,10 @@ public:
 
 protected:
   bool prev_gate[2] = {};
+  uint8_t seen_starts = 0;
+  // true once after each clock start (check every tick)
+  bool Restarted() { const bool r = seen_starts != clock_starts; seen_starts = clock_starts; return r; }
+  bool Synced(int p) const { return mode[p] != SYNC_FREE; }
   bool Gate(int src) const;
   bool Edge(int src, const ModCtx& ctx, int slot);
   float Seconds(int v, float lo, float hi) const; // 0..100 -> lo..hi, exp
@@ -183,7 +187,9 @@ FLASHMEM float WaveMod::At(float phase) const {
 
 FLASHMEM void WaveMod::Tick(const ModCtx& ctx) {
   if (Edge(cur[P_RESET], ctx, 0)) { ph = 0.0f; flash = 0.1f; }
-  ph += Hz() * ctx.dt;
+  const bool synced = Synced(P_RATE);
+  if (Restarted() && synced) ph = 0.0f;
+  if (!synced || clock_running) ph += Hz() * ctx.dt;
   ph -= floorf(ph);
   out = At(ph);
 }
@@ -265,9 +271,15 @@ FLASHMEM void RandomMod::Step() {
 }
 
 FLASHMEM void RandomMod::Tick(const ModCtx& ctx) {
-  if (cur[P_CLOCK]) {
+  const bool synced = Synced(P_RATE) && !cur[P_CLOCK];
+  if (Restarted() && synced) {
+    // start: back to the first step
+    t = 0.0f;
+    pos = cur[P_LEN] > 0 ? cur[P_LEN] - 1 : 0;
+    Step();
+  } else if (cur[P_CLOCK]) {
     if (Edge(cur[P_CLOCK], ctx, 0)) Step();
-  } else {
+  } else if (!synced || clock_running) {
     t += Hz() * ctx.dt;
     if (t >= 1.0f) { t -= floorf(t); Step(); }
   }
@@ -524,7 +536,9 @@ public:
   void DrawViz(int x, int y, int w, int h) override;
   void DrawMini(int x, int y, int w, int h) override;
   bool external() const { return cur[P_SOURCE] != 0; }
+  bool midi() const { return cur[P_SOURCE] == 1; }
 private:
+  uint8_t beat = 0;
   uint32_t last_edge_us = 0, tap_us = 0;
   uint32_t midi_mark = 0, midi_mark_us = 0;
   float beat_ph = 0.0f;
@@ -564,8 +578,9 @@ FLASHMEM void ClockDevice::Tick(const ModCtx& ctx) {
   tempo_bpm = (src && have_measure) ? measured : float(cur[P_BPM]);
 
   // beat blink for the picture, and a 0..1 ramp per beat as output
-  beat_ph += ctx.dt * tempo_bpm / 60.0f;
-  if (beat_ph >= 1.0f) { beat_ph -= floorf(beat_ph); flash = 0.08f; }
+  if (Restarted()) { beat_ph = 0.0f; beat = 0; flash = 0.08f; }
+  if (clock_running) beat_ph += ctx.dt * tempo_bpm / 60.0f;
+  if (beat_ph >= 1.0f) { beat_ph -= floorf(beat_ph); beat = (beat + 1) % 4; flash = 0.08f; }
   out = beat_ph;
 }
 
@@ -598,22 +613,22 @@ FLASHMEM void ClockDevice::DrawViz(int x, int y, int w, int h) {
   snprintf(buf, sizeof(buf), "%d", int(tempo_bpm + 0.5f));
   gfxPrint(x + 4, y + 4, buf);
   gfxPrint(x + 4 + 6 * int(strlen(buf)) + 2, y + 4, PSTR("BPM"));
-  if (external() && !have_measure) gfxPrint(x + 4, y + 16, PSTR("waiting for clock"));
-  // four beats, the current one filled
+  if (!clock_running) gfxPrint(x + 4, y + 16, PSTR("stopped  Z: start"));
+  else if (external() && !have_measure) gfxPrint(x + 4, y + 16, PSTR("waiting for clock"));
+  // four beats, the current one filled (none while stopped)
   for (int b = 0; b < 4; b++) {
     const int bx = x + w - 52 + b * 13;
     gfxFrame(bx, y + 4, 10, 10);
   }
-  static uint8_t beat = 0;
-  if (flash > 0.07f) beat = (beat + 1) % 4;
-  gfxRect(x + w - 52 + beat * 13 + 2, y + 6, 6, 6);
+  if (clock_running) gfxRect(x + w - 52 + beat * 13 + 2, y + 6, 6, 6);
 }
 
 FLASHMEM void ClockDevice::DrawMini(int x, int y, int w, int h) {
   char buf[8];
   snprintf(buf, sizeof(buf), "%d", int(tempo_bpm + 0.5f));
   gfxPrint(x + 1, y + 2, buf);
-  if (flash > 0.0f) gfxRect(x + w / 2 - 3, y + h / 2 + 2, 6, 6);
+  if (!clock_running) gfxPrint(x + 1, y + h / 2 + 2, PSTR("STP"));
+  else if (flash > 0.0f) gfxRect(x + w / 2 - 3, y + h / 2 + 2, 6, 6);
   else gfxFrame(x + w / 2 - 3, y + h / 2 + 2, 6, 6);
 }
 

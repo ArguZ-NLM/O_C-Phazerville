@@ -609,6 +609,11 @@ FLASHMEM static void SculptReadMIDI(T& device) {
     };
     if (msg.message == midi::SystemExclusive || msg.message == midi::ProgramChange) continue;
     if (msg.message == midi::Clock) sculpt::midi_clocks++;
+    if (sculpt::tempo_clock && sculpt::tempo_clock->midi()) {
+      if (msg.message == midi::Start) sculpt::ClockStart();
+      else if (msg.message == midi::Continue) sculpt::clock_running = true;
+      else if (msg.message == midi::Stop) sculpt::ClockStop();
+    }
     const bool realtime = msg.message == midi::Clock || msg.message == midi::Start
       || msg.message == midi::Stop;
     if (realtime || (msg.message >> 4) != 0xF) HS::frame.MIDIState.ProcessMIDIMsg(msg);
@@ -806,6 +811,11 @@ FLASHMEM void AppSculpt::MainLoop() {
 FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
   using namespace sculpt;
   dirty = true;
+  if (event.control == OC::CONTROL_BUTTON_Z) {
+    // anywhere in the app: clock start / stop
+    if (event.type == UI::EVENT_BUTTON_PRESS) clock_running ? ClockStop() : ClockStart();
+    return;
+  }
   if (event.control == OC::CONTROL_BUTTON_L) {
     if (event.type == UI::EVENT_BUTTON_DOWN) {
       l_held = true;

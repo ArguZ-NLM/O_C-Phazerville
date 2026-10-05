@@ -718,10 +718,11 @@ void FASTRUN loop() {
 #endif
           // also in release builds: lets the flash script save state first
           // remote panel (testing): a short press of A / B / X / Y ('+' '-'
-          // 'u' 'y'), L / R push ('[' ']'), L / R encoder ('," "." / '<' '>')
-          case '+': case '-': case 'u': case 'y': case '[': case ']': {
+          // 'u' 'y'), Z ('*'), L / R push ('[' ']'), L / R encoder ('," "." / '<' '>')
+          case '+': case '-': case 'u': case 'y': case '*': case '[': case ']': {
             const uint16_t c = cmd == '+' ? OC::CONTROL_BUTTON_A : cmd == '-' ? OC::CONTROL_BUTTON_B
                              : cmd == 'u' ? OC::CONTROL_BUTTON_X : cmd == 'y' ? OC::CONTROL_BUTTON_Y
+                             : cmd == '*' ? OC::CONTROL_BUTTON_Z
                              : cmd == '[' ? OC::CONTROL_BUTTON_L : OC::CONTROL_BUTTON_R;
             OC::ui.Inject(UI::EVENT_BUTTON_DOWN, c, 0, 0);
             OC::ui.Inject(UI::EVENT_BUTTON_PRESS, c, 0, 0);

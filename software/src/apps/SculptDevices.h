@@ -81,6 +81,13 @@ struct ModCtx {
 // --- tempo ---
 // set by the CLOCK device; synced times and rates follow it
 float tempo_bpm = 120.0f;
+// Z starts and stops the clock (so does MIDI start/stop when the clock
+// follows MIDI): synced modulators hold while stopped and begin again from
+// the top on start
+bool clock_running = true;
+uint8_t clock_starts = 0;  // counts starts; each modulator notices a new one
+inline void ClockStart() { clock_running = true; clock_starts++; }
+inline void ClockStop() { clock_running = false; }
 
 // note values for synced times, in beats (quarter notes)
 constexpr int NUM_DIVS = 9;
