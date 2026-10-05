@@ -223,8 +223,10 @@ FLASHMEM void Device::Defaults() {
 
 FLASHMEM int Device::Modulated(int p) const {
   const ParamDef& d = param(p);
-  const bool one = mod_amt[p] && ModSourceOn(p);
-  const bool two = mod_amt2[p] && mod_bus2[p] && mod_bus;
+  // a MOD slot with no modulator in it (-1) counts as no source
+  const bool one = mod_amt[p] && ModSourceOn(p)
+                   && !(mod_bus_sel[p] && mod_bus && mod_bus[mod_bus_sel[p] - 1] < 0.0f);
+  const bool two = mod_amt2[p] && mod_bus2[p] && mod_bus && mod_bus[mod_bus2[p] - 1] >= 0.0f;
   if (!one && !two) return val[p];
   // the two sources add up, each by its own amount
   float sum = 0.0f;

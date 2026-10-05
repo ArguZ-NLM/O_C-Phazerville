@@ -91,7 +91,8 @@ namespace sculpt {
     SculptGate* gate = nullptr;         // before ECHO: its tail rings out
     Modulator* mods[NUM_MODS][MOD_TYPES] = {};
     uint8_t mod_type[NUM_MODS] = {};
-    float mod_out[MOD_BUSES] = {};  // MOD A-D, then a copy of the shared E-H
+    // MOD A-D, then a copy of the shared E-H; -1 = no modulator there
+    float mod_out[MOD_BUSES] = {-1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f};
 
     Modulator* mod(int i) const { return mods[i][mod_type[i]]; }
 
@@ -468,8 +469,8 @@ FLASHMEM void AppSculpt::SetModType(int t, int i, int type) {
   }
   ModType(t, i) = type;
   if (!type) {
-    if (i < NUM_MODS) tracks[t].mod_out[i] = 0.0f;
-    else for (auto& tr : tracks) tr.mod_out[i] = 0.0f;
+    if (i < NUM_MODS) tracks[t].mod_out[i] = -1.0f;  // a setting listening to it stays put
+    else for (auto& tr : tracks) tr.mod_out[i] = -1.0f;
   }
 }
 
@@ -762,7 +763,10 @@ FLASHMEM void AppSculpt::MainLoop() {
   for (int t = 0; t < sculpt::NUM_TRACKS; t++) {
     const sculpt::Track& tr = sculpt::tracks[t];
     Serial.printf("  %c mods", t ? 'R' : 'L');
-    for (int i = 0; i < sculpt::MOD_BUSES; i++) Serial.printf(" %c=%d.%02d", 'A' + i, int(tr.mod_out[i]), int(tr.mod_out[i] * 100) % 100);
+    for (int i = 0; i < sculpt::MOD_BUSES; i++) {
+      const sculpt::Modulator* m = ModAt(t, i);
+      Serial.printf(" %c:%s=%d.%02d", 'A' + i, m ? m->def.tag : "-", int(tr.mod_out[i]), int(tr.mod_out[i] * 100) % 100);
+    }
     Serial.println();
     ForEachDevice([&](sculpt::Device* d) {
       if (d->mod_bus != tr.mod_out) return;
@@ -1280,12 +1284,14 @@ FLASHMEM void AppSculpt::DrawDevice() const {
         const int amt = k ? d->mod_amt2[p] : d->mod_amt[p];
         const bool on = k ? d->mod_bus2[p] && d->mod_bus : d->ModSourceOn(p);
         if (!amt || !on) continue;
+        // an empty modulator: the line dotted (it does nothing)
+        const int bus = k ? d->mod_bus2[p] : d->mod_bus_sel[p];
+        const bool empty = bus && d->mod_bus && d->mod_bus[bus - 1] < 0.0f;
         const int len = std::max(1, abs(amt) * 14 / 100);
         const bool bi = k ? d->Bipolar2(p) : d->Bipolar(p);
         const int ry = 60 + 2 * k;
-        if (bi) gfxLine(c - len, ry, c + len, ry);
-        else if (amt > 0) gfxLine(c, ry, c + len, ry);
-        else gfxLine(c - len, ry, c, ry);
+        const int x0 = bi || amt < 0 ? c - len : c, x1 = bi || amt > 0 ? c + len : c;
+        for (int px = x0; px <= x1; px++) if (!empty || !(px & 1)) gfxPixel(px, ry);
       }
     } else if (pd.kind == BI) {
       const int c = x + 15, len = d->val[p] * 15 / std::max(1, (int)pd.max);
