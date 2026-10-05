@@ -35,6 +35,7 @@
 #include "../Audio/AudioEffectResonator.h"
 #include "../Audio/AudioEffectClouds.h"
 #include "../Audio/AudioEffectReel.h"
+#include "../Audio/AudioPlayStream.h"
 #include <SD.h>
 
 namespace sculpt {
@@ -1136,7 +1137,10 @@ class PlayerDevice : public Device {
 public:
   enum { FILE_, SPEED, START, END, SNAP, XFADE, LEVEL };
   static constexpr float MAX_SECS = 16.0f;
-  PlayerDevice() : Device(PLAYER_DEF) {}
+  // longer files stream from the card (AudioPlayStream) into fx's input,
+  // which fx passes through (its MON), so the device has one output
+  static constexpr int IDX_FRAMES = 256;  // frames per entry of the level index
+  PlayerDevice() : Device(PLAYER_DEF), st_l(stream, 0, fx, 0), st_r(stream, 1, fx, 1) {}
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
   bool Activate() override;
@@ -1146,7 +1150,7 @@ public:
   int Step(int p, int v, int dir) const override;
   void Format(int p, char* buf, size_t n) const override;
   void Action(int a) override;
-  bool ActionLit(int a) const override { return a == 0 && fx.state() == AudioEffectReel::PLAY; }
+  bool ActionLit(int a) const override { return a == 0 && Playing(); }
   void DrawViz(int x, int y, int w, int h) override;
   void DrawMini(int x, int y, int w, int h) override;
   void CpuMax(float parts[2]) override {
@@ -1161,8 +1165,20 @@ public:
   void Select(const char* name);
 
 private:
+  AudioPlayStream stream;  // before fx: the audio update order follows the signal
   AudioEffectReel fx;
+  AudioConnection st_l, st_r;
   char names[MAX_FILES][NAME_LEN] = {};
+  // streaming (files too long for fx)
+  bool streaming = false, analysing = false;
+  size_t data_off = 0, done = 0;  // where the samples start in the file; analysis progress
+  uint8_t* idx = nullptr;         // level per IDX_FRAMES frames, for the picture
+  size_t idx_n = 0;
+  bool Playing() const { return streaming ? stream.Playing() : fx.state() == AudioEffectReel::PLAY; }
+  size_t Frames() const { return streaming ? frames : fx.Length(); }
+  int16_t Sample(const uint8_t* p) const;
+  size_t ReadFrames(int16_t* l, int16_t* r, size_t n);  // from lf, converted
+  int PeakAt(size_t a, size_t b) const;                 // picture: loudest in a..b
   int nfiles = 0, loaded = -1;
   // loading
   File lf;
@@ -1210,7 +1226,7 @@ FLASHMEM void PlayerDevice::Select(const char* name) {
 FLASHMEM bool PlayerDevice::Activate() {
   if (active) return fx.ready();
   fx.Acquire(MAX_SECS);
-  fx.SetMonitor(0.0f);
+  fx.SetMonitor(1.0f);  // passes the stream through
   Scan();
   active = true;
   loaded = -1;
@@ -1220,7 +1236,10 @@ FLASHMEM bool PlayerDevice::Activate() {
 
 FLASHMEM void PlayerDevice::Deactivate() {
   if (!active) return;
-  if (loading) { lf.close(); loading = false; }
+  if (loading || streaming || analysing) lf.close();
+  loading = streaming = analysing = false;
+  stream.Release();
+  if (idx) { extmem_free(idx); idx = nullptr; }
   fx.Release();
   loaded = -1;
   active = false;
@@ -1228,7 +1247,10 @@ FLASHMEM void PlayerDevice::Deactivate() {
 
 // reads the WAV header, then Idle() fills the buffer
 FLASHMEM void PlayerDevice::Load(int i) {
-  if (loading) { lf.close(); loading = false; }
+  if (loading || streaming || analysing) lf.close();
+  loading = streaming = analysing = false;
+  stream.Stop();
+  stream.Open(0);
   fx.BeginLoad();
   loaded = i;
   too_long = false;
@@ -1263,10 +1285,18 @@ FLASHMEM void PlayerDevice::Load(int i) {
       if (!ok_bits || chans < 1) break;
       bytes = bits / 8;
       frames = sz / (bytes * chans);
-      if (frames > fx.Capacity()) { frames = fx.Capacity(); too_long = true; }
-      got = 0;
       rate = srate / 44100.0f;
-      loading = true;
+      got = 0;
+      if (frames <= fx.Capacity()) { loading = true; return; }
+      // too long for memory: stream it, after one pass for the level index
+      data_off = lf.position();
+      if (!stream.ready()) stream.Acquire(4.0f, 1.0f);
+      if (idx) extmem_free(idx);
+      idx_n = frames / IDX_FRAMES + 1;
+      idx = static_cast<uint8_t*>(extmem_calloc(idx_n, 1));
+      if (!stream.ready() || !idx) { too_long = true; frames = fx.Capacity(); loading = true; return; }
+      done = 0;
+      analysing = true;
       return;
     } else {
       lf.seek(lf.position() + sz + (sz & 1));
@@ -1275,76 +1305,130 @@ FLASHMEM void PlayerDevice::Load(int i) {
   lf.close();
 }
 
-FLASHMEM void PlayerDevice::Idle() {
-  if (!active) return;
-  if (loaded != cur[FILE_] && !loading) Load(cur[FILE_]);
-  if (!loading) return;
-  // any sample size / float, to 16 bit; the first two channels (mono: both)
+// one sample of any size / float as 16 bit
+FLASHMEM int16_t PlayerDevice::Sample(const uint8_t* p) const {
+  switch (bytes) {
+    case 1: return int16_t((p[0] - 128) << 8);  // 8-bit is unsigned
+    case 2: return int16_t(p[0] | p[1] << 8);
+    case 3: return int16_t(p[1] | p[2] << 8);
+    default:
+      if (is_float) {
+        float f;
+        memcpy(&f, p, 4);
+        return int16_t(constrain(f, -1.0f, 1.0f) * 32767.0f);
+      }
+      return int16_t(p[2] | p[3] << 8);
+  }
+}
+
+// up to n frames from the file's current position; the first two channels
+// (mono: both)
+FLASHMEM size_t PlayerDevice::ReadFrames(int16_t* l, int16_t* r, size_t n) {
   static uint8_t raw[IO_CHUNK * 8];
   const size_t frame = size_t(bytes) * chans;
-  const size_t k = std::min({IO_CHUNK, frames - got, sizeof(raw) / frame});
+  const size_t k = std::min(n, sizeof(raw) / frame);
   const size_t rd = lf.read(raw, k * frame) / frame;
-  int16_t* l = fx.Data(0);
-  int16_t* r = fx.Data(1);
-  auto sample = [&](const uint8_t* p) -> int16_t {
-    switch (bytes) {
-      case 1: return int16_t((p[0] - 128) << 8);  // 8-bit is unsigned
-      case 2: return int16_t(p[0] | p[1] << 8);
-      case 3: return int16_t(p[1] | p[2] << 8);
-      default:
-        if (is_float) {
-          float f;
-          memcpy(&f, p, 4);
-          return int16_t(constrain(f, -1.0f, 1.0f) * 32767.0f);
-        }
-        return int16_t(p[2] | p[3] << 8);
-    }
-  };
   for (size_t i = 0; i < rd; i++) {
     const uint8_t* fp = raw + i * frame;
-    l[got + i] = sample(fp);
-    r[got + i] = sample(fp + (chans > 1 ? bytes : 0));
+    l[i] = Sample(fp);
+    r[i] = Sample(fp + (chans > 1 ? bytes : 0));
   }
-  fx.MarkRange(got, got + rd);
-  got += rd;
-  if (rd < k || got >= frames) {
-    lf.close();
-    loading = false;
-    fx.FinishLoad(got);
-    ApplyAll();
+  return rd;
+}
+
+FLASHMEM void PlayerDevice::Idle() {
+  if (!active) return;
+  if (loaded != cur[FILE_] && !loading && !analysing) Load(cur[FILE_]);
+  static int16_t tl[IO_CHUNK], tr[IO_CHUNK];
+  if (loading) {  // short file: all of it into fx
+    const size_t rd = ReadFrames(fx.Data(0) + got, fx.Data(1) + got, std::min(IO_CHUNK, frames - got));
+    fx.MarkRange(got, got + rd);
+    got += rd;
+    if (!rd || got >= frames) {
+      lf.close();
+      loading = false;
+      fx.FinishLoad(got);
+      ApplyAll();
+    }
+    return;
+  }
+  if (analysing) {  // long file, first pass: the level index
+    const size_t rd = ReadFrames(tl, tr, std::min(IO_CHUNK, frames - done));
+    for (size_t i = 0; i < rd; i++) {
+      const size_t e = (done + i) / IDX_FRAMES;
+      const uint8_t pk = uint8_t(std::min(255, std::max(abs(tl[i]), abs(tr[i])) >> 7));
+      if (e < idx_n && pk > idx[e]) idx[e] = pk;
+    }
+    done += rd;
+    if (!rd || done >= frames) {
+      analysing = false;
+      streaming = true;
+      stream.Open(frames);
+      ApplyAll();
+    }
+    return;
+  }
+  if (streaming) {  // keep the stream's buffers topped up, a few chunks a time
+    for (int k = 0; k < 4; k++) {
+      int16_t *l, *r;
+      size_t at, count;
+      if (!stream.Next(l, r, at, count, IO_CHUNK)) break;
+      lf.seek(data_off + at * size_t(bytes) * chans);
+      const size_t rd = ReadFrames(l, r, count);
+      stream.Filled(rd);
+      if (rd < count) break;
+    }
   }
 }
 
 // the quietest sample within ~5 ms of a position (a soft place to cut)
 FLASHMEM size_t PlayerDevice::SnapQuiet(size_t at) const {
-  const size_t n = fx.Length();
+  const size_t n = Frames();
   if (!n) return at;
   const size_t r = 220, lo = at > r ? at - r : 0, hi = std::min(n - 1, at + r);
   size_t best = at;
   int quiet = INT32_MAX;
+  static int16_t sl[2 * 220 + 1], sr[2 * 220 + 1];
+  const int16_t *pl, *pr;
+  if (streaming) {  // read the spot from the card
+    auto* self = const_cast<PlayerDevice*>(this);
+    self->lf.seek(data_off + lo * size_t(bytes) * chans);
+    const size_t rd = self->ReadFrames(sl, sr, hi - lo + 1);
+    pl = sl - lo; pr = sr - lo;
+    if (rd < hi - lo + 1) return at;
+  } else {
+    pl = fx.Data(0); pr = fx.Data(1);
+  }
   for (size_t i = lo; i <= hi; i++) {
-    const int a = abs(fx.Data(0)[i]) + abs(fx.Data(1)[i]);
+    const int a = abs(pl[i]) + abs(pr[i]);
     if (a < quiet) { quiet = a; best = i; }
   }
   return best;
 }
 
 FLASHMEM void PlayerDevice::Window() {
-  const size_t n = fx.Length();
+  const size_t n = Frames();
   if (!n) return;
   size_t a = size_t(uint64_t(cur[START]) * n / 10000), b = size_t(uint64_t(cur[END]) * n / 10000);
   if (cur[SNAP]) { a = SnapQuiet(a); b = SnapQuiet(b); }
   if (b <= a + AUDIO_BLOCK_SAMPLES) b = std::min(n, a + AUDIO_BLOCK_SAMPLES * 2);
-  fx.SetWindowSamples(a, b - a);
+  if (streaming) stream.SetWindow(a, b);
+  else fx.SetWindowSamples(a, b - a);
 }
 
 FLASHMEM void PlayerDevice::Apply(int p) {
   switch (p) {
     case FILE_: break;  // Idle() loads it
-    case SPEED: fx.SetSpeed(cur[SPEED] * 0.01f * rate); break;
+    case SPEED:  // streaming: forward only (0 .. 2x)
+      fx.SetSpeed(cur[SPEED] * 0.01f * rate);
+      stream.SetSpeed(cur[SPEED] * 0.01f * rate);
+      break;
     case START: case END: case SNAP: Window(); break;
-    case XFADE: fx.SetSeam(16.0f + cur[XFADE] * 0.01f * 8800.0f); break;  // up to ~200 ms
-    case LEVEL: fx.SetLevel(cur[LEVEL] * 0.01f); break;
+    case XFADE:  // up to ~200 ms
+      fx.SetSeam(16.0f + cur[XFADE] * 0.01f * 8800.0f);
+      stream.SetSeam(16.0f + cur[XFADE] * 0.01f * 8800.0f);
+      break;
+    case LEVEL: fx.SetLevel(cur[LEVEL] * 0.01f); stream.SetLevel(cur[LEVEL] * 0.01f); break;
   }
 }
 
@@ -1372,6 +1456,11 @@ FLASHMEM void PlayerDevice::Format(int p, char* buf, size_t n) const {
 
 // A: play / stop; B: back to the start
 FLASHMEM void PlayerDevice::Action(int a) {
+  if (streaming) {
+    if (a == 0 && stream.Playing()) stream.Stop();
+    else stream.Play();  // A: from the start of the loop; B: back to it
+    return;
+  }
   const auto st = fx.state();
   if (a == 0) {
     if (st == AudioEffectReel::PLAY) fx.Stop();
@@ -1390,15 +1479,20 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
   if (!SDcard_Ready) { gfxPrint(x + 34, cy - 4, PSTR("no SD card")); return; }
   if (!nfiles) { gfxPrint(x + 4, cy - 4, PSTR("no WAV in /SCULPT")); return; }
   const int fi = std::min<int>(cur[FILE_], nfiles - 1);
-  if (loading) {
+  if (loading || analysing) {
     char t[24];
-    snprintf(t, sizeof(t), "loading %d%%", frames ? int(got * 100 / frames) : 0);
+    if (loading) snprintf(t, sizeof(t), "loading %d%%", frames ? int(got * 100 / frames) : 0);
+    else snprintf(t, sizeof(t), "reading %d%%", frames ? int(done * 100 / frames) : 0);
     gfxPrint(x + 28, cy - 4, t);
     return;
   }
-  const size_t n = fx.Length();
+  const size_t n = Frames();
   gfxPrint(x, y, names[fi]);
   if (too_long) gfxPrint(x + w - 24, y, PSTR("16s"));
+  if (streaming) {  // streamed from the card; blinks if the card fell behind
+    const bool late = stream.Underran();
+    if (!late || (millis() / 200) % 2) gfxPrint(x + w - 12, y, late ? PSTR("!!") : PSTR("SD"));
+  }
   if (!n) { gfxPrint(x + 28, cy - 4, PSTR("can't read")); return; }
   // what part of the sample is on screen
   const bool zoomed = view_cursor == START || view_cursor == END;
@@ -1411,21 +1505,27 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
   const int wy = y + 9, wh = h - 9, wc = wy + wh / 2;
   for (int c = 0; c < w; c++) {
     const size_t a = v0 + size_t(c) * span / w, b = v0 + size_t(c + 1) * span / w;
-    const int pk = fx.Peak(a, std::max(a + 1, b), std::max<size_t>(1, (b - a) / 24));
+    const int pk = PeakAt(a, std::max(a + 1, b));
     const int amp = int(sqrtf(pk / 32768.0f) * (wh / 2 - 1));
     gfxLine(x + c, wc - amp, x + c, wc + amp);
   }
   // the loop's edges and the head
-  float fa, fb;
-  fx.Window(fa, fb);
-  for (const float f : {fa, fb}) {
-    const int ex = sx(size_t(f * n));
+  size_t ea, eb;
+  if (streaming) {
+    ea = size_t(uint64_t(cur[START]) * n / 10000); eb = size_t(uint64_t(cur[END]) * n / 10000);
+  } else {
+    float fa, fb;
+    fx.Window(fa, fb);
+    ea = size_t(fa * n); eb = size_t(fb * n);
+  }
+  for (const size_t e : {ea, eb}) {
+    const int ex = sx(e);
     if (ex < x || ex >= x + w) continue;
     graphics.clearRect(std::max(x, ex - 1), wy, std::min(3, x + w - std::max(x, ex - 1)), wh);
     gfxLine(ex, wy, ex, base);
   }
-  if (fx.state() == AudioEffectReel::PLAY) {
-    const int hx = sx(size_t(fx.HeadPos() * n));
+  if (Playing()) {
+    const int hx = sx(size_t((streaming ? stream.HeadPos() : fx.HeadPos()) * n));
     if (hx >= x && hx < x + w) gfxInvert(hx, wy, 1, wh);
   }
   if (zoomed && z > 1) {
@@ -1435,8 +1535,25 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
   }
 }
 
+// loudest between two frames, from memory or (streaming) the level index
+FLASHMEM int PlayerDevice::PeakAt(size_t a, size_t b) const {
+  if (!streaming) return fx.Peak(a, b, std::max<size_t>(1, (b - a) / 24));
+  int pk = 0;
+  for (size_t e = a / IDX_FRAMES; e <= (b - 1) / IDX_FRAMES && e < idx_n; e++) pk = std::max<int>(pk, idx[e]);
+  return pk << 7;
+}
+
 FLASHMEM void PlayerDevice::DrawMini(int x, int y, int w, int h) {
   const int cy = y + h / 2;
+  if (streaming) {
+    for (int i = 0; i < w; i++) {
+      const size_t a = size_t(i) * frames / w, b = size_t(i + 1) * frames / w;
+      const int amp = int(sqrtf(PeakAt(a, std::max(a + 1, b)) / 32768.0f) * (h / 2));
+      gfxLine(x + i, cy - amp, x + i, cy + amp);
+    }
+    if (stream.Playing()) gfxInvert(constrain(x + int(stream.HeadPos() * (w - 1)), x, x + w - 1), y, 1, h);
+    return;
+  }
   if (!fx.Length()) {  // nothing loaded: a play arrow
     const int cx = x + w / 2, r = h / 2 - 1;
     gfxLine(cx - r / 2 - 1, cy - r, cx + r / 2 + 2, cy);
