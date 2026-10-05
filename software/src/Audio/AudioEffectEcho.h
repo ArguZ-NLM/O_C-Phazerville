@@ -69,6 +69,10 @@ public:
   void feedback(float f) { fb_target = constrain(f, 0.0f, 1.05f); }
   void delay_mix(float m) { dmix_target = constrain(m, 0.0f, 1.0f); }
   void reverb_mix(float m) { rmix_target = constrain(m, 0.0f, 1.0f); }
+  // SEND instead of MIX: the dry signal stays at full level and the echoes /
+  // the reverb are added on top (MIX crossfades them against it)
+  void delay_send(bool s) { dsend = s; }
+  void reverb_send(bool s) { rsend = s; }
   void pingpong(float s) { spread_target = constrain(s, 0.0f, 1.0f); }
   void diffuse(float d) { ap_g = 0.7f * constrain(d, 0.0f, 1.0f); }
   void set_freeze(bool f) { freeze = f; }
@@ -163,6 +167,7 @@ private:
   float decay_secs = 3.0f;
 
   float fb = 0.0f, dmix = 0.4f, rmix = 0.3f, spread_ = 0.0f, freeze_amt = 0.0f;
+  volatile bool dsend = false, rsend = false;
   float lp_z[2] = {}, hp_z[2] = {}, damp_z[LINES] = {};
 
   Viz viz = {};
@@ -326,8 +331,8 @@ FASTRUN void AudioEffectEcho::update() {
 
     // DELAY: crossfade dry -> echoes
     const float x1[2] = {
-      dry[0] + dmix * (tsum[0][n] - dry[0]),
-      dry[1] + dmix * (tsum[1][n] - dry[1]),
+      dry[0] + dmix * (tsum[0][n] - (dsend ? 0.0f : dry[0])),
+      dry[1] + dmix * (tsum[1][n] - (dsend ? 0.0f : dry[1])),
     };
 
     // --- REVERB: 4-line FDN fed by the delay stage ---
@@ -357,7 +362,7 @@ FASTRUN void AudioEffectEcho::update() {
     peak_tail = std::max(peak_tail, std::max(fabsf(tail[0]), fabsf(tail[1])));
 
     for (int c = 0; c < 2; c++) {
-      const int16_t o = ToQ15(x1[c] + rmix * (tail[c] - x1[c]));
+      const int16_t o = ToQ15(x1[c] + rmix * (tail[c] - (rsend ? 0.0f : x1[c])));
       out[c]->data[n] = o;
       peak_out = std::max(peak_out, abs(o));
     }

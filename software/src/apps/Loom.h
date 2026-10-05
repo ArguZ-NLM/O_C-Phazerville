@@ -90,6 +90,7 @@ namespace loom {
     Device* inst[SLOT_COUNT][MAX_OPTIONS] = {};
     LoomFade* fade[SLOT_COUNT] = {};  // after each effect slot: bypass fade
     LoomGate* gate = nullptr;         // before ECHO: its tail rings out
+    LoomFade* out_fade = nullptr;     // OUTPUT MIX: the source against the chain
     Modulator* mods[NUM_MODS][MOD_TYPES] = {};
     uint8_t mod_type[NUM_MODS] = {};
     // MOD A-D, then a copy of the shared E-H; -1 = no modulator there
@@ -129,6 +130,7 @@ namespace loom {
     // per slot: in -> (gate ->) device, in -> fade dry, device -> fade wet
     AudioConnection link[NUM_TRACKS][SLOT_COUNT][8];
     AudioConnection to_mix[NUM_TRACKS][2];
+    AudioConnection out_mix[NUM_TRACKS][4];  // source (dry) and chain (wet) into the OUTPUT fade
     AudioConnection mix_out[NUM_TRACKS][2];
     // every track's output into both tracks' INPUT (OUT L / OUT R)
     AudioConnection cross[NUM_TRACKS][NUM_TRACKS][2];  // [from][to][channel]
@@ -364,14 +366,18 @@ FLASHMEM void AppLoom::Start() {
   }
   // the MIX band stages before the mixer, so the update order follows the
   // signal
-  for (int t = 0; t < NUM_TRACKS; t++) tracks[t].mix = new MixDevice(t);
+  for (int t = 0; t < NUM_TRACKS; t++) {
+    tracks[t].out_fade = new LoomFade;
+    tracks[t].mix = new MixDevice(t);
+    tracks[t].mix->out_fade = tracks[t].out_fade;
+  }
   mixer = new LoomMixer;
   for (int t = 0; t < NUM_TRACKS; t++) {
     Track& tr = tracks[t];
     tr.mix->mixer = mixer;
     tr.mix->mod_bus = tr.mod_out;
     tr.mix->Defaults();
-    tr.mix->val[1] = t ? 25 : -25; // pan the tracks apart a little
+    tr.mix->val[MixDevice::PAN] = t ? 25 : -25; // pan the tracks apart a little
     tr.mix->ApplyAll();
     // start with ECHO on both tracks, a bit different on track 2
     tr.choice[ECHO] = 1;
@@ -397,6 +403,7 @@ FLASHMEM void AppLoom::Repatch(int t) {
   for (auto& slot : link) for (auto& c : slot) c.disconnect();
   for (auto& c : patch->to_mix[t]) c.disconnect();
   for (auto& c : patch->mix_out[t]) c.disconnect();
+  for (auto& c : patch->out_mix[t]) c.disconnect();
   AudioStream* prev = tr.input;
   if (tr.choice[SOURCE] == 1 && tr.reel) {  // SPOOL records and plays after the input
     for (int c = 0; c < 2; c++) link[SOURCE][c].connect(*tr.input, c, *tr.reel->in(), c);
@@ -404,6 +411,7 @@ FLASHMEM void AppLoom::Repatch(int t) {
   } else if (tr.choice[SOURCE] == 2 && tr.player) {  // PLAYER instead of the input
     prev = tr.player->out();
   }
+  AudioStream* const source = prev;  // what came in, for OUTPUT's MIX
   for (int k = 0; k < SLOT_COUNT - 1; k++) {  // the effects in their order
     const int s = tr.order[k];
     Device* d = tr.current(s);
@@ -426,8 +434,13 @@ FLASHMEM void AppLoom::Repatch(int t) {
     for (int c = 0; c < 2; c++) (l++)->connect(*d->out(), c, *tr.fade[s], 2 + c);
     prev = tr.fade[s];
   }
-  // through the track's MIX band stage into the mixer
-  for (int c = 0; c < 2; c++) patch->to_mix[t][c].connect(*prev, c, *tr.mix->in(), c);
+  // OUTPUT's MIX: the source (dry) against the chain (wet), then through the
+  // track's band stage into the mixer
+  for (int c = 0; c < 2; c++) {
+    patch->out_mix[t][c].connect(*source, c, *tr.out_fade, c);
+    patch->out_mix[t][2 + c].connect(*prev, c, *tr.out_fade, 2 + c);
+    patch->to_mix[t][c].connect(*tr.out_fade, c, *tr.mix->in(), c);
+  }
   for (int c = 0; c < 2; c++) patch->mix_out[t][c].connect(*tr.mix->out(), c, *mixer, t * 2 + c);
   AudioInterrupts();
   ApplyBypass(t);
@@ -492,6 +505,7 @@ FLASHMEM void AppLoom::DisconnectTrack(int t) {
   for (auto& slot : patch->link[t]) for (auto& c : slot) c.disconnect();
   for (auto& c : patch->to_mix[t]) c.disconnect();
   for (auto& c : patch->mix_out[t]) c.disconnect();
+  for (auto& c : patch->out_mix[t]) c.disconnect();
   AudioInterrupts();
   // disconnected devices stop updating; now they can drop their buffers
   for (int s = SOURCE; s < SLOT_COUNT; s++) {
@@ -514,7 +528,7 @@ FLASHMEM void AppLoom::Mirror(loom::Device* d, int p) const {
   if (!tw) return;
   // PLAYER's FILE goes along only when linked as SPLIT (one file for both)
   if (!focus_mod && col == SOURCE && p == 0 && !(d == tracks[track].player && link_stereo)) return;
-  if (!focus_mod && col == MIX_COL && p == 1) return;
+  if (!focus_mod && col == MIX_COL && p == MixDevice::PAN) return;
   tw->val[p] = d->val[p];
   tw->mode[p] = d->mode[p];
   tw->mod_amt[p] = d->mod_amt[p];
@@ -697,8 +711,9 @@ FLASHMEM void AppLoom::LinkCopy() {
   }
   for (int p = 1; p < b.input->num_params(); p++) b.input->val[p] = a.input->val[p];
   b.input->ApplyAll();
-  b.mix->val[0] = a.mix->val[0]; // level
-  b.mix->val[2] = a.mix->val[2]; // mute
+  b.mix->val[MixDevice::LEVEL] = a.mix->val[MixDevice::LEVEL];
+  b.mix->val[MixDevice::MUTE] = a.mix->val[MixDevice::MUTE];
+  b.mix->val[MixDevice::DRYWET] = a.mix->val[MixDevice::DRYWET];
   b.mix->ApplyAll();
   track = 0; // the cursor lives on row 1 while linked
 }
@@ -1301,8 +1316,8 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
       track = idx / COLS;
       col = tracks[track].SlotAt(idx % COLS);
     } else if (col == MIX_COL) {
-      tracks[track].mix->Nudge(0, dir); // level
-      Mirror(tracks[track].mix, 0);
+      tracks[track].mix->Nudge(MixDevice::LEVEL, dir);
+      Mirror(tracks[track].mix, MixDevice::LEVEL);
     } else {
       SetChoiceLinked(col, tracks[track].choice[col] + dir);  // SOURCE: INPUT / SPOOL
     }
@@ -1857,6 +1872,7 @@ namespace loom {
     for (auto& r : renamed) if (!memcmp(tag, r[0], 4)) memcpy(tag, r[1], 4);
     const bool use = d && !memcmp(tag, d->def.tag, 4) && n <= d->num_params();
     const bool remap_spr = use && !memcmp(tag, "SPR", 4) && n == 7;
+    const bool remap_mix = use && !memcmp(tag, "MIX", 4) && n == 7;  // MIX came in first
     for (int p = 0; p < n; p++) {
       int16_t v; uint8_t md; int8_t amt; uint16_t src; uint8_t bus;
       if (f.read(&v, 2) != 2 || f.read(&md, 1) != 1 || f.read(&amt, 1) != 1
@@ -1867,6 +1883,7 @@ namespace loom {
       // SPRAY gained SPRD before MIX: an older file's MIX (its 7th) goes to 8th
       const int q = p;
       if (remap_spr && p == 6) p = 7;
+      if (remap_mix) p = q + 1;
       d->mod_amt2[p] = constrain(amt2, -100, 100);
       d->mod_bus2[p] = bus2 <= MOD_BUSES ? bus2 : 0;
       const ParamDef& pd = d->param(p);
@@ -1884,6 +1901,7 @@ namespace loom {
       auto mv = [](uint8_t b) { return uint8_t((b & 0x3F) | ((b & 0x40) << 1)); };
       bi = mv(bi); bi2 = mv(bi2);
     }
+    if (remap_mix) { bi = uint8_t(bi << 1); bi2 = uint8_t(bi2 << 1); }
     if (use) {
       d->mod_bi = bi;
       d->mod_bi2 = bi2;

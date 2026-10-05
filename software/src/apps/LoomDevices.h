@@ -553,8 +553,11 @@ FASTRUN void LoomGate::update() {
 // MIX: level / pan / mute per track (not an audio stage itself)
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef MIX_DEF = {
-  "OUTPUT", "MIX", 7, {"", ""},  // the tag stays MIX: saved files use it
+  "OUTPUT", "MIX", 8, {"", ""},  // the tag stays MIX: saved files use it
   {
+    // the chain against the track's source as it came in (0 = only the
+    // source, 100 = only the chain): all the effects dialled back at once
+    {"MIX", 0, 100, 100, UNI},
     {"LEVEL", 0, 100, 80, UNI},
     {"PAN", -50, 50, 0, BI},
     {"MUTE", 0, 1, 0, LIST, 2, 0, 0, {"off", "ON"}},
@@ -569,7 +572,8 @@ PROGMEM static const DeviceDef MIX_DEF = {
 // The track's audio runs through the band stage, then into the mixer.
 class MixDevice : public Device {
 public:
-  enum { LEVEL, PAN, MUTE, BANDZ, B_LOW, B_MID, B_HIGH };
+  enum { DRYWET, LEVEL, PAN, MUTE, BANDZ, B_LOW, B_MID, B_HIGH };
+  LoomFade* out_fade = nullptr;  // source (dry) against the chain (wet), before the band stage
   explicit MixDevice(int t) : Device(MIX_DEF), track(t) {}
   AudioStream* in() override { return &bandz; }
   AudioStream* out() override { return &bandz; }
@@ -626,6 +630,14 @@ FLASHMEM void MixDevice::Apply(int p) {
   static const float lo_hz[3] = {120.0f, 250.0f, 500.0f};
   static const float hi_hz[3] = {1500.0f, 3000.0f, 6000.0f};
   switch (p) {
+    case DRYWET:
+      if (out_fade) {  // equal power; exact at the ends (the fade then just passes one side on)
+        const float m = cur[DRYWET] * 0.01f * 1.5707963f;
+        if (cur[DRYWET] >= 100) out_fade->Set(0.0f, 1.0f);
+        else if (cur[DRYWET] <= 0) out_fade->Set(1.0f, 0.0f);
+        else out_fade->Set(cosf(m), sinf(m));
+      }
+      return;
     case BANDZ: bandz.compress(cur[BANDZ] * 0.01f); return;
     case B_LOW:   bandz.band_gain(0, cur[B_LOW] * 0.5f); bandz.split_low(lo_hz[mode[B_LOW] % 3]); return;
     case B_MID:   bandz.band_gain(1, cur[B_MID] * 0.5f); return;
@@ -663,7 +675,7 @@ FLASHMEM void MixDevice::DrawViz(int x, int y, int w, int h) {
   // compression hanging from the top
   if (view_page == 0) DrawSpectrum(x, y, 94, h);
   for (int b = 0; b < 3 && view_page == 1; b++) {
-    const int bx = x + b * 32;
+    const int bx = x + (b + 1) * 32;  // above LOW / MID / HIGH
     const int gain = cur[B_LOW + b] * (h / 2 - 1) / 24;
     gfxDottedLine(bx + 3, cy, bx + 28, cy, 2);
     if (gain > 0) gfxRect(bx + 10, cy - gain, 8, gain);
@@ -674,9 +686,10 @@ FLASHMEM void MixDevice::DrawViz(int x, int y, int w, int h) {
     if (gr > 0) gfxRect(bx + 25, y, 2, gr);
   }
 
-  // fourth column: output meters with the pan position underneath
+  // output meters with the pan position underneath: right of the spectrum
+  // (page 1), above BANDZ (page 2)
   const float l = meters[0].Hit(level[0]), r = meters[1].Hit(level[1]);
-  const int ox = x + 96 + 6;
+  const int ox = view_page == 1 ? x + 6 : x + 96 + 6;
   gfxFrame(ox, y, 8, h - 4);
   gfxFrame(ox + 11, y, 8, h - 4);
   DrawVMeter(ox + 1, y + 1, 6, h - 6, l);
@@ -2209,11 +2222,11 @@ PROGMEM static const DeviceDef ECHO_DEF = {
   "ECHO", "ECO", 8, {"FRZ", "CLR"},
   {
     // page 1: the delay, page 2: the reverb and TONE
-    {"LEVEL", 0, 100, 40, UNI},  // the delay's
+    {"LEVEL", 0, 100, 40, UNI, 0, 2, 0, {}, {"MIX", "SEND"}},  // the delay's; mode: crossfade / added
     {"TIME", 20, 6000, 450, UNI, 0, 4, 0, {}, {"FREE", "STR", "TRI", "DOT"}},
     {"FDBK", 0, 100, 45, UNI},
     {"SPRD", 0, 100, 40, UNI, 0, 3, 1, {}, {"PHASE", "PING", "DIFF"}},
-    {"LEVEL", 0, 100, 30, UNI},  // the reverb's
+    {"LEVEL", 0, 100, 30, UNI, 0, 2, 0, {}, {"MIX", "SEND"}},  // the reverb's
     {"SIZE", 0, 100, 60, UNI},
     {"DECAY", 0, 100, 50, UNI},
     {"TONE", -50, 50, -10, BI},
@@ -2314,9 +2327,9 @@ FLASHMEM void EchoDevice::SetTimes() {
 FLASHMEM void EchoDevice::Apply(int p) {
   const float v = cur[p] * 0.01f;
   switch (p) {
-    case DELAY:    echo.delay_mix(v); break;
+    case DELAY:    echo.delay_mix(v); echo.delay_send(mode[DELAY] == 1); break;
     case TIME:     SetTimes(); break;
-    case REVERB:   echo.reverb_mix(v); break;
+    case REVERB:   echo.reverb_mix(v); echo.reverb_send(mode[REVERB] == 1); break;
     case SIZE:     echo.size(v); break;
     case FEEDBACK: echo.feedback(v); break;
     case SPREAD:
