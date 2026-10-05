@@ -68,6 +68,17 @@ public:
   // the window in whole samples (the player sets its edges exactly)
   void SetWindowSamples(size_t start, size_t length) { ex_ws = start; ex_wl = length; exact = true; }
   void SetSeam(float samples) { seam = std::max(16.0f, samples); }  // fade at the loop ends
+  // PLAYER: looping forward, the seam is a real crossfade (the loop's end
+  // plays into what leads up to its start) instead of a dip
+  void SetCrossfade(bool on) { xfade_loop = on; }
+  // the crossfade's length and where its incoming part comes from: before
+  // START (pre = true) or, when there is too little before it, the first
+  // part of the loop itself (the loop then wraps to just after it)
+  static size_t XfLen(float seam, size_t ws, size_t wl, bool& pre) {
+    size_t f = std::min<size_t>(size_t(seam), wl / 2);
+    pre = ws >= f;
+    return f;
+  }
   void SetDub(float keep) { keep_ = keep; }
   void SetMonitor(float m) { mon = m; }
   void SetLevel(float l) { level = l; }
@@ -135,6 +146,7 @@ private:
   volatile bool press = false, clear = false, stop = false, retrig = false, loop_ = true;
   volatile float speed = 1.0f, start_ = 0.0f, len_ = 1.0f, keep_ = 0.8f, mon = 1.0f, level = 1.0f;
   volatile float seam = 256.0f;
+  volatile bool xfade_loop = false;
   volatile size_t ex_ws = 0, ex_wl = 0;
   volatile bool exact = false;
   uint8_t hist[HIST] = {};
@@ -220,12 +232,20 @@ FASTRUN void AudioEffectReel::update() {
   }
   const float sp = speed, g = level, m = mon, keep = keep_;
   constexpr float q = 1.0f / 32768.0f;
+  // the crossfade seam (looping forward): over the last xl frames of the
+  // window the loop's end fades out while the frames leading into START
+  // (or the loop's own beginning) fade in, equal power
+  bool xpre = true;
+  const bool xon = xfade_loop && loop_ && sp > 0.0f && len && st != REC;
+  const size_t xl_ = xon ? XfLen(seam, ws, wl, xpre) : 0;
+  const float xlf = float(xl_);
+  const float wrap = xon && !xpre ? float(wl - xl_) : float(wl);  // inside: wraps to just after the faded-in part
   // one play head: linear read, faded near its window's ends (the seam)
   auto read = [&](size_t w0, size_t wn, float o, float& l, float& r) {
     const size_t i0 = (w0 + size_t(o)) % len, i1 = (i0 + 1) % len;
     const float fr = o - std::floor(o);
     const float fade = std::min(float(seam), wn * 0.25f);
-    const float e = std::min(1.0f, std::min(o, wn - o) / fade);
+    const float e = xon && w0 == ws ? 1.0f : std::min(1.0f, std::min(o, wn - o) / fade);
     l = (buf[0][i0] + fr * (buf[0][i1] - buf[0][i0])) * q * e;
     r = (buf[1][i0] + fr * (buf[1][i1] - buf[1][i0])) * q * e;
   };
@@ -251,6 +271,18 @@ FASTRUN void AudioEffectReel::update() {
       constexpr float run_step = 1.0f / (0.005f * AUDIO_SAMPLE_RATE_EXACT);
       run_g = (st == PLAY || st == DUB) ? std::min(1.0f, run_g + run_step) : std::max(0.0f, run_g - run_step);
       read(ws, wl, off, yl, yr);
+      if (xon && xl_ > 1 && off >= wl - xlf) {
+        // in the crossfade: the incoming part, read like the main head
+        const float t = (off - (wl - xlf)) / xlf;
+        const float src = xpre ? float(ws) - xlf + (off - (wl - xlf)) : float(ws) + (off - (wl - xlf));
+        const size_t i0 = (size_t(src) + len) % len, i1 = (i0 + 1) % len;
+        const float fr = src - std::floor(src);
+        const float il = (buf[0][i0] + fr * (buf[0][i1] - buf[0][i0])) * q;
+        const float ir = (buf[1][i0] + fr * (buf[1][i1] - buf[1][i0])) * q;
+        const float go = cosf(t * 1.5707963f), gi = sinf(t * 1.5707963f);
+        yl = yl * go + il * gi;
+        yr = yr * go + ir * gi;
+      }
       if (xf > 0) {  // the old window fading out
         float ol, orr;
         read(o_ws, o_wl, o_off, ol, orr);
@@ -276,7 +308,15 @@ FASTRUN void AudioEffectReel::update() {
         Mark(i0, nl, nr);
       }
       // not looping: once round, stop (the seam has faded it out already)
-      if (step(off, wl) && !loop_ && st == PLAY) {
+      bool went_round;
+      if (xon) {  // the crossfade seam: inside, round to just after the faded-in part
+        off += sp;
+        went_round = off >= wl;
+        while (off >= wl) off -= wrap;
+      } else {
+        went_round = step(off, wl);
+      }
+      if (went_round && !loop_ && st == PLAY) {
         st = STOPPED;
         run_g = 0.0f;
         off = sp < 0.0f ? wl - 1.0f : 0.0f;

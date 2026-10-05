@@ -50,6 +50,11 @@ public:
   void SetSpeed(float s) { speed = std::max(0.0f, std::min(2.0f, s)); }
   void SetLevel(float l) { level = l; }
   void SetSeam(float s) { seam = std::max(16.0f, s); }
+  void SetCrossfade(bool on) { xfade_loop = on; }
+  // the crossfade's length: at most half the loop and what the cache holds
+  size_t XfLen(size_t a, size_t b) const {
+    return std::min<size_t>({size_t(seam), (b - a) / 2, cache_cap > 64 ? cache_cap - 64 : 0});
+  }
   void Play() { pos = double(ws); playing = true; }
   void Retrigger() { if (playing) retrig = true; else Play(); }  // dips ~5 ms, no click
   void SetLoop(bool l) { loop_ = l; }
@@ -111,6 +116,7 @@ private:
   volatile bool playing = false, underrun = false, retrig = false, loop_ = true;
   float run_g = 0.0f;  // start / stop glide
   volatile float speed = 1.0f, level = 1.0f, seam = 256.0f;
+  volatile bool xfade_loop = false;
   bool pending_cache = false;
 
   // one frame, or false when it isn't buffered (yet)
@@ -131,6 +137,11 @@ FASTRUN void AudioPlayStream::update() {
   const float sp = speed, g = level / 32768.0f;
   const size_t a = ws, b = we;
   const float wl = float(b - a), fade = std::min(float(seam), wl * 0.25f);
+  // crossfade seam (looping): the last xl frames before END fade into the
+  // loop's first xl frames (from the cache); then on from just after them
+  const bool xon = xfade_loop && loop_;
+  const size_t xl_ = xon ? XfLen(a, b) : 0;
+  const double xs = double(b) - double(xl_);
   double p = pos;
   constexpr float run_step = 1.0f / (0.005f * AUDIO_SAMPLE_RATE_EXACT);
   const bool on = playing && !retrig;
@@ -143,9 +154,22 @@ FASTRUN void AudioPlayStream::update() {
       if (!Frame(i + 1 < b ? i + 1 : a, l1, r1)) { l1 = l0; r1 = r0; }
       const float fr = float(p - double(i));
       const float o = float(p - double(a));
-      const float e = std::min(1.0f, std::min(o, wl - o) / fade);  // the seam
+      const float e = xon ? 1.0f : std::min(1.0f, std::min(o, wl - o) / fade);  // the seam
       yl = (l0 + fr * (l1 - l0)) * g * e;
       yr = (r0 + fr * (r1 - r0)) * g * e;
+      if (xon && xl_ > 1 && p >= xs) {
+        const double into = p - xs;
+        const size_t k = a + size_t(into);
+        int16_t il0, ir0, il1, ir1;
+        if (Frame(k, il0, ir0)) {
+          if (!Frame(k + 1, il1, ir1)) { il1 = il0; ir1 = ir0; }
+          const float fk = float(into - std::floor(into));
+          const float t = float(into / double(xl_));
+          const float go = cosf(t * 1.5707963f), gi = sinf(t * 1.5707963f);
+          yl = yl * go + (il0 + fk * (il1 - il0)) * g * gi;
+          yr = yr * go + (ir0 + fk * (ir1 - ir0)) * g * gi;
+        }
+      }
     } else {
       underrun = true;
     }
@@ -153,7 +177,7 @@ FASTRUN void AudioPlayStream::update() {
     out[1]->data[n] = __SSAT(int32_t(yr * run_g * 32767.0f), 16);
     p += sp;
     if (p >= double(b)) {
-      p = double(a) + (p - double(b));
+      p = double(a) + double(xl_) + (p - double(b));  // crossfade: on from after the faded-in part
       if (!loop_) { playing = false; run_g = 0.0f; p = double(a); }  // once through
     }
     if (p < double(a)) p = double(a);

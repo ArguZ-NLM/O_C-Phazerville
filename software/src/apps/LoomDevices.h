@@ -1346,6 +1346,10 @@ public:
   void SetFile(const char* folder, const char* name);
   const char* Folder() const { return dir; }
   void SetPick(uint8_t p) { fx.pick = p; }
+  float XfadeFrames() const {
+    const float v = cur[XFADE] * 0.01f;
+    return 16.0f + v * v * AUDIO_SAMPLE_RATE_EXACT;
+  }
   // linked: the same file, place and edges as the other track's PLAYER
   void LinkFrom(const PlayerDevice& a) {
     CopyFrom(a);
@@ -1822,9 +1826,11 @@ FLASHMEM void PlayerDevice::Apply(int p) {
       Window();
       break;
     case SNAP: Window(); break;
-    case XFADE:  // up to ~200 ms
-      fx.SetSeam(16.0f + cur[XFADE] * 0.01f * 8800.0f);
-      stream.SetSeam(16.0f + cur[XFADE] * 0.01f * 8800.0f);
+    case XFADE:  // a crossfade up to 1 s (finer at the short end)
+      fx.SetSeam(XfadeFrames());
+      stream.SetSeam(XfadeFrames());
+      fx.SetCrossfade(true);
+      stream.SetCrossfade(true);
       break;
     case LEVEL: fx.SetLevel(cur[LEVEL] * 0.01f); stream.SetLevel(cur[LEVEL] * 0.01f); break;
   }
@@ -2037,6 +2043,26 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
     if (ex < x || ex >= x + w) continue;
     graphics.clearRect(std::max(x, ex - 1), wy, std::min(3, x + w - std::max(x, ex - 1)), wh);
     gfxLine(ex, wy, ex, base);
+  }
+  // the crossfade: the end fading out (a line falling into END) and the part
+  // fading in (rising into START from before it, or over the loop's start)
+  if (eb > ea && cur[LOOP]) {
+    bool pre = false;
+    const size_t xl = streaming ? stream.XfLen(ea, eb) : AudioEffectReel::XfLen(XfadeFrames(), ea, eb - ea, pre);
+    if (xl > 1) {
+      auto ramp = [&](size_t f0, size_t f1, bool up) {
+        const int x0 = sx(f0), x1 = sx(f1);
+        if (x1 <= x0) return;
+        for (int px = std::max(x, x0); px <= std::min(x + w - 1, x1); px += 2) {
+          const float t = float(px - x0) / float(x1 - x0);
+          const int yy = wy + int((up ? 1.0f - t : t) * (wh - 1));
+          gfxPixel(px, yy);
+        }
+      };
+      ramp(eb - xl, eb, false);                      // out, into END
+      if (pre) ramp(ea - xl, ea, true);              // in, from before START
+      else ramp(ea, ea + xl, true);                  // in, over the loop's start
+    }
   }
   if (Playing()) {
     const int hx = sx(size_t((streaming ? stream.HeadPos() : fx.HeadPos()) * n));
