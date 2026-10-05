@@ -113,7 +113,14 @@ FLASHMEM void AppCard::DrawMenu() const {
   if (on) gfxInvert(0, 0, 128, 9);
   gfxLine(0, 10, 127, 10);
   if (!SDcard_Ready) return;
-  // the folder, then 5 entries around the selection
+  if (!on) {  // waiting: how to connect, instead of the list
+    gfxPrint(0, 16, "open OpenMTP on the");
+    gfxPrint(0, 25, "computer; if no card:");
+    gfxPrint(0, 34, "card-mode.sh");
+    gfxPrint(0, 52, "back: app menu");
+    return;
+  }
+  // connected: the folder, then 5 entries around the selection
   char t[24];
   const size_t l = strlen(dir);
   snprintf(t, sizeof(t), "%s", l > 21 ? dir + l - 21 : dir);
