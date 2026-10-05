@@ -282,6 +282,7 @@ private:
   void DrawMods() const;
   void DrawOutputs() const;
   static void DrawClockMark(int x, int y);
+  void DrawLinkLabel(int x, int y) const;  // L, two squares (filled: STEREO), R
   float OutLevel(int o) const;
   void WriteOutputs();
   void SetChoice(int t, int s, int option);
@@ -1387,7 +1388,8 @@ FLASHMEM void AppLoom::DrawDevice() const {
   const char* name = mod_mode && name_x + 6 * int(strlen(d->def.name)) > 62 ? d->def.tag : d->def.name;
   if (both) {
     // linked STEREO shows L|R, DUAL MONO (and the shared mods) L+R
-    gfxPrint(1, 1, linked && link_stereo && !SharedFocus() ? PSTR("L|R") : PSTR("L+R"));
+    if (linked && !SharedFocus()) DrawLinkLabel(1, 1);
+    else gfxPrint(1, 1, PSTR("L+R"));
     gfxInvert(0, 0, 21, 9);
   } else {
     gfxPrint(1, 1, track ? PSTR("R") : PSTR("L"));
@@ -1579,7 +1581,8 @@ FLASHMEM void AppLoom::DrawMods() const {
   using namespace loom;
   if (mod_cursor >= OUT_CURSOR) { DrawOutputs(); return; }
   const int page = mod_cursor < NUM_MODS ? 0 : 1;
-  if (linked || page) gfxPrint(1, 0, linked && link_stereo && !page ? PSTR("L|R") : PSTR("L+R"));
+  if (linked && !page) DrawLinkLabel(1, 0);
+  else if (linked || page) gfxPrint(1, 0, PSTR("L+R"));
   else gfxPrint(1, 0, track ? PSTR("R") : PSTR("L"));
   gfxPrint(linked || page ? 24 : 12, 0, page ? PSTR("SHARED") : PSTR("MODULATORS"));
   DrawClockMark(96, 1);
@@ -1640,6 +1643,17 @@ FLASHMEM void AppLoom::DrawClockPage() const {
     if (clock_running && b == c->Beat()) gfxRect(4 + b * 11, 52, 5, 5);
   }
   gfxPrint(50, 51, !clock_running ? PSTR("stopped") : c->Waiting() ? PSTR("waiting...") : PSTR("running"));
+}
+
+// linked tracks in the top line: L and R with the two squares of the chain
+// view between them, filled for STEREO, hollow for DUAL MONO
+FLASHMEM void AppLoom::DrawLinkLabel(int x, int y) const {
+  gfxPrint(x, y, PSTR("L"));
+  for (const int sx : {x + 7, x + 11}) {
+    if (link_stereo) gfxRect(sx, y + 2, 3, 3);
+    else gfxFrame(sx, y + 2, 3, 3);
+  }
+  gfxPrint(x + 14, y, PSTR("R"));
 }
 
 // the clock in the top line: a play triangle while it runs, a square when
