@@ -1395,7 +1395,7 @@ FLASHMEM void AppSculpt::LoadFile() {
     for (auto& tr : tracks) if (more && !ReadDevice(f, tr.player)) more = false;
     for (auto& tr : tracks) {
       uint8_t a = 0, b = 0;
-      char fd[128] = {}, fn[64] = {};
+      char fd[128] = {}, fn[96] = {};
       if (!more || f.read(&a, 1) != 1 || a >= sizeof(fd) || f.read(fd, a) != a ||
           f.read(&b, 1) != 1 || b >= sizeof(fn) || f.read(fn, b) != b) { more = false; break; }
       if (tr.player && a) tr.player->SetFile(fd, fn);

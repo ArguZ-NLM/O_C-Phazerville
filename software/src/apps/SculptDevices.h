@@ -1055,7 +1055,7 @@ FLASHMEM void ReelDevice::DrawMini(int x, int y, int w, int h) {
 // screen keeps going and the audio interrupt is never held up.
 /////////////////////////////////////////////////////////////////
 constexpr char LOOP_DIR[] = "/SCULPT";
-constexpr int MAX_FILES = 48, NAME_LEN = 40;
+constexpr int MAX_FILES = 48, NAME_LEN = 80;
 constexpr size_t IO_CHUNK = 2048;  // sample frames per step
 
 FLASHMEM static void PutLE(uint8_t* p, uint32_t v, int n) {
@@ -1196,9 +1196,9 @@ private:
   AudioConnection st_l, st_r;
   char names[MAX_FILES][NAME_LEN] = {};
   uint32_t scanned_at = 0;
-  char dir[80] = "/SCULPT";  // the folder FILE steps through
+  char dir[96] = "/SCULPT";  // the folder FILE steps through
   // browser
-  char bdir[80] = "/";
+  char bdir[96] = "/";
   char bn[MAX_FILES][NAME_LEN] = {};
   bool bfolder[MAX_FILES] = {};
   int bcount = 0, bsel = 0;
@@ -1381,7 +1381,7 @@ FLASHMEM void PlayerDevice::Load(int i) {
   if (!keep_exact) ex_valid = false;  // a new file: from the settings
   keep_exact = false;
   if (i >= nfiles || !fx.ready()) return;
-  char path[128];
+  char path[192];
   snprintf(path, sizeof(path), "%s/%s", strcmp(dir, "/") ? dir : "", names[i]);
   lf = SD.open(path, FILE_READ);
   if (!lf) return;
