@@ -300,6 +300,8 @@ private:
   void StereoOn(int master);  // linked as a stereo pair (master: the track whose PLAYER file both play)
   void StereoOff();  // ... and back to each track's own input / file
   void RouteStereo(bool on);
+  void SetPans(int l, int r);
+  int16_t unlinked_pan[2] = {INT16_MIN, 0};  // the tracks' own PAN from before the link
   void UpdateMixLevels() const;
   void DrawChain() const;
   bool Muted() const;
@@ -595,6 +597,8 @@ FLASHMEM void AppLoom::ToggleLink() {
   using namespace loom;
   if (!linked) {
     const int master = track;  // LinkCopy moves the cursor to row 1
+    unlinked_pan[0] = tracks[0].mix->val[MixDevice::PAN];
+    unlinked_pan[1] = tracks[1].mix->val[MixDevice::PAN];
     linked = true;
     link_stereo = true;
     LinkCopy();
@@ -602,8 +606,11 @@ FLASHMEM void AppLoom::ToggleLink() {
   } else if (link_stereo) {
     StereoOff();
     link_stereo = false;
+    SetPans(0, 0);  // DUAL MONO: both in the middle
   } else {
     linked = false;
+    if (unlinked_pan[0] != INT16_MIN) SetPans(unlinked_pan[0], unlinked_pan[1]);  // their own again
+    unlinked_pan[0] = INT16_MIN;
   }
   link_note_at = millis() | 1;  // the mode, shown for a moment
 }
@@ -682,6 +689,13 @@ FLASHMEM void AppLoom::LinkCopy() {
 }
 
 // STEREO: track L all to the left output, track R all to the right
+FLASHMEM void AppLoom::SetPans(int l, int r) {
+  using namespace loom;
+  tracks[0].mix->val[MixDevice::PAN] = l;
+  tracks[1].mix->val[MixDevice::PAN] = r;
+  for (auto& tr : tracks) tr.mix->ApplyAll();
+}
+
 FLASHMEM void AppLoom::RouteStereo(bool on) {
   using namespace loom;
   for (int t = 0; t < NUM_TRACKS; t++) {
@@ -692,6 +706,7 @@ FLASHMEM void AppLoom::RouteStereo(bool on) {
 
 FLASHMEM void AppLoom::StereoOn(int master) {
   using namespace loom;
+  SetPans(-50, 50);  // STEREO: track L hard left, track R hard right
   RouteStereo(true);
   Track& a = tracks[master];
   Track& b = tracks[1 - master];
