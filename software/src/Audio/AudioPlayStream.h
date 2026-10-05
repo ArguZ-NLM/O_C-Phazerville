@@ -97,7 +97,7 @@ public:
       __disable_irq(); const size_t d = from - 1024 - rs; rs += d; rn -= d; __enable_irq();
     }
     const size_t next = rs + rn;
-    const size_t stop = std::min<size_t>(frames, we + Half(ws, we));  // past END for the crossfade
+    const size_t stop = std::min<size_t>(size_t(frames), size_t(we + Half(ws, we)));  // past END for the crossfade
     if (next >= stop || rn + chunk > ring_cap - 1024) return false;
     at = next;
     count = std::min(chunk, stop - next);
