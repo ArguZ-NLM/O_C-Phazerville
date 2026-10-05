@@ -1055,7 +1055,7 @@ FLASHMEM void ReelDevice::DrawMini(int x, int y, int w, int h) {
 // screen keeps going and the audio interrupt is never held up.
 /////////////////////////////////////////////////////////////////
 constexpr char LOOP_DIR[] = "/SCULPT";
-constexpr int MAX_FILES = 48, NAME_LEN = 16;
+constexpr int MAX_FILES = 48, NAME_LEN = 40;
 constexpr size_t IO_CHUNK = 2048;  // sample frames per step
 
 FLASHMEM static void PutLE(uint8_t* p, uint32_t v, int n) {
@@ -1169,6 +1169,8 @@ private:
   AudioEffectReel fx;
   AudioConnection st_l, st_r;
   char names[MAX_FILES][NAME_LEN] = {};
+  bool top[MAX_FILES] = {};  // at the top of the card rather than in /SCULPT
+  uint32_t scanned_at = 0;
   // streaming (files too long for fx)
   bool streaming = false, analysing = false;
   size_t data_off = 0, done = 0;  // where the samples start in the file; analysis progress
@@ -1192,26 +1194,38 @@ private:
   size_t SnapQuiet(size_t at) const;
 };
 
+// WAVs in /SCULPT, then those at the top of the card; each list sorted by
+// name. A card put in after power-up is picked up here.
 FLASHMEM void PlayerDevice::Scan() {
   nfiles = 0;
+  scanned_at = millis() | 1;
+  if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
   if (!SDcard_Ready) return;
-  File dir = SD.open(LOOP_DIR);
-  if (!dir) return;
-  while (nfiles < MAX_FILES) {
-    File e = dir.openNextFile();
-    if (!e) break;
-    const char* nm = e.name();
-    const size_t l = strlen(nm);
-    if (!e.isDirectory() && l > 4 && l < NAME_LEN && !strcasecmp(nm + l - 4, ".WAV"))
-      snprintf(names[nfiles++], NAME_LEN, "%s", nm);
-    e.close();
-  }
-  dir.close();
-  for (int i = 1; i < nfiles; i++)  // sorted by name (LOOP001, LOOP002, ...)
-    for (int j = i; j > 0 && strcmp(names[j - 1], names[j]) > 0; j--) {
-      char t[NAME_LEN];
-      memcpy(t, names[j], NAME_LEN); memcpy(names[j], names[j - 1], NAME_LEN); memcpy(names[j - 1], t, NAME_LEN);
+  for (int pass = 0; pass < 2; pass++) {
+    File dir = SD.open(pass ? "/" : LOOP_DIR);
+    if (!dir) continue;
+    const int first = nfiles;
+    while (nfiles < MAX_FILES) {
+      File e = dir.openNextFile();
+      if (!e) break;
+      const char* nm = e.name();
+      const size_t l = strlen(nm);
+      if (!e.isDirectory() && nm[0] != '.' && l > 4 && l < NAME_LEN - 1 && !strcasecmp(nm + l - 4, ".WAV")) {
+        top[nfiles] = pass;
+        snprintf(names[nfiles++], NAME_LEN, "%s", nm);
+      }
+      e.close();
     }
+    dir.close();
+    for (int i = first + 1; i < nfiles; i++)
+      for (int j = i; j > first && strcasecmp(names[j - 1], names[j]) > 0; j--) {
+        char t[NAME_LEN];
+        memcpy(t, names[j], NAME_LEN); memcpy(names[j], names[j - 1], NAME_LEN); memcpy(names[j - 1], t, NAME_LEN);
+        std::swap(top[j], top[j - 1]);
+      }
+  }
+  Serial.printf("PLAYER: %d WAV\n", nfiles);  // what the card offers, over USB
+  for (int i = 0; i < nfiles; i++) Serial.printf("  %s%s\n", top[i] ? "/" : "/SCULPT/", names[i]);
 }
 
 FLASHMEM void PlayerDevice::Select(const char* name) {
@@ -1255,8 +1269,8 @@ FLASHMEM void PlayerDevice::Load(int i) {
   loaded = i;
   too_long = false;
   if (i >= nfiles || !fx.ready()) return;
-  char path[40];
-  snprintf(path, sizeof(path), "%s/%s", LOOP_DIR, names[i]);
+  char path[64];
+  snprintf(path, sizeof(path), "%s/%s", top[i] ? "" : LOOP_DIR, names[i]);
   lf = SD.open(path, FILE_READ);
   if (!lf) return;
   uint8_t h[12];
@@ -1338,6 +1352,7 @@ FLASHMEM size_t PlayerDevice::ReadFrames(int16_t* l, int16_t* r, size_t n) {
 
 FLASHMEM void PlayerDevice::Idle() {
   if (!active) return;
+  if (!nfiles && millis() - scanned_at > 3000) Scan();  // card / files may come later
   if (loaded != cur[FILE_] && !loading && !analysing) Load(cur[FILE_]);
   static int16_t tl[IO_CHUNK], tr[IO_CHUNK];
   if (loading) {  // short file: all of it into fx
@@ -1477,7 +1492,7 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
   const int base = y + h - 1, cy = y + h / 2;
   if (!fx.ready()) { gfxPrint(x + 22, cy - 4, PSTR("out of memory")); return; }
   if (!SDcard_Ready) { gfxPrint(x + 34, cy - 4, PSTR("no SD card")); return; }
-  if (!nfiles) { gfxPrint(x + 4, cy - 4, PSTR("no WAV in /SCULPT")); return; }
+  if (!nfiles) { gfxPrint(x + 28, cy - 4, PSTR("no WAV found")); return; }
   const int fi = std::min<int>(cur[FILE_], nfiles - 1);
   if (loading || analysing) {
     char t[24];
@@ -1487,7 +1502,11 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
     return;
   }
   const size_t n = Frames();
-  gfxPrint(x, y, names[fi]);
+  {
+    char nm[24];
+    snprintf(nm, sizeof(nm), "%.*s", (w - 30) / 6, names[fi]);  // as much as fits
+    gfxPrint(x, y, nm);
+  }
   if (too_long) gfxPrint(x + w - 24, y, PSTR("16s"));
   if (streaming) {  // streamed from the card; blinks if the card fell behind
     const bool late = stream.Underran();
