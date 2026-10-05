@@ -1830,6 +1830,7 @@ FLASHMEM void PlayerDevice::Apply(int p) {
       fx.SetSeam(XfadeFrames());
       stream.SetSeam(XfadeFrames());
       fx.SetCrossfade(mode[XFADE] == 0);
+      fx.SetDeferWindow(true);  // a new START / END waits for the loop's end
       stream.SetCrossfade(mode[XFADE] == 0);
       break;
     case LEVEL: fx.SetLevel(cur[LEVEL] * 0.01f); stream.SetLevel(cur[LEVEL] * 0.01f); break;

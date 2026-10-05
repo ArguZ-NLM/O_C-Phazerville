@@ -3,6 +3,7 @@
 #include <Audio.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 // Stereo looper for the Loom SPOOL device. The loop lives in PSRAM (up to
 // 16 s; less if memory is short). A press cycles REC -> PLAY -> DUB -> PLAY;
@@ -75,11 +76,16 @@ public:
   // END cross into h either side of START. Where the file has too little
   // before START or after END, h shrinks; when nothing is left (h 0) it
   // falls back to fading the last f frames into the loop's own first f.
-  static void XfPlan(float seam, size_t ws, size_t wl, size_t len, size_t& h, size_t& f) {
-    h = std::min<size_t>({size_t(seam / 2), wl / 2, ws, len > ws + wl ? len - ws - wl : 0});
+  // nws / nwl: the window the loop goes on with (a new one waits for the seam)
+  static void XfPlan(float seam, size_t ws, size_t wl, size_t len, size_t& h, size_t& f,
+                     size_t nws = SIZE_MAX, size_t nwl = 0) {
+    if (nws == SIZE_MAX) { nws = ws; nwl = wl; }
+    h = std::min<size_t>({size_t(seam / 2), wl / 2, nwl / 2, nws, len > ws + wl ? len - ws - wl : 0});
     if (h < 16) h = 0;
-    f = h ? 0 : std::min<size_t>(size_t(seam), wl / 2);
+    f = h ? 0 : std::min<size_t>({size_t(seam), wl / 2, nwl / 2});
   }
+  // PLAYER: a new START / END waits until the loop comes round (no jump)
+  void SetDeferWindow(bool on) { defer_win = on; }
   void SetDub(float keep) { keep_ = keep; }
   void SetMonitor(float m) { mon = m; }
   void SetLevel(float l) { level = l; }
@@ -149,6 +155,10 @@ private:
   volatile float seam = 256.0f;
   volatile bool xfade_loop = false;
   size_t xh_l = 0, xf_l = 0;  // the crossfade plan in use (see update)
+  size_t lt_ws = 0, lt_wl = 0;  // ... and the window it crosses into
+  volatile bool defer_win = false;
+  bool pend = false;            // a new window waiting for the seam
+  size_t p_ws = 0, p_wl = 0;
   volatile size_t ex_ws = 0, ex_wl = 0;
   volatile bool exact = false;
   uint8_t hist[HIST] = {};
@@ -220,7 +230,14 @@ FASTRUN void AudioEffectReel::update() {
     const size_t nws = std::min<size_t>(len - 1, exact ? ex_ws : size_t(start_ * len));
     const size_t nwl = std::max<size_t>(AUDIO_BLOCK_SAMPLES,
                                         std::min<size_t>(len, exact ? ex_wl : size_t(len_ * len)));
-    if ((nws != ws || nwl != wl) && xf == 0) {
+    const bool forward_loop = defer_win && loop_ && speed > 0.0f && (st == PLAY || st == DUB);
+    if (forward_loop && (nws != ws || nwl != wl)) {
+      // playing on: the new window starts when the loop comes round
+      pend = true; p_ws = nws; p_wl = nwl;
+    } else if (forward_loop) {
+      pend = false;
+    } else if ((nws != ws || nwl != wl) && xf == 0) {
+      pend = false;
       o_ws = ws; o_wl = wl; o_off = off;
       const size_t at = (ws + size_t(off)) % len;           // where we play now
       const size_t into = (at + len - nws) % len;            // ... in the new window
@@ -241,12 +258,17 @@ FASTRUN void AudioEffectReel::update() {
   // the plan only changes outside the crossfade (a new FADE / window in the
   // middle of one would jump)
   if (xon) {
+    // crossing into the window the loop goes on with (a waiting one)
+    const size_t tws = pend ? p_ws : ws, twl = pend ? p_wl : wl;
     size_t h, f;
-    XfPlan(seam, ws, wl, len, h, f);
+    XfPlan(seam, ws, wl, len, h, f, tws, twl);
     const float zone = float(wl) - float(xh_l ? xh_l : xf_l);
-    if (off < zone || (h == xh_l && f == xf_l)) { xh_l = h; xf_l = f; }
+    if (off < zone || (h == xh_l && f == xf_l && tws == lt_ws && twl == lt_wl)) {
+      xh_l = h; xf_l = f; lt_ws = tws; lt_wl = twl;
+    }
   } else {
     xh_l = xf_l = 0;
+    lt_ws = ws; lt_wl = wl;
   }
   const size_t xh = xh_l, xf_in = xf_l;
   const float xhf = float(xh), xff = float(xf_in);
@@ -287,7 +309,7 @@ FASTRUN void AudioEffectReel::update() {
       if (in_xf) {
         const float into = off - (wl - (xh ? xhf : xff));
         const float t = into / (xh ? 2.0f * xhf : xff);
-        const float src = xh ? float(ws) - xhf + into : float(ws) + into;
+        const float src = xh ? float(lt_ws) - xhf + into : float(lt_ws) + into;
         const size_t i0 = (size_t(src) + len) % len, i1 = (i0 + 1) % len;
         const float fr = src - std::floor(src);
         const float il = (buf[0][i0] + fr * (buf[0][i1] - buf[0][i0])) * q;
@@ -325,11 +347,20 @@ FASTRUN void AudioEffectReel::update() {
       if (xon) {  // the crossfade seam: on from where the faded-in part ended
         off += sp;
         const float end = xh ? wl + xhf : wl;
-        const float back = xh ? wl : wl - xff;
         went_round = off >= end;
-        while (off >= end) off -= back;
+        if (went_round) {
+          // into the window crossed into (a waiting START / END takes over here)
+          const float over = off - end;
+          if (ws != lt_ws || wl != lt_wl) { ws = lt_ws; wl = lt_wl; }
+          if (pend && p_ws == ws && p_wl == wl) pend = false;
+          off = std::fmod((xh ? xhf : xff) + over, float(wl));
+        }
       } else {
         went_round = step(off, wl);
+        if (went_round && pend) {  // INOUT: the new window after the dip
+          ws = p_ws; wl = p_wl; pend = false;
+          off = std::fmod(std::max(0.0f, off), float(wl));
+        }
       }
       if (went_round && !loop_ && st == PLAY) {
         st = STOPPED;

@@ -3,6 +3,7 @@
 #include <Audio.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 // Plays a long file that is streamed from the SD card, for the Loom
 // PLAYER. The audio interrupt only ever reads PSRAM:
@@ -42,7 +43,7 @@ public:
   // a new file of n frames: nothing buffered yet
   void Open(size_t n) {
     __disable_irq();
-    playing = false; frames = n; pos = 0.0; ws = 0; we = n; nws = 0; nwe = n; h_l = 0;
+    playing = false; frames = n; pos = 0.0; ws = 0; we = n; nws = 0; nwe = n; h_l = 0; lt_a = 0; lt_b = n;
     rs = 0; rn = 0; cs = 0; cn = 0;
     __enable_irq();
   }
@@ -50,7 +51,7 @@ public:
   void SetWindow(size_t a, size_t b) {
     __disable_irq();
     nws = a; nwe = std::max(b, a + AUDIO_BLOCK_SAMPLES);
-    if (!playing || !frames) { ws = nws; we = nwe; }
+    if (!playing || !frames) { ws = nws; we = nwe; lt_a = nws; lt_b = nwe; }
     __enable_irq();
   }
   void SetSpeed(float s) { speed = std::max(0.0f, std::min(2.0f, s)); }
@@ -60,15 +61,19 @@ public:
   // the crossfade, centred on the edges: h either side of END into h either
   // side of START (the cache then starts h before START); 0 when there is
   // too little room, then XfLen: the last f frames into the loop's first f
-  size_t Half(size_t a, size_t b) const {
+  // ta / tb: the window the loop goes on with (a new one waits for the seam)
+  size_t Half(size_t a, size_t b, size_t ta = SIZE_MAX, size_t tb = 0) const {
     if (!(xfade_loop && loop_)) return 0;
-    const size_t h = std::min<size_t>({size_t(seam / 2), (b - a) / 2, a, frames > b ? frames - b : 0,
+    if (ta == SIZE_MAX) { ta = a; tb = b; }
+    const size_t h = std::min<size_t>({size_t(seam / 2), (b - a) / 2, (tb - ta) / 2, ta,
+                                       frames > b ? frames - b : 0,
                                        cache_cap > 128 ? cache_cap / 2 - 64 : 0});
     return h >= 16 ? h : 0;
   }
-  size_t XfLen(size_t a, size_t b) const {
-    if (!(xfade_loop && loop_) || Half(a, b)) return 0;
-    return std::min<size_t>({size_t(seam), (b - a) / 2, cache_cap > 64 ? cache_cap - 64 : 0});
+  size_t XfLen(size_t a, size_t b, size_t ta = SIZE_MAX, size_t tb = 0) const {
+    if (ta == SIZE_MAX) { ta = a; tb = b; }
+    if (!(xfade_loop && loop_) || Half(a, b, ta, tb)) return 0;
+    return std::min<size_t>({size_t(seam), (b - a) / 2, (tb - ta) / 2, cache_cap > 64 ? cache_cap - 64 : 0});
   }
   void Play() { pos = double(ws); playing = true; }
   void Retrigger() { if (playing) retrig = true; else Play(); }  // dips ~5 ms, no click
@@ -84,7 +89,7 @@ public:
   bool Next(int16_t*& l, int16_t*& r, size_t& at, size_t& count, size_t chunk) {
     if (!frames) return false;
     // the loop's start into the cache
-    const size_t c0 = ws - h_l;  // centred crossfade: from h before START
+    const size_t c0 = lt_a - h_l;  // the start crossed into (h before it when centred)
     if (cs != c0) { __disable_irq(); cs = c0; cn = 0; __enable_irq(); }
     const size_t cache_want = std::min(cache_cap, we - c0);
     if (cn < cache_want) {
@@ -138,6 +143,7 @@ private:
   float win_g = 1.0f;                // dip while the window changes
   float ur_g = 1.0f, last_l = 0.0f, last_r = 0.0f;  // underrun glide
   volatile size_t h_l = 0;           // the crossfade half in use (changes away from the seam)
+  volatile size_t lt_a = 0, lt_b = 0; // ... and the window it crosses into
   bool pending_cache = false;
 
   // one frame, or false when it isn't buffered (yet)
@@ -160,33 +166,40 @@ FASTRUN void AudioPlayStream::update() {
   // goes on unchanged); when the head would have to jump, a ~3 ms dip out,
   // take it, back in
   constexpr float win_step = 1.0f / (0.003f * AUDIO_SAMPLE_RATE_EXACT);
-  bool win_change = nws != ws || nwe != we;
+  // looping: a new window waits until the loop comes round (taken at the
+  // seam, see below); once through: as described
+  bool win_change = !loop_ && (nws != ws || nwe != we);
   if (win_change) {
     const double p0 = pos;
     const double safe_end = double(nwe) - double(h_l) - AUDIO_BLOCK_SAMPLES;
     if (win_g <= 0.0f || (p0 >= double(nws) && p0 < safe_end && p0 < double(we) - double(h_l) - AUDIO_BLOCK_SAMPLES)) {
-      ws = nws; we = nwe;
+      ws = nws; we = nwe; lt_a = nws; lt_b = nwe;
       if (pos < double(ws) || pos >= double(we)) pos = double(ws);
       win_change = false;
     }
   }
   // the crossfade half changes only while playing away from the seam and
   // the cached start (so the cache can be refilled before it is needed)
+  // (the window crossed into too: a new START gets cached before the seam)
   {
-    const size_t h = Half(ws, we);
+    const size_t h = Half(ws, we, nws, nwe);
     const double p0 = pos;
-    if (h != h_l && p0 >= double(cs + cn) && p0 < double(we) - double(std::max(h, size_t(h_l))) - AUDIO_SAMPLE_RATE_EXACT * 0.1)
-      h_l = h;
+    const bool away = p0 >= double(cs + cn) &&
+                      p0 < double(we) - double(std::max(h, size_t(h_l))) - AUDIO_SAMPLE_RATE_EXACT * 0.1;
+    if ((h != h_l || nws != lt_a || nwe != lt_b) && away) { h_l = h; lt_a = nws; lt_b = nwe; }
     if (!xfade_loop || !loop_) h_l = 0;
+    if (!loop_) { lt_a = ws; lt_b = we; }
   }
-  const size_t a = ws, b = we;
-  const float wl = float(b - a), fade = std::min(float(seam), wl * 0.25f);
+  size_t a = ws, b = we;  // (the window changes at the seam, mid-block too)
+  float wl = float(b - a);
+  const float fade = std::min(float(seam), wl * 0.25f);
   // crossfade seam (looping): the last xl frames before END fade into the
   // loop's first xl frames (from the cache); then on from just after them
   const bool xon = xfade_loop && loop_;
   const size_t xh = h_l;                  // centred
-  const size_t xl_ = xh ? 0 : XfLen(a, b); // else: the loop's own start
-  const double xs = double(b) - double(xh ? xh : xl_);
+  const size_t ta = lt_a, tb = lt_b;
+  const size_t xl_ = xh ? 0 : XfLen(a, b, ta, tb); // else: the loop's own start
+  double xs = double(b) - double(xh ? xh : xl_);
   double p = pos;
   constexpr float run_step = 1.0f / (0.005f * AUDIO_SAMPLE_RATE_EXACT);
   const bool on = playing && !retrig;
@@ -206,7 +219,7 @@ FASTRUN void AudioPlayStream::update() {
       yr = (r0 + fr * (r1 - r0)) * g * e;
       if (xon && (xh || xl_ > 1) && p >= xs) {
         const double into = p - xs;
-        const size_t k = a - xh + size_t(into);
+        const size_t k = ta - xh + size_t(into);
         int16_t il0, ir0, il1, ir1;
         if (Frame(k, il0, ir0)) {
           if (!Frame(k + 1, il1, ir1)) { il1 = il0; ir1 = ir0; }
@@ -229,9 +242,14 @@ FASTRUN void AudioPlayStream::update() {
     out[1]->data[n] = __SSAT(int32_t(yr * run_g * win_g * 32767.0f), 16);
     p += sp;
     if (xh && p >= double(b + xh)) {
-      p = double(a + xh) + (p - double(b + xh));  // centred crossfade: on from after it
+      // centred crossfade: on from after it, in the window crossed into
+      p = double(ta + xh) + (p - double(b + xh));
+      ws = a = ta; we = b = tb;
+      wl = float(b - a); xs = double(b) - double(xh);
     } else if (!xh && p >= double(b)) {
-      p = double(a) + double(xl_) + (p - double(b));  // crossfade: on from after the faded-in part
+      p = double(ta) + double(xon ? xl_ : 0) + (p - double(b));  // on from after the faded-in part
+      ws = a = ta; we = b = tb;
+      wl = float(b - a); xs = double(b) - double(xl_);
       if (!loop_) { playing = false; run_g = 0.0f; p = double(a); }  // once through
     }
     if (p < double(a)) p = double(a);
