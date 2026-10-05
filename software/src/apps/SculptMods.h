@@ -279,7 +279,7 @@ FLASHMEM void RandomMod::Tick(const ModCtx& ctx) {
 }
 
 // LEN set: the sequence as bars, the current step lit, the output (with its
-// glide) as a line over them; free: the last steps going by as bars
+// glide) as a line over them; free: the last steps going by as a line
 FLASHMEM void RandomMod::DrawViz(int x, int y, int w, int h) {
   const int ww = w - 8, top = y + 1, hh = h - 3;
   auto val = [&](float s) { return constrain(0.5f + (s - 0.5f) * cur[P_AMT] * 0.01f + cur[P_OFFS] * 0.01f, 0.0f, 1.0f); };
@@ -293,11 +293,14 @@ FLASHMEM void RandomMod::DrawViz(int x, int y, int w, int h) {
       else gfxFrame(bx + 1, by, std::max(1, bw - 2), top + hh - by + 1);
     }
   } else {
-    // the history, sampled as steps (~1 s across)
+    // the history (~1 s across) as one stepped line
+    int py = -1;
     for (int i = 0; i < HIST; i++) {
-      const float v = hist[(hist_pos + i) % HIST];
-      const int xx = x + i * ww / HIST;
-      gfxDottedLine(xx, yy(v), xx, top + hh, 2);
+      const int cy = yy(hist[(hist_pos + i) % HIST]);
+      const int x0 = x + i * ww / HIST, x1 = x + (i + 1) * ww / HIST - 1;
+      if (py >= 0 && py != cy) gfxLine(x0, py, x0, cy);
+      gfxLine(x0, cy, std::max(x0, x1), cy);
+      py = cy;
     }
   }
   // the output now, as a line across, so the glide shows
