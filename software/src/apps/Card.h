@@ -26,6 +26,12 @@ FLASHMEM void AppCard::HandleAppEvent(OC::AppEvent event) {
       started = true;
     }
     serving = true;
+    // The computer only asks for the card when the module turns up on USB,
+    // while Sculpt was running and nobody answered. So: leave the bus for a
+    // moment and come back, like pulling and putting back the cable.
+    USB1_USBCMD &= ~USB_USBCMD_RS;
+    delay(150);
+    USB1_USBCMD |= USB_USBCMD_RS;
   } else if (event == OC::APP_EVENT_SUSPEND) {
     serving = false;
   }
