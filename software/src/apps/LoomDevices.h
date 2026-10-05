@@ -1576,6 +1576,7 @@ FLASHMEM void PlayerDevice::Load(int i) {
   loaded = i;
   loaded_mode = mode[FILE_];
   too_long = clipped = indexing = false;
+  wv_any = false;  // the cached picture belongs to what was there
   if (!keep_exact) ex_valid = false;  // a new file: from the settings
   keep_exact = false;
   if (i >= nfiles || !fx.ready()) return;
