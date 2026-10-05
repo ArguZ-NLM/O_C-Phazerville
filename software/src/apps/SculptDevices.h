@@ -1126,8 +1126,8 @@ PROGMEM static const DeviceDef PLAYER_DEF = {
     {"LOOP", 0, 1, 1, LIST, 2, 0, 0, {"OFF", "ON"}},
     {"LEVEL", 0, 100, 100, UNI},
     {"SPEED", 0, 200, 100, UNI, 0, 2, 0, {}, {"FWD", "REV"}},  // mode: direction
-    {"START", 0, 10000, 0, UNI, 0, 8, 0},       // mode: zoom 1x .. 16k
-    {"END", 0, 10000, 10000, UNI, 0, 8, 0},
+    {"START", 0, 10000, 0, UNI, 0, 10, 0},      // mode: zoom 1x .. 256k
+    {"END", 0, 10000, 10000, UNI, 0, 10, 0},
     {"XFADE", 0, 100, 20, UNI},
     {"SNAP", 0, 1, 0, LIST, 2, 0, 0, {"OFF", "ON"}},
   },
@@ -1153,9 +1153,11 @@ public:
   void FormatMode(int p, char* buf, size_t n) const override;
   void Action(int a) override;
   bool ActionLit(int a) const override { return a == 0 && Playing(); }
+  static constexpr size_t MIN_SPAN = 16;  // deepest view: 16 samples across
+  int Samples(size_t a, size_t count, int16_t* mono) const;  // picture: (L+R)/2
   static int Zoom(int m) {
-    static const int zf[8] = {1, 4, 16, 64, 256, 1024, 4096, 16384};
-    return zf[std::min(m, 7)];
+    static const int zf[10] = {1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144};
+    return zf[std::min(m, 9)];
   }
   // START / END to the sample (the settings hold them to 0.01%); kept with
   // the folder and file in the saved settings
@@ -1268,6 +1270,7 @@ FLASHMEM void PlayerDevice::List() {
   if (strcmp(bdir, "/")) { snprintf(bn[bcount], NAME_LEN, ".."); bfolder[bcount++] = true; }
   File d = SD.open(bdir);
   if (!d) return;
+  Serial.printf("BROWSER %s\n", bdir);  // the whole folder over USB, for checking
   for (int pass = 0; pass < 2; pass++) {  // folders, then files
     d.rewindDirectory();
     const int first = bcount;
@@ -1280,6 +1283,7 @@ FLASHMEM void PlayerDevice::List() {
       const bool want = nm[0] != '.' && l < NAME_LEN - 1 &&
                         (pass == 0 ? isdir : (!isdir && l > 4 && !strcasecmp(nm + l - 4, ".WAV")));
       if (want) { bfolder[bcount] = isdir; snprintf(bn[bcount++], NAME_LEN, "%s", nm); }
+      if (pass == 1) Serial.printf("  %s%s %lu%s\n", nm, isdir ? "/" : "", (unsigned long)e.size(), want ? "" : "  (not listed)");
       e.close();
     }
     for (int i = first + 1; i < bcount; i++)
@@ -1571,7 +1575,7 @@ FLASHMEM int PlayerDevice::Step(int p, int v, int dir) const {
     // one pixel of the picture at the current zoom (down to one sample)
     const size_t n = Frames();
     if (!n) return v + dir * 100;
-    const size_t span = std::max<size_t>(128, n / Zoom(mode[p]));
+    const size_t span = std::max<size_t>(MIN_SPAN, n / Zoom(mode[p]));
     const int64_t px = std::max<int64_t>(1, int64_t(span / 128));
     if (!ex_valid) { ex_pos[0] = EdgeAt(START); ex_pos[1] = EdgeAt(END); ex_valid = true; }
     uint32_t& e = ex_pos[p == END];
@@ -1674,7 +1678,7 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
   size_t span;
   int64_t v0;
   if (zoomed) {
-    span = std::max<size_t>(w, n / z);
+    span = std::max<size_t>(MIN_SPAN, n / z);
     v0 = int64_t(EdgeAt(view_cursor)) - int64_t(span / 2);
   } else if (eb0 > ea0 && (ea0 > 0 || eb0 < n)) {
     const size_t sec = eb0 - ea0, room = sec / 16;
@@ -1686,16 +1690,46 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
   }
   auto sx = [&](size_t pos) { return x + int((int64_t(pos) - v0) * (w - 1) / int64_t(span)); };
   const int wy = y + 9, wh = h - 9, wc = wy + wh / 2;
-  for (int c = 0; c < w; c++) {
-    const int64_t a = v0 + int64_t(c) * int64_t(span) / w, b = v0 + int64_t(c + 1) * int64_t(span) / w;
-    if (b <= 0 || a >= int64_t(n)) {
-      if (c % 2 == 0) gfxPixel(x + c, wc);
-      continue;
+  if (span <= size_t(2 * w)) {
+    // close in: the wave itself, a line through the samples (each sample a
+    // dot when several pixels wide)
+    static int16_t mono[2 * 128 + 2];
+    const int64_t first = std::max<int64_t>(0, v0), last = std::min<int64_t>(int64_t(n), v0 + int64_t(span) + 1);
+    const int got_n = last > first ? Samples(size_t(first), size_t(last - first), mono) : 0;
+    int py = -1;
+    for (int c = 0; c < w; c++) {
+      const float fpos = float(v0) + float(c) * float(span) / float(w);
+      if (fpos < 0.0f || fpos >= float(n) || !got_n) {
+        if (c % 2 == 0) gfxPixel(x + c, wc);
+        py = -1;
+        continue;
+      }
+      const int i0 = int(fpos - float(first));
+      const int i1 = std::min(i0 + 1, got_n - 1);
+      const float fr = fpos - std::floor(fpos);
+      const float v = (mono[std::min(i0, got_n - 1)] + fr * (mono[i1] - mono[std::min(i0, got_n - 1)])) / 32768.0f;
+      const int yy = wc - int(v * (wh / 2 - 1));
+      if (py >= 0) gfxLine(x + c - 1, py, x + c, yy); else gfxPixel(x + c, yy);
+      py = yy;
     }
-    const size_t ca = size_t(std::max<int64_t>(0, a)), cb = size_t(std::min<int64_t>(int64_t(n), b));
-    const int pk = PeakAt(ca, std::max(ca + 1, cb));
-    const int amp = int(sqrtf(pk / 32768.0f) * (wh / 2 - 1));
-    gfxLine(x + c, wc - amp, x + c, wc + amp);
+    if (span < size_t(w / 2)) {  // samples wide apart: mark each one
+      for (int64_t i = first; i < last; i++) {
+        const int c = int((i - v0) * (w - 1) / int64_t(span));
+        if (c >= 0 && c < w) gfxRect(x + c - 1, wc - int(mono[i - first] / 32768.0f * (wh / 2 - 1)) - 1, 3, 3);
+      }
+    }
+  } else {
+  for (int c = 0; c < w; c++) {
+      const int64_t a = v0 + int64_t(c) * int64_t(span) / w, b = v0 + int64_t(c + 1) * int64_t(span) / w;
+      if (b <= 0 || a >= int64_t(n)) {
+        if (c % 2 == 0) gfxPixel(x + c, wc);
+        continue;
+      }
+      const size_t ca = size_t(std::max<int64_t>(0, a)), cb = size_t(std::min<int64_t>(int64_t(n), b));
+      const int pk = PeakAt(ca, std::max(ca + 1, cb));
+      const int amp = int(sqrtf(pk / 32768.0f) * (wh / 2 - 1));
+      gfxLine(x + c, wc - amp, x + c, wc + amp);
+    }
   }
   // the loop's edges and the head
   size_t ea, eb;
@@ -1716,6 +1750,22 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
     const int hx = sx(size_t((streaming ? stream.HeadPos() : fx.HeadPos()) * n));
     if (hx >= x && hx < x + w) gfxInvert(hx, wy, 1, wh);
   }
+}
+
+// (L+R)/2 of a few frames, for the close-in picture: from memory, or from
+// the card when streaming
+FLASHMEM int PlayerDevice::Samples(size_t a, size_t count, int16_t* mono) const {
+  count = std::min<size_t>(count, 2 * 128 + 2);
+  if (!streaming) {
+    for (size_t i = 0; i < count; i++) mono[i] = int16_t((fx.Data(0)[a + i] + fx.Data(1)[a + i]) / 2);
+    return int(count);
+  }
+  static int16_t l[2 * 128 + 2], r[2 * 128 + 2];
+  auto* self = const_cast<PlayerDevice*>(this);
+  self->lf.seek(data_off + a * size_t(bytes) * chans);
+  const size_t rd = self->ReadFrames(l, r, count);
+  for (size_t i = 0; i < rd; i++) mono[i] = int16_t((l[i] + r[i]) / 2);
+  return int(rd);
 }
 
 // loudest between two frames, from memory or (streaming) the level index
