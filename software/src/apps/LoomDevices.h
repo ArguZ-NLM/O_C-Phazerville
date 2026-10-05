@@ -1200,12 +1200,15 @@ struct WavWriter {
 // PSRAM (up to 16 s, like SPOOL) and played by the same engine: START / END
 // pick the loop, SPEED plays it at any rate (backwards below zero), XFADE
 // is the fade at the loop ends. START / END zoom the picture (their mode)
-// and, with SNAP on, land on the quietest point nearby.
+// and, with SNAP on, land on the quietest point nearby. Longer files stream
+// from the card (FILE mode STRM); FILE mode MEM copies a section of them
+// (START..END when switched, at most 16 s) into memory and plays that as
+// the sample, START / END then within it; back to STRM puts them back.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef PLAYER_DEF = {
   "PLAYER", "PLY", 8, {"PLAY", "TOP"},
   {
-    {"FILE", 0, MAX_FILES - 1, 0, UNI},
+    {"FILE", 0, MAX_FILES - 1, 0, UNI, 0, 2, 0, {}, {"STRM", "MEM"}},
     {"LOOP", 0, 1, 1, LIST, 2, 0, 0, {"OFF", "ON"}},
     {"LEVEL", 0, 100, 100, UNI},
     {"SPEED", 0, 200, 100, UNI, 0, 2, 0, {}, {"FWD", "REV"}},  // mode: direction
@@ -1222,6 +1225,11 @@ public:
   enum { FILE_, LOOP, LEVEL, SPEED, START, END, XFADE, SNAP };
   static constexpr float MAX_SECS = 16.0f;
   static constexpr size_t MIN_BUF = 11025;  // 0.25 s: the buffer before a file
+  // FILE mode MEM on a long file: the section in memory, in file frames
+  // (len 0: none chosen yet, the first 16 s); kept in the saved settings
+  uint32_t sec_off = 0, sec_len = 0;
+  bool clipped = false;     // what is in memory is a section of a long file
+  int applied_file = -1, applied_mode = -1;
   // longer files stream from the card (AudioPlayStream) into fx's input,
   // which fx passes through (its MON), so the device has one output
   static constexpr int IDX_FRAMES = 256;  // frames per entry of the level index
@@ -1320,7 +1328,17 @@ private:
   int16_t Sample(const uint8_t* p) const;
   size_t ReadFrames(int16_t* l, int16_t* r, size_t n);  // from lf, converted
   int PeakAt(size_t a, size_t b) const;                 // picture: loudest in a..b
-  int nfiles = 0, loaded = -1;
+  int nfiles = 0, loaded = -1, loaded_mode = -1;
+  // START / END settings from the exact edges, once the length is known
+  void EdgesToSettings() {
+    const size_t n = Frames();
+    if (!ex_valid || !n) return;
+    for (int k = 0; k < 2; k++) {
+      ex_pos[k] = std::min<uint32_t>(ex_pos[k], uint32_t(n));
+      val[k ? END : START] = int(uint64_t(ex_pos[k]) * 10000 / n);
+      Refresh(k ? END : START);
+    }
+  }
   // loading
   File lf;
   bool loading = false, too_long = false;
@@ -1495,7 +1513,8 @@ FLASHMEM void PlayerDevice::Load(int i) {
   stream.Open(0);
   fx.BeginLoad();
   loaded = i;
-  too_long = false;
+  loaded_mode = mode[FILE_];
+  too_long = clipped = false;
   if (!keep_exact) ex_valid = false;  // a new file: from the settings
   keep_exact = false;
   if (i >= nfiles || !fx.ready()) return;
@@ -1531,8 +1550,17 @@ FLASHMEM void PlayerDevice::Load(int i) {
       frames = sz / (bytes * chans);
       rate = srate / 44100.0f;
       got = 0;
+      // MEM on a long file: only the chosen section goes into memory
+      const size_t max_frames = size_t(MAX_SECS * AUDIO_SAMPLE_RATE_EXACT);
+      if (mode[FILE_] == 1 && frames > max_frames) {
+        if (!sec_len || sec_off >= frames) { sec_off = 0; sec_len = max_frames; }
+        sec_len = uint32_t(std::min<size_t>({size_t(sec_len), max_frames, frames - sec_off}));
+        lf.seek(lf.position() + size_t(sec_off) * size_t(bytes) * chans);
+        frames = sec_len;
+        clipped = true;
+      }
       // up to 16 s: into memory, in a buffer of the file's own length
-      if (frames <= size_t(MAX_SECS * AUDIO_SAMPLE_RATE_EXACT) && fx.Resize(std::max<size_t>(frames, MIN_BUF))) {
+      if (frames <= max_frames && fx.Resize(std::max<size_t>(frames, MIN_BUF))) {
         loading = true;
         return;
       }
@@ -1592,7 +1620,7 @@ FLASHMEM size_t PlayerDevice::ReadFrames(int16_t* l, int16_t* r, size_t n) {
 FLASHMEM void PlayerDevice::Idle() {
   if (!active) return;
   if (!nfiles && millis() - scanned_at > 3000) Scan();  // card / files may come later
-  if (loaded != cur[FILE_] && !loading && !analysing) Load(cur[FILE_]);
+  if ((loaded != cur[FILE_] || loaded_mode != mode[FILE_]) && !loading && !analysing) Load(cur[FILE_]);
   static int16_t tl[IO_CHUNK], tr[IO_CHUNK];
   if (loading) {  // short file: all of it into fx
     const size_t rd = ReadFrames(fx.Data(0) + got, fx.Data(1) + got, std::min(IO_CHUNK, frames - got));
@@ -1602,6 +1630,7 @@ FLASHMEM void PlayerDevice::Idle() {
       lf.close();
       loading = false;
       fx.FinishLoad(got);
+      EdgesToSettings();
       ApplyAll();
     }
     return;
@@ -1618,6 +1647,7 @@ FLASHMEM void PlayerDevice::Idle() {
       analysing = false;
       streaming = true;
       stream.Open(frames);
+      EdgesToSettings();
       ApplyAll();
     }
     return;
@@ -1680,7 +1710,26 @@ FLASHMEM void PlayerDevice::Window() {
 
 FLASHMEM void PlayerDevice::Apply(int p) {
   switch (p) {
-    case FILE_: break;  // Idle() loads it
+    case FILE_: {  // Idle() loads it
+      if (applied_file >= 0 && cur[FILE_] != applied_file) sec_len = 0;  // another file
+      if (applied_mode >= 0 && mode[FILE_] != applied_mode && Frames()) {
+        if (mode[FILE_] == 1 && streaming) {
+          // STRM -> MEM: the loop (at most 16 s) becomes the sample
+          const size_t a = EdgeAt(START), b = EdgeAt(END);
+          sec_off = uint32_t(a);
+          sec_len = uint32_t(std::min<size_t>(std::max<size_t>(b - std::min(a, b), 2 * AUDIO_BLOCK_SAMPLES),
+                                              size_t(MAX_SECS * AUDIO_SAMPLE_RATE_EXACT)));
+          ex_pos[0] = 0; ex_pos[1] = sec_len;
+          ex_valid = keep_exact = true;
+        } else if (mode[FILE_] == 0 && clipped) {
+          // MEM -> STRM: the edges back to where they are in the whole file
+          ex_pos[0] = sec_off + EdgeAt(START); ex_pos[1] = sec_off + EdgeAt(END);
+          ex_valid = keep_exact = true;
+        }
+      }
+      applied_file = cur[FILE_];
+      applied_mode = mode[FILE_];
+    } break;
     case SPEED: {  // mode REV plays backwards (streamed files: forward only)
       const float sp = cur[SPEED] * 0.01f * rate;
       fx.SetSpeed(mode[SPEED] ? -sp : sp);
@@ -1800,6 +1849,7 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
     // the top line: the name, then the zoom (time across) and SD at the right
     int right = x + w;
     if (streaming) right -= 14;
+    else if (clipped) right -= 20;
     char zt[8] = {};
     if (zm > 0) {
       FormatZoom(zm, zt, sizeof(zt));
@@ -1811,6 +1861,7 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
     gfxPrint(x, y, nm);
   }
   if (too_long) gfxPrint(x + w - 24, y, PSTR("16s"));
+  else if (clipped) gfxPrint(x + w - 18, y, PSTR("MEM"));
   if (streaming) {  // streamed from the card; blinks if the card fell behind
     const bool late = stream.Underran();
     if (!late || (millis() / 200) % 2) gfxPrint(x + w - 12, y, late ? PSTR("!!") : PSTR("SD"));

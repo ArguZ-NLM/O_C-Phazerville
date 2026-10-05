@@ -1728,6 +1728,13 @@ FLASHMEM void AppLoom::SaveFile() const {
   f.write("D", 1);
   f.write(cv_out_src, NUM_CV_OUTS);
   f.write(&cv_out_bypass, 1);
+  // ... and PLAYER's MEM section of a long file
+  f.write("M", 1);
+  for (auto& tr : tracks) {
+    uint32_t sec[2] = {0, 0};
+    if (tr.player) { sec[0] = tr.player->sec_off; sec[1] = tr.player->sec_len; }
+    f.write(reinterpret_cast<uint8_t*>(sec), 8);
+  }
   f.close();
   fs.remove(SAVE_FILE);
   fs.rename(SAVE_TMP, SAVE_FILE);
@@ -1829,6 +1836,13 @@ FLASHMEM void AppLoom::LoadFile() {
         if (okm && f.read(&mark, 1) == 1 && (mark == 'C' || mark == 'D') && f.read(outs, NUM_CV_OUTS) == NUM_CV_OUTS) {
           for (int o = 0; o < NUM_CV_OUTS; o++) cv_out_src[o] = outs[o] < OUT_SOURCES ? outs[o] : 0;
           if (mark == 'D') f.read(&cv_out_bypass, 1);
+          if (f.read(&mark, 1) == 1 && mark == 'M') {
+            for (auto& tr : tracks) {
+              uint32_t sec[2];
+              if (f.read(reinterpret_cast<uint8_t*>(sec), 8) != 8) break;
+              if (tr.player) { tr.player->sec_off = sec[0]; tr.player->sec_len = sec[1]; }
+            }
+          }
         }
       }
     }
