@@ -776,6 +776,20 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
   if (view == MODS) focus_mod = true;
   else if (view == CHAIN) focus_mod = false;
   Device* d = Focused();
+  // PLAYER: R push on FILE opens the browser; in it R enters / picks, Y
+  // goes up (closes at the top)
+  if (view == DEVICE && !focus_mod && col == SOURCE && d && d == tracks[track].player) {
+    PlayerDevice* pl = tracks[track].player;
+    if (pl->browsing) {
+      if (event.control == OC::CONTROL_BUTTON_R) pl->BrowseEnter();
+      else if (event.control == OC::CONTROL_BUTTON_Y) pl->BrowseBack();
+      return;
+    }
+    if (event.control == OC::CONTROL_BUTTON_R && cursor == PlayerDevice::FILE_ && !mod_mode) {
+      pl->OpenBrowser();
+      return;
+    }
+  }
   switch (event.control) {
     case OC::CONTROL_BUTTON_R:
       if (view == MODS) {
@@ -843,6 +857,11 @@ FLASHMEM void AppSculpt::OnEncoder(const UI::Event &event) {
   dirty = true;
   const int dir = event.value;
   const bool left = event.control == OC::CONTROL_ENCODER_L;
+  if (view == DEVICE && !focus_mod && col == SOURCE && tracks[track].player &&
+      tracks[track].player->browsing && Focused() == tracks[track].player) {
+    tracks[track].player->BrowseMove(dir);  // either knob scrolls the browser
+    return;
+  }
   if (view == MODS) {
     if (!left) {
       mod_cursor = constrain(mod_cursor + dir, 0, NUM_MODS);
@@ -1081,6 +1100,12 @@ FLASHMEM void AppSculpt::DrawDevice() const {
   }
   gfxLine(0, 9, 127, 9);
 
+  // PLAYER's file browser takes the whole page
+  if (!focus_mod && col == SOURCE && d == tracks[track].player && tracks[track].player->browsing) {
+    tracks[track].player->DrawBrowser(0, 11, 128, 53);
+    return;
+  }
+
   // the device's picture
   d->view_page = cursor / 4;
   d->view_cursor = cursor;
@@ -1296,6 +1321,13 @@ FLASHMEM void AppSculpt::SaveFile() const {
   // REEL's settings (older files end before); the recording isn't kept
   for (auto& tr : tracks) WriteDevice(f, tr.reel);
   for (auto& tr : tracks) WriteDevice(f, tr.player);
+  for (auto& tr : tracks) {  // PLAYER's file by folder and name
+    const char* fd = tr.player ? tr.player->Folder() : "";
+    const char* fn = tr.player ? tr.player->FileName() : "";
+    const uint8_t a = strlen(fd), b = strlen(fn);
+    f.write(&a, 1); f.write(fd, a);
+    f.write(&b, 1); f.write(fn, b);
+  }
   f.close();
   fs.remove(SAVE_FILE);
   fs.rename(SAVE_TMP, SAVE_FILE);
@@ -1354,6 +1386,13 @@ FLASHMEM void AppSculpt::LoadFile() {
     bool more = true;
     for (auto& tr : tracks) if (more && !ReadDevice(f, tr.reel)) more = false;
     for (auto& tr : tracks) if (more && !ReadDevice(f, tr.player)) more = false;
+    for (auto& tr : tracks) {
+      uint8_t a = 0, b = 0;
+      char fd[128] = {}, fn[64] = {};
+      if (!more || f.read(&a, 1) != 1 || a >= sizeof(fd) || f.read(fd, a) != a ||
+          f.read(&b, 1) != 1 || b >= sizeof(fn) || f.read(fn, b) != b) { more = false; break; }
+      if (tr.player && a) tr.player->SetFile(fd, fn);
+    }
   }
   f.close();
   linked = lk;

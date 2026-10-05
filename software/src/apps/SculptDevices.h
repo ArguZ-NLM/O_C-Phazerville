@@ -1161,17 +1161,34 @@ public:
   }
   // main loop: loading in steps
   void Idle();
-  // the files in /SCULPT, sorted; Select picks one by name (after a save)
+  // the WAVs in the current folder, sorted; Select picks one in /SCULPT by
+  // name (after a save), SetFile any folder + name (from the settings)
   void Scan();
-  void Select(const char* name);
+  void Select(const char* name) { SetFile(LOOP_DIR, name); }
+  void SetFile(const char* folder, const char* name);
+  const char* Folder() const { return dir; }
+  const char* FileName() const { return nfiles ? names[std::min<int>(cur[FILE_], nfiles - 1)] : ""; }
+  // the browser: folders and WAVs as a text list (R push on FILE)
+  bool browsing = false;
+  void OpenBrowser();
+  void BrowseMove(int d) { bsel = constrain(bsel + d, 0, std::max(0, bcount - 1)); }
+  void BrowseEnter();
+  void BrowseBack();
+  void DrawBrowser(int x, int y, int w, int h) const;
 
 private:
   AudioPlayStream stream;  // before fx: the audio update order follows the signal
   AudioEffectReel fx;
   AudioConnection st_l, st_r;
   char names[MAX_FILES][NAME_LEN] = {};
-  bool top[MAX_FILES] = {};  // at the top of the card rather than in /SCULPT
   uint32_t scanned_at = 0;
+  char dir[80] = "/SCULPT";  // the folder FILE steps through
+  // browser
+  char bdir[80] = "/";
+  char bn[MAX_FILES][NAME_LEN] = {};
+  bool bfolder[MAX_FILES] = {};
+  int bcount = 0, bsel = 0;
+  void List();
   // streaming (files too long for fx)
   bool streaming = false, analysing = false;
   size_t data_off = 0, done = 0;  // where the samples start in the file; analysis progress
@@ -1195,46 +1212,122 @@ private:
   size_t SnapQuiet(size_t at) const;
 };
 
-// WAVs in /SCULPT, then those at the top of the card; each list sorted by
-// name. A card put in after power-up is picked up here.
+// the WAVs in the current folder, sorted by name; a card put in after
+// power-up is picked up here
 FLASHMEM void PlayerDevice::Scan() {
   nfiles = 0;
   scanned_at = millis() | 1;
   if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
   if (!SDcard_Ready) return;
-  for (int pass = 0; pass < 2; pass++) {
-    File dir = SD.open(pass ? "/" : LOOP_DIR);
-    if (!dir) continue;
-    const int first = nfiles;
-    while (nfiles < MAX_FILES) {
-      File e = dir.openNextFile();
-      if (!e) break;
-      const char* nm = e.name();
-      const size_t l = strlen(nm);
-      if (!e.isDirectory() && nm[0] != '.' && l > 4 && l < NAME_LEN - 1 && !strcasecmp(nm + l - 4, ".WAV")) {
-        top[nfiles] = pass;
-        snprintf(names[nfiles++], NAME_LEN, "%s", nm);
-      }
-      e.close();
-    }
-    dir.close();
-    for (int i = first + 1; i < nfiles; i++)
-      for (int j = i; j > first && strcasecmp(names[j - 1], names[j]) > 0; j--) {
-        char t[NAME_LEN];
-        memcpy(t, names[j], NAME_LEN); memcpy(names[j], names[j - 1], NAME_LEN); memcpy(names[j - 1], t, NAME_LEN);
-        std::swap(top[j], top[j - 1]);
-      }
+  File d = SD.open(dir);
+  if (!d) { snprintf(dir, sizeof(dir), "/"); d = SD.open(dir); }
+  if (!d) return;
+  while (nfiles < MAX_FILES) {
+    File e = d.openNextFile();
+    if (!e) break;
+    const char* nm = e.name();
+    const size_t l = strlen(nm);
+    if (!e.isDirectory() && nm[0] != '.' && l > 4 && l < NAME_LEN - 1 && !strcasecmp(nm + l - 4, ".WAV"))
+      snprintf(names[nfiles++], NAME_LEN, "%s", nm);
+    e.close();
   }
-  Serial.printf("PLAYER: %d WAV\n", nfiles);  // what the card offers, over USB
-  for (int i = 0; i < nfiles; i++) Serial.printf("  %s%s\n", top[i] ? "/" : "/SCULPT/", names[i]);
+  d.close();
+  for (int i = 1; i < nfiles; i++)
+    for (int j = i; j > 0 && strcasecmp(names[j - 1], names[j]) > 0; j--) {
+      char t[NAME_LEN];
+      memcpy(t, names[j], NAME_LEN); memcpy(names[j], names[j - 1], NAME_LEN); memcpy(names[j - 1], t, NAME_LEN);
+    }
+  Serial.printf("PLAYER: %d WAV in %s\n", nfiles, dir);  // over USB
 }
 
-FLASHMEM void PlayerDevice::Select(const char* name) {
+FLASHMEM void PlayerDevice::SetFile(const char* folder, const char* name) {
+  snprintf(dir, sizeof(dir), "%s", folder && folder[0] ? folder : "/");
   Scan();
   for (int i = 0; i < nfiles; i++)
     if (!strcmp(names[i], name)) { val[FILE_] = cur[FILE_] = i; break; }
   loaded = -1;
   if (active) Load(cur[FILE_]);
+}
+
+// --- the browser: sub-folders first (with a /), then WAVs; ".." goes up
+FLASHMEM void PlayerDevice::List() {
+  bcount = 0;
+  bsel = 0;
+  if (strcmp(bdir, "/")) { snprintf(bn[bcount], NAME_LEN, ".."); bfolder[bcount++] = true; }
+  File d = SD.open(bdir);
+  if (!d) return;
+  for (int pass = 0; pass < 2; pass++) {  // folders, then files
+    d.rewindDirectory();
+    const int first = bcount;
+    while (bcount < MAX_FILES) {
+      File e = d.openNextFile();
+      if (!e) break;
+      const char* nm = e.name();
+      const size_t l = strlen(nm);
+      const bool isdir = e.isDirectory();
+      const bool want = nm[0] != '.' && l < NAME_LEN - 1 &&
+                        (pass == 0 ? isdir : (!isdir && l > 4 && !strcasecmp(nm + l - 4, ".WAV")));
+      if (want) { bfolder[bcount] = isdir; snprintf(bn[bcount++], NAME_LEN, "%s", nm); }
+      e.close();
+    }
+    for (int i = first + 1; i < bcount; i++)
+      for (int j = i; j > first && strcasecmp(bn[j - 1], bn[j]) > 0; j--) {
+        char t[NAME_LEN];
+        memcpy(t, bn[j], NAME_LEN); memcpy(bn[j], bn[j - 1], NAME_LEN); memcpy(bn[j - 1], t, NAME_LEN);
+        std::swap(bfolder[j], bfolder[j - 1]);
+      }
+  }
+  d.close();
+}
+
+FLASHMEM void PlayerDevice::OpenBrowser() {
+  if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
+  snprintf(bdir, sizeof(bdir), "%s", dir);
+  List();
+  // start on the file that is playing
+  for (int i = 0; i < bcount; i++)
+    if (!bfolder[i] && !strcmp(bn[i], FileName())) { bsel = i; break; }
+  browsing = true;
+}
+
+FLASHMEM void PlayerDevice::BrowseBack() {
+  if (!strcmp(bdir, "/")) { browsing = false; return; }  // at the top: close
+  char* slash = strrchr(bdir, '/');
+  if (slash == bdir) bdir[1] = 0; else if (slash) *slash = 0;
+  List();
+}
+
+FLASHMEM void PlayerDevice::BrowseEnter() {
+  if (bsel >= bcount) return;
+  if (bfolder[bsel]) {
+    if (!strcmp(bn[bsel], "..")) { BrowseBack(); return; }
+    const size_t l = strlen(bdir);
+    if (l + strlen(bn[bsel]) + 2 < sizeof(bdir))
+      snprintf(bdir + l, sizeof(bdir) - l, "%s%s", l > 1 ? "/" : "", bn[bsel]);
+    List();
+    return;
+  }
+  SetFile(bdir, bn[bsel]);  // a WAV: play from this folder
+  browsing = false;
+}
+
+FLASHMEM void PlayerDevice::DrawBrowser(int x, int y, int w, int h) const {
+  // the folder on top, then 5 entries around the selection
+  char t[24];
+  const size_t l = strlen(bdir);
+  snprintf(t, sizeof(t), "%s", l > 21 ? bdir + l - 21 : bdir);
+  gfxPrint(x, y + 1, t);
+  gfxLine(x, y + 10, x + w - 1, y + 10);
+  if (!bcount) { gfxPrint(x + 4, y + 16, PSTR("(empty)")); return; }
+  constexpr int rows = 5;
+  const int first = constrain(bsel - rows / 2, 0, std::max(0, bcount - rows));
+  for (int r = 0; r < rows && first + r < bcount; r++) {
+    const int i = first + r;
+    snprintf(t, sizeof(t), "%.19s%s", bn[i], bfolder[i] && strcmp(bn[i], "..") ? "/" : "");
+    const int ry = y + 13 + r * 8;
+    gfxPrint(x + 2, ry, t);
+    if (i == bsel) gfxInvert(x, ry - 1, w, 9);
+  }
 }
 
 // called while the stream is not patched in
@@ -1270,8 +1363,8 @@ FLASHMEM void PlayerDevice::Load(int i) {
   loaded = i;
   too_long = false;
   if (i >= nfiles || !fx.ready()) return;
-  char path[64];
-  snprintf(path, sizeof(path), "%s/%s", top[i] ? "" : LOOP_DIR, names[i]);
+  char path[128];
+  snprintf(path, sizeof(path), "%s/%s", strcmp(dir, "/") ? dir : "", names[i]);
   lf = SD.open(path, FILE_READ);
   if (!lf) return;
   uint8_t h[12];
