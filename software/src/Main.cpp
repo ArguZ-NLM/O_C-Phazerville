@@ -494,8 +494,8 @@ FLASHMEM void setup() {
 
 #ifdef LOOM_ONLY
   // boot picture: the moving wave with LOOM over it, until a button is
-  // pressed or a knob turned (or a USB command arrives); that touch only
-  // ends the picture
+  // pressed or a knob turned (or a USB command other than a screen request
+  // arrives); that touch only ends the picture
   if (!start_cal) {
     uint32_t idle = OC::ui.idle_time();
     while (true) {
@@ -504,6 +504,9 @@ FLASHMEM void setup() {
       loom::DrawTitle();
       GRAPHICS_END_FRAME();
       const uint32_t now_idle = OC::ui.idle_time();
+      // screen requests (the screen-capture tool asks all the time) don't
+      // end it; other USB commands (saving before a flash) do
+      while (Serial.available() && Serial.peek() == 'S') Serial.read();
       if (now_idle < idle || Serial.available()) break;  // something happened
       idle = now_idle;
     }
