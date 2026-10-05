@@ -193,7 +193,10 @@ FASTRUN void AudioEffectReel::update() {
       const size_t into = (at + len - nws) % len;            // ... in the new window
       ws = nws; wl = nwl;
       off = into < wl ? float(into) + (off - std::floor(off)) : (speed < 0.0f ? wl - 1.0f : 0.0f);
-      xf = XFADE;
+      // only a playing loop fades; a silent one takes the new window at once
+      // (the fade counts down only while playing)
+      const bool sounding = st == PLAY || st == DUB || run_g > 0.0f;
+      xf = sounding ? XFADE : 0;
     }
   }
   const float sp = speed, g = level, m = mon, keep = keep_;
