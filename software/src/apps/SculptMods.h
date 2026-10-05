@@ -211,7 +211,7 @@ FLASHMEM void WaveMod::DrawViz(int x, int y, int w, int h) {
   const int bh = int(out * h);
   gfxFrame(x + w - 4, y, 4, h);
   if (bh > 0) gfxRect(x + w - 4, y + h - bh, 4, bh);
-  if (flash > 0.0f) gfxInvert(x, y, ww, h);
+  if (flash > 0.0f) gfxRect(x, y, 4, 4);  // reset: small corner mark
 }
 
 FLASHMEM void WaveMod::Format(int p, char* buf, size_t n) const {
