@@ -698,6 +698,7 @@ PROGMEM static const DeviceDef INPUT_DEF = {
 };
 
 class InputDevice : public Device, public AudioStream {
+  uint32_t heard_at = 0;  // last time the mini picture saw a signal
 public:
   enum Source { STEREO, IN1, IN2, OFF };
   InputDevice() : Device(INPUT_DEF), AudioStream(2, queue) {}
@@ -816,8 +817,10 @@ FLASHMEM void InputDevice::DrawViz(int x, int y, int w, int h) {
 // one for L, the right one for R, none when off
 FLASHMEM void InputDevice::DrawMini(int x, int y, int w, int h) {
   Poll();
-  // nothing coming in (or OFF): a microphone, like REC's circle / PLY's arrow
-  if (cur[0] == OFF || std::max(meters[0].v, meters[1].v) < 0.02f) {
+  // nothing coming in for 2 s (or OFF): a microphone, like REC's circle /
+  // PLY's arrow; sound brings the bars straight back
+  if (std::max(meters[0].v, meters[1].v) >= 0.02f) heard_at = millis();
+  if (cur[0] == OFF || millis() - heard_at > 2000) {
     const int cx = x + w / 2;
     gfxFrame(cx - 2, y, 5, 6);                // capsule
     gfxPixel(cx - 2, y); gfxPixel(cx + 2, y);  // (round its top)
