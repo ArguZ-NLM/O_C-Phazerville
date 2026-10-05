@@ -588,6 +588,19 @@ void FASTRUN loop() {
       do {
         int cmd = Serial.read();
         switch (cmd) {
+#if defined(__IMXRT1062__)
+          case 'K':  // the crash log the firmware keeps after a crash
+            for (const char* fn : {"CRASH.OLD", "CRASH.LOG"}) {
+              File cl = PhzConfig::myfs.open(fn, FILE_READ);
+              Serial.printf("--- %s %s ---\n", fn, cl ? "" : "(none)");
+              if (!cl) continue;
+              char b[64];
+              int n;
+              while ((n = cl.read(b, sizeof(b))) > 0) { Serial.write(b, n); delay(2); }
+              cl.close();
+            }
+            break;
+#endif
 #ifdef PRINT_DEBUG
           case 'z':
             Serial.println("-=[ PEW PEW NERDS! ]=-");
