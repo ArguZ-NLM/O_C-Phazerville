@@ -816,6 +816,20 @@ FLASHMEM void InputDevice::DrawViz(int x, int y, int w, int h) {
 // one for L, the right one for R, none when off
 FLASHMEM void InputDevice::DrawMini(int x, int y, int w, int h) {
   Poll();
+  // nothing coming in (or OFF): a microphone, like REC's circle / PLY's arrow
+  if (cur[0] == OFF || std::max(meters[0].v, meters[1].v) < 0.02f) {
+    const int cx = x + w / 2;
+    gfxFrame(cx - 2, y, 5, 6);                // capsule
+    gfxPixel(cx - 2, y); gfxPixel(cx + 2, y);  // (round its top)
+    graphics.clearRect(cx - 2, y, 1, 1);
+    graphics.clearRect(cx + 2, y, 1, 1);
+    gfxLine(cx - 4, y + 3, cx - 4, y + 5);    // holder
+    gfxLine(cx + 4, y + 3, cx + 4, y + 5);
+    gfxLine(cx - 3, y + 6, cx + 3, y + 6);
+    gfxLine(cx, y + 7, cx, y + 8);            // stand
+    gfxLine(cx - 2, y + 9, cx + 2, y + 9);
+    return;
+  }
   const int bw = (w - 3) / 2;
   if (cur[0] == STEREO || cur[0] == IN1) DrawVMeter(x, y, bw, h, cur[0] == STEREO ? meters[0].v : std::max(meters[0].v, meters[1].v));
   if (cur[0] == STEREO || cur[0] == IN2) DrawVMeter(x + w - bw, y, bw, h, cur[0] == STEREO ? meters[1].v : std::max(meters[0].v, meters[1].v));
