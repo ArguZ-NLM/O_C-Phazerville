@@ -1211,27 +1211,31 @@ FLASHMEM void AppSculpt::DrawDevice() const {
     const bool sel = p == cursor;
     char buf[8];
 
-    // name row (in modulation mode: the source for the selected setting)
-    if (sel && mod_mode && mod_slot) {
-      if (d->mod_bus2[p]) snprintf(buf, sizeof(buf), "Md%c %c", 'A' + d->mod_bus2[p] - 1, d->Bipolar2(p) ? 'B' : 'U');
-      else snprintf(buf, sizeof(buf), "off");
-      PrintCentred(x, 43, buf);
-    } else if (sel && mod_mode) {
+    // name row (in modulation mode: the source for the selected setting,
+    // e.g. "1 MCB" = source 1 is MOD C, bipolar; "2 off")
+    if (sel && mod_mode) {
       const HS::CVInputMap& in = d->mod_in[p];
-      const bool learn = !d->mod_bus_sel[p] && in.source_type() == HS::CVInputMap::TYPE_MIDI
+      const bool learn = !mod_slot && !d->mod_bus_sel[p] && in.source_type() == HS::CVInputMap::TYPE_MIDI
         && HS::frame.MIDIState.mapping[in.index()].learning();
+      const uint8_t bus = mod_slot ? d->mod_bus2[p] : d->mod_bus_sel[p];
+      const char ub = (mod_slot ? d->Bipolar2(p) : d->Bipolar(p)) ? 'B' : 'U';
+      char src[8] = {};
+      if (bus) snprintf(src, sizeof(src), "M%c%c", 'A' + bus - 1, ub);
+      else if (!mod_slot && in.enabled()) {
+        // CV / MIDI: its short name without the gaps (C 1 -> C1)
+        int k = 0;
+        for (const char* c = in.InputName(); *c && k < 4; c++) if (*c != ' ') src[k++] = *c;
+        src[k++] = ub;
+        src[k] = 0;
+      } else snprintf(src, sizeof(src), "off");
       if (learn) snprintf(buf, sizeof(buf), "learn");
-      else {
-        char src[6];
-        d->ModSourceName(p, src, sizeof(src));
-        snprintf(buf, sizeof(buf), "%s %c", src, d->Bipolar(p) ? 'B' : 'U');
-      }
+      else snprintf(buf, sizeof(buf), strlen(src) > 3 ? "%d%s" : "%d %s", mod_slot + 1, src);
       PrintCentred(x, 43, buf);
     } else {
       PrintCentred(x, 43, pd.name);
       if (pd.nmodes) gfxRect(x + 29, 43, 2, 2); // has modes (hold L + turn R)
     }
-    if (d->Modded(p)) { // modulated: small wave mark
+    if (d->Modded(p) && !(sel && mod_mode)) { // modulated: small wave mark
       gfxPixel(x + 27, 49); gfxPixel(x + 28, 48); gfxPixel(x + 29, 49); gfxPixel(x + 30, 48);
     }
 
