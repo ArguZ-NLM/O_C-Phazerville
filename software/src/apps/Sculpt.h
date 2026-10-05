@@ -1048,7 +1048,7 @@ FLASHMEM void AppSculpt::DrawDevice() const {
       char src[6], buf[16];
       FormatTrig(d->act_trig[a], src, sizeof(src));
       const char* act = d->def.actions[a][0] ? d->def.actions[a] : "-";
-      snprintf(buf, sizeof(buf), "%s %s:%s", a ? "DN" : "UP", act, src);
+      snprintf(buf, sizeof(buf), "%s %s:%s", a ? "B" : "A", act, src);  // the panel's names
       gfxPrint(4, 13 + a * 10, buf);
     }
     gfxPrint(4, 33, PSTR("L/R enc: trigger"));

@@ -51,7 +51,7 @@ public:
   void SetLevel(float l) { level = l; }
   void SetSeam(float s) { seam = std::max(16.0f, s); }
   void Play() { pos = double(ws); playing = true; }
-  void Stop() { playing = false; }
+  void Stop() { playing = false; }  // fades out over ~5 ms
   bool Playing() const { return playing; }
   float HeadPos() const { return frames ? float(pos / frames) : 0.0f; }
   bool Underran() { const bool u = underrun; underrun = false; return u; }
@@ -107,6 +107,7 @@ private:
   volatile size_t cs = 0, cn = 0;  // cache: frames cs .. cs + cn
   volatile double pos = 0.0;
   volatile bool playing = false, underrun = false;
+  float run_g = 0.0f;  // start / stop glide
   volatile float speed = 1.0f, level = 1.0f, seam = 256.0f;
   bool pending_cache = false;
 
@@ -119,7 +120,7 @@ private:
 };
 
 FASTRUN void AudioPlayStream::update() {
-  if (!playing || !ready()) return;
+  if ((!playing && run_g <= 0.0f) || !ready()) return;
   audio_block_t* out[2] = {allocate(), allocate()};
   if (!out[0] || !out[1]) {
     for (auto b : out) if (b) release(b);
@@ -129,7 +130,10 @@ FASTRUN void AudioPlayStream::update() {
   const size_t a = ws, b = we;
   const float wl = float(b - a), fade = std::min(float(seam), wl * 0.25f);
   double p = pos;
+  constexpr float run_step = 1.0f / (0.005f * AUDIO_SAMPLE_RATE_EXACT);
+  const bool on = playing;
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+    run_g = on ? std::min(1.0f, run_g + run_step) : std::max(0.0f, run_g - run_step);
     const size_t i = size_t(p);
     int16_t l0 = 0, r0 = 0, l1, r1;
     float yl = 0.0f, yr = 0.0f;
@@ -143,8 +147,8 @@ FASTRUN void AudioPlayStream::update() {
     } else {
       underrun = true;
     }
-    out[0]->data[n] = __SSAT(int32_t(yl * 32767.0f), 16);
-    out[1]->data[n] = __SSAT(int32_t(yr * 32767.0f), 16);
+    out[0]->data[n] = __SSAT(int32_t(yl * run_g * 32767.0f), 16);
+    out[1]->data[n] = __SSAT(int32_t(yr * run_g * 32767.0f), 16);
     p += sp;
     if (p >= double(b)) p = double(a) + (p - double(b));
     if (p < double(a)) p = double(a);
