@@ -146,7 +146,7 @@ PROGMEM static const DeviceDef WAVE_DEF = {
   "WAVE", "WAV", 7, {"RST", ""},
   {
     {"RATE", 0, 100, 40, UNI, 0, 4, 0, {}, {"FREE", "STR", "TRI", "DOT"}},
-    {"AMT", 0, 100, 100, UNI},
+    {"AMNT", 0, 100, 100, UNI},
     {"PHASE", 0, 100, 0, UNI},
     {"OFFS", -50, 50, 0, BI},
     {"SHAPE", 0, 3, 0, LIST, 4, 0, 0, {"SIN", "TRI", "SQR", "SAW"}},
@@ -231,7 +231,7 @@ PROGMEM static const DeviceDef RANDOM_DEF = {
   "RANDOM", "RND", 7, {"STP", ""},
   {
     {"RATE", 0, 100, 45, UNI, 0, 4, 0, {}, {"FREE", "STR", "TRI", "DOT"}},
-    {"AMT", 0, 100, 100, UNI},
+    {"AMNT", 0, 100, 100, UNI},
     {"SMTH", 0, 100, 0, UNI},
     {"OFFS", -50, 50, 0, BI},
     {"LEN", 0, 16, 0, UNI},
@@ -344,7 +344,7 @@ PROGMEM static const DeviceDef ADSR_DEF = {
     {"DEC", 0, 100, 45, UNI},
     {"SUS", 0, 100, 60, UNI},
     {"REL", 0, 100, 50, UNI},
-    {"AMT", 0, 100, 100, UNI},
+    {"AMNT", 0, 100, 100, UNI},
     {"TRIG", 0, TRIG_SOURCES - 1, 1, UNI},
     {"CURVE", -50, 50, 0, BI},
   }
@@ -362,7 +362,7 @@ private:
   enum Stage : uint8_t { IDLE, ATTACK, DECAY, SUSTAIN, RELEASE } stage = IDLE;
   float env = 0.0f;
   float rel_from = 1.0f;  // where the release started, for the picture
-  float Shaped(float e) const;  // CURVE and AMT applied
+  float Shaped(float e) const;  // CURVE and AMNT applied
   float manual = 0.0f; // the action button holds the gate this long
   float Time(int p) const;
 };
@@ -398,7 +398,7 @@ FLASHMEM void AdsrMod::Tick(const ModCtx& ctx) {
   out = Shaped(env);
 }
 
-// CURVE bends all stages: + exponential, - logarithmic; AMT scales
+// CURVE bends all stages: + exponential, - logarithmic; AMNT scales
 FLASHMEM float AdsrMod::Shaped(float e) const {
   const float c = cur[P_CURVE] * 0.02f;
   const float e3 = e * e * e, l3 = 1.0f - (1.0f - e) * (1.0f - e) * (1.0f - e);
@@ -461,7 +461,7 @@ PROGMEM static const DeviceDef FOLLOW_DEF = {
   "FOLLOW", "FOL", 6, {"", ""},
   {
     {"INPUT", 0, 1, 0, LIST, 2, 0, 0, {"IN", "OUT"}},
-    {"AMT", 0, 100, 100, UNI},
+    {"AMNT", 0, 100, 100, UNI},
     {"RISE", 0, 100, 10, UNI},
     {"FALL", 0, 100, 40, UNI},
     {"GAIN", 0, 200, 100, UNI},
