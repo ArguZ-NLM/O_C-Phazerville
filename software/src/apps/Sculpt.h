@@ -127,6 +127,7 @@ namespace sculpt {
   // MOD E-H: shared by both tracks (in the MOD view's second page)
   Modulator* shared_mods[NUM_MODS][MOD_TYPES] = {};
   uint8_t shared_type[NUM_MODS] = {};
+  char load_note[160] = "";  // how the last settings load went (USB stats)
   // MOD view cursor: 0-3 the track's A-D, 4-7 the shared E-H, then CLOCK
   constexpr int CLK_CURSOR = 2 * NUM_MODS;
 
@@ -1373,7 +1374,6 @@ namespace sculpt {
   // 2: modulator types sorted by name; 3: second mod source, MOD E-H
   constexpr uint8_t SAVE_VERSION = 3;
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
-  static char load_note[160] = "";             // how the last load went (USB stats)
 
   // per device: tag, count, then per setting value/mode/mod amount/
   // mod source/bus select, then bipolar bits and action triggers
