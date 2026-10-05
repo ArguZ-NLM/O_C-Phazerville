@@ -285,6 +285,7 @@ private:
   bool Muted() const;
   bool BypassKey() const;
   void DrawDevice() const;
+  void DrawClockPage() const;
 };
 
 FLASHMEM sculpt::Device* AppSculpt::FocusOn(int t) const {
@@ -1319,6 +1320,12 @@ FLASHMEM void AppSculpt::DrawDevice() const {
     return;
   }
 
+  // the clock has its own roomy page (the grid only for modulation)
+  if (d == tempo_clock && !mod_mode && !trig_mode) {
+    DrawClockPage();
+    return;
+  }
+
   // the device's picture
   d->view_page = cursor / 4;
   d->view_cursor = cursor;
@@ -1466,6 +1473,34 @@ FLASHMEM void AppSculpt::DrawMods() const {
   Modulator* m = ModAt(track, mod_cursor);
   gfxPrint(0, 56, m ? m->def.name : PSTR("off"));
   gfxPrint(80, 56, PSTR("Y:back"));
+}
+
+// the clock page: one setting per line with room for full names, then the
+// four beats and whether it runs
+FLASHMEM void AppSculpt::DrawClockPage() const {
+  using namespace sculpt;
+  const ClockDevice* c = tempo_clock;
+  static const char* const names[3] = {"SOURCE", "BPM", "PPQN"};
+  for (int p = 0; p < 3; p++) {
+    const int y = 13 + p * 11;
+    gfxPrint(2, y, names[p]);
+    char buf[20];
+    if (p == ClockDevice::P_SOURCE && c->val[p] == 0) snprintf(buf, sizeof(buf), "internal");
+    else if (p == ClockDevice::P_SOURCE && c->val[p] == 1) snprintf(buf, sizeof(buf), "MIDI clock");
+    else if (p == ClockDevice::P_PPQN && !c->external()) snprintf(buf, sizeof(buf), "-");
+    else c->Format(p, buf, sizeof(buf));
+    gfxPrint(48, y, buf);
+    if (p == cursor) {
+      gfxInvert(1, y - 1, 41, 9);
+      if (editing) gfxInvert(47, y - 1, 6 * int(strlen(buf)) + 1, 9);
+    }
+  }
+  // four beats, the current one filled while running
+  for (int b = 0; b < 4; b++) {
+    gfxFrame(2 + b * 11, 50, 9, 9);
+    if (clock_running && b == c->Beat()) gfxRect(4 + b * 11, 52, 5, 5);
+  }
+  gfxPrint(50, 51, !clock_running ? PSTR("stopped") : c->Waiting() ? PSTR("waiting...") : PSTR("running"));
 }
 
 // the clock in the top line: a play triangle while it runs, a square when

@@ -537,6 +537,8 @@ public:
   void DrawMini(int x, int y, int w, int h) override;
   bool external() const { return cur[P_SOURCE] != 0; }
   bool midi() const { return cur[P_SOURCE] == 1; }
+  bool Waiting() const { return external() && !have_measure; }
+  int Beat() const { return beat; }
 private:
   uint8_t beat = 0;
   uint32_t last_edge_us = 0, tap_us = 0;
