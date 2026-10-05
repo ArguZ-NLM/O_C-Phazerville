@@ -137,7 +137,8 @@ namespace sculpt {
   // what each CV output A-H sends (0-10 V): off, track L's MOD A-D, track
   // R's MOD A-D, the shared E-H, or the clock as a gate
   enum { OUT_OFF, OUT_L = 1, OUT_R = 5, OUT_SHARED = 9, OUT_CLOCK = 13, OUT_SOURCES };
-  uint8_t cv_out_src[NUM_CV_OUTS] = {};
+  // by default A-D = track L's MOD A-D, E-H = track R's
+  uint8_t cv_out_src[NUM_CV_OUTS] = {OUT_L, OUT_L + 1, OUT_L + 2, OUT_L + 3, OUT_R, OUT_R + 1, OUT_R + 2, OUT_R + 3};
   FLASHMEM void FormatOutSource(int s, char* buf, size_t n, bool long_name) {
     if (s >= OUT_CLOCK) snprintf(buf, n, long_name ? "clock (beats)" : "CK");
     else if (s >= OUT_SHARED) snprintf(buf, n, long_name ? "shared MOD %c" : "%c", 'E' + s - OUT_SHARED);
@@ -1599,7 +1600,7 @@ FLASHMEM void AppSculpt::SaveFile() const {
   for (int i = 0; i < NUM_MODS; i++)
     for (int type = 1; type < MOD_TYPES; type++) WriteDevice(f, shared_mods[i][type]);
   // ... and what the CV outputs send
-  f.write("O", 1);
+  f.write("C", 1);
   f.write(cv_out_src, NUM_CV_OUTS);
   f.close();
   fs.remove(SAVE_FILE);
@@ -1695,7 +1696,7 @@ FLASHMEM void AppSculpt::LoadFile() {
           shared_type[i] = types[i] < MOD_TYPES && shared_mods[i][types[i]] ? types[i] : 0;
         }
         uint8_t outs[NUM_CV_OUTS];
-        if (okm && f.read(&mark, 1) == 1 && mark == 'O' && f.read(outs, NUM_CV_OUTS) == NUM_CV_OUTS)
+        if (okm && f.read(&mark, 1) == 1 && mark == 'C' && f.read(outs, NUM_CV_OUTS) == NUM_CV_OUTS)
           for (int o = 0; o < NUM_CV_OUTS; o++) cv_out_src[o] = outs[o] < OUT_SOURCES ? outs[o] : 0;
       }
     }
