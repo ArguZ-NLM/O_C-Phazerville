@@ -278,8 +278,8 @@ FLASHMEM void RandomMod::Tick(const ModCtx& ctx) {
   out = 0.5f + (smooth - 0.5f) * cur[P_AMT] * 0.01f + cur[P_OFFS] * 0.01f;
 }
 
-// LEN set: the sequence as bars, the current step lit, the output (with its
-// glide) as a line over them; free: the last steps going by as a line
+// LEN set: the sequence as bars, the current step lit; free: the last steps
+// going by as a line
 FLASHMEM void RandomMod::DrawViz(int x, int y, int w, int h) {
   const int ww = w - 8, top = y + 1, hh = h - 3;
   auto val = [&](float s) { return constrain(0.5f + (s - 0.5f) * cur[P_AMT] * 0.01f + cur[P_OFFS] * 0.01f, 0.0f, 1.0f); };
@@ -303,8 +303,6 @@ FLASHMEM void RandomMod::DrawViz(int x, int y, int w, int h) {
       py = cy;
     }
   }
-  // the output now, as a line across, so the glide shows
-  gfxDottedLine(x, yy(out), x + ww - 1, yy(out), 2);
   const int bh = int(out * h);
   gfxFrame(x + w - 4, y, 4, h);
   if (bh > 0) gfxRect(x + w - 4, y + h - bh, 4, bh);
