@@ -38,11 +38,12 @@
 // Device view:
 //   R enc  move between the 8 settings    L enc  the setting's mode
 //   R push grab / let go; grabbed, R enc changes the value
-//   L push modulation for the setting:    L enc amount, R enc source (off,
-//          MOD A-D, CV in, CV out, MIDI map, noise), R push unipolar /
-//          bipolar, X  MIDI learn (move a knob), L push again to leave
-//   X      action triggers: L enc source for UP's action, R enc for DOWN's
-//          (gate in, CV in as gate, MIDI map), X / Y to leave
+//   X      modulation for the setting: MOD1 -> MOD2 -> off. L enc amount,
+//          R enc source (MOD1: off, MOD A-H, CV in, CV out, MIDI map, noise;
+//          MOD2: off, MOD A-H), R push unipolar / bipolar; the two add up.
+//          MOD1: X held = MIDI learn (move a knob)
+//   L push action triggers: L enc source for UP's action, R enc for DOWN's
+//          (gate in, CV in as gate, MIDI map), L push / Y to leave
 //   Y      back                           UP / DOWN  actions
 // MOD view (4 modulators per track, plus the clock):
 //   R enc  choose A-D or CLK              L enc  type: WAVE/RANDOM/ADSR/FOLLOW
@@ -758,12 +759,10 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
     } else if (event.type == UI::EVENT_BUTTON_PRESS) {
       l_held = false;
       if (l_used) return;
-      // L push: MOD (first source) -> MOD 2 (second source) -> off
+      // L push: the action triggers page
       if (view == DEVICE) {
-        if (!mod_mode) { mod_mode = true; mod_slot = 0; }
-        else if (mod_slot == 0) mod_slot = 1;
-        else mod_mode = false;
-        editing = trig_mode = false;
+        trig_mode = !trig_mode;
+        editing = mod_mode = false;
       }
     }
     return;
@@ -809,6 +808,11 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
         return;
       }
     }
+  }
+  // X held in MOD1: MIDI learn (the release that follows does nothing)
+  if (event.control == OC::CONTROL_BUTTON_X && view == DEVICE && mod_mode) {
+    if (event.type == UI::EVENT_BUTTON_LONG_PRESS && !mod_slot && Focused()) MidiLearn(Focused());
+    if (event.type != UI::EVENT_BUTTON_PRESS) return;
   }
   if (event.type != UI::EVENT_BUTTON_PRESS) return;
 
@@ -862,8 +866,13 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
       editing = mod_mode = false;
       break;
     case OC::CONTROL_BUTTON_X:
-      if (view == DEVICE && mod_mode && d) { if (!mod_slot) MidiLearn(d); }
-      else if (view == DEVICE) { trig_mode = !trig_mode; editing = false; }
+      // X: modulation, MOD1 (first source) -> MOD2 (second source) -> off
+      if (view == DEVICE) {
+        if (!mod_mode) { mod_mode = true; mod_slot = 0; }
+        else if (mod_slot == 0) mod_slot = 1;
+        else mod_mode = false;
+        editing = trig_mode = false;
+      }
       else if (view == CHAIN) view = MODS;
       else if (view == MODS) view = CHAIN;
       break;
