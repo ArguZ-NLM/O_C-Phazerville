@@ -9,7 +9,8 @@
 // PLAYER. The audio interrupt only ever reads PSRAM:
 //  - the ring holds the stretch ahead of the play head, refilled by the
 //    main loop (Service) from the card;
-//  - the cache holds the first second of the loop, so the jump from its end
+//  - two caches hold the first second of the loop (one for the loop playing,
+//    one for a new START waiting for the seam), so the jump from its end
 //    back to its start never waits for the card.
 // The main loop owns the file; this class only has the buffers and the
 // play head. Forward playback (SPEED 0..2x) for now.
@@ -24,7 +25,7 @@ public:
     cache_cap = size_t(cache_secs * AUDIO_SAMPLE_RATE_EXACT);
     for (int c = 0; c < 2; c++) {
       ring[c] = static_cast<int16_t*>(extmem_malloc(ring_cap * 2));
-      cache[c] = static_cast<int16_t*>(extmem_malloc(cache_cap * 2));
+      for (int k = 0; k < 2; k++) cache[k][c] = static_cast<int16_t*>(extmem_malloc(cache_cap * 2));
     }
     if (!ready()) { Release(); return false; }
     return true;
@@ -33,18 +34,18 @@ public:
     playing = false;
     for (int c = 0; c < 2; c++) {
       if (ring[c]) extmem_free(ring[c]);
-      if (cache[c]) extmem_free(cache[c]);
-      ring[c] = cache[c] = nullptr;
+      for (int k = 0; k < 2; k++) { if (cache[k][c]) extmem_free(cache[k][c]); cache[k][c] = nullptr; }
+      ring[c] = nullptr;
     }
     ring_cap = cache_cap = 0;
   }
-  bool ready() const { return ring[0] && ring[1] && cache[0] && cache[1]; }
+  bool ready() const { return ring[0] && ring[1] && cache[0][0] && cache[0][1] && cache[1][0] && cache[1][1]; }
 
   // a new file of n frames: nothing buffered yet
   void Open(size_t n) {
     __disable_irq();
     playing = false; frames = n; pos = 0.0; ws = 0; we = n; nws = 0; nwe = n; h_l = 0; lt_a = 0; lt_b = n;
-    rs = 0; rn = 0; cs = 0; cn = 0;
+    rs = 0; rn = 0; cs[0] = cs[1] = 0; cn[0] = cn[1] = 0;
     __enable_irq();
   }
   // a new loop window: taken over in the audio update, under a ~3 ms dip
@@ -89,19 +90,26 @@ public:
   bool Next(int16_t*& l, int16_t*& r, size_t& at, size_t& count, size_t chunk) {
     if (!frames) return false;
     // the loop's start into the cache
-    const size_t c0 = lt_a - h_l;  // the start crossed into (h before it when centred)
-    if (cs != c0) { __disable_irq(); cs = c0; cn = 0; __enable_irq(); }
-    const size_t cache_want = std::min(cache_cap, we - c0);
-    if (cn < cache_want) {
-      at = cs + cn; count = std::min(chunk, cache_want - cn);
-      l = cache[0] + cn; r = cache[1] + cn;
-      pending_cache = true;
+    // the start crossed into (h before it when centred): in the cache that
+    // already has it, else in the one the head isn't playing from
+    const size_t c0 = lt_a - h_l;
+    const size_t head = size_t(pos);
+    int k = cs[0] == c0 ? 0 : cs[1] == c0 ? 1 : -1;
+    if (k < 0) {
+      k = (head >= cs[0] && head < cs[0] + cn[0]) ? 1 : 0;
+      __disable_irq(); cs[k] = c0; cn[k] = 0; __enable_irq();
+    }
+    const size_t cache_want = std::min(cache_cap, size_t(lt_b) - c0);
+    if (cn[k] < cache_want) {
+      at = cs[k] + cn[k]; count = std::min(chunk, cache_want - cn[k]);
+      l = cache[k][0] + cn[k]; r = cache[k][1] + cn[k];
+      pending_cache = k + 1;
       return true;
     }
-    pending_cache = false;
-    // the ring: frames after the head (after the cache when the head is in it)
-    const size_t head = size_t(pos);
-    const size_t from = (head >= cs && head < cs + cn) ? cs + cn : head;
+    pending_cache = 0;
+    // the ring: frames after the head (after a cache when the head is in it)
+    size_t from = head;
+    for (int j = 0; j < 2; j++) if (head >= cs[j] && head < cs[j] + cn[j]) from = cs[j] + cn[j];
     if (from < rs || from > rs + rn) {  // the head jumped (loop, START): start over
       __disable_irq(); rs = from; rn = 0; __enable_irq();
     } else if (from > rs + 1024) {      // let go of what's played
@@ -121,7 +129,7 @@ public:
   // after the main loop has filled what Next() asked for
   void Filled(size_t count) {
     __disable_irq();
-    if (pending_cache) cn += count; else rn += count;
+    if (pending_cache) cn[pending_cache - 1] += count; else rn += count;
     __enable_irq();
   }
 
@@ -129,11 +137,11 @@ public:
 
 private:
   int16_t* ring[2] = {};
-  int16_t* cache[2] = {};
+  int16_t* cache[2][2] = {};  // [which][channel]
   size_t ring_cap = 0, cache_cap = 0;
   volatile size_t frames = 0, ws = 0, we = 0;
   volatile size_t rs = 0, rn = 0;  // ring: frames rs .. rs + rn
-  volatile size_t cs = 0, cn = 0;  // cache: frames cs .. cs + cn
+  volatile size_t cs[2] = {}, cn[2] = {};  // caches: frames cs .. cs + cn
   volatile double pos = 0.0;
   volatile bool playing = false, underrun = false, retrig = false, loop_ = true;
   float run_g = 0.0f;  // start / stop glide
@@ -144,11 +152,12 @@ private:
   float ur_g = 1.0f, last_l = 0.0f, last_r = 0.0f;  // underrun glide
   volatile size_t h_l = 0;           // the crossfade half in use (changes away from the seam)
   volatile size_t lt_a = 0, lt_b = 0; // ... and the window it crosses into
-  bool pending_cache = false;
+  int pending_cache = 0;  // 1 / 2: Next() handed out cache 0 / 1
 
   // one frame, or false when it isn't buffered (yet)
   bool Frame(size_t i, int16_t& l, int16_t& r) const {
-    if (i >= cs && i < cs + cn) { l = cache[0][i - cs]; r = cache[1][i - cs]; return true; }
+    for (int k = 0; k < 2; k++)
+      if (i >= cs[k] && i < cs[k] + cn[k]) { l = cache[k][0][i - cs[k]]; r = cache[k][1][i - cs[k]]; return true; }
     if (i >= rs && i < rs + rn) { const size_t k = i % ring_cap; l = ring[0][k]; r = ring[1][k]; return true; }
     return false;
   }
@@ -184,8 +193,9 @@ FASTRUN void AudioPlayStream::update() {
   {
     const size_t h = Half(ws, we, nws, nwe);
     const double p0 = pos;
-    const bool away = p0 >= double(cs + cn) &&
-                      p0 < double(we) - double(std::max(h, size_t(h_l))) - AUDIO_SAMPLE_RATE_EXACT * 0.1;
+    // (with two caches the new start is read while the old one plays; only
+    // the last moments before the seam keep what they have)
+    const bool away = p0 < double(we) - double(std::max(h, size_t(h_l))) - AUDIO_BLOCK_SAMPLES * 4;
     if ((h != h_l || nws != lt_a || nwe != lt_b) && away) { h_l = h; lt_a = nws; lt_b = nwe; }
     if (!xfade_loop || !loop_) h_l = 0;
     if (!loop_) { lt_a = ws; lt_b = we; }
