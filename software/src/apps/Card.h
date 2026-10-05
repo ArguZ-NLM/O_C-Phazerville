@@ -5,7 +5,8 @@
 // buffers. On a Mac the card shows up in OpenMTP (macOS's photo import may
 // have to be kept out of the way: card-mode.sh). The screen lists the card's
 // folders and files, refreshed every 2 s, so copied files can be seen
-// arriving; R enc scrolls, R push opens a folder, Y goes up.
+// arriving; R enc scrolls, R push opens a folder, B (or Y) goes up, X held
+// for 2 s deletes the selected file.
 
 #include <MTP_Teensy.h>
 
@@ -24,6 +25,9 @@ private:
   bool folder[MAX] = {};
   int count = 0, sel = 0;
   uint32_t listed_at = 0;
+  // X held on a file: delete it after 2 s
+  bool del_held = false;
+  uint32_t del_since = 0, deleted_at = 0;
   void List();
 };
 
@@ -88,6 +92,16 @@ FLASHMEM void AppCard::HandleAppEvent(OC::AppEvent event) {
 FLASHMEM void AppCard::Loop() {
   if (!serving) return;
   MTP.loop();
+  if (del_held && millis() - del_since >= 2000) {
+    del_held = false;
+    char path[160];
+    snprintf(path, sizeof(path), "%s/%s", strcmp(dir, "/") ? dir : "", names[sel]);
+    if (SD.remove(path)) {
+      MTP.send_removeObjectEvent(0, path);  // so the computer's list updates
+      deleted_at = millis() | 1;
+    }
+    List();
+  }
   if (millis() - listed_at > 2000) List();  // new files show up by themselves
 }
 
@@ -132,6 +146,24 @@ FLASHMEM void AppCard::DrawMenu() const {
     if (sz[0]) gfxPrint(128 - 6 * int(strlen(sz)), ry, sz);
     if (i == sel) gfxInvert(0, ry - 1, 128, 9);
   }
+  // deleting: a box with the name and a bar filling over the 2 s
+  if (del_held || (deleted_at && millis() - deleted_at < 1000)) {
+    graphics.clearRect(8, 26, 112, 24);
+    gfxFrame(8, 26, 112, 24);
+    if (del_held) {
+      char nm[20];
+      const int nl = int(strlen(names[sel]));
+      if (nl <= 17) snprintf(nm, sizeof(nm), "%s", names[sel]);
+      else snprintf(nm, sizeof(nm), "%.8s..%s", names[sel], names[sel] + nl - 7);
+      gfxPrint(12, 29, "DELETE");
+      gfxPrint(12, 38, nm);
+      const int fill = std::min<int>(106, (millis() - del_since) * 106 / 2000);
+      gfxInvert(11, 28, fill, 20);
+    } else {
+      gfxPrint(40, 34, "deleted");
+      gfxInvert(9, 27, 110, 22);
+    }
+  }
 }
 FLASHMEM void AppCard::DrawScreensaver() const { DrawMenu(); }
 void AppCard::Process(OC::IOFrame*) {}
@@ -144,10 +176,19 @@ FLASHMEM void AppCard::HandleEncoderEvent(const UI::Event& event) {
   sel = constrain(sel + event.value, 0, std::max(0, count - 1));
 }
 
-// R push: open the folder; Y: up
+// R push: open the folder; B (or Y): up; X held: delete the file
 FLASHMEM void AppCard::HandleButtonEvent(const UI::Event& event) {
+  if (event.control == OC::CONTROL_BUTTON_X) {
+    if (event.type == UI::EVENT_BUTTON_DOWN) {
+      del_held = sel < count && !folder[sel];
+      del_since = millis();
+    } else if (event.type == UI::EVENT_BUTTON_PRESS || event.type == UI::EVENT_BUTTON_LONG_RELEASE) {
+      del_held = false;  // let go early: nothing happens
+    }
+    return;
+  }
   if (event.type != UI::EVENT_BUTTON_PRESS) return;
-  const bool up = event.control == OC::CONTROL_BUTTON_Y ||
+  const bool up = event.control == OC::CONTROL_BUTTON_B || event.control == OC::CONTROL_BUTTON_Y ||
                   (event.control == OC::CONTROL_BUTTON_R && sel < count && !strcmp(names[sel], ".."));
   if (up && strcmp(dir, "/")) {
     char* slash = strrchr(dir, '/');
