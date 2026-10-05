@@ -493,15 +493,22 @@ FLASHMEM void setup() {
   OC::PresetEngine::BootRecall();
 
 #ifdef LOOM_ONLY
-  // boot picture: the moving wave with LOOM over it, 4 s
+  // boot picture: the moving wave with LOOM over it, until a button is
+  // pressed or a knob turned (or a USB command arrives); that touch only
+  // ends the picture
   if (!start_cal) {
-    const uint32_t t0 = millis();
-    while (millis() - t0 < 4000) {
+    uint32_t idle = OC::ui.idle_time();
+    while (true) {
       GRAPHICS_BEGIN_FRAME(true);
       loom::DrawWave();
       loom::DrawTitle();
       GRAPHICS_END_FRAME();
+      const uint32_t now_idle = OC::ui.idle_time();
+      if (now_idle < idle || Serial.available()) break;  // something happened
+      idle = now_idle;
     }
+    OC::ui.SetButtonIgnoreMask();
+    OC::ui.FlushEvents();
   }
 #endif
 

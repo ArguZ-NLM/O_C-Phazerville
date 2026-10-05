@@ -125,6 +125,11 @@ public:
     return event_queue_.idle_time();
   }
 
+  // drop what is queued (e.g. the press that ended the Loom boot picture)
+  inline void FlushEvents() {
+    event_queue_.Flush();
+  }
+
   inline uint32_t ticks() const {
     return ticks_;
   }
