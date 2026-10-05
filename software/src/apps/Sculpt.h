@@ -1212,13 +1212,14 @@ FLASHMEM void AppSculpt::DrawDevice() const {
     char buf[8];
 
     // name row (in modulation mode: the source for the selected setting,
-    // e.g. "1 MCB" = source 1 is MOD C, bipolar; "2 off")
+    // e.g. "1 MCb" = source 1 is MOD C, bipolar; "2 off")
     if (sel && mod_mode) {
       const HS::CVInputMap& in = d->mod_in[p];
       const bool learn = !mod_slot && !d->mod_bus_sel[p] && in.source_type() == HS::CVInputMap::TYPE_MIDI
         && HS::frame.MIDIState.mapping[in.index()].learning();
       const uint8_t bus = mod_slot ? d->mod_bus2[p] : d->mod_bus_sel[p];
-      const char ub = (mod_slot ? d->Bipolar2(p) : d->Bipolar(p)) ? 'B' : 'U';
+      // small u / b, so the wave mark fits above it
+      const char ub = (mod_slot ? d->Bipolar2(p) : d->Bipolar(p)) ? 'b' : 'u';
       char src[8] = {};
       if (bus) snprintf(src, sizeof(src), "M%c%c", 'A' + bus - 1, ub);
       else if (!mod_slot && in.enabled()) {
@@ -1235,8 +1236,9 @@ FLASHMEM void AppSculpt::DrawDevice() const {
       PrintCentred(x, 43, pd.name);
       if (pd.nmodes) gfxRect(x + 29, 43, 2, 2); // has modes (hold L + turn R)
     }
-    if (d->Modded(p) && !(sel && mod_mode)) { // modulated: small wave mark
-      gfxPixel(x + 27, 49); gfxPixel(x + 28, 48); gfxPixel(x + 29, 49); gfxPixel(x + 30, 48);
+    if (d->Modded(p)) { // modulated: small wave mark (in modulation: above the u / b)
+      const int my = sel && mod_mode ? 43 : 48;
+      gfxPixel(x + 27, my + 1); gfxPixel(x + 28, my); gfxPixel(x + 29, my + 1); gfxPixel(x + 30, my);
     }
 
     // value row
