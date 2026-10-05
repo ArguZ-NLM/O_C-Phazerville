@@ -758,6 +758,22 @@ FLASHMEM void AppSculpt::MainLoop() {
     int(usage), int(usage * 10) % 10, AudioMemoryUsageMax(), OC::AudioIO::AUDIO_MEMORY);
   AudioProcessorUsageMaxReset();
   AudioMemoryUsageMaxReset();
+  // modulated settings: value, result, both sources (amount, MOD, u/b)
+  for (int t = 0; t < sculpt::NUM_TRACKS; t++) {
+    const sculpt::Track& tr = sculpt::tracks[t];
+    Serial.printf("  %c mods", t ? 'R' : 'L');
+    for (int i = 0; i < sculpt::MOD_BUSES; i++) Serial.printf(" %c=%d.%02d", 'A' + i, int(tr.mod_out[i]), int(tr.mod_out[i] * 100) % 100);
+    Serial.println();
+    ForEachDevice([&](sculpt::Device* d) {
+      if (d->mod_bus != tr.mod_out) return;
+      for (int p = 0; p < d->num_params(); p++) {
+        if (!d->Modded(p)) continue;
+        Serial.printf("  %c %s %s val %d cur %d | 1: %+d%% bus %d src %04x %c | 2: %+d%% bus %d %c\n", t ? 'R' : 'L',
+          d->def.tag, d->param(p).name, d->val[p], d->cur[p], d->mod_amt[p], d->mod_bus_sel[p], d->mod_in[p].Pack(),
+          d->Bipolar(p) ? 'b' : 'u', d->mod_amt2[p], d->mod_bus2[p], d->Bipolar2(p) ? 'b' : 'u');
+      }
+    });
+  }
 
   // per device: own stream + owned streams (e.g. ECHO core + delay lines)
   using namespace sculpt;
@@ -1234,7 +1250,11 @@ FLASHMEM void AppSculpt::DrawDevice() const {
       PrintCentred(x, 43, buf);
     } else {
       PrintCentred(x, 43, pd.name);
-      if (pd.nmodes) gfxRect(x + 29, 43, 2, 2); // has modes (hold L + turn R)
+      // has modes: a small square, right of a 5-letter name
+      if (pd.nmodes) {
+        if (strlen(pd.name) >= 5) gfxLine(x + 31, 43, x + 31, 44);
+        else gfxRect(x + 29, 43, 2, 2);
+      }
     }
     if (d->Modded(p) && !(sel && mod_mode)) { // modulated: small wave mark
       gfxPixel(x + 27, 49); gfxPixel(x + 28, 48); gfxPixel(x + 29, 49); gfxPixel(x + 30, 48);
@@ -1255,7 +1275,7 @@ FLASHMEM void AppSculpt::DrawDevice() const {
     const int span = std::max(1, pd.max - pd.min);
     if (mod_mode) {
       const int c = x + 15;
-      gfxLine(c, 60, c, 62);
+      gfxLine(c, 61, c, 62);
       for (int k = 0; k < 2; k++) {
         const int amt = k ? d->mod_amt2[p] : d->mod_amt[p];
         const bool on = k ? d->mod_bus2[p] && d->mod_bus : d->ModSourceOn(p);
@@ -1269,10 +1289,11 @@ FLASHMEM void AppSculpt::DrawDevice() const {
       }
     } else if (pd.kind == BI) {
       const int c = x + 15, len = d->val[p] * 15 / std::max(1, (int)pd.max);
-      gfxPixel(c, 60);
+      gfxPixel(c, 61);
       if (len > 0) gfxRect(c, 61, len, 2);
       else if (len < 0) gfxRect(c + len, 61, -len, 2);
-      if (d->Modded(p)) gfxLine(c + d->cur[p] * 15 / std::max(1, (int)pd.max), 58, c + d->cur[p] * 15 / std::max(1, (int)pd.max), 60);
+      // where modulation puts it: a notch through the bar (room under the number)
+      if (d->Modded(p)) gfxInvert(c + d->cur[p] * 15 / std::max(1, (int)pd.max), 60, 1, 4);
     } else if (pd.kind == LIST) {
       for (int k = 0; k < pd.nlabels; k++) {
         const int bx = x + 1 + k * 7;
@@ -1283,7 +1304,7 @@ FLASHMEM void AppSculpt::DrawDevice() const {
       gfxRect(x + 1, 61, (d->val[p] - pd.min) * 29 / span, 2);
       if (d->Modded(p)) {
         const int mx = x + 1 + (d->cur[p] - pd.min) * 29 / span;
-        gfxLine(mx, 58, mx, 60);
+        gfxInvert(mx, 60, 1, 4);
       }
     }
     if (sel) gfxInvert(x, 42, 32, 9);
