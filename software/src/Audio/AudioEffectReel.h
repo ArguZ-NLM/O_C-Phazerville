@@ -54,6 +54,7 @@ public:
     Reset();
   }
   bool ready() const { return buf[0] && buf[1]; }
+  volatile uint8_t pick = 0;  // 0 stereo, 1 the left side on both, 2 the right side
   float CapSecs() const { return cap / AUDIO_SAMPLE_RATE_EXACT; }
 
   // --- UI thread; taken over at the next block ---
@@ -286,6 +287,9 @@ FASTRUN void AudioEffectReel::update() {
     out[1]->data[n] = __SSAT(int32_t(orr * 32767.0f), 16);
   }
 
+  // one side on both channels (linked PLAYERs: L takes the left, R the right)
+  if (pick == 1) memcpy(out[1]->data, out[0]->data, sizeof(out[0]->data));
+  else if (pick == 2) memcpy(out[0]->data, out[1]->data, sizeof(out[1]->data));
   transmit(out[0], 0);
   transmit(out[1], 1);
   for (auto b : out) release(b);

@@ -243,7 +243,17 @@ private:
   bool active = false;
   bool reload_on_resume = false;  // a preset recall replaced LOOM.BIN
   bool linked = false;
+  bool link_stereo = false;  // linked as STEREO (else DUAL MONO)
   int16_t unlinked_in[2] = {-1, -1}, unlinked_spool_in[2] = {0, 0};  // input choices from before the link
+  // the other track's PLAYER from before the link (its own file comes back)
+  struct {
+    bool valid = false, ex_valid = false;
+    int track = 1;
+    char dir[128], name[96];
+    int16_t val[loom::MAX_PARAMS];
+    uint8_t mode[loom::MAX_PARAMS];
+    uint32_t ex[2], sec[2];
+  } player_stash;
   mutable bool dirty = false; // something changed since the last save
   float applied_tempo = 120.0f;
   int cpu = 0;
@@ -284,6 +294,9 @@ private:
   void ConnectTrack(int t);
   void DisconnectTrack(int t);
   void ToggleLink();
+  void LinkCopy();   // the track under the cursor copied to the other one
+  void StereoOn(int master);  // linked as a stereo pair (master: the track whose PLAYER file both play)
+  void StereoOff();  // ... and back to each track's own input / file
   void UpdateMixLevels() const;
   void DrawChain() const;
   bool Muted() const;
@@ -480,7 +493,8 @@ FLASHMEM void AppLoom::Mirror(loom::Device* d, int p) const {
   using namespace loom;
   Device* tw = Twin(d);
   if (!tw) return;
-  if (!focus_mod && col == SOURCE && p == 0) return;
+  // PLAYER's FILE goes along only when linked as STEREO (one file for both)
+  if (!focus_mod && col == SOURCE && p == 0 && !(d == tracks[track].player && link_stereo)) return;
   if (!focus_mod && col == MIX_COL && p == 1) return;
   tw->val[p] = d->val[p];
   tw->mode[p] = d->mode[p];
@@ -491,6 +505,16 @@ FLASHMEM void AppLoom::Mirror(loom::Device* d, int p) const {
   tw->mod_amt2[p] = d->mod_amt2[p];
   tw->mod_bus2[p] = d->mod_bus2[p];
   tw->mod_bi2 = (tw->mod_bi2 & ~(1 << p)) | (d->mod_bi2 & (1 << p));
+  if (d == tracks[track].player && link_stereo) {  // and the exact edges (both, one may have pushed the other)
+    PlayerDevice* a = tracks[track].player;
+    PlayerDevice* b = tracks[1 - track].player;
+    b->ex_pos[0] = a->ex_pos[0]; b->ex_pos[1] = a->ex_pos[1];
+    b->ex_valid = a->ex_valid;
+    for (int q : {int(PlayerDevice::START), int(PlayerDevice::END)}) b->val[q] = a->val[q];
+    b->sec_off = a->sec_off; b->sec_len = a->sec_len;
+    b->Refresh(PlayerDevice::START);
+    b->Refresh(PlayerDevice::END);
+  }
   tw->Refresh(p);
 }
 
@@ -560,20 +584,53 @@ FLASHMEM void AppLoom::ToggleBypass(int s) {
   }
 }
 
+// UP+DOWN cycles: off -> STEREO -> DUAL MONO -> off. Linked, the controls
+// of both tracks are the same; STEREO also makes them one stereo pair (track
+// L the left input / left side of the PLAYER's file, track R the right),
+// DUAL MONO keeps each track's own input and file.
 FLASHMEM void AppLoom::ToggleLink() {
   using namespace loom;
-  linked = !linked;
   if (!linked) {
-    // each track's own input choice back (as before the link)
-    for (int t = 0; t < NUM_TRACKS && unlinked_in[t] >= 0; t++) {
-      Track& tr = tracks[t];
-      tr.input->val[0] = unlinked_in[t];
-      tr.input->ApplyAll();
-      if (tr.reel) { tr.reel->val[ReelDevice::IN] = unlinked_spool_in[t]; tr.reel->ApplyAll(); }
-    }
-    unlinked_in[0] = unlinked_in[1] = -1;
-    return;
+    const int master = track;  // LinkCopy moves the cursor to row 1
+    linked = true;
+    link_stereo = true;
+    LinkCopy();
+    StereoOn(master);
+  } else if (link_stereo) {
+    StereoOff();
+    link_stereo = false;
+  } else {
+    linked = false;
   }
+}
+
+FLASHMEM void AppLoom::StereoOff() {
+  using namespace loom;
+  // each track's own input choice back (as before the link)
+  for (int t = 0; t < NUM_TRACKS && unlinked_in[t] >= 0; t++) {
+    Track& tr = tracks[t];
+    tr.input->val[0] = unlinked_in[t];
+    tr.input->ApplyAll();
+    if (tr.reel) { tr.reel->val[ReelDevice::IN] = unlinked_spool_in[t]; tr.reel->ApplyAll(); }
+  }
+  unlinked_in[0] = unlinked_in[1] = -1;
+  // the PLAYERs: stereo again, the other track's own file back
+  for (auto& tr : tracks) if (tr.player) tr.player->SetPick(0);
+  if (player_stash.valid && tracks[player_stash.track].player) {
+    PlayerDevice* p = tracks[player_stash.track].player;
+    memcpy(p->val, player_stash.val, sizeof(p->val));
+    memcpy(p->mode, player_stash.mode, sizeof(p->mode));
+    p->ex_pos[0] = player_stash.ex[0]; p->ex_pos[1] = player_stash.ex[1];
+    p->ex_valid = p->keep_exact = player_stash.ex_valid;
+    p->sec_off = player_stash.sec[0]; p->sec_len = player_stash.sec[1];
+    p->ApplyAll();
+    p->SetFile(player_stash.dir, player_stash.name);
+  }
+  player_stash.valid = false;
+}
+
+FLASHMEM void AppLoom::LinkCopy() {
+  using namespace loom;
   const int master = track;
   // the track under the cursor is the master: copy it to the other one
   Track& a = tracks[master];
@@ -616,8 +673,15 @@ FLASHMEM void AppLoom::ToggleLink() {
   b.mix->val[0] = a.mix->val[0]; // level
   b.mix->val[2] = a.mix->val[2]; // mute
   b.mix->ApplyAll();
+  track = 0; // the cursor lives on row 1 while linked
+}
+
+FLASHMEM void AppLoom::StereoOn(int master) {
+  using namespace loom;
+  Track& a = tracks[master];
+  Track& b = tracks[1 - master];
   // linked = one stereo pair: track L hears the left input, track R the
-  // right one (their own choices come back on unlinking)
+  // right one (their own choices come back with DUAL MONO / unlinking)
   for (int t = 0; t < NUM_TRACKS; t++) {
     Track& tr = tracks[t];
     unlinked_in[t] = tr.input->val[0];
@@ -626,7 +690,22 @@ FLASHMEM void AppLoom::ToggleLink() {
     tr.input->ApplyAll();
     if (tr.reel) { tr.reel->val[ReelDevice::IN] = t ? InputDevice::IN2 : InputDevice::IN1; tr.reel->ApplyAll(); }
   }
-  track = 0; // the cursor lives on row 1 while linked
+  // the PLAYERs: track R plays track L's file, each its own side of it
+  if (a.player && b.player) {
+    PlayerDevice* p = b.player;
+    player_stash.track = 1 - master;
+    snprintf(player_stash.dir, sizeof(player_stash.dir), "%s", p->Folder());
+    snprintf(player_stash.name, sizeof(player_stash.name), "%s", p->FileName());
+    memcpy(player_stash.val, p->val, sizeof(player_stash.val));
+    memcpy(player_stash.mode, p->mode, sizeof(player_stash.mode));
+    player_stash.ex[0] = p->ex_pos[0]; player_stash.ex[1] = p->ex_pos[1];
+    player_stash.ex_valid = p->ex_valid;
+    player_stash.sec[0] = p->sec_off; player_stash.sec[1] = p->sec_len;
+    player_stash.valid = true;
+    p->LinkFrom(*a.player);
+    tracks[0].player->SetPick(1);
+    tracks[1].player->SetPick(2);
+  }
 }
 
 FLASHMEM void AppLoom::Resume() {
@@ -1297,7 +1376,8 @@ FLASHMEM void AppLoom::DrawDevice() const {
   const int name_x = both ? 24 : 12;
   const char* name = mod_mode && name_x + 6 * int(strlen(d->def.name)) > 62 ? d->def.tag : d->def.name;
   if (both) {
-    gfxPrint(1, 1, PSTR("L+R"));
+    // linked STEREO shows L|R, DUAL MONO (and the shared mods) L+R
+    gfxPrint(1, 1, linked && link_stereo && !SharedFocus() ? PSTR("L|R") : PSTR("L+R"));
     gfxInvert(0, 0, 21, 9);
   } else {
     gfxPrint(1, 1, track ? PSTR("R") : PSTR("L"));
@@ -1489,7 +1569,7 @@ FLASHMEM void AppLoom::DrawMods() const {
   using namespace loom;
   if (mod_cursor >= OUT_CURSOR) { DrawOutputs(); return; }
   const int page = mod_cursor < NUM_MODS ? 0 : 1;
-  if (linked || page) gfxPrint(1, 0, PSTR("L+R"));
+  if (linked || page) gfxPrint(1, 0, linked && link_stereo && !page ? PSTR("L|R") : PSTR("L+R"));
   else gfxPrint(1, 0, track ? PSTR("R") : PSTR("L"));
   gfxPrint(linked || page ? 24 : 12, 0, page ? PSTR("SHARED") : PSTR("MODULATORS"));
   DrawClockMark(96, 1);
@@ -1714,7 +1794,7 @@ FLASHMEM void AppLoom::SaveFile() const {
   if (!f) return;
   f.write("SCU", 3);  // the file's mark since it was Sculpt; kept so all files load
   f.write(&SAVE_VERSION, 1);
-  const uint8_t lk = linked;
+  const uint8_t lk = linked ? (link_stereo ? 2 : 1) : 0;  // 2 = STEREO
   f.write(&lk, 1);
   WriteDevice(f, tempo_clock);
   for (auto& tr : tracks) {
@@ -1882,8 +1962,14 @@ FLASHMEM void AppLoom::LoadFile() {
   snprintf(load_note + strlen(load_note), sizeof(load_note) - strlen(load_note), " v%d ok %d stage %d pos %d/%d",
            version, ok, stage, int(f.position()), int(f.size()));
   f.close();
-  linked = lk;
+  linked = lk != 0;
+  link_stereo = lk == 2;
   if (linked) track = 0;
+  // STEREO: each PLAYER its own side (the rest is in the saved settings)
+  if (link_stereo && tracks[0].player && tracks[1].player) {
+    tracks[0].player->SetPick(1);
+    tracks[1].player->SetPick(2);
+  }
   if (view == DEVICE && (!Focused() || cursor >= Focused()->num_params())) {
     view = CHAIN;
     cursor = 0;

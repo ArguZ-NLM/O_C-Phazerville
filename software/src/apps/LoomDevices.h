@@ -1343,6 +1343,16 @@ public:
   void Select(const char* name) { SetFile(LOOP_DIR, name); }
   void SetFile(const char* folder, const char* name);
   const char* Folder() const { return dir; }
+  void SetPick(uint8_t p) { fx.pick = p; }
+  // linked: the same file, place and edges as the other track's PLAYER
+  void LinkFrom(const PlayerDevice& a) {
+    CopyFrom(a);
+    ex_pos[0] = a.ex_pos[0]; ex_pos[1] = a.ex_pos[1];
+    ex_valid = keep_exact = a.ex_valid;
+    sec_off = a.sec_off; sec_len = a.sec_len;
+    applied_file = a.applied_file; applied_mode = a.applied_mode;
+    SetFile(a.Folder(), a.FileName());
+  }
   const char* FileName() const { return nfiles ? names[std::min<int>(cur[FILE_], nfiles - 1)] : ""; }
   // the browser: folders and WAVs as a text list (R push on FILE)
   bool browsing = false;
