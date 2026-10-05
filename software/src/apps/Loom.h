@@ -110,6 +110,17 @@ namespace loom {
     Device* at(int col) const {
       return col == MIX_COL ? mix : current(col);
     }
+    // the effects' order in the chain (they can be moved; SOURCE first and
+    // OUT last stay): order[k] = the slot at position k + 1
+    uint8_t order[SLOT_COUNT - 1] = {SPRAY, RESONATOR, TEXTURE, ECHO};
+    int SlotAt(int pos) const {  // column -> slot
+      return pos == SOURCE || pos >= MIX_COL ? pos : order[pos - 1];
+    }
+    int PosOf(int slot) const {  // slot -> column
+      if (slot == SOURCE || slot >= MIX_COL) return slot;
+      for (int k = 0; k < SLOT_COUNT - 1; k++) if (order[k] == slot) return k + 1;
+      return slot;
+    }
   };
 
   // patch cords live on the heap: no RAM1 until Loom is first opened
@@ -192,6 +203,7 @@ private:
   elapsedMicros tick_timer;
   int8_t track = 0, col = loom::ECHO, cursor = 0;
   bool l_held = false, l_used = false;
+  bool r_held = false, r_moved = false;  // chain view: R held + turned moves an effect
   bool loop_save_held = false;  // SPOOL: A is down (held 2 s saves the loop) ...
   uint32_t loop_save_hold = 0;  // ... since then
   bool save_held = false;   // chain view: Y is down (held 2 s saves) ...
@@ -301,6 +313,7 @@ private:
   void StereoOff();  // ... and back to each track's own input / file
   void RouteStereo(bool on);
   void SetPans(int l, int r);
+  void MoveEffect(int dir);
   int16_t unlinked_pan[2] = {INT16_MIN, 0};  // the tracks' own PAN from before the link
   void UpdateMixLevels() const;
   void DrawChain() const;
@@ -391,7 +404,8 @@ FLASHMEM void AppLoom::Repatch(int t) {
   } else if (tr.choice[SOURCE] == 2 && tr.player) {  // PLAYER instead of the input
     prev = tr.player->out();
   }
-  for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
+  for (int k = 0; k < SLOT_COUNT - 1; k++) {  // the effects in their order
+    const int s = tr.order[k];
     Device* d = tr.current(s);
     if (!d || !d->in()) continue;
     // bypassed slots stay patched while their fade (or tail) runs; parked
@@ -689,6 +703,22 @@ FLASHMEM void AppLoom::LinkCopy() {
 }
 
 // SPLIT: track L all to the left output, track R all to the right
+// the effect under the cursor one place left / right along the chain
+// (both tracks when linked)
+FLASHMEM void AppLoom::MoveEffect(int dir) {
+  using namespace loom;
+  for (int t = 0; t < NUM_TRACKS; t++) {
+    if (t != track && !linked) continue;
+    Track& tr = tracks[t];
+    const int from = tr.PosOf(col) - 1;
+    const int to = constrain(from + (dir > 0 ? 1 : -1), 0, SLOT_COUNT - 2);
+    if (to == from) continue;
+    std::swap(tr.order[from], tr.order[to]);
+    Repatch(t);
+  }
+  dirty = true;
+}
+
 FLASHMEM void AppLoom::SetPans(int l, int r) {
   using namespace loom;
   tracks[0].mix->val[MixDevice::PAN] = l;
@@ -1045,6 +1075,18 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
     }
     return;
   }
+  if (event.control == OC::CONTROL_BUTTON_R) {
+    if (event.type == UI::EVENT_BUTTON_DOWN) {
+      r_held = view == CHAIN;
+      r_moved = false;
+      return;
+    }
+    if (event.type == UI::EVENT_BUTTON_PRESS || event.type == UI::EVENT_BUTTON_LONG_RELEASE) {
+      r_held = false;
+      if (r_moved) { r_moved = false; return; }  // it was a move, not a push
+      if (event.type == UI::EVENT_BUTTON_LONG_RELEASE) return;
+    }
+  }
   if (event.control == OC::CONTROL_BUTTON_L) {
     if (event.type == UI::EVENT_BUTTON_DOWN) {
       l_held = true;
@@ -1248,9 +1290,15 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
     if (!left) {
       // linked: both rows are the same, so the cursor stays on row 1
       const int rows = linked ? 1 : NUM_TRACKS;
-      const int idx = constrain(track * COLS + col + dir, 0, rows * COLS - 1);
+      if (r_held && col > SOURCE && col < MIX_COL) {
+        // R held: the effect under the cursor moves along the chain
+        MoveEffect(dir);
+        r_moved = true;
+        return;
+      }
+      const int idx = constrain(track * COLS + tracks[track].PosOf(col) + dir, 0, rows * COLS - 1);
       track = idx / COLS;
-      col = idx % COLS;
+      col = tracks[track].SlotAt(idx % COLS);
     } else if (col == MIX_COL) {
       tracks[track].mix->Nudge(0, dir); // level
       Mirror(tracks[track].mix, 0);
@@ -1341,9 +1389,10 @@ FLASHMEM void AppLoom::DrawChain() const {
     for (int r = 0; r < 7; r++)
       for (int c = 0; c < 5; c++)
         if (glyph[t][r] >> (4 - c) & 1) gfxPixel(c, y + 9 + r);
-    for (int c = 0; c < COLS; c++) {
-      const int x = x0 + c * bw;
+    for (int pos = 0; pos < COLS; pos++) {
+      const int x = x0 + pos * bw;
       const Track& tr = tracks[t];
+      const int c = tr.SlotAt(pos);  // the effects in their order
       Device* d = tr.at(c);
       if (tr.shown_bypassed(c)) d = nullptr;  // drawn like an empty slot
       if (d) gfxFrame(x, y, bw + 1, bh);
@@ -1360,7 +1409,14 @@ FLASHMEM void AppLoom::DrawChain() const {
       if (!d) gfxPrint(x + 1 + (bw - 1 - 12) / 2, y + 14, PSTR("BP"));
       else if (d->ok()) d->DrawMini(x + 2, y + 13, bw - 3, 10);
       else gfxPrint(x + 5, y + 14, PSTR("!!"));
-      if (t == track && c == col) gfxInvert(x + 1, y + 1, bw - 1, bh - 2);
+      if (t == track && c == col) {
+        gfxInvert(x + 1, y + 1, bw - 1, bh - 2);
+        // being moved (R held): arrows either side
+        if (r_held && c > SOURCE && c < MIX_COL) {
+          gfxPrint(x + 1, y + 14, PSTR("<"));
+          gfxPrint(x + bw - 6, y + 14, PSTR(">"));
+        }
+      }
     }
   }
 
@@ -1892,6 +1948,9 @@ FLASHMEM void AppLoom::SaveFile() const {
   f.write("D", 1);
   f.write(cv_out_src, NUM_CV_OUTS);
   f.write(&cv_out_bypass, 1);
+  // ... and the effects' order
+  f.write("R", 1);
+  for (auto& tr : tracks) f.write(tr.order, SLOT_COUNT - 1);
   // ... and PLAYER's MEM section of a long file
   f.write("M", 1);
   for (auto& tr : tracks) {
@@ -2000,7 +2059,18 @@ FLASHMEM void AppLoom::LoadFile() {
         if (okm && f.read(&mark, 1) == 1 && (mark == 'C' || mark == 'D') && f.read(outs, NUM_CV_OUTS) == NUM_CV_OUTS) {
           for (int o = 0; o < NUM_CV_OUTS; o++) cv_out_src[o] = outs[o] < OUT_SOURCES ? outs[o] : 0;
           if (mark == 'D') f.read(&cv_out_bypass, 1);
-          if (f.read(&mark, 1) == 1 && mark == 'M') {
+          bool got_mark = f.read(&mark, 1) == 1;
+          if (got_mark && mark == 'R') {  // the effects' order (a permutation, else left as is)
+            for (auto& tr : tracks) {
+              uint8_t o[SLOT_COUNT - 1];
+              if (f.read(o, sizeof(o)) != sizeof(o)) break;
+              uint8_t seen = 0;
+              for (uint8_t v : o) if (v > SOURCE && v < SLOT_COUNT) seen |= 1 << v;
+              if (seen == ((1 << SLOT_COUNT) - 2)) memcpy(tr.order, o, sizeof(o));
+            }
+            got_mark = f.read(&mark, 1) == 1;
+          }
+          if (got_mark && mark == 'M') {
             for (auto& tr : tracks) {
               uint32_t sec[2];
               if (f.read(reinterpret_cast<uint8_t*>(sec), 8) != 8) break;
