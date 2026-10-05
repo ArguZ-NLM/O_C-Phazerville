@@ -244,6 +244,7 @@ private:
   bool reload_on_resume = false;  // a preset recall replaced LOOM.BIN
   bool linked = false;
   bool link_stereo = false;  // linked as STEREO (else DUAL MONO)
+  uint32_t link_note_at = 0;   // when the link mode changed (shown briefly)
   int16_t unlinked_in[2] = {-1, -1}, unlinked_spool_in[2] = {0, 0};  // input choices from before the link
   // the other track's PLAYER from before the link (its own file comes back)
   struct {
@@ -602,6 +603,7 @@ FLASHMEM void AppLoom::ToggleLink() {
   } else {
     linked = false;
   }
+  link_note_at = millis() | 1;  // the mode, shown for a moment
 }
 
 FLASHMEM void AppLoom::StereoOff() {
@@ -1329,9 +1331,11 @@ FLASHMEM void AppLoom::DrawChain() const {
   }
 
   if (linked) {
-    // chain link between the track numbers
-    gfxFrame(0, 21, 5, 6);
-    gfxFrame(0, 25, 5, 6);
+    // two squares between L and R: filled = STEREO, hollow = DUAL MONO
+    for (const int sy : {21, 27}) {
+      if (link_stereo) gfxRect(0, sy, 5, 5);
+      else gfxFrame(0, sy, 5, 5);
+    }
   }
 
   // status line: what is under the cursor, CPU load
@@ -1984,6 +1988,16 @@ FLASHMEM void AppLoom::View() const {
   if (view == DEVICE && Focused()) DrawDevice();
   else if (view == MODS) DrawMods();
   else DrawChain();
+  // the link mode, for a moment after it changed: in a box with a double
+  // outline (like the boot picture's LOOM, smaller)
+  if (link_note_at && millis() - link_note_at < 1200) {
+    const char* txt = !linked ? PSTR("UNLINKED") : link_stereo ? PSTR("STEREO") : PSTR("DUAL MONO");
+    const int tw = 6 * int(strlen(txt)), bw = tw + 14, bx = (128 - bw) / 2;
+    graphics.clearRect(bx, 21, bw, 19);
+    gfxFrame(bx, 21, bw, 19);
+    gfxFrame(bx + 2, 23, bw - 4, 15);
+    gfxPrint(bx + 7, 27, txt);
+  }
   // saving: a bar fills while Y is held, then SAVED
   const uint32_t since = millis() - saved_at;
   if (saved_at && since < 1200) {
