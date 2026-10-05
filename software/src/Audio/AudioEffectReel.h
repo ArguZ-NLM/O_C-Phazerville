@@ -148,6 +148,7 @@ private:
   volatile float speed = 1.0f, start_ = 0.0f, len_ = 1.0f, keep_ = 0.8f, mon = 1.0f, level = 1.0f;
   volatile float seam = 256.0f;
   volatile bool xfade_loop = false;
+  size_t xh_l = 0, xf_l = 0;  // the crossfade plan in use (see update)
   volatile size_t ex_ws = 0, ex_wl = 0;
   volatile bool exact = false;
   uint8_t hist[HIST] = {};
@@ -237,8 +238,17 @@ FASTRUN void AudioEffectReel::update() {
   // window the loop's end fades out while the frames leading into START
   // (or the loop's own beginning) fade in, equal power
   const bool xon = xfade_loop && loop_ && sp > 0.0f && len && st != REC;
-  size_t xh = 0, xf_in = 0;
-  if (xon) XfPlan(seam, ws, wl, len, xh, xf_in);
+  // the plan only changes outside the crossfade (a new FADE / window in the
+  // middle of one would jump)
+  if (xon) {
+    size_t h, f;
+    XfPlan(seam, ws, wl, len, h, f);
+    const float zone = float(wl) - float(xh_l ? xh_l : xf_l);
+    if (off < zone || (h == xh_l && f == xf_l)) { xh_l = h; xf_l = f; }
+  } else {
+    xh_l = xf_l = 0;
+  }
+  const size_t xh = xh_l, xf_in = xf_l;
   const float xhf = float(xh), xff = float(xf_in);
   // one play head: linear read, faded near its window's ends (the seam)
   auto read = [&](size_t w0, size_t wn, float o, float& l, float& r) {
