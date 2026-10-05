@@ -1126,8 +1126,8 @@ PROGMEM static const DeviceDef PLAYER_DEF = {
     {"LOOP", 0, 1, 1, LIST, 2, 0, 0, {"OFF", "ON"}},
     {"LEVEL", 0, 100, 100, UNI},
     {"SPEED", 0, 200, 100, UNI, 0, 2, 0, {}, {"FWD", "REV"}},  // mode: direction
-    {"START", 0, 10000, 0, UNI, 0, 4, 0, {}, {"1x", "4x", "16x", "64x"}},
-    {"END", 0, 10000, 10000, UNI, 0, 4, 0, {}, {"1x", "4x", "16x", "64x"}},
+    {"START", 0, 10000, 0, UNI, 0, 5, 0},       // mode: zoom 1x .. 128x
+    {"END", 0, 10000, 10000, UNI, 0, 5, 0},
     {"XFADE", 0, 100, 20, UNI},
     {"SNAP", 0, 1, 0, LIST, 2, 0, 0, {"OFF", "ON"}},
   },
@@ -1150,8 +1150,10 @@ public:
   void Apply(int p) override;
   int Step(int p, int v, int dir) const override;
   void Format(int p, char* buf, size_t n) const override;
+  void FormatMode(int p, char* buf, size_t n) const override;
   void Action(int a) override;
   bool ActionLit(int a) const override { return a == 0 && Playing(); }
+  static int Zoom(int m) { static const int zf[5] = {1, 4, 16, 64, 128}; return zf[std::min(m, 4)]; }
   void DrawViz(int x, int y, int w, int h) override;
   void DrawMini(int x, int y, int w, int h) override;
   void CpuMax(float parts[2]) override {
@@ -1546,8 +1548,8 @@ FLASHMEM void PlayerDevice::Apply(int p) {
 // START / END: steps get finer with the zoom (1% at 1x .. ~0.02% at 64x)
 FLASHMEM int PlayerDevice::Step(int p, int v, int dir) const {
   if (p == START || p == END) {
-    static const int step[4] = {100, 25, 6, 2};
-    return v + dir * step[mode[p] & 3];
+    static const int step[5] = {100, 25, 6, 2, 1};
+    return v + dir * step[std::min<int>(mode[p], 4)];
   }
   return v + dir;
 }
@@ -1563,6 +1565,12 @@ FLASHMEM void PlayerDevice::Format(int p, char* buf, size_t n) const {
   } else {
     Device::Format(p, buf, n);
   }
+}
+
+// START / END: their zoom
+FLASHMEM void PlayerDevice::FormatMode(int p, char* buf, size_t n) const {
+  if (p == START || p == END) snprintf(buf, n, "%dx", Zoom(mode[p]));
+  else Device::FormatMode(p, buf, n);
 }
 
 // A: play / stop; B: back to the start
@@ -1598,9 +1606,22 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
     return;
   }
   const size_t n = Frames();
+  // what part of the sample is on screen: zoomed around START / END while
+  // the cursor is on them
+  const bool zoomed = view_cursor == START || view_cursor == END;
+  const int z = zoomed ? Zoom(mode[view_cursor]) : 1;
   {
+    // the top line: the name, then the zoom and SD at the right
+    int right = x + w;
+    if (streaming) right -= 14;
+    char zt[6] = {};
+    if (z > 1) {
+      snprintf(zt, sizeof(zt), "%dx", z);
+      right -= 6 * int(strlen(zt)) + 2;
+      gfxPrint(right + 2, y, zt);
+    }
     char nm[24];
-    snprintf(nm, sizeof(nm), "%.*s", (w - 30) / 6, names[fi]);  // as much as fits
+    snprintf(nm, sizeof(nm), "%.*s", std::max(0, (right - x) / 6 - 1), names[fi]);  // as much as fits
     gfxPrint(x, y, nm);
   }
   if (too_long) gfxPrint(x + w - 24, y, PSTR("16s"));
@@ -1609,10 +1630,6 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
     if (!late || (millis() / 200) % 2) gfxPrint(x + w - 12, y, late ? PSTR("!!") : PSTR("SD"));
   }
   if (!n) { gfxPrint(x + 28, cy - 4, PSTR("can't read")); return; }
-  // what part of the sample is on screen
-  const bool zoomed = view_cursor == START || view_cursor == END;
-  static const int zf[4] = {1, 4, 16, 64};
-  const int z = zoomed ? zf[mode[view_cursor] & 3] : 1;
   const size_t span = std::max<size_t>(w, n / z);
   // the point being set stays in the middle of the screen; past the file's
   // ends there is a dotted line
@@ -1649,11 +1666,6 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
   if (Playing()) {
     const int hx = sx(size_t((streaming ? stream.HeadPos() : fx.HeadPos()) * n));
     if (hx >= x && hx < x + w) gfxInvert(hx, wy, 1, wh);
-  }
-  if (zoomed && z > 1) {
-    char t[6];
-    snprintf(t, sizeof(t), "%dx", z);
-    gfxPrint(x + w - 6 * int(strlen(t)), base - 7, t);
   }
 }
 
