@@ -156,6 +156,7 @@ private:
   volatile size_t nws = 0, nwe = 0;  // the window asked for (SetWindow)
   float win_g = 1.0f;                // dip while the window changes
   float ur_g = 1.0f, last_l = 0.0f, last_r = 0.0f;  // underrun glide
+  bool wrapped = false;  // just came round: the next window / crossfade may change
   volatile size_t h_l = 0;           // the crossfade half in use (changes away from the seam)
   volatile size_t lt_a = 0, lt_b = 0; // ... and the window it crosses into
   int pending_cache = 0;  // 1 / 2: Next() handed out cache 0 / 1
@@ -204,9 +205,10 @@ FASTRUN void AudioPlayStream::update() {
     const size_t wlen = we - ws;
     const double margin = std::min<double>(AUDIO_BLOCK_SAMPLES * 4, wlen / 4);
     const bool stale = h_l > wlen / 2;  // the loop got shorter than its crossfade
-    const bool away = stale || wlen < AUDIO_BLOCK_SAMPLES * 8 ||
+    const bool away = stale || wrapped || wlen < AUDIO_BLOCK_SAMPLES * 8 ||
                       p0 < double(we) - double(std::max(h, size_t(h_l))) - margin;
     if ((h != h_l || nws != lt_a || nwe != lt_b) && away) { h_l = h; lt_a = nws; lt_b = nwe; }
+    wrapped = false;
     if (!xfade_loop || !loop_) h_l = 0;
     if (!loop_) { lt_a = ws; lt_b = we; }
   }
@@ -265,10 +267,12 @@ FASTRUN void AudioPlayStream::update() {
       // centred crossfade: on from after it, in the window crossed into
       p = double(ta + xh) + (p - double(b + xh));
       ws = a = ta; we = b = tb;
+      wrapped = true;
       wl = float(b - a); xs = double(b) - double(xh);
     } else if (!xh && p >= double(b)) {
       p = double(ta) + double(xon ? xl_ : 0) + (p - double(b));  // on from after the faded-in part
       ws = a = ta; we = b = tb;
+      wrapped = true;
       wl = float(b - a); xs = double(b) - double(xl_);
       if (!loop_) { playing = false; run_g = 0.0f; p = double(a); }  // once through
     }

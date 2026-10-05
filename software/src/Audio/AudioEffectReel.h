@@ -163,6 +163,7 @@ private:
   size_t lt_ws = 0, lt_wl = 0;  // ... and the window it crosses into
   volatile bool defer_win = false;
   bool pend = false;            // a new window waiting for the seam
+  bool wrapped = false;         // just came round: the next plan may change
   size_t p_ws = 0, p_wl = 0;
   volatile size_t ex_ws = 0, ex_wl = 0;
   volatile bool exact = false;
@@ -271,7 +272,10 @@ FASTRUN void AudioEffectReel::update() {
     // a plan that doesn't fit this window any more (it got short) is
     // replaced at once, else it could never be replaced
     const bool stale = xh_l > wl / 2 || xf_l > wl / 2 || lt_wl == 0;
-    if (off < zone || stale || (h == xh_l && f == xf_l && tws == lt_ws && twl == lt_wl)) {
+    // right after the seam it can always change (in a short loop with a long
+    // fade the head is never outside the crossfade)
+    if (off < zone || stale || wrapped || (h == xh_l && f == xf_l && tws == lt_ws && twl == lt_wl)) {
+      wrapped = false;
       xh_l = h; xf_l = f; lt_ws = tws; lt_wl = twl;
     }
   } else {
@@ -360,6 +364,7 @@ FASTRUN void AudioEffectReel::update() {
           // into the window crossed into (a waiting START / END takes over here)
           const float over = off - end;
           if (ws != lt_ws || wl != lt_wl) { ws = lt_ws; wl = lt_wl; }
+          wrapped = true;
           if (pend && p_ws == ws && p_wl == wl) pend = false;
           off = std::fmod((xh ? xhf : xff) + over, float(wl));
         }
