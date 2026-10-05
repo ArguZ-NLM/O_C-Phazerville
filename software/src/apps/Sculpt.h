@@ -1905,15 +1905,16 @@ struct Drift {
 FLASHMEM void AppSculpt::DrawScreensaver() const {
   using namespace sculpt;
   constexpr float L = 2.5f, AMP = 0.7f, F = 130.0f;
+  constexpr float LEN = 0.7f * L;  // drawn: the front 70% (the shape keeps L)
   constexpr float CAM_CUBE = 0.8f, AIM_CUBE = 0.25f;  // half sizes
   static Drift cam_drift[3], aim_drift[3];
   const uint32_t now = millis();
   const float t = now * 0.001f;
   const float phase = t * 0.5f;
 
-  // the logo view: looking at (0, -0.3, 0.83) from 5 units away, down 45
+  // the logo view: looking at (0, -0.3, 0.7) from 3.8 units away, down 45
   // degrees and turned 45; both points drift around these
-  float aim[3] = {0.0f, -0.3f, L * 0.33f}, cam[3] = {-2.5f, 3.24f, -1.67f};
+  float aim[3] = {0.0f, -0.3f, 0.7f}, cam[3] = {-1.9f, 2.39f, -1.2f};
   for (int a = 0; a < 3; a++) {
     aim[a] += AIM_CUBE * aim_drift[a].At(now);
     cam[a] += CAM_CUBE * cam_drift[a].At(now);
@@ -1964,7 +1965,7 @@ FLASHMEM void AppSculpt::DrawScreensaver() const {
     bool prev = at(u, 0.0f, px, py);
     for (int k = 1; k <= S; k++) {
       float x, y;
-      const bool ok = at(u, L * k / S, x, y);
+      const bool ok = at(u, LEN * k / S, x, y);
       if (ok && prev) line(px, py, x, y);
       px = x; py = y; prev = ok;
     }
