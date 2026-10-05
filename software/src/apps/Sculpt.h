@@ -720,7 +720,9 @@ FLASHMEM void AppSculpt::ModulateAll() {
   WriteOutputs();
 }
 
-// the CV outputs: 0..1 -> 0..10 V, calibrated
+// the CV outputs: 0..1 -> 0..10 V. They go out through the shared IO frame,
+// which the core writes to the jacks every tick (writing the DAC directly
+// was overwritten by it)
 FLASHMEM float AppSculpt::OutLevel(int o) const {
   using namespace sculpt;
   const int s = cv_out_src[o];
@@ -733,10 +735,8 @@ FLASHMEM float AppSculpt::OutLevel(int o) const {
 }
 
 FLASHMEM void AppSculpt::WriteOutputs() {
-  for (int o = 0; o < sculpt::NUM_CV_OUTS && o < DAC_CHANNEL_COUNT; o++) {
-    const int32_t pitch = int32_t(OutLevel(o) * 10.0f * (12 << 7));  // 12 << 7 = 1 V
-    OC::DAC::set(o, OC::DAC::PitchToScaledDAC(o, pitch, OC::VOLTAGE_SCALING_1V_PER_OCT, false));
-  }
+  for (int o = 0; o < sculpt::NUM_CV_OUTS && o < DAC_CHANNEL_COUNT; o++)
+    HS::frame.Out(DAC_CHANNEL(o), int(OutLevel(o) * 10.0f * ONE_OCTAVE));  // ONE_OCTAVE = 1 V
 }
 
 FLASHMEM void AppSculpt::MainLoop() {
