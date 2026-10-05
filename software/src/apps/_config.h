@@ -137,6 +137,9 @@ static AppContainer<void // this space intentionally left blank
 #ifdef ENABLE_APP_PONG
   , AppPong
 #endif
+#ifdef CARD_APP
+  , AppCard  // above Sculpt in the menu
+#endif
 #if defined(ENABLE_APP_SCULPT) && defined(ARDUINO_TEENSY41)
   , AppSculpt
 #endif
@@ -145,15 +148,16 @@ static AppContainer<void // this space intentionally left blank
   , AppWaveformEditor
 #endif
   , AppBackup
-#ifdef CARD_APP
-  , AppCard
-#endif
 > app_container;
 
 static_assert(decltype(app_container)::TotalAppDataStorageSize() < AppData::kAppDataSize,
               "Apps use too much EEPROM space!");
 
+#ifdef CARD_APP
+static constexpr int DEFAULT_APP_INDEX = 2;  // Sculpt, after Settings and Card
+#else
 static constexpr int DEFAULT_APP_INDEX = 1;
+#endif
 static constexpr uint16_t DEFAULT_APP_ID = decltype(app_container)::GetAppIDAtIndex<DEFAULT_APP_INDEX>();
 
 }

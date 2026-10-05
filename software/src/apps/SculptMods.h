@@ -158,16 +158,15 @@ public:
   void Tick(const ModCtx& ctx) override;
   void Format(int p, char* buf, size_t n) const override;
   void Action(int a) override { if (a == 0) { ph = 0.0f; flash = 0.1f; } }
+  void DrawViz(int x, int y, int w, int h) override;
 private:
   float ph = 0.0f;
   float Hz() const { return RateHz(P_RATE, 0.02f, 20.0f); }
+  float At(float phase) const;  // the output at a point of the cycle, 0..1
 };
 
-FLASHMEM void WaveMod::Tick(const ModCtx& ctx) {
-  if (Edge(cur[P_RESET], ctx, 0)) { ph = 0.0f; flash = 0.1f; }
-  ph += Hz() * ctx.dt;
-  ph -= floorf(ph);
-  float p = ph + cur[P_PHASE] * 0.01f;
+FLASHMEM float WaveMod::At(float phase) const {
+  float p = phase + cur[P_PHASE] * 0.01f;
   p -= floorf(p);
   // skew moves the half-way point, squashing the wave to one side
   const float k = 0.5f + cur[P_SKEW] * 0.0098f;
@@ -179,7 +178,34 @@ FLASHMEM void WaveMod::Tick(const ModCtx& ctx) {
     case 3:  wv = p; break;                              // SAW
     default: wv = 0.5f - 0.5f * cosf(2.0f * float(M_PI) * p); break;
   }
-  out = 0.5f + (wv - 0.5f) * cur[P_AMT] * 0.01f + cur[P_OFFS] * 0.01f;
+  return constrain(0.5f + (wv - 0.5f) * cur[P_AMT] * 0.01f + cur[P_OFFS] * 0.01f, 0.0f, 1.0f);
+}
+
+FLASHMEM void WaveMod::Tick(const ModCtx& ctx) {
+  if (Edge(cur[P_RESET], ctx, 0)) { ph = 0.0f; flash = 0.1f; }
+  ph += Hz() * ctx.dt;
+  ph -= floorf(ph);
+  out = At(ph);
+}
+
+// one cycle of the wave as it comes out, a dot running along it, the output
+// level on the right
+FLASHMEM void WaveMod::DrawViz(int x, int y, int w, int h) {
+  const int ww = w - 8, top = y + 1, hh = h - 3;
+  auto yy = [&](float v) { return top + hh - int(v * hh + 0.5f); };
+  gfxDottedLine(x, yy(0.5f), x + ww - 1, yy(0.5f), 3);
+  int py = -1;
+  for (int i = 0; i < ww; i++) {
+    const int cy = yy(At(float(i) / ww));
+    if (py >= 0) gfxLine(x + i - 1, py, x + i, cy); else gfxPixel(x + i, cy);
+    py = cy;
+  }
+  const int dx = x + int(ph * (ww - 1));
+  gfxRect(dx - 1, yy(out) - 1, 3, 3);
+  const int bh = int(out * h);
+  gfxFrame(x + w - 4, y, 4, h);
+  if (bh > 0) gfxRect(x + w - 4, y + h - bh, 4, bh);
+  if (flash > 0.0f) gfxInvert(x, y, ww, h);
 }
 
 FLASHMEM void WaveMod::Format(int p, char* buf, size_t n) const {
@@ -288,9 +314,12 @@ public:
   void Tick(const ModCtx& ctx) override;
   void Format(int p, char* buf, size_t n) const override;
   void Action(int a) override { if (a == 0) { stage = ATTACK; manual = 0.15f; flash = 0.1f; } }
+  void DrawViz(int x, int y, int w, int h) override;
 private:
   enum Stage : uint8_t { IDLE, ATTACK, DECAY, SUSTAIN, RELEASE } stage = IDLE;
   float env = 0.0f;
+  float rel_from = 1.0f;  // where the release started, for the picture
+  float Shaped(float e) const;  // CURVE and AMT applied
   float manual = 0.0f; // the action button holds the gate this long
   float Time(int p) const;
 };
@@ -309,11 +338,11 @@ FLASHMEM void AdsrMod::Tick(const ModCtx& ctx) {
       break;
     case DECAY:
       env -= ctx.dt / Time(P_DEC) * (1.0f - sus);
-      if (env <= sus) { env = sus; stage = gate ? SUSTAIN : RELEASE; }
+      if (env <= sus) { env = sus; stage = gate ? SUSTAIN : RELEASE; rel_from = env; }
       break;
     case SUSTAIN:
       env = sus;
-      if (!gate) stage = RELEASE;
+      if (!gate) { stage = RELEASE; rel_from = env; }
       break;
     case RELEASE:
       env -= ctx.dt / Time(P_REL);
@@ -322,13 +351,52 @@ FLASHMEM void AdsrMod::Tick(const ModCtx& ctx) {
     default: break;
   }
   // a short trigger (no gate held) plays attack-decay, then releases
-  if (stage == DECAY && !gate && env <= sus + 0.0001f) stage = RELEASE;
+  if (stage == DECAY && !gate && env <= sus + 0.0001f) { stage = RELEASE; rel_from = env; }
+  out = Shaped(env);
+}
 
-  // CURVE bends all stages: + exponential, - logarithmic
+// CURVE bends all stages: + exponential, - logarithmic; AMT scales
+FLASHMEM float AdsrMod::Shaped(float e) const {
   const float c = cur[P_CURVE] * 0.02f;
-  const float e3 = env * env * env, l3 = 1.0f - (1.0f - env) * (1.0f - env) * (1.0f - env);
-  const float shaped = c >= 0.0f ? env + c * (e3 - env) : env - c * (l3 - env);
-  out = shaped * cur[P_AMT] * 0.01f;
+  const float e3 = e * e * e, l3 = 1.0f - (1.0f - e) * (1.0f - e) * (1.0f - e);
+  const float sh = c >= 0.0f ? e + c * (e3 - e) : e - c * (l3 - e);
+  return sh * cur[P_AMT] * 0.01f;
+}
+
+// the envelope as a line: attack, decay, a stretch of sustain, release, each
+// as long as its setting; a dot rides along it while it plays
+FLASHMEM void AdsrMod::DrawViz(int x, int y, int w, int h) {
+  const int ww = w - 8, top = y + 1, hh = h - 3, seg = ww / 4;
+  auto yy = [&](float e) { return top + hh - int(Shaped(e) * hh + 0.5f); };
+  const int wa = 2 + cur[P_ATT] * (seg - 2) / 100, wd = 2 + cur[P_DEC] * (seg - 2) / 100;
+  const int wr = 2 + cur[P_REL] * (seg - 2) / 100, wsus = ww - wa - wd - wr - 1;
+  const float sus = cur[P_SUS] * 0.01f;
+  gfxDottedLine(x, top + hh, x + ww - 1, top + hh, 3);
+  // the shape, column by column
+  int py = -1;
+  for (int i = 0; i < ww; i++) {
+    float e;
+    if (i < wa) e = float(i) / wa;
+    else if (i < wa + wd) e = 1.0f - (1.0f - sus) * float(i - wa) / wd;
+    else if (i < wa + wd + wsus) e = sus;
+    else e = sus * (1.0f - float(i - wa - wd - wsus) / wr);
+    const int cy = yy(std::max(0.0f, e));
+    if (py >= 0) gfxLine(x + i - 1, py, x + i, cy); else gfxPixel(x + i, cy);
+    py = cy;
+  }
+  // where it is now
+  int dx = -1;
+  switch (stage) {
+    case ATTACK:  dx = int(env * wa); break;
+    case DECAY:   dx = wa + int((1.0f - env) / std::max(0.001f, 1.0f - sus) * wd); break;
+    case SUSTAIN: dx = wa + wd + wsus / 2; break;
+    case RELEASE: dx = wa + wd + wsus + int((1.0f - env / std::max(0.001f, rel_from)) * wr); break;
+    default: break;
+  }
+  if (dx >= 0) gfxRect(x + constrain(dx, 0, ww - 1) - 1, top + hh - int(out * hh + 0.5f) - 1, 3, 3);
+  const int bh = int(out * h);
+  gfxFrame(x + w - 4, y, 4, h);
+  if (bh > 0) gfxRect(x + w - 4, y + h - bh, 4, bh);
 }
 
 FLASHMEM void AdsrMod::Format(int p, char* buf, size_t n) const {
