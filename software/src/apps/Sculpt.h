@@ -1957,7 +1957,8 @@ FLASHMEM void AppSculpt::DrawScreensaver() const {
   };
   constexpr int S = 40;  // segments per line
   for (int j = 0; j < 10; j++) {  // across: close together at the front, sparse at the back, only where the long lines reach
-    const float z = powf(j / 9.0f, 2.3f) * 1.15f * L;
+    // the second line half way between the first and the third
+    const float z = powf((j == 1 ? 2 : j) / 9.0f, 2.3f) * 1.15f * L * (j == 1 ? 0.5f : 1.0f);
     float px = 0, py = 0;
     bool prev = at(-1.0f, z, px, py);
     for (int k = 1; k <= S; k++) {
