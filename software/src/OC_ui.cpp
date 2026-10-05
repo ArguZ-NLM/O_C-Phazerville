@@ -284,12 +284,11 @@ UiMode Ui::Splashscreen(bool &reset_settings, uint8_t phase) {
       GRAPHICS_BEGIN_FRAME(true);
 #ifdef LOOM_ONLY
       // nothing held: the Loom boot picture (the wave and LOOM)
-      if (mode == UI_MODE_MENU && !reset_settings) {
+      const bool loom_pic = mode == UI_MODE_MENU && !reset_settings;
+      if (loom_pic) {
         loom::DrawWave();
         loom::DrawTitle();
-        GRAPHICS_END_FRAME();
-        continue;
-      }
+      } else {
 #endif
 
       menu::DefaultTitleBar::Draw();
@@ -324,6 +323,9 @@ UiMode Ui::Splashscreen(bool &reset_settings, uint8_t phase) {
       w %= 256;
       if (w > 128) w = 256 - w;
       graphics.invertRect(0, 56, w, 8);
+#ifdef LOOM_ONLY
+      }
+#endif
 
       /* fixes spurious button presses when booting ? */
       while (event_queue_.available())
