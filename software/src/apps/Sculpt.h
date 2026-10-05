@@ -1399,6 +1399,16 @@ namespace sculpt {
     f.write(d->act_trig, 2);
   }
 
+  // whether the next record holds a device (its first byte), without
+  // using it up: peek() doesn't work on the internal flash's files
+  FLASHMEM static bool NextPresent(File& f) {
+    const uint64_t at = f.position();
+    uint8_t present = 0;
+    const bool got = f.read(&present, 1) == 1;
+    f.seek(at);
+    return got && present == 1;
+  }
+
   // reads one record; applies it if d is there and of the same kind
   FLASHMEM static bool ReadDevice(File& f, Device* d) {
     uint8_t present = 0;
@@ -1552,7 +1562,7 @@ FLASHMEM void AppSculpt::LoadFile() {
         // version 1 kept them in the old order
         const int type = version == 1 ? OLD_MOD_TYPE[slot] : slot;
         // create the modulator before reading into it
-        if (f.peek() == 1 && !tr.mods[i][type]) SetModType(t, i, type);
+        if (NextPresent(f) && !tr.mods[i][type]) SetModType(t, i, type);
         ok = ReadDevice(f, tr.mods[i][type]);
       }
       const int ty = types[i] < MOD_TYPES ? types[i] : 0;
@@ -1598,7 +1608,7 @@ FLASHMEM void AppSculpt::LoadFile() {
         bool okm = true;
         for (int i = 0; i < NUM_MODS && okm; i++) {
           for (int type = 1; type < MOD_TYPES && okm; type++) {
-            if (f.peek() == 1 && !shared_mods[i][type]) SetModType(0, NUM_MODS + i, type);
+            if (NextPresent(f) && !shared_mods[i][type]) SetModType(0, NUM_MODS + i, type);
             okm = ReadDevice(f, shared_mods[i][type]);
           }
           shared_type[i] = types[i] < MOD_TYPES && shared_mods[i][types[i]] ? types[i] : 0;
