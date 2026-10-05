@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <cmath>
 
-// Stereo looper for the Sculpt REEL device. The loop lives in PSRAM (up to
+// Stereo looper for the Loom REEL device. The loop lives in PSRAM (up to
 // 16 s; less if memory is short). A press cycles REC -> PLAY -> DUB -> PLAY;
 // the first REC sets the loop length. Stop keeps the loop (a press plays it
 // again from the start), Clear empties it. SPEED plays it at any rate, backwards

@@ -18,7 +18,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Modulators for the Sculpt app: WAVE / RANDOM / ADSR / FOLLOW. Four slots per track (MOD A-D); a device setting picks one as its
+// Modulators for the Loom app: WAVE / RANDOM / ADSR / FOLLOW. Four slots per track (MOD A-D); a device setting picks one as its
 // modulation source. They run in the main loop about once per millisecond and
 // output 0..1, like a 0..10 V CV; the setting's U/B choice decides whether
 // that pushes one way or swings around the setting.
@@ -29,9 +29,9 @@
 
 #pragma once
 
-#include "SculptDevices.h"
+#include "LoomDevices.h"
 
-namespace sculpt {
+namespace loom {
 
 class Modulator : public Device {
 public:
@@ -655,4 +655,4 @@ FLASHMEM static Modulator* MakeModulator(int type) {
   }
 }
 
-} // namespace sculpt
+} // namespace loom

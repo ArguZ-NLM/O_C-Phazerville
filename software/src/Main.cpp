@@ -361,8 +361,8 @@ FLASHMEM void setup() {
 
   // first sign of life
   GRAPHICS_BEGIN_FRAME(true);
-  graphics.setPrintPos(46, 28);  // Sculpt test firmware: a plain name
-  graphics.print("SCULPT");
+  graphics.setPrintPos(52, 28);  // Loom test firmware: a plain name
+  graphics.print("LOOM");
   GRAPHICS_END_FRAME();
 
 #if defined(ARDUINO_TEENSY41)
@@ -487,7 +487,7 @@ FLASHMEM void setup() {
   OC::PresetBusUI::Init();
   OC::PresetEngine::BootRecall();
 
-  // (no welcome splash in the Sculpt test firmware)
+  // (no welcome splash in the Loom test firmware)
 
   if (start_cal)
     OC::start_calibration();
@@ -625,9 +625,9 @@ void FASTRUN loop() {
               cl.close();
             }
             break;
-          case 'Q': {  // Sculpt's settings file, in hex
-            File sf = PhzConfig::myfs.open("SCULPT.BIN", FILE_READ);
-            Serial.printf("--- SCULPT.BIN %d bytes ---\n", sf ? int(sf.size()) : -1);
+          case 'Q': {  // Loom's settings file, in hex
+            File sf = PhzConfig::myfs.open("LOOM.BIN", FILE_READ);
+            Serial.printf("--- LOOM.BIN %d bytes ---\n", sf ? int(sf.size()) : -1);
             if (!sf) break;
             uint8_t b[32];
             int n;

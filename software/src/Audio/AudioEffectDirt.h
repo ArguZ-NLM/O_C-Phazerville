@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <cmath>
 
-// Stereo dirt stage for the Sculpt TEXTURE device.
+// Stereo dirt stage for the Loom TEXTURE device.
 //
 // Signal chain: tilt -> noise -> fold -> drive -> crush -> wet/dry.
 //   TILT     two bands split at 80 Hz / 650 Hz / 2.5 kHz; + lifts the highs
@@ -105,7 +105,7 @@ private:
   }
 };
 
-// Runs from RAM1 (ITCM) like the other Sculpt engines.
+// Runs from RAM1 (ITCM) like the other Loom engines.
 FASTRUN void AudioEffectDirt::update() {
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   audio_block_t* out[2] = {allocate(), allocate()};

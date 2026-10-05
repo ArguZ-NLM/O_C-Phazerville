@@ -18,7 +18,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Sculpt: a full-screen effect chain app.
+// Loom: a full-screen effect chain app.
 //
 // Two stereo tracks, each a fixed chain SOURCE > SPRAY > RESONATOR > TEXTURE
 // > ECHO, mixed to the stereo output. Every effect slot can be bypassed.
@@ -55,22 +55,22 @@
 //   input. ECHO TIME and the WAVE / RANDOM rates can sync to it (L enc on the
 //   setting: FREE / STR / TRI / DOT).
 //
-// Settings are saved to SCULPT.BIN on the internal flash when Sculpt is left
+// Settings are saved to LOOM.BIN on the internal flash when Loom is left
 // (e.g. app menu) and with the global save, and loaded at power-up.
 //
-// While Sculpt is the active app it claims the audio outputs from AudioIO.
+// While Loom is the active app it claims the audio outputs from AudioIO.
 // The Quadrants audio applet chain is left intact and comes back as soon as
-// Sculpt is suspended (e.g. when the app menu opens).
+// Loom is suspended (e.g. when the app menu opens).
 
 #include "../HSApplication.h"
 #include "../AudioIO.h"
 #include "../OC_gpio.h"
 #include "../HSMIDI.h"
 #include "../PhzConfig.h"
-#include "SculptDevices.h"
-#include "SculptMods.h"
+#include "LoomDevices.h"
+#include "LoomMods.h"
 
-namespace sculpt {
+namespace loom {
   constexpr int NUM_TRACKS = 2;
   constexpr int COLS = SLOT_COUNT + 1; // + MIX
   constexpr int MIX_COL = SLOT_COUNT;
@@ -87,8 +87,8 @@ namespace sculpt {
     uint8_t parked = 0;  // bit per slot: bypassed and unpatched (no CPU)
     uint32_t park_at[SLOT_COUNT] = {};  // when a bypassed device gets parked
     Device* inst[SLOT_COUNT][MAX_OPTIONS] = {};
-    SculptFade* fade[SLOT_COUNT] = {};  // after each effect slot: bypass fade
-    SculptGate* gate = nullptr;         // before ECHO: its tail rings out
+    LoomFade* fade[SLOT_COUNT] = {};  // after each effect slot: bypass fade
+    LoomGate* gate = nullptr;         // before ECHO: its tail rings out
     Modulator* mods[NUM_MODS][MOD_TYPES] = {};
     uint8_t mod_type[NUM_MODS] = {};
     // MOD A-D, then a copy of the shared E-H; -1 = no modulator there
@@ -111,7 +111,7 @@ namespace sculpt {
     }
   };
 
-  // patch cords live on the heap: no RAM1 until Sculpt is first opened
+  // patch cords live on the heap: no RAM1 until Loom is first opened
   struct Patch {
     AudioConnection in[NUM_TRACKS][2];
     // per slot: in -> (gate ->) device, in -> fade dry, device -> fade wet
@@ -121,7 +121,7 @@ namespace sculpt {
   };
 
   Track tracks[NUM_TRACKS];
-  SculptMixer* mixer = nullptr;
+  LoomMixer* mixer = nullptr;
   ClockDevice* tempo_clock = nullptr;
   Patch* patch = nullptr;
   // MOD E-H: shared by both tracks (in the MOD view's second page)
@@ -157,10 +157,10 @@ namespace sculpt {
   bool audio_hw() { return I2S2_Audio_ADC && I2S2_Audio_DAC; }
 }
 
-OC_APP_CLASS(AppSculpt, TWOCCS("SP"), "Sculpt", "Sculpt"),
+OC_APP_CLASS(AppLoom, TWOCCS("LM"), "Loom", "Loom"),
   public HSApplication {
 public:
-  OC_APP_INTERFACE_DECLARE(AppSculpt, 0);
+  OC_APP_INTERFACE_DECLARE(AppLoom, 0);
 
   void Start();
   void Resume();
@@ -170,12 +170,12 @@ public:
   void Controller() {
     uint16_t e = 0;
     for (int i = 0; i < 12; i++) e |= HS::frame.clocked[i] << i;
-    sculpt::trig_latch |= e;
+    loom::trig_latch |= e;
   }
   void MainLoop();
   void ModulateAll();
   void ReadMIDI();
-  void MidiLearn(sculpt::Device* d);
+  void MidiLearn(loom::Device* d);
   void View() const;
 
   void OnButton(const UI::Event &event);
@@ -187,7 +187,7 @@ private:
   bool focus_mod = false;   // the device view shows a modulator
   int8_t mod_cursor = 0;
   elapsedMicros tick_timer;
-  int8_t track = 0, col = sculpt::ECHO, cursor = 0;
+  int8_t track = 0, col = loom::ECHO, cursor = 0;
   bool l_held = false, l_used = false;
   bool loop_save_held = false;  // REEL: A is down (held 2 s saves the loop) ...
   uint32_t loop_save_hold = 0;  // ... since then
@@ -206,7 +206,7 @@ private:
   // the clock page opened by holding Z: where Y goes back to
   struct { bool on; ViewMode view; bool focus_mod; int8_t mod_cursor, cursor; } clock_back = {};
   // L enc in modulation: each source comes as U then B (off has neither)
-  void StepModOption(sculpt::Device* d, int p, int dir) {
+  void StepModOption(loom::Device* d, int p, int dir) {
     const int bit = 1 << p;
     uint8_t& bi = mod_slot ? d->mod_bi2 : d->mod_bi;
     auto on = [&]() { return mod_slot ? d->mod_bus2[p] != 0 : d->ModSourceOn(p); };
@@ -244,24 +244,24 @@ private:
   int cpu = 0;
   elapsedMillis stats_timer;
 
-  sculpt::Device* FocusOn(int t) const;
+  loom::Device* FocusOn(int t) const;
   void SaveFile() const;
   void LoadFile();
   template <typename F> void ForEachDevice(F f) const;
-  sculpt::Device* Focused() const { return FocusOn(track); }
+  loom::Device* Focused() const { return FocusOn(track); }
   // modulator i (0-7) as seen from track t: its row of types and its type
-  static sculpt::Modulator** ModRow(int t, int i) {
-    return i < sculpt::NUM_MODS ? sculpt::tracks[t].mods[i] : sculpt::shared_mods[i - sculpt::NUM_MODS];
+  static loom::Modulator** ModRow(int t, int i) {
+    return i < loom::NUM_MODS ? loom::tracks[t].mods[i] : loom::shared_mods[i - loom::NUM_MODS];
   }
   static uint8_t& ModType(int t, int i) {
-    return i < sculpt::NUM_MODS ? sculpt::tracks[t].mod_type[i] : sculpt::shared_type[i - sculpt::NUM_MODS];
+    return i < loom::NUM_MODS ? loom::tracks[t].mod_type[i] : loom::shared_type[i - loom::NUM_MODS];
   }
-  static sculpt::Modulator* ModAt(int t, int i) {
-    if (i > sculpt::CLK_CURSOR) return nullptr;  // the CV outputs
-    if (i == sculpt::CLK_CURSOR) return sculpt::tempo_clock;
+  static loom::Modulator* ModAt(int t, int i) {
+    if (i > loom::CLK_CURSOR) return nullptr;  // the CV outputs
+    if (i == loom::CLK_CURSOR) return loom::tempo_clock;
     return ModRow(t, i)[ModType(t, i)];
   }
-  bool SharedFocus() const { return focus_mod && mod_cursor >= sculpt::NUM_MODS && mod_cursor < sculpt::CLK_CURSOR; }
+  bool SharedFocus() const { return focus_mod && mod_cursor >= loom::NUM_MODS && mod_cursor < loom::CLK_CURSOR; }
   void SetModType(int t, int i, int type);
   void DrawMods() const;
   void DrawOutputs() const;
@@ -271,8 +271,8 @@ private:
   void SetChoice(int t, int s, int option);
   void SetChoiceLinked(int s, int option);
   void ToggleBypass(int s);
-  sculpt::Device* Twin(sculpt::Device* d) const;
-  void Mirror(sculpt::Device* d, int p) const;
+  loom::Device* Twin(loom::Device* d) const;
+  void Mirror(loom::Device* d, int p) const;
   void Repatch(int t);
   void ApplyBypass(int t);
   void ParkBypassed(int t);
@@ -287,12 +287,12 @@ private:
   void DrawClockPage() const;
 };
 
-FLASHMEM sculpt::Device* AppSculpt::FocusOn(int t) const {
-  return focus_mod ? ModAt(t, mod_cursor) : sculpt::tracks[t].at(col);
+FLASHMEM loom::Device* AppLoom::FocusOn(int t) const {
+  return focus_mod ? ModAt(t, mod_cursor) : loom::tracks[t].at(col);
 }
 
-FLASHMEM void AppSculpt::Start() {
-  using namespace sculpt;
+FLASHMEM void AppLoom::Start() {
+  using namespace loom;
   // Create every device up front in chain order, so the audio update order
   // follows the signal flow (no extra block of latency per hop). Devices only
   // hold their big buffers while they are in use.
@@ -312,7 +312,7 @@ FLASHMEM void AppSculpt::Start() {
     tr.player->mod_bus = tr.mod_out;
     tr.player->Defaults();
     for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
-      if (s == ECHO) tr.gate = new SculptGate;
+      if (s == ECHO) tr.gate = new LoomGate;
       for (int o = 0; o < SLOT_DEFS[s].noptions; o++) {
         Device* d = MakeDevice(s, o);
         if (d) {
@@ -322,14 +322,14 @@ FLASHMEM void AppSculpt::Start() {
         }
         tr.inst[s][o] = d;
       }
-      tr.fade[s] = new SculptFade;
+      tr.fade[s] = new LoomFade;
       tr.last_choice[s] = SLOT_DEFS[s].noptions > 1 ? 1 : 0;
     }
   }
   // the MIX band stages before the mixer, so the update order follows the
   // signal
   for (int t = 0; t < NUM_TRACKS; t++) tracks[t].mix = new MixDevice(t);
-  mixer = new SculptMixer;
+  mixer = new LoomMixer;
   for (int t = 0; t < NUM_TRACKS; t++) {
     Track& tr = tracks[t];
     tr.mix->mixer = mixer;
@@ -352,8 +352,8 @@ FLASHMEM void AppSculpt::Start() {
   LoadFile();
 }
 
-FLASHMEM void AppSculpt::Repatch(int t) {
-  using namespace sculpt;
+FLASHMEM void AppLoom::Repatch(int t) {
+  using namespace loom;
   if (!active) return;
   Track& tr = tracks[t];
   auto& link = patch->link[t];
@@ -398,8 +398,8 @@ FLASHMEM void AppSculpt::Repatch(int t) {
 
 // bypass targets for the track's fades: dry only, or for ECHO dry plus
 // the device's output with its input closed, so the tail rings out
-FLASHMEM void AppSculpt::ApplyBypass(int t) {
-  using namespace sculpt;
+FLASHMEM void AppLoom::ApplyBypass(int t) {
+  using namespace loom;
   Track& tr = tracks[t];
   for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
     if (!tr.fade[s]) continue;
@@ -419,8 +419,8 @@ FLASHMEM void AppSculpt::ApplyBypass(int t) {
   tr.mix->SetBypass(tr.bypass >> MIX_COL & 1);
 }
 
-FLASHMEM void AppSculpt::SetChoice(int t, int s, int option) {
-  using namespace sculpt;
+FLASHMEM void AppLoom::SetChoice(int t, int s, int option) {
+  using namespace loom;
   Track& tr = tracks[t];
   option = constrain(option, 0, SLOT_DEFS[s].noptions - 1);
   if (option == tr.choice[s]) return;
@@ -436,8 +436,8 @@ FLASHMEM void AppSculpt::SetChoice(int t, int s, int option) {
   if (old) old->Deactivate();
 }
 
-FLASHMEM void AppSculpt::ConnectTrack(int t) {
-  using namespace sculpt;
+FLASHMEM void AppLoom::ConnectTrack(int t) {
+  using namespace loom;
   AudioNoInterrupts();
   for (int c = 0; c < 2; c++)
     patch->in[t][c].connect(OC::AudioIO::InputStream(), c, *tracks[t].input, c);
@@ -448,8 +448,8 @@ FLASHMEM void AppSculpt::ConnectTrack(int t) {
   Repatch(t);
 }
 
-FLASHMEM void AppSculpt::DisconnectTrack(int t) {
-  using namespace sculpt;
+FLASHMEM void AppLoom::DisconnectTrack(int t) {
+  using namespace loom;
   AudioNoInterrupts();
   for (auto& c : patch->in[t]) c.disconnect();
   for (auto& slot : patch->link[t]) for (auto& c : slot) c.disconnect();
@@ -463,16 +463,16 @@ FLASHMEM void AppSculpt::DisconnectTrack(int t) {
 }
 
 // the same device on the other track (only meaningful while linked)
-FLASHMEM sculpt::Device* AppSculpt::Twin(sculpt::Device* d) const {
-  using namespace sculpt;
+FLASHMEM loom::Device* AppLoom::Twin(loom::Device* d) const {
+  using namespace loom;
   if (!linked || !d) return nullptr;
   Device* tw = FocusOn(1 - track);
   return (tw && tw != d && &tw->def == &d->def) ? tw : nullptr;  // shared: no twin
 }
 
 // copy one parameter to the twin; input source and pan stay per track
-FLASHMEM void AppSculpt::Mirror(sculpt::Device* d, int p) const {
-  using namespace sculpt;
+FLASHMEM void AppLoom::Mirror(loom::Device* d, int p) const {
+  using namespace loom;
   Device* tw = Twin(d);
   if (!tw) return;
   if (!focus_mod && col == SOURCE && p == 0) return;
@@ -489,8 +489,8 @@ FLASHMEM void AppSculpt::Mirror(sculpt::Device* d, int p) const {
   tw->Refresh(p);
 }
 
-FLASHMEM void AppSculpt::SetModType(int t, int i, int type) {
-  using namespace sculpt;
+FLASHMEM void AppLoom::SetModType(int t, int i, int type) {
+  using namespace loom;
   Modulator** row = ModRow(t, i);
   type = constrain(type, 0, MOD_TYPES - 1);
   if (type && !row[type]) {
@@ -507,17 +507,17 @@ FLASHMEM void AppSculpt::SetModType(int t, int i, int type) {
   }
 }
 
-FLASHMEM void AppSculpt::SetChoiceLinked(int s, int option) {
+FLASHMEM void AppLoom::SetChoiceLinked(int s, int option) {
   SetChoice(track, s, option);
-  if (linked) SetChoice(1 - track, s, sculpt::tracks[track].choice[s]);
+  if (linked) SetChoice(1 - track, s, loom::tracks[track].choice[s]);
 }
 
 // one-click bypass of a slot: the device stays (and keeps its settings and
 // page) but the track's audio goes around it
 // unpatch devices that have been bypassed long enough (fade done, tail rung
 // out), so they stop using CPU
-FLASHMEM void AppSculpt::ParkBypassed(int t) {
-  using namespace sculpt;
+FLASHMEM void AppLoom::ParkBypassed(int t) {
+  using namespace loom;
   Track& tr = tracks[t];
   uint8_t fresh = 0;
   for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
@@ -533,8 +533,8 @@ FLASHMEM void AppSculpt::ParkBypassed(int t) {
     if (fresh >> s & 1) tr.current(s)->Parked();
 }
 
-FLASHMEM void AppSculpt::ToggleBypass(int s) {
-  using namespace sculpt;
+FLASHMEM void AppLoom::ToggleBypass(int s) {
+  using namespace loom;
   const uint8_t bit = 1 << s;
   const bool on = !(tracks[track].bypass & bit);
   for (int t = 0; t < NUM_TRACKS; t++) {
@@ -555,8 +555,8 @@ FLASHMEM void AppSculpt::ToggleBypass(int s) {
   }
 }
 
-FLASHMEM void AppSculpt::ToggleLink() {
-  using namespace sculpt;
+FLASHMEM void AppLoom::ToggleLink() {
+  using namespace loom;
   linked = !linked;
   if (!linked) return;
   const int master = track;
@@ -604,10 +604,10 @@ FLASHMEM void AppSculpt::ToggleLink() {
   track = 0; // the cursor lives on row 1 while linked
 }
 
-FLASHMEM void AppSculpt::Resume() {
-  // SPRAY: at most 8 overlapping grains while Sculpt runs (CPU peaks)
+FLASHMEM void AppLoom::Resume() {
+  // SPRAY: at most 8 overlapping grains while Loom runs (CPU peaks)
   AudioEffectClouds::grain_limit = 8;
-  using namespace sculpt;
+  using namespace loom;
   if (!audio_hw() || active) return;
   if (!patch) patch = new Patch;
   active = true;
@@ -619,10 +619,10 @@ FLASHMEM void AppSculpt::Resume() {
   stats_timer = 0;
 }
 
-FLASHMEM void AppSculpt::Suspend() {
+FLASHMEM void AppLoom::Suspend() {
   // the Quadrants applets get all their grains back
   AudioEffectClouds::grain_limit = AudioEffectClouds::MAX_GRAINS;
-  using namespace sculpt;
+  using namespace loom;
   if (!active) return;
   OC::AudioIO::ReleaseOutput();
   for (int t = 0; t < NUM_TRACKS; t++) DisconnectTrack(t);
@@ -631,20 +631,20 @@ FLASHMEM void AppSculpt::Suspend() {
   if (dirty) SaveFile();
 }
 
-// MIDI is normally read by Quadrants; while Sculpt runs it feeds the same
+// MIDI is normally read by Quadrants; while Loom runs it feeds the same
 // shared MIDI maps itself (no thru, no SysEx, no program changes)
 template <typename T>
-FLASHMEM static void SculptReadMIDI(T& device) {
+FLASHMEM static void LoomReadMIDI(T& device) {
   for (int n = 0; n < 32 && device.read(); n++) {
     const HS::MIDIMessage msg = {
       device.getChannel(), device.getType(), device.getData1(), device.getData2()
     };
     if (msg.message == midi::SystemExclusive || msg.message == midi::ProgramChange) continue;
-    if (msg.message == midi::Clock) sculpt::midi_clocks++;
-    if (sculpt::tempo_clock && sculpt::tempo_clock->midi()) {
-      if (msg.message == midi::Start) sculpt::ClockStart();
-      else if (msg.message == midi::Continue) sculpt::clock_running = true;
-      else if (msg.message == midi::Stop) sculpt::ClockStop();
+    if (msg.message == midi::Clock) loom::midi_clocks++;
+    if (loom::tempo_clock && loom::tempo_clock->midi()) {
+      if (msg.message == midi::Start) loom::ClockStart();
+      else if (msg.message == midi::Continue) loom::clock_running = true;
+      else if (msg.message == midi::Stop) loom::ClockStop();
     }
     const bool realtime = msg.message == midi::Clock || msg.message == midi::Start
       || msg.message == midi::Stop;
@@ -652,16 +652,16 @@ FLASHMEM static void SculptReadMIDI(T& device) {
   }
 }
 
-FLASHMEM void AppSculpt::ReadMIDI() {
-  SculptReadMIDI(usbMIDI);
-  SculptReadMIDI(usbHostMIDI[0]);
-  SculptReadMIDI(usbHostMIDI[1]);
-  SculptReadMIDI(MIDI1);
+FLASHMEM void AppLoom::ReadMIDI() {
+  LoomReadMIDI(usbMIDI);
+  LoomReadMIDI(usbHostMIDI[0]);
+  LoomReadMIDI(usbHostMIDI[1]);
+  LoomReadMIDI(MIDI1);
 }
 
 // point the setting at a free MIDI map (or its current one) and let the next
 // CC or note teach it
-FLASHMEM void AppSculpt::MidiLearn(sculpt::Device* d) {
+FLASHMEM void AppLoom::MidiLearn(loom::Device* d) {
   HS::CVInputMap& in = d->mod_in[cursor];
   auto& maps = HS::frame.MIDIState.mapping;
   if (in.source_type() != HS::CVInputMap::TYPE_MIDI) {
@@ -678,8 +678,8 @@ FLASHMEM void AppSculpt::MidiLearn(sculpt::Device* d) {
   Mirror(d, cursor);
 }
 
-FLASHMEM void AppSculpt::ModulateAll() {
-  using namespace sculpt;
+FLASHMEM void AppLoom::ModulateAll() {
+  using namespace loom;
   ModCtx ctx;
   ctx.dt = std::min(tick_timer * 1e-6f, 0.05f);
   tick_timer = 0;
@@ -735,8 +735,8 @@ FLASHMEM void AppSculpt::ModulateAll() {
 // the CV outputs: 0..1 -> 0..10 V. They go out through the shared IO frame,
 // which the core writes to the jacks every tick (writing the DAC directly
 // was overwritten by it)
-FLASHMEM float AppSculpt::OutLevel(int o) const {
-  using namespace sculpt;
+FLASHMEM float AppLoom::OutLevel(int o) const {
+  using namespace loom;
   const int s = cv_out_src[o];
   float v = -1.0f;
   if (cv_out_bypass & (1 << o)) return 0.0f;
@@ -747,15 +747,15 @@ FLASHMEM float AppSculpt::OutLevel(int o) const {
   return constrain(v, 0.0f, 1.0f);  // empty slot (-1) or off: 0 V
 }
 
-FLASHMEM void AppSculpt::WriteOutputs() {
-  for (int o = 0; o < sculpt::NUM_CV_OUTS && o < DAC_CHANNEL_COUNT; o++)
+FLASHMEM void AppLoom::WriteOutputs() {
+  for (int o = 0; o < loom::NUM_CV_OUTS && o < DAC_CHANNEL_COUNT; o++)
     HS::frame.Out(DAC_CHANNEL(o), int(OutLevel(o) * 8.5f * ONE_OCTAVE));  // measured: 8.5 "volts" give 10 V at the jack
 }
 
-FLASHMEM void AppSculpt::MainLoop() {
+FLASHMEM void AppLoom::MainLoop() {
   if (active) ReadMIDI();
   {
-    using namespace sculpt;
+    using namespace loom;
     // REEL: A held 2 s starts writing the loop; the files go in steps
     const uint32_t ms = loop_save_held ? millis() - loop_save_hold : 0;
     for (int t = 0; t < NUM_TRACKS; t++) {
@@ -790,7 +790,7 @@ FLASHMEM void AppSculpt::MainLoop() {
     saved_at = millis() | 1;
   }
   {
-    using namespace sculpt;
+    using namespace loom;
     const bool held = clear_held;
     const uint32_t ms = held ? millis() - clear_hold : 0;
     // only after a moment, so a short press (stop) shows nothing
@@ -805,7 +805,7 @@ FLASHMEM void AppSculpt::MainLoop() {
   if (active && mod_timer >= 1000) { // follow the sources about once per ms
     mod_timer = 0;
     ModulateAll();
-    for (int t = 0; t < sculpt::NUM_TRACKS; t++) {
+    for (int t = 0; t < loom::NUM_TRACKS; t++) {
       ApplyBypass(t);  // follows SPRAY LEVEL
       ParkBypassed(t);
     }
@@ -814,21 +814,21 @@ FLASHMEM void AppSculpt::MainLoop() {
   stats_timer = 0;
   const float usage = AudioProcessorUsageMax();
   cpu = int(usage + 0.5f);
-  Serial.printf("Sculpt: AudioProcessorUsageMax %d.%d%%  mem %u/%d blocks\n",
+  Serial.printf("Loom: AudioProcessorUsageMax %d.%d%%  mem %u/%d blocks\n",
     int(usage), int(usage * 10) % 10, AudioMemoryUsageMax(), OC::AudioIO::AUDIO_MEMORY);
   AudioProcessorUsageMaxReset();
   AudioMemoryUsageMaxReset();
-  Serial.printf("  load:%s\n", sculpt::load_note);
+  Serial.printf("  load:%s\n", loom::load_note);
   // modulated settings: value, result, both sources (amount, MOD, u/b)
-  for (int t = 0; t < sculpt::NUM_TRACKS; t++) {
-    const sculpt::Track& tr = sculpt::tracks[t];
+  for (int t = 0; t < loom::NUM_TRACKS; t++) {
+    const loom::Track& tr = loom::tracks[t];
     Serial.printf("  %c mods", t ? 'R' : 'L');
-    for (int i = 0; i < sculpt::MOD_BUSES; i++) {
-      const sculpt::Modulator* m = ModAt(t, i);
+    for (int i = 0; i < loom::MOD_BUSES; i++) {
+      const loom::Modulator* m = ModAt(t, i);
       Serial.printf(" %c:%s=%d.%02d", 'A' + i, m ? m->def.tag : "-", int(tr.mod_out[i]), int(tr.mod_out[i] * 100) % 100);
     }
     Serial.println();
-    ForEachDevice([&](sculpt::Device* d) {
+    ForEachDevice([&](loom::Device* d) {
       if (d->mod_bus != tr.mod_out) return;
       for (int p = 0; p < d->num_params(); p++) {
         if (!d->Modded(p)) continue;
@@ -840,7 +840,7 @@ FLASHMEM void AppSculpt::MainLoop() {
   }
 
   // per device: own stream + owned streams (e.g. ECHO core + delay lines)
-  using namespace sculpt;
+  using namespace loom;
   for (int t = 0; t < NUM_TRACKS; t++) {
     Serial.printf("  %c", t ? 'R' : 'L');
     for (int s = SOURCE; s < SLOT_COUNT; s++) {
@@ -861,8 +861,8 @@ FLASHMEM void AppSculpt::MainLoop() {
 /////////////////////////////////////////////////////////////////
 // Controls
 /////////////////////////////////////////////////////////////////
-FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
-  using namespace sculpt;
+FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
+  using namespace loom;
   dirty = true;
   if (event.control == OC::CONTROL_BUTTON_Z) {
     // anywhere in the app: clock start / stop; held: the clock page, on
@@ -1048,8 +1048,8 @@ FLASHMEM void AppSculpt::OnButton(const UI::Event &event) {
   }
 }
 
-FLASHMEM void AppSculpt::OnEncoder(const UI::Event &event) {
-  using namespace sculpt;
+FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
+  using namespace loom;
   dirty = true;
   const int dir = event.value;
   const bool left = event.control == OC::CONTROL_ENCODER_L;
@@ -1133,8 +1133,8 @@ FLASHMEM void AppSculpt::OnEncoder(const UI::Event &event) {
 /////////////////////////////////////////////////////////////////
 // Screens
 /////////////////////////////////////////////////////////////////
-FLASHMEM void AppSculpt::UpdateMixLevels() const {
-  using namespace sculpt;
+FLASHMEM void AppLoom::UpdateMixLevels() const {
+  using namespace loom;
   if (!mixer) return;
   float pk[2][2];
   mixer->ReadPeaks(pk);
@@ -1145,8 +1145,8 @@ FLASHMEM void AppSculpt::UpdateMixLevels() const {
 }
 
 // the track on screen is muted (while linked: either of them)
-FLASHMEM bool AppSculpt::Muted() const {
-  using namespace sculpt;
+FLASHMEM bool AppLoom::Muted() const {
+  using namespace loom;
   for (int t = 0; t < NUM_TRACKS; t++)
     if ((t == track || linked) && tracks[t].mix && tracks[t].mix->Muted()) return true;
   return false;
@@ -1154,14 +1154,14 @@ FLASHMEM bool AppSculpt::Muted() const {
 
 // on an effect slot's page B (DOWN) bypasses the slot (ECHO's CLR stays
 // reachable through a trigger); on OUTPUT it bypasses the band stage
-FLASHMEM bool AppSculpt::BypassKey() const {
-  using namespace sculpt;
+FLASHMEM bool AppLoom::BypassKey() const {
+  using namespace loom;
   if (view != DEVICE || focus_mod || col <= SOURCE || col > MIX_COL) return false;
   return Focused() != nullptr;
 }
 
-FLASHMEM void AppSculpt::DrawChain() const {
-  using namespace sculpt;
+FLASHMEM void AppLoom::DrawChain() const {
+  using namespace loom;
   // boxes are drawn one pixel wider than the spacing so neighbours share a
   // border; 19 px inside each. Glyphs are 6 px with a blank first column.
   // Inside: the slot's name and a small live picture of its device.
@@ -1233,8 +1233,8 @@ FLASHMEM static void PrintCentred(int x, int y, const char* str) {
   gfxPrint(x + std::max(0, (32 - w) / 2), y, str);
 }
 
-FLASHMEM void AppSculpt::DrawDevice() const {
-  using namespace sculpt;
+FLASHMEM void AppLoom::DrawDevice() const {
+  using namespace loom;
   Device* d = Focused();
   if (!d) return;
   const int n = d->num_params();
@@ -1435,8 +1435,8 @@ FLASHMEM void AppSculpt::DrawDevice() const {
 }
 
 // two pages of four plus CLOCK: the track's A-D, then the shared E-H
-FLASHMEM void AppSculpt::DrawMods() const {
-  using namespace sculpt;
+FLASHMEM void AppLoom::DrawMods() const {
+  using namespace loom;
   if (mod_cursor >= OUT_CURSOR) { DrawOutputs(); return; }
   const int page = mod_cursor < NUM_MODS ? 0 : 1;
   if (linked || page) gfxPrint(1, 0, PSTR("L+R"));
@@ -1476,8 +1476,8 @@ FLASHMEM void AppSculpt::DrawMods() const {
 
 // the clock page: one setting per line with room for full names, then the
 // four beats and whether it runs
-FLASHMEM void AppSculpt::DrawClockPage() const {
-  using namespace sculpt;
+FLASHMEM void AppLoom::DrawClockPage() const {
+  using namespace loom;
   const ClockDevice* c = tempo_clock;
   static const char* const names[3] = {"SOURCE", "BPM", "PPQN"};
   for (int p = 0; p < 3; p++) {
@@ -1504,8 +1504,8 @@ FLASHMEM void AppSculpt::DrawClockPage() const {
 
 // the clock in the top line: a play triangle while it runs, a square when
 // stopped (Z), 5 x 5 px from x, y
-FLASHMEM void AppSculpt::DrawClockMark(int x, int y) {
-  if (sculpt::clock_running) {
+FLASHMEM void AppLoom::DrawClockMark(int x, int y) {
+  if (loom::clock_running) {
     for (int i = 0; i < 3; i++) gfxLine(x + i, y + i, x + i, y + 4 - i);
   } else {
     gfxRect(x, y, 5, 5);
@@ -1513,8 +1513,8 @@ FLASHMEM void AppSculpt::DrawClockMark(int x, int y) {
 }
 
 // page 3: the 8 CV outputs, each with its source and its voltage as a bar
-FLASHMEM void AppSculpt::DrawOutputs() const {
-  using namespace sculpt;
+FLASHMEM void AppLoom::DrawOutputs() const {
+  using namespace loom;
   gfxPrint(1, 0, PSTR("CV OUTPUTS"));
   DrawClockMark(96, 1);
   gfxPrint(110, 0, PSTR("3/3"));
@@ -1552,11 +1552,11 @@ FLASHMEM void AppSculpt::DrawOutputs() const {
 }
 
 /////////////////////////////////////////////////////////////////
-// Saving: SCULPT.BIN on the internal flash
+// Saving: LOOM.BIN on the internal flash
 /////////////////////////////////////////////////////////////////
-namespace sculpt {
-  constexpr char SAVE_FILE[] = "SCULPT.BIN";
-  constexpr char SAVE_TMP[] = "SCULPT.TMP";
+namespace loom {
+  constexpr char SAVE_FILE[] = "LOOM.BIN";
+  constexpr char SAVE_TMP[] = "LOOM.TMP";
   // 2: modulator types sorted by name; 3: second mod source, MOD E-H
   constexpr uint8_t SAVE_VERSION = 3;
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
@@ -1640,8 +1640,8 @@ namespace sculpt {
 }
 
 template <typename F>
-FLASHMEM void AppSculpt::ForEachDevice(F f) const {
-  using namespace sculpt;
+FLASHMEM void AppLoom::ForEachDevice(F f) const {
+  using namespace loom;
   if (tempo_clock) f(tempo_clock);
   for (auto& tr : tracks) {
     f(tr.input);
@@ -1657,12 +1657,12 @@ FLASHMEM void AppSculpt::ForEachDevice(F f) const {
     for (auto m : slot) if (m) f(m);
 }
 
-FLASHMEM void AppSculpt::SaveFile() const {
-  using namespace sculpt;
+FLASHMEM void AppLoom::SaveFile() const {
+  using namespace loom;
   auto& fs = PhzConfig::myfs;
   File f = fs.open(SAVE_TMP, FILE_WRITE_BEGIN);
   if (!f) return;
-  f.write("SCU", 3);
+  f.write("SCU", 3);  // the file's mark since it was Sculpt; kept so all files load
   f.write(&SAVE_VERSION, 1);
   const uint8_t lk = linked;
   f.write(&lk, 1);
@@ -1678,7 +1678,7 @@ FLASHMEM void AppSculpt::SaveFile() const {
     for (int i = 0; i < NUM_MODS; i++)
       for (int type = 1; type < MOD_TYPES; type++) WriteDevice(f, tr.mods[i][type]);
   }
-  // where the user was, so Sculpt opens there again (older files end before)
+  // where the user was, so Loom opens there again (older files end before)
   const uint8_t ui[6] = {uint8_t(view), uint8_t(track), uint8_t(col),
                          uint8_t(cursor), uint8_t(focus_mod), uint8_t(mod_cursor)};
   f.write(ui, sizeof(ui));
@@ -1714,12 +1714,13 @@ FLASHMEM void AppSculpt::SaveFile() const {
   fs.remove(SAVE_FILE);
   fs.rename(SAVE_TMP, SAVE_FILE);
   dirty = false;
-  Serial.println("Sculpt: settings saved");
+  Serial.println("Loom: settings saved");
 }
 
-FLASHMEM void AppSculpt::LoadFile() {
-  using namespace sculpt;
+FLASHMEM void AppLoom::LoadFile() {
+  using namespace loom;
   File f = PhzConfig::myfs.open(SAVE_FILE, FILE_READ);
+  if (!f) f = PhzConfig::myfs.open("SCULPT.BIN", FILE_READ);  // from before the rename
   if (!f) return;
   char magic[3];
   uint8_t version = 0, lk = 0;
@@ -1784,6 +1785,8 @@ FLASHMEM void AppSculpt::LoadFile() {
       char fd[128] = {}, fn[96] = {};
       if (!more || f.read(&a, 1) != 1 || a >= sizeof(fd) || f.read(fd, a) != a ||
           f.read(&b, 1) != 1 || b >= sizeof(fn) || f.read(fn, b) != b) { more = false; break; }
+      // the card folder was /SCULPT before the rename (moved to /LOOM)
+      if (!strncmp(fd, "/SCULPT", 7)) { memmove(fd + 5, fd + 7, strlen(fd + 7) + 1); memcpy(fd, "/LOOM", 5); }
       if (tr.player && a) tr.player->SetFile(fd, fn);
     }
     char mark = 0;
@@ -1822,11 +1825,11 @@ FLASHMEM void AppSculpt::LoadFile() {
     cursor = 0;
   }
   ForEachDevice([](Device* d) { d->ApplyAll(); });
-  Serial.printf("Sculpt: settings loaded%s\n", ok ? "" : " (partly)");
+  Serial.printf("Loom: settings loaded%s\n", ok ? "" : " (partly)");
 
 }
 
-FLASHMEM void AppSculpt::View() const {
+FLASHMEM void AppLoom::View() const {
   UpdateMixLevels();
   if (view == DEVICE && Focused()) DrawDevice();
   else if (view == MODS) DrawMods();
@@ -1850,41 +1853,41 @@ FLASHMEM void AppSculpt::View() const {
 /////////////////////////////////////////////////////////////////
 // App glue
 /////////////////////////////////////////////////////////////////
-FLASHMEM void AppSculpt::Init() {
+FLASHMEM void AppLoom::Init() {
   BaseStart();
 }
 
-// the global save (app menu, USB 'g') also writes Sculpt's own file
-FLASHMEM size_t AppSculpt::SaveAppData(util::StreamBufferWriter &) const {
+// the global save (app menu, USB 'g') also writes Loom's own file
+FLASHMEM size_t AppLoom::SaveAppData(util::StreamBufferWriter &) const {
   if (dirty) SaveFile();
   return 0;
 }
-size_t AppSculpt::RestoreAppData(util::StreamBufferReader &) { return 0; }
+size_t AppLoom::RestoreAppData(util::StreamBufferReader &) { return 0; }
 
-void AppSculpt::Process(OC::IOFrame *ioframe) {
+void AppLoom::Process(OC::IOFrame *ioframe) {
   BaseController(ioframe);
 }
 
-FLASHMEM void AppSculpt::HandleAppEvent(OC::AppEvent event) {
+FLASHMEM void AppLoom::HandleAppEvent(OC::AppEvent event) {
   if (event == OC::APP_EVENT_RESUME) Resume();
   if (event == OC::APP_EVENT_SUSPEND) Suspend();
 }
 
-FLASHMEM void AppSculpt::Loop() {
+FLASHMEM void AppLoom::Loop() {
   MainLoop();
 }
 
-FLASHMEM void AppSculpt::GetIOConfig(OC::IOConfig &) const { }
-void AppSculpt::DrawDebugInfo() const { }
+FLASHMEM void AppLoom::GetIOConfig(OC::IOConfig &) const { }
+void AppLoom::DrawDebugInfo() const { }
 
-FLASHMEM void AppSculpt::DrawMenu() const { BaseView(); }
+FLASHMEM void AppLoom::DrawMenu() const { BaseView(); }
 
 // screensaver: the NLM wave as a 3D wire mesh: a sheet with two troughs at
 // the front, flattening towards the back, seen like the logo. The camera
 // floats inside a cube (left / right, up / down, forward / back, three slow
 // random glides) and looks at a point that wanders the same way inside a
 // smaller cube. The wave slowly travels.
-namespace sculpt {
+namespace loom {
 // glides from one random value in -1..1 to the next, a new one every 3-7 s
 struct Drift {
   float from = 0.0f, to = 0.0f;
@@ -1902,8 +1905,8 @@ struct Drift {
 };
 }
 
-FLASHMEM void AppSculpt::DrawScreensaver() const {
-  using namespace sculpt;
+FLASHMEM void AppLoom::DrawScreensaver() const {
+  using namespace loom;
   constexpr float L = 2.5f, AMP = 0.7f, F = 130.0f;
   // how far back each of the 13 long lines goes (x L), left to right: a
   // ragged back edge, the right side reaching further, like the logo
@@ -1981,10 +1984,10 @@ FLASHMEM void AppSculpt::DrawScreensaver() const {
   }
 }
 
-FLASHMEM void AppSculpt::HandleButtonEvent(const UI::Event &event) {
+FLASHMEM void AppLoom::HandleButtonEvent(const UI::Event &event) {
   OnButton(event);
 }
 
-FLASHMEM void AppSculpt::HandleEncoderEvent(const UI::Event &event) {
+FLASHMEM void AppLoom::HandleEncoderEvent(const UI::Event &event) {
   OnEncoder(event);
 }

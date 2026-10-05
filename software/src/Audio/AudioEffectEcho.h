@@ -6,7 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 
-// Delay + reverb core for the Sculpt ECHO device. Stereo in, stereo out.
+// Delay + reverb core for the Loom ECHO device. Stereo in, stereo out.
 //
 // The delay lines live in extmem and are read a whole block at a time (taps
 // are at least one block long), which suits PSRAM far better than reading
@@ -224,7 +224,7 @@ FLASHMEM void AudioEffectEcho::ReadTap(int ch, int t, int16_t* out) {
   if (tp.phase >= XFADE) tp.cur = tp.next;
 }
 
-// Runs from RAM1 (ITCM) like the other Sculpt engines.
+// Runs from RAM1 (ITCM) like the other Loom engines.
 FASTRUN void AudioEffectEcho::update() {
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   audio_block_t* out[2] = {allocate(), allocate()};

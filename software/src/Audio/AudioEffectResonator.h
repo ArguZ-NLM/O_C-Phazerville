@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <cmath>
 
-// Resonant filter bank for the Sculpt RESONATOR device.
+// Resonant filter bank for the Loom RESONATOR device.
 //
 // BANDS two-pole band-pass resonators (Chamberlin state variable), fed with
 // the track's input summed to mono; even bands go left, odd bands right.
@@ -60,7 +60,7 @@ private:
   float x[AUDIO_BLOCK_SAMPLES], dmp[AUDIO_BLOCK_SAMPLES], sum[2][AUDIO_BLOCK_SAMPLES];
 };
 
-// Runs from RAM1 (ITCM) like the other Sculpt engines.
+// Runs from RAM1 (ITCM) like the other Loom engines.
 FASTRUN void AudioEffectResonator::update() {
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   audio_block_t* out[2] = {allocate(), allocate()};

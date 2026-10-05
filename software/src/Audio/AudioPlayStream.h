@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <cmath>
 
-// Plays a long file that is streamed from the SD card, for the Sculpt
+// Plays a long file that is streamed from the SD card, for the Loom
 // PLAYER. The audio interrupt only ever reads PSRAM:
 //  - the ring holds the stretch ahead of the play head, refilled by the
 //    main loop (Service) from the card;

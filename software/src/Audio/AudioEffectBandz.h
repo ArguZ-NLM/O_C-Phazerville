@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <cmath>
 
-// Stereo 3-band tone + dynamics stage for the Sculpt MIX device, after
+// Stereo 3-band tone + dynamics stage for the Loom MIX device, after
 // Phazerville's 3-Bandz applet: the signal is split into low / mid / high
 // (state-variable filters; mid = input - low - high, so the bands always sum
 // back to the input), each band gets a gain and a compressor, then they are
@@ -82,7 +82,7 @@ private:
   }
 };
 
-// Runs from RAM1 (ITCM) like the other Sculpt engines.
+// Runs from RAM1 (ITCM) like the other Loom engines.
 FASTRUN void AudioEffectBandz::update() {
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   // bypass fades over ~15 ms; nothing to do once it is all the way out

@@ -18,7 +18,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Devices for the Sculpt app.
+// Devices for the Loom app.
 //
 // A device is a stereo audio stage with up to 8 parameters (2 pages of 4),
 // up to 2 actions (UP / DOWN buttons) and a picture. The audio updates run
@@ -38,7 +38,7 @@
 #include "../Audio/AudioPlayStream.h"
 #include <SD.h>
 
-namespace sculpt {
+namespace loom {
 
 enum ParamKind : uint8_t { UNI, BI, LIST };
 
@@ -392,9 +392,9 @@ FLASHMEM static void DrawHMeter(int x, int y, int w, int h, float lvl) {
 /////////////////////////////////////////////////////////////////
 // Track mixer: both tracks -> stereo out
 /////////////////////////////////////////////////////////////////
-class SculptMixer : public AudioStream {
+class LoomMixer : public AudioStream {
 public:
-  SculptMixer() : AudioStream(4, queue) {}
+  LoomMixer() : AudioStream(4, queue) {}
   volatile float gain[2][2] = {{0.8f, 0.8f}, {0.8f, 0.8f}}; // [track][L/R]
   volatile float level[2] = {}; // last block's peak per track, for FOLLOW
   float peak[2][2] = {};  // held until read, [track][L/R]
@@ -412,7 +412,7 @@ private:
   audio_block_t* queue[4];
 };
 
-FASTRUN void SculptMixer::update() {
+FASTRUN void LoomMixer::update() {
   audio_block_t* in[4];
   for (int i = 0; i < 4; i++) in[i] = receiveReadOnly(i);
   audio_block_t* out[2] = {allocate(), allocate()};
@@ -446,8 +446,8 @@ FASTRUN void SculptMixer::update() {
 }
 
 /////////////////////////////////////////////////////////////////
-// Bypass fades. SculptFade sits after every effect slot and mixes the
-// slot's input (dry) with the device's output (wet); SculptGate sits in
+// Bypass fades. LoomFade sits after every effect slot and mixes the
+// slot's input (dry) with the device's output (wet); LoomGate sits in
 // front of a device whose tail rings out when bypassed (ECHO). Both glide
 // to their targets in ~15 ms and pass blocks through untouched once there.
 /////////////////////////////////////////////////////////////////
@@ -457,9 +457,9 @@ static inline float Glide(float g, float to) {
   return to > g ? std::min(to, g + FADE_STEP) : std::max(to, g - FADE_STEP);
 }
 
-class SculptFade : public AudioStream {
+class LoomFade : public AudioStream {
 public:
-  SculptFade() : AudioStream(4, queue) {}  // dry L/R, wet L/R
+  LoomFade() : AudioStream(4, queue) {}  // dry L/R, wet L/R
   void Set(float dry, float wet) { to_dry = dry; to_wet = wet; }
   void update() override;
 private:
@@ -468,7 +468,7 @@ private:
   float g_dry = 0.0f, g_wet = 1.0f;
 };
 
-FASTRUN void SculptFade::update() {
+FASTRUN void LoomFade::update() {
   audio_block_t* in[4];
   for (int i = 0; i < 4; i++) in[i] = receiveReadOnly(i);
   const float td = to_dry, tw = to_wet;
@@ -498,9 +498,9 @@ FASTRUN void SculptFade::update() {
   for (auto b : in) if (b) release(b);
 }
 
-class SculptGate : public AudioStream {
+class LoomGate : public AudioStream {
 public:
-  SculptGate() : AudioStream(2, queue) {}
+  LoomGate() : AudioStream(2, queue) {}
   void Set(float g) { to = g; }
   void update() override;
 private:
@@ -509,7 +509,7 @@ private:
   float g = 1.0f;
 };
 
-FASTRUN void SculptGate::update() {
+FASTRUN void LoomGate::update() {
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   const float t = to;
   if (g == t && (t == 0.0f || t == 1.0f)) {
@@ -567,7 +567,7 @@ public:
     bandz.processorUsageMaxReset();
   }
   float level[2] = {};  // set by the app from the mixer peaks
-  SculptMixer* mixer = nullptr;
+  LoomMixer* mixer = nullptr;
 private:
   AudioEffectBandz bandz;
   int track;
@@ -1112,11 +1112,11 @@ FLASHMEM void ReelDevice::DrawMini(int x, int y, int w, int h) {
 }
 
 /////////////////////////////////////////////////////////////////
-// Loop files on the SD card: /SCULPT/*.WAV, 16-bit PCM, mono or stereo.
+// Loop files on the SD card: /LOOM/*.WAV, 16-bit PCM, mono or stereo.
 // Reading and writing happen in small steps from the main loop, so the
 // screen keeps going and the audio interrupt is never held up.
 /////////////////////////////////////////////////////////////////
-constexpr char LOOP_DIR[] = "/SCULPT";
+constexpr char LOOP_DIR[] = "/LOOM";
 constexpr int MAX_FILES = 48, NAME_LEN = 80;
 constexpr size_t IO_CHUNK = 2048;  // sample frames per step
 
@@ -1248,7 +1248,7 @@ public:
   }
   // main loop: loading in steps
   void Idle();
-  // the WAVs in the current folder, sorted; Select picks one in /SCULPT by
+  // the WAVs in the current folder, sorted; Select picks one in /LOOM by
   // name (after a save), SetFile any folder + name (from the settings)
   void Scan();
   void Select(const char* name) { SetFile(LOOP_DIR, name); }
@@ -1269,7 +1269,7 @@ private:
   AudioConnection st_l, st_r;
   char names[MAX_FILES][NAME_LEN] = {};
   uint32_t scanned_at = 0;
-  char dir[96] = "/SCULPT";  // the folder FILE steps through
+  char dir[96] = "/LOOM";  // the folder FILE steps through
   // browser
   char bdir[96] = "/";
   char bn[MAX_FILES][NAME_LEN] = {};
@@ -1306,6 +1306,8 @@ FLASHMEM void PlayerDevice::Scan() {
   scanned_at = millis() | 1;
   if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
   if (!SDcard_Ready) return;
+  // the folder was /SCULPT before the app became Loom: move it over once
+  if (!SD.exists(LOOP_DIR) && SD.exists("/SCULPT")) SD.rename("/SCULPT", LOOP_DIR);
   File d = SD.open(dir);
   if (!d) { snprintf(dir, sizeof(dir), "/"); d = SD.open(dir); }
   if (!d) return;
@@ -2752,4 +2754,4 @@ FLASHMEM static Device* MakeDevice(int slot, int option) {
   return nullptr;
 }
 
-} // namespace sculpt
+} // namespace loom

@@ -183,8 +183,8 @@ UiMode Ui::DispatchEvents(const RuntimeSlot &appslot) {
 #endif
 
     const bool z_hold = (event.mask & CONTROL_BUTTON_Z);
-    // Sculpt keeps Z for its clock: only Z + R push (app menu) stays
-    const bool z_extras = app->id() != TWOCCS("SP");
+    // Loom keeps Z for its clock: only Z + R push (app menu) stays
+    const bool z_extras = app->id() != TWOCCS("LM");
     const bool a_hold = (event.mask & CONTROL_BUTTON_A);
 
     // --- Handle global hotkeys
@@ -195,7 +195,7 @@ UiMode Ui::DispatchEvents(const RuntimeSlot &appslot) {
         break;
       }
       // Hold Z or A and push left encoder for IO settings menu
-      // Sculpt: hold Z and push left encoder for its screensaver (the NLM logo)
+      // Loom: hold Z and push left encoder for its screensaver (the NLM logo)
       if (CONTROL_BUTTON_L == event.control && z_hold && !z_extras) {
         screensaver_ = true;
         SetButtonIgnoreMask();
@@ -300,7 +300,7 @@ UiMode Ui::Splashscreen(bool &reset_settings, uint8_t phase) {
 
       GRAPHICS_END_FRAME();
 
-      // Sculpt test firmware: only stays while L or R (or the reset combo)
+      // Loom test firmware: only stays while L or R (or the reset combo)
       // is held at power-up; otherwise it's gone after a short check
     } while (timeout < (mode != UI_MODE_MENU || reset_settings ? SPLASHSCREEN_DELAY_MS : 300));
       break;

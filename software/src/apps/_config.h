@@ -42,8 +42,8 @@ namespace menu = OC::menu;
 #include "ScaleEditor.h"
 #include "WaveformEditor.h"
 #include "PongGame.h"
-#if defined(ENABLE_APP_SCULPT) && defined(ARDUINO_TEENSY41)
-#include "Sculpt.h"
+#if defined(ENABLE_APP_LOOM) && defined(ARDUINO_TEENSY41)
+#include "Loom.h"
 #endif
 #include "Backup.h"
 #ifdef CARD_APP
@@ -138,10 +138,10 @@ static AppContainer<void // this space intentionally left blank
   , AppPong
 #endif
 #ifdef CARD_APP
-  , AppCard  // above Sculpt in the menu
+  , AppCard  // above Loom in the menu
 #endif
-#if defined(ENABLE_APP_SCULPT) && defined(ARDUINO_TEENSY41)
-  , AppSculpt
+#if defined(ENABLE_APP_LOOM) && defined(ARDUINO_TEENSY41)
+  , AppLoom
 #endif
   , AppScaleEditor
 #ifndef NO_HEMISPHERE
@@ -154,7 +154,7 @@ static_assert(decltype(app_container)::TotalAppDataStorageSize() < AppData::kApp
               "Apps use too much EEPROM space!");
 
 #ifdef CARD_APP
-static constexpr int DEFAULT_APP_INDEX = 2;  // Sculpt, after Settings and Card
+static constexpr int DEFAULT_APP_INDEX = 2;  // Loom, after Settings and Card
 #else
 static constexpr int DEFAULT_APP_INDEX = 1;
 #endif

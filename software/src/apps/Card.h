@@ -1,7 +1,7 @@
 #pragma once
 
 // CARD: the SD card over USB (MTP), as an app of its own. Nothing of it runs
-// until it is opened; Sculpt is paused meanwhile and has let go of its big
+// until it is opened; Loom is paused meanwhile and has let go of its big
 // buffers. On a Mac the card shows up in OpenMTP (macOS's photo import may
 // have to be kept out of the way: card-mode.sh). The screen lists the card's
 // folders and files, refreshed every 2 s, so copied files can be seen
@@ -79,7 +79,7 @@ FLASHMEM void AppCard::HandleAppEvent(OC::AppEvent event) {
     serving = true;
     List();
     // The computer only asks for the card when the module turns up on USB,
-    // while Sculpt was running and nobody answered. So: leave the bus for a
+    // while Loom was running and nobody answered. So: leave the bus for a
     // moment and come back, like pulling and putting back the cable.
     USB1_USBCMD &= ~USB_USBCMD_RS;
     delay(150);
