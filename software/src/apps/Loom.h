@@ -80,7 +80,7 @@ namespace loom {
     InputDevice* input = nullptr;
     ReelDevice* reel = nullptr;    // SOURCE option 1: a looper after the input
     PlayerDevice* player = nullptr;  // SOURCE option 2: a WAV from the SD card
-    WavWriter writer;              // saving REEL's loop to the SD card
+    WavWriter writer;              // saving SPOOL's loop to the SD card
     MixDevice* mix = nullptr;
     uint8_t choice[SLOT_COUNT] = {};
     uint8_t last_choice[SLOT_COUNT] = {}; // for the bypass toggle
@@ -190,11 +190,11 @@ private:
   elapsedMicros tick_timer;
   int8_t track = 0, col = loom::ECHO, cursor = 0;
   bool l_held = false, l_used = false;
-  bool loop_save_held = false;  // REEL: A is down (held 2 s saves the loop) ...
+  bool loop_save_held = false;  // SPOOL: A is down (held 2 s saves the loop) ...
   uint32_t loop_save_hold = 0;  // ... since then
   bool save_held = false;   // chain view: Y is down (held 2 s saves) ...
   uint32_t save_hold = 0, saved_at = 0;  // ... since then; when the save happened
-  bool clear_held = false;  // REEL: B is down on the REEL page ...
+  bool clear_held = false;  // SPOOL: B is down on the SPOOL page ...
   uint32_t clear_hold = 0;  // ... since then
   bool editing = false;   // device view: setting grabbed, R enc changes it
   bool out_editing = false;  // CV outputs page: output grabbed, R enc picks its modulator
@@ -364,7 +364,7 @@ FLASHMEM void AppLoom::Repatch(int t) {
   for (auto& c : patch->to_mix[t]) c.disconnect();
   for (auto& c : patch->mix_out[t]) c.disconnect();
   AudioStream* prev = tr.input;
-  if (tr.choice[SOURCE] == 1 && tr.reel) {  // REEL records and plays after the input
+  if (tr.choice[SOURCE] == 1 && tr.reel) {  // SPOOL records and plays after the input
     for (int c = 0; c < 2; c++) link[SOURCE][c].connect(*tr.input, c, *tr.reel->in(), c);
     prev = tr.reel->out();
   } else if (tr.choice[SOURCE] == 2 && tr.player) {  // PLAYER instead of the input
@@ -769,7 +769,7 @@ FLASHMEM void AppLoom::MainLoop() {
   if (active) ReadMIDI();
   {
     using namespace loom;
-    // REEL: A held 2 s starts writing the loop; the files go in steps
+    // SPOOL: A held 2 s starts writing the loop; the files go in steps
     const uint32_t ms = loop_save_held ? millis() - loop_save_hold : 0;
     for (int t = 0; t < NUM_TRACKS; t++) {
       Track& tr = tracks[t];
@@ -924,9 +924,9 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
     }
     return;
   }
-  // REEL: B held for 3 s clears the loop (see MainLoop); followed by the
+  // SPOOL: B held for 3 s clears the loop (see MainLoop); followed by the
   // button's own down / release events
-  // REEL: A held for 2 s writes the loop to the SD card (see MainLoop)
+  // SPOOL: A held for 2 s writes the loop to the SD card (see MainLoop)
   if (event.control == OC::CONTROL_BUTTON_UP) {
     if (event.type == UI::EVENT_BUTTON_DOWN) {
       loop_save_held = view == DEVICE && !focus_mod && col == SOURCE && tracks[track].choice[SOURCE] == 1;
@@ -1108,7 +1108,7 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
       tracks[track].mix->Nudge(0, dir); // level
       Mirror(tracks[track].mix, 0);
     } else {
-      SetChoiceLinked(col, tracks[track].choice[col] + dir);  // SOURCE: INPUT / REEL
+      SetChoiceLinked(col, tracks[track].choice[col] + dir);  // SOURCE: INPUT / SPOOL
     }
     return;
   }
@@ -1204,9 +1204,9 @@ FLASHMEM void AppLoom::DrawChain() const {
 
       // the slot's name at the top, always; underneath its device's little
       // picture, or BP when bypassed
-      // SOURCE is named after what it does: IN (input) or REC (REEL)
+      // SOURCE is named after what it does: IN (input), SPL (SPOOL) or PLY
       const char* tag = c == MIX_COL ? PSTR("OUT")
-                      : c == SOURCE ? (tr.choice[SOURCE] == 1 ? PSTR("REC")
+                      : c == SOURCE ? (tr.choice[SOURCE] == 1 ? PSTR("SPL")
                                        : tr.choice[SOURCE] == 2 ? PSTR("PLY") : PSTR("IN"))
                       : SLOT_DEFS[c].tag;
       gfxPrint(x + 1 + (bw - 1 - 6 * int(strlen(tag))) / 2, y + 3, tag);
@@ -1227,7 +1227,7 @@ FLASHMEM void AppLoom::DrawChain() const {
   const Track& tr = tracks[track];
   Device* d = tr.at(col);
   if (!linked) gfxPrint(0, 56, track ? PSTR("R") : PSTR("L"));
-  // the slot name; SOURCE names its source (INPUT, REEL or PLAYER)
+  // the slot name; SOURCE names its source (INPUT, SPOOL or PLAYER)
   gfxPrint(8, 56, col == MIX_COL ? PSTR("OUTPUT")
                   : col == SOURCE && d ? d->def.name : SLOT_DEFS[col].name);
   // bypass (when on) at the right end; the CPU load always left of its place
@@ -1702,7 +1702,7 @@ FLASHMEM void AppLoom::SaveFile() const {
   f.write(ui, sizeof(ui));
   // bypassed slots (older files end before)
   for (auto& tr : tracks) f.write(&tr.bypass, 1);
-  // REEL's settings (older files end before); the recording isn't kept
+  // SPOOL's settings (older files end before); the recording isn't kept
   for (auto& tr : tracks) WriteDevice(f, tr.reel);
   for (auto& tr : tracks) WriteDevice(f, tr.player);
   for (auto& tr : tracks) {  // PLAYER's file by folder and name

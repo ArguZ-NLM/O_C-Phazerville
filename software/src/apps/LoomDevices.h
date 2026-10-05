@@ -912,11 +912,11 @@ FLASHMEM void InputDevice::DrawMini(int x, int y, int w, int h) {
 }
 
 /////////////////////////////////////////////////////////////////
-// REEL (Source): a looper in front of the chain. It records what comes in
+// SPOOL (Source): a looper in front of the chain. It records what comes in
 // through the track's input; IN is the input's source, so it is set here too.
 /////////////////////////////////////////////////////////////////
-PROGMEM static const DeviceDef REEL_DEF = {
-  "REEL", "REL", 7, {"REC", "STP"},
+PROGMEM static const DeviceDef SPOOL_DEF = {
+  "SPOOL", "REL", 7, {"REC", "STP"},  // tag REL kept for saved files (was REEL)
   {
     {"IN", 0, 3, 1, LIST, 4, 0, 0, {"L+R", "L", "R", "OFF"}},
     {"SPEED", -200, 200, 100, BI},
@@ -933,7 +933,7 @@ class ReelDevice : public Device {
 public:
   enum { IN, SPEED, START, LEN, DUB, MON, LEVEL };
   static constexpr float MAX_SECS = 16.0f;
-  explicit ReelDevice(InputDevice* i) : Device(REEL_DEF), input(i) {}
+  explicit ReelDevice(InputDevice* i) : Device(SPOOL_DEF), input(i) {}
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
   bool Activate() override;
@@ -1197,7 +1197,7 @@ struct WavWriter {
 
 /////////////////////////////////////////////////////////////////
 // PLAYER (Source): plays a WAV from the SD card. The file is loaded into
-// PSRAM (up to 16 s, like REEL) and played by the same engine: START / END
+// PSRAM (up to 16 s, like SPOOL) and played by the same engine: START / END
 // pick the loop, SPEED plays it at any rate (backwards below zero), XFADE
 // is the fade at the loop ends. START / END zoom the picture (their mode)
 // and, with SNAP on, land on the quietest point nearby.
@@ -2837,7 +2837,7 @@ struct SlotDef {
 };
 
 PROGMEM static const SlotDef SLOT_DEFS[SLOT_COUNT] = {
-  {"SOURCE",   "SRC", 3, 3},  // INPUT, REEL, PLAYER (owned by the track, not made here)
+  {"SOURCE",   "SRC", 3, 3},  // INPUT, SPOOL, PLAYER (owned by the track, not made here)
   {"SPRAY",    "SPR", 2, 1},  // BYPASS, SPRAY
   {"RESONATOR", "RES", 2, 1},  // BYPASS, RESONATOR
   {"TEXTURE",  "TEX", 2, 1},  // BYPASS, TEXTURE

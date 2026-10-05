@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <cmath>
 
-// Stereo looper for the Loom REEL device. The loop lives in PSRAM (up to
+// Stereo looper for the Loom SPOOL device. The loop lives in PSRAM (up to
 // 16 s; less if memory is short). A press cycles REC -> PLAY -> DUB -> PLAY;
 // the first REC sets the loop length. Stop keeps the loop (a press plays it
 // again from the start), Clear empties it. SPEED plays it at any rate, backwards
@@ -56,7 +56,7 @@ public:
   State state() const { return st; }
   size_t Length() const { return len; }
   size_t Capacity() const { return cap; }
-  // --- the player loads into, and REEL saves from, the buffer directly
+  // --- the player loads into, and SPOOL saves from, the buffer directly
   // (main loop; while loading the engine stays silent)
   int16_t* Data(int c) { return buf[c]; }
   const int16_t* Data(int c) const { return buf[c]; }
