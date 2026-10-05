@@ -69,6 +69,7 @@
 #include "../PhzConfig.h"
 #include "SculptDevices.h"
 #include "SculptMods.h"
+#include "SculptLogo.h"
 
 namespace sculpt {
   constexpr int NUM_TRACKS = 2;
@@ -1842,7 +1843,21 @@ void AppSculpt::DrawDebugInfo() const { }
 
 FLASHMEM void AppSculpt::DrawMenu() const { BaseView(); }
 
-FLASHMEM void AppSculpt::DrawScreensaver() const { BaseView(); }
+// screensaver: the NLM logo drifting slowly from side to side, its columns
+// rippling like the wave it shows
+FLASHMEM void AppSculpt::DrawScreensaver() const {
+  using namespace sculpt;
+  const float t = millis() * 0.001f;
+  const float p = fmodf(t / 20.0f, 2.0f);  // 20 s one way
+  const int x0 = int((p < 1.0f ? p : 2.0f - p) * (128 - NLM_LOGO_W) + 0.5f);
+  for (int x = 0; x < NLM_LOGO_W; x++) {
+    const int dy = 2 + int(roundf(2.0f * sinf(x * 0.15f - t * 2.0f)));  // 0..4
+    for (int y = 0; y < NLM_LOGO_H; y++) {
+      if (pgm_read_byte(&NLM_LOGO[y * NLM_LOGO_BPR + (x >> 3)]) & (0x80 >> (x & 7)))
+        gfxPixel(x0 + x, y + dy);
+    }
+  }
+}
 
 FLASHMEM void AppSculpt::HandleButtonEvent(const UI::Event &event) {
   OnButton(event);
