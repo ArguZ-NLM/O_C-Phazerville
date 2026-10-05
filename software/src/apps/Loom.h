@@ -1406,7 +1406,12 @@ FLASHMEM void AppLoom::DrawChain() const {
                       : c == SOURCE ? (tr.choice[SOURCE] == 1 ? PSTR("SPL")
                                        : tr.choice[SOURCE] == 2 ? PSTR("PLY") : PSTR("IN"))
                       : SLOT_DEFS[c].tag;
-      gfxPrint(x + 1 + (bw - 1 - 6 * int(strlen(tag))) / 2, y + 3, tag);
+      if (strlen(tag) <= 3) {
+        gfxPrint(x + 1 + (bw - 1 - 6 * int(strlen(tag))) / 2, y + 3, tag);
+      } else {  // 4 letters (REED, SLUB): 5 px apart so they fit the box
+        char ch[2] = {0, 0};
+        for (int i = 0; i < 4; i++) { ch[0] = tag[i]; gfxPrint(x + 5 * i, y + 3, ch); }
+      }
       if (!d) gfxPrint(x + 1 + (bw - 1 - 12) / 2, y + 14, PSTR("BP"));
       else if (d->ok()) d->DrawMini(x + 2, y + 13, bw - 3, 10);
       else gfxPrint(x + 5, y + 14, PSTR("!!"));
@@ -1850,6 +1855,7 @@ namespace loom {
       {"MOS", "SPR"}};
     for (auto& r : renamed) if (!memcmp(tag, r[0], 4)) memcpy(tag, r[1], 4);
     const bool use = d && !memcmp(tag, d->def.tag, 4) && n <= d->num_params();
+    const bool remap_spr = use && !memcmp(tag, "SPR", 4) && n == 7;
     for (int p = 0; p < n; p++) {
       int16_t v; uint8_t md; int8_t amt; uint16_t src; uint8_t bus;
       if (f.read(&v, 2) != 2 || f.read(&md, 1) != 1 || f.read(&amt, 1) != 1
@@ -1857,6 +1863,9 @@ namespace loom {
       int8_t amt2 = 0; uint8_t bus2 = 0;
       if (load_version >= 3 && (f.read(&amt2, 1) != 1 || f.read(&bus2, 1) != 1)) return false;
       if (!use) continue;
+      // THRUM gained SPRD before MIX: an older file's MIX (its 7th) goes to 8th
+      const int q = p;
+      if (remap_spr && p == 6) p = 7;
       d->mod_amt2[p] = constrain(amt2, -100, 100);
       d->mod_bus2[p] = bus2 <= MOD_BUSES ? bus2 : 0;
       const ParamDef& pd = d->param(p);
@@ -1865,10 +1874,15 @@ namespace loom {
       d->mod_amt[p] = constrain(amt, -100, 100);
       d->mod_in[p].Unpack(src);
       d->mod_bus_sel[p] = bus <= MOD_BUSES ? bus : 0;
+      p = q;
     }
     uint8_t bi, bi2 = 0, trig[2];
     if (f.read(&bi, 1) != 1 || (load_version >= 3 && f.read(&bi2, 1) != 1)
         || f.read(trig, 2) != 2) return false;
+    if (remap_spr) {  // the bipolar bits move with MIX too
+      auto mv = [](uint8_t b) { return uint8_t((b & 0x3F) | ((b & 0x40) << 1)); };
+      bi = mv(bi); bi2 = mv(bi2);
+    }
     if (use) {
       d->mod_bi = bi;
       d->mod_bi2 = bi2;

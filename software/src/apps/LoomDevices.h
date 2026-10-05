@@ -1260,7 +1260,7 @@ struct WavWriter {
 // the sample, START / END then within it; back to STRM puts them back.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef PLAYER_DEF = {
-  "PLAYER", "PLY", 8, {"PLAY", "TOP"},
+  "SHUTTLE", "PLY", 8, {"PLAY", "TOP"},  // was PLAYER
   {
     {"FILE", 0, MAX_FILES - 1, 0, UNI, 0, 2, 0, {}, {"STRM", "MEM"}},
     {"LOOP", 0, 1, 1, LIST, 2, 0, 0, {"OFF", "ON"}},
@@ -2205,7 +2205,7 @@ FLASHMEM void PlayerDevice::DrawMini(int x, int y, int w, int h) {
 // ECHO: hybrid delay + reverb
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef ECHO_DEF = {
-  "ECHO", "ECO", 8, {"FRZ", "CLR"},
+  "REPEAT", "ECO", 8, {"FRZ", "CLR"},  // was ECHO
   {
     // page 1: the delay, page 2: the reverb and TONE
     {"LEVEL", 0, 100, 40, UNI},  // the delay's
@@ -2468,7 +2468,7 @@ FLASHMEM void EchoDevice::DrawMini(int x, int y, int w, int h) {
 // TEXTURE: fold, drive, crush, tilt, envelope-following noise
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef DIRT_DEF = {
-  "TEXTURE", "TEX", 8, {"", ""},
+  "SLUB", "TEX", 8, {"", ""},  // was TEXTURE
   {
     {"DRIVE", 0, 100, 30, UNI},
     {"FOLD", 0, 100, 0, UNI},
@@ -2663,7 +2663,7 @@ FLASHMEM void DirtDevice::DrawMini(int x, int y, int w, int h) {
 // RESONATOR: 48-band resonant filter bank
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef RESONATOR_DEF = {
-  "RESONATOR", "RES", 8, {"", ""},
+  "REED", "RES", 8, {"", ""},  // was RESONATOR
   {
     {"CUT", 0, 100, 70, UNI},
     {"SLOPE", -50, 50, -50, BI},
@@ -2834,7 +2834,7 @@ FLASHMEM void ResonatorDevice::DrawMini(int x, int y, int w, int h) {
 // slot's fade mixes them with the dry signal by LEVEL.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef SPRAY_DEF = {
-  "SPRAY", "SPR", 7, {"FRZ", ""},
+  "THRUM", "SPR", 8, {"FRZ", ""},  // was SPRAY (tag SPR kept for saved files)
   {
     // left of the middle: P (periodic), right: R (random), middle: no grains
     {"RATE", -100, 100, 55, BI},
@@ -2845,6 +2845,7 @@ PROGMEM static const DeviceDef SPRAY_DEF = {
     {"POS", 0, 100, 50, UNI, 0, 21, 4},
     {"SHAPE", 0, 100, 70, UNI},
     {"FDBK", 0, 100, 0, UNI},
+    {"SPRD", 0, 100, 60, UNI},  // stereo spread: each grain's random place left / right
     {"MIX", 0, 100, 50, UNI},  // source <> grains
   },
   {"GRAIN", ""},
@@ -2852,7 +2853,7 @@ PROGMEM static const DeviceDef SPRAY_DEF = {
 
 class SprayDevice : public Device {
 public:
-  enum { RATE, SIZE, PITCH, POS, SHAPE, FDBK, LEVEL };
+  enum { RATE, SIZE, PITCH, POS, SHAPE, FDBK, SPREAD, LEVEL };
   static constexpr float BUF_SECS = 4.0f;
   SprayDevice();
   AudioStream* in() override { return &fx; }
@@ -2891,7 +2892,6 @@ FLASHMEM bool SprayDevice::Activate() {
   if (active) return fx.IsReady();
   fx.Acquire();
   fx.setGrainSource(0.0f);
-  fx.setStereoSpread(0.6f);
   ApplyAll();
   active = true;
   return fx.IsReady();
@@ -2915,6 +2915,7 @@ FLASHMEM void SprayDevice::Apply(int p) {
     case POS:   fx.setPosition(1.0f - v); fx.setSpray(PosVariation()); break;  // engine: 0 = now
     case SHAPE: fx.setTexture(v); break;
     case FDBK:  fx.setFeedback(0.9f * v * v); break;  // gentle start: 25 -> 6%, 50 -> 23%
+    case SPREAD: fx.setStereoSpread(v); break;
     case LEVEL: wet = v; break;
   }
 }
@@ -3046,17 +3047,17 @@ constexpr int MAX_OPTIONS = 2;
 
 struct SlotDef {
   char name[10];
-  char tag[4];
+  char tag[5];       // chain box label, 3 letters (4 drawn tighter)
   uint8_t noptions;  // BYPASS + devices that exist now (SOURCE: no bypass)
   uint8_t planned;   // devices this slot will offer (dots on the chain view)
 };
 
 PROGMEM static const SlotDef SLOT_DEFS[SLOT_COUNT] = {
   {"SOURCE",   "SRC", 3, 3},  // INPUT, SPOOL, PLAYER (owned by the track, not made here)
-  {"SPRAY",    "SPR", 2, 1},  // BYPASS, SPRAY
-  {"RESONATOR", "RES", 2, 1},  // BYPASS, RESONATOR
-  {"TEXTURE",  "TEX", 2, 1},  // BYPASS, TEXTURE
-  {"ECHO",     "ECO", 2, 1},  // BYPASS, ECHO
+  {"THRUM",    "THR", 2, 1},  // BYPASS, THRUM (grains)
+  {"REED",     "REED", 2, 1},  // BYPASS, REED (resonator)
+  {"SLUB",     "SLUB", 2, 1},  // BYPASS, SLUB (texture)
+  {"REPEAT",   "RPT", 2, 1},  // BYPASS, REPEAT (echo)
 };
 
 // nullptr = BYPASS. SOURCE/INPUT is owned by the track, not made here.
