@@ -1802,8 +1802,9 @@ FLASHMEM int PlayerDevice::Step(int p, int v, int dir) const {
 
 FLASHMEM void PlayerDevice::Format(int p, char* buf, size_t n) const {
   if (p == FILE_) {
+    // the name is in the picture; here how it plays: STRM / MEM
     if (!nfiles) snprintf(buf, n, "none");
-    else snprintf(buf, n, "%d", std::min<int>(val[FILE_], nfiles - 1) + 1);
+    else snprintf(buf, n, "%s", mode[FILE_] ? "MEM" : "STRM");
   } else if (p == START || p == END) {  // seconds into the file, to the ms
     const size_t fr = Frames();
     if (!fr) { snprintf(buf, n, "%d%%", val[p] / 100); return; }
