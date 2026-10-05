@@ -195,6 +195,12 @@ UiMode Ui::DispatchEvents(const RuntimeSlot &appslot) {
         break;
       }
       // Hold Z or A and push left encoder for IO settings menu
+      // Sculpt: hold Z and push left encoder for its screensaver (the NLM logo)
+      if (CONTROL_BUTTON_L == event.control && z_hold && !z_extras) {
+        screensaver_ = true;
+        SetButtonIgnoreMask();
+        break;
+      }
       if (CONTROL_BUTTON_L == event.control && ((z_hold && z_extras) || a_hold)) {
         app->EditIOSettings();
         SetButtonIgnoreMask();
