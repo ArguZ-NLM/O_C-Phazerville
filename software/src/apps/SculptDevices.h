@@ -205,6 +205,20 @@ public:
            && !(mod_bus_sel[p] && mod_bus && mod_bus[mod_bus_sel[p] - 1] < 0.0f);
   }
   bool ModsLive(int p) const { return ModLive(p, 0) || ModLive(p, 1); }
+  // the lowest and highest value the live sources together can give
+  void ModRange(int p, int& lo, int& hi) const {
+    float a = 0.0f, b = 0.0f;  // percent
+    for (int k = 0; k < 2; k++) {
+      if (!ModLive(p, k)) continue;
+      const int amt = k ? mod_amt2[p] : mod_amt[p];
+      if (k ? Bipolar2(p) : Bipolar(p)) { a -= abs(amt); b += abs(amt); }
+      else if (amt > 0) b += amt;
+      else a += amt;
+    }
+    const ParamDef& d = param(p);
+    lo = constrain(val[p] + int(a * 0.01f * (d.max - d.min)), d.min, d.max);
+    hi = constrain(val[p] + int(b * 0.01f * (d.max - d.min)), d.min, d.max);
+  }
   int Modulated(int p) const;
   void Refresh(int p);   // recompute cur[p] and apply it
   void Modulate();       // follow the CV inputs

@@ -1273,7 +1273,7 @@ FLASHMEM void AppSculpt::DrawDevice() const {
     PrintCentred(x, 52, buf);
     if (sel && (editing || mod_mode)) gfxInvert(x, 51, 32, 9);
 
-    // value bar, plus a tick where modulation puts it right now. In
+    // value bar; modulated, the reach of the modulation instead. In
     // modulation: the two sources instead, 1 above 2, from the middle by
     // their amount (- to the left); bipolar ones spread both ways
     const int span = std::max(1, pd.max - pd.min);
@@ -1293,13 +1293,25 @@ FLASHMEM void AppSculpt::DrawDevice() const {
         const int x0 = bi || amt < 0 ? c - len : c, x1 = bi || amt > 0 ? c + len : c;
         for (int px = x0; px <= x1; px++) if (!empty || !(px & 1)) gfxPixel(px, ry);
       }
+    } else if (pd.kind != LIST && d->ModsLive(p)) {
+      // modulated: the stretch both sources together can reach (a line with
+      // end ticks) and the playhead where they put it right now
+      auto px = [&](int v) {
+        return pd.kind == BI ? x + 15 + v * 15 / std::max(1, (int)pd.max)
+                             : x + 1 + (v - pd.min) * 29 / span;
+      };
+      int lo, hi;
+      d->ModRange(p, lo, hi);
+      const int x0 = px(lo), x1 = px(hi);
+      gfxLine(x0, 62, x1, 62);
+      gfxPixel(x0, 61);
+      gfxPixel(x1, 61);
+      gfxLine(px(d->cur[p]), 59, px(d->cur[p]), 63);
     } else if (pd.kind == BI) {
       const int c = x + 15, len = d->val[p] * 15 / std::max(1, (int)pd.max);
       gfxPixel(c, 61);
       if (len > 0) gfxRect(c, 61, len, 2);
       else if (len < 0) gfxRect(c + len, 61, -len, 2);
-      // where modulation puts it: a notch through the bar (room under the number)
-      if (d->ModsLive(p)) gfxInvert(c + d->cur[p] * 15 / std::max(1, (int)pd.max), 60, 1, 4);
     } else if (pd.kind == LIST) {
       for (int k = 0; k < pd.nlabels; k++) {
         const int bx = x + 1 + k * 7;
@@ -1308,10 +1320,6 @@ FLASHMEM void AppSculpt::DrawDevice() const {
       }
     } else {
       gfxRect(x + 1, 61, (d->val[p] - pd.min) * 29 / span, 2);
-      if (d->ModsLive(p)) {
-        const int mx = x + 1 + (d->cur[p] - pd.min) * 29 / span;
-        gfxInvert(mx, 60, 1, 4);
-      }
     }
     if (sel) gfxInvert(x, 42, 32, 9);
   }
