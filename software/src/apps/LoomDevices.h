@@ -1674,7 +1674,11 @@ FLASHMEM void PlayerDevice::Apply(int p) {
       stream.SetSpeed(sp);
     } break;
     case LOOP: fx.SetLoop(cur[LOOP]); stream.SetLoop(cur[LOOP]); break;
-    case START: case END: case SNAP: Window(); break;
+    case START: case END:
+      mode[p == START ? END : START] = mode[p];  // one zoom for both
+      Window();
+      break;
+    case SNAP: Window(); break;
     case XFADE:  // up to ~200 ms
       fx.SetSeam(16.0f + cur[XFADE] * 0.01f * 8800.0f);
       stream.SetSeam(16.0f + cur[XFADE] * 0.01f * 8800.0f);
@@ -1692,8 +1696,22 @@ FLASHMEM int PlayerDevice::Step(int p, int v, int dir) const {
     const size_t span = ZoomSpan(mode[p]);
     const int64_t px = std::max<int64_t>(1, int64_t(span / 128));
     if (!ex_valid) { ex_pos[0] = EdgeAt(START); ex_pos[1] = EdgeAt(END); ex_valid = true; }
-    uint32_t& e = ex_pos[p == END];
-    e = uint32_t(constrain(int64_t(e) + dir * px, int64_t(0), int64_t(n)));
+    // they never cross: closer than GAP, the one moved pushes the other
+    constexpr int64_t GAP = 2 * AUDIO_BLOCK_SAMPLES;
+    const int64_t nn = int64_t(n);
+    const bool end = p == END;
+    uint32_t& e = ex_pos[end];
+    uint32_t& o = ex_pos[!end];
+    e = uint32_t(end ? constrain(int64_t(e) + dir * px, std::min(GAP, nn), nn)
+                     : constrain(int64_t(e) + dir * px, int64_t(0), std::max<int64_t>(0, nn - GAP)));
+    const int64_t want = end ? std::max<int64_t>(0, int64_t(e) - GAP) : std::min(nn, int64_t(e) + GAP);
+    if (end ? int64_t(o) > want : int64_t(o) < want) {
+      o = uint32_t(want);
+      auto* self = const_cast<PlayerDevice*>(this);
+      const int q = end ? START : END;
+      self->val[q] = int(uint64_t(o) * 10000 / n);
+      self->Refresh(q);
+    }
     return int(uint64_t(e) * 10000 / n);
   }
   return v + dir;
