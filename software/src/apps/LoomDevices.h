@@ -1955,6 +1955,10 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
         gfxLine(x + c, y0, x + c, y1);
         continue;
       }
+      if (can) {  // not read yet: just the middle line, no level bars in between
+        if (c % 2 == 0) gfxPixel(x + c, wc);
+        continue;
+      }
       const size_t ca = size_t(std::max<int64_t>(0, a)), cb = size_t(std::min<int64_t>(int64_t(n), b));
       const int pk = PeakAt(ca, std::max(ca + 1, cb));
       const int amp = int(sqrtf(pk / 32768.0f) * (wh / 2 - 1));
