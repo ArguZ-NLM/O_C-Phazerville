@@ -41,11 +41,24 @@ FLASHMEM void AppCard::Loop() {
   if (serving) MTP.loop();
 }
 
+// whether a program on the computer has the card open (an MTP session; it
+// can't tell which program - macOS's photo import counts too)
 FLASHMEM void AppCard::DrawMenu() const {
   gfxHeader("CARD");
-  gfxPrint(0, 15, SDcard_Ready ? "SD card on USB" : "no SD card");
-  gfxPrint(0, 27, "Mac: OpenMTP or");
-  gfxPrint(0, 36, "Android File Transfer");
+  if (!SDcard_Ready) {
+    gfxPrint(0, 15, "no SD card");
+    gfxPrint(0, 52, "back: app menu");
+    return;
+  }
+  const bool on = serving && static_cast<bool>(MTP);
+  gfxPrint(0, 15, on ? "connected" : "waiting for computer");
+  if (on) {
+    gfxPrint(0, 27, "copy with OpenMTP");
+    gfxInvert(0, 14, 128, 9);
+  } else {
+    gfxPrint(0, 27, "open OpenMTP; if no");
+    gfxPrint(0, 36, "card: card-mode.sh");
+  }
   gfxPrint(0, 52, "back: app menu");
 }
 FLASHMEM void AppCard::DrawScreensaver() const { DrawMenu(); }
