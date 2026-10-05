@@ -397,6 +397,9 @@ public:
   LoomMixer() : AudioStream(4, queue) {}
   volatile float gain[2][2] = {{0.8f, 0.8f}, {0.8f, 0.8f}}; // [track][L/R]
   volatile float level[2] = {}; // last block's peak per track, for FOLLOW
+  // STEREO link: a track's two channels summed into one side of the output
+  // (0 both sides as usual, 1 all to the left, 2 all to the right)
+  volatile uint8_t route[2] = {0, 0};
   float peak[2][2] = {};  // held until read, [track][L/R]
   volatile bool mute = false;   // the whole output, fading over ~15 ms
   float mute_g = 1.0f;
@@ -426,10 +429,14 @@ FASTRUN void LoomMixer::update() {
         const audio_block_t* b = in[t * 2 + c];
         if (!b) continue;
         const int32_t g = static_cast<int32_t>(gain[t][c] * 32767.0f); // Q15
+        const uint8_t rt = route[t];
+        // routed: both channels at half into the one side
+        const int to = rt ? rt - 1 : c;
+        const int sh = rt ? 16 : 15;
         int32_t pk = 0;
         for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
-          const int32_t v = (b->data[n] * g) >> 15;
-          acc[c][n] += v;
+          const int32_t v = (b->data[n] * g) >> sh;
+          acc[to][n] += v;
           pk = std::max<int32_t>(pk, abs(v));
         }
         peak[t][c] = std::max(peak[t][c], pk * (1.0f / 32768.0f));
@@ -626,7 +633,7 @@ FLASHMEM void MixDevice::Apply(int p) {
   }
   if (!mixer) return;
   const float lvl = cur[MUTE] ? 0.0f : cur[LEVEL] * 0.01f;
-  const float pan = cur[PAN] * 0.02f; // -1..1
+  const float pan = mixer->route[track] ? 0.0f : cur[PAN] * 0.02f; // -1..1 (STEREO link: no pan, the side is fixed)
   mixer->gain[track][0] = lvl * (pan > 0.0f ? 1.0f - pan : 1.0f);
   mixer->gain[track][1] = lvl * (pan < 0.0f ? 1.0f + pan : 1.0f);
 }

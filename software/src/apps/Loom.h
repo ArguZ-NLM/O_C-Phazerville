@@ -299,6 +299,7 @@ private:
   void LinkCopy();   // the track under the cursor copied to the other one
   void StereoOn(int master);  // linked as a stereo pair (master: the track whose PLAYER file both play)
   void StereoOff();  // ... and back to each track's own input / file
+  void RouteStereo(bool on);
   void UpdateMixLevels() const;
   void DrawChain() const;
   bool Muted() const;
@@ -609,6 +610,7 @@ FLASHMEM void AppLoom::ToggleLink() {
 
 FLASHMEM void AppLoom::StereoOff() {
   using namespace loom;
+  RouteStereo(false);
   // each track's own input choice back (as before the link)
   for (int t = 0; t < NUM_TRACKS && unlinked_in[t] >= 0; t++) {
     Track& tr = tracks[t];
@@ -679,8 +681,18 @@ FLASHMEM void AppLoom::LinkCopy() {
   track = 0; // the cursor lives on row 1 while linked
 }
 
+// STEREO: track L all to the left output, track R all to the right
+FLASHMEM void AppLoom::RouteStereo(bool on) {
+  using namespace loom;
+  for (int t = 0; t < NUM_TRACKS; t++) {
+    mixer->route[t] = on ? uint8_t(t + 1) : 0;
+    tracks[t].mix->ApplyAll();
+  }
+}
+
 FLASHMEM void AppLoom::StereoOn(int master) {
   using namespace loom;
+  RouteStereo(true);
   Track& a = tracks[master];
   Track& b = tracks[1 - master];
   // linked = one stereo pair: track L hears the left input, track R the
@@ -1995,6 +2007,7 @@ FLASHMEM void AppLoom::LoadFile() {
     tracks[0].player->SetPick(1);
     tracks[1].player->SetPick(2);
   }
+  if (mixer) RouteStereo(link_stereo);
   if (view == DEVICE && (!Focused() || cursor >= Focused()->num_params())) {
     view = CHAIN;
     cursor = 0;
