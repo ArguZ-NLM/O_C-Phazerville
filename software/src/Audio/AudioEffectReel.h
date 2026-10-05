@@ -42,6 +42,8 @@ public:
   void Press() { press = true; }
   void Clear() { clear = true; }
   void Stop() { stop = true; }
+  void Retrigger() { retrig = true; }  // back to the start, crossfaded
+  void SetLoop(bool l) { loop_ = l; }  // off: play once and stop
   void SetSpeed(float s) { speed = s; }
   void SetWindow(float start, float len) { start_ = start; len_ = len; exact = false; }
   // the window in whole samples (the player sets its edges exactly)
@@ -111,7 +113,7 @@ private:
   float dub_g = 0.0f;  // overdub fading in / out (~10 ms), so it doesn't click
   float run_g = 0.0f;  // playback fading in / out (~5 ms) on start and stop
   volatile State st = EMPTY;
-  volatile bool press = false, clear = false, stop = false;
+  volatile bool press = false, clear = false, stop = false, retrig = false, loop_ = true;
   volatile float speed = 1.0f, start_ = 0.0f, len_ = 1.0f, keep_ = 0.8f, mon = 1.0f, level = 1.0f;
   volatile float seam = 256.0f;
   volatile size_t ex_ws = 0, ex_wl = 0;
@@ -169,6 +171,15 @@ FASTRUN void AudioEffectReel::update() {
     }
   }
 
+  // back to the start: the old position fades out while the start fades in
+  if (retrig) {
+    retrig = false;
+    if (len && wl) {
+      if (st == PLAY || st == DUB) { o_ws = ws; o_wl = wl; o_off = off; xf = XFADE; }
+      off = speed < 0.0f ? wl - 1.0f : 0.0f;
+      if (st == STOPPED) st = PLAY;
+    }
+  }
   // the looping part of the loop (whole samples); a change starts a fade
   // from the old window to the new one, keeping the play position when it
   // is inside the new window
@@ -196,10 +207,12 @@ FASTRUN void AudioEffectReel::update() {
     l = (buf[0][i0] + fr * (buf[0][i1] - buf[0][i0])) * q * e;
     r = (buf[1][i0] + fr * (buf[1][i1] - buf[1][i0])) * q * e;
   };
-  auto step = [&](float& o, size_t wn) {
+  auto step = [&](float& o, size_t wn) {  // true when it went round
     o += sp;
-    while (o >= wn) o -= wn;
-    while (o < 0.0f) o += wn;
+    bool wrapped = false;
+    while (o >= wn) { o -= wn; wrapped = true; }
+    while (o < 0.0f) { o += wn; wrapped = true; }
+    return wrapped;
   };
 
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
@@ -240,7 +253,12 @@ FASTRUN void AudioEffectReel::update() {
         buf[1][i0] = nr;
         Mark(i0, nl, nr);
       }
-      step(off, wl);
+      // not looping: once round, stop (the seam has faded it out already)
+      if (step(off, wl) && !loop_ && st == PLAY) {
+        st = STOPPED;
+        run_g = 0.0f;
+        off = sp < 0.0f ? wl - 1.0f : 0.0f;
+      }
     }
     const float ol = yl * g + xl * q * m, orr = yr * g + xr * q * m;
     out[0]->data[n] = __SSAT(int32_t(ol * 32767.0f), 16);

@@ -1120,22 +1120,23 @@ struct WavWriter {
 // and, with SNAP on, land on the quietest point nearby.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef PLAYER_DEF = {
-  "PLAYER", "PLY", 7, {"PLAY", "TOP"},
+  "PLAYER", "PLY", 8, {"PLAY", "TOP"},
   {
     {"FILE", 0, MAX_FILES - 1, 0, UNI},
-    {"SPEED", -200, 200, 100, BI},
+    {"LOOP", 0, 1, 1, LIST, 2, 0, 0, {"OFF", "ON"}},
+    {"LEVEL", 0, 100, 100, UNI},
+    {"SPEED", 0, 200, 100, UNI, 0, 2, 0, {}, {"FWD", "REV"}},  // mode: direction
     {"START", 0, 10000, 0, UNI, 0, 4, 0, {}, {"1x", "4x", "16x", "64x"}},
     {"END", 0, 10000, 10000, UNI, 0, 4, 0, {}, {"1x", "4x", "16x", "64x"}},
-    {"SNAP", 0, 1, 0, LIST, 2, 0, 0, {"OFF", "ON"}},
     {"XFADE", 0, 100, 20, UNI},
-    {"LEVEL", 0, 100, 100, UNI},
+    {"SNAP", 0, 1, 0, LIST, 2, 0, 0, {"OFF", "ON"}},
   },
   {"", ""},
 };
 
 class PlayerDevice : public Device {
 public:
-  enum { FILE_, SPEED, START, END, SNAP, XFADE, LEVEL };
+  enum { FILE_, LOOP, LEVEL, SPEED, START, END, XFADE, SNAP };
   static constexpr float MAX_SECS = 16.0f;
   // longer files stream from the card (AudioPlayStream) into fx's input,
   // which fx passes through (its MON), so the device has one output
@@ -1434,10 +1435,12 @@ FLASHMEM void PlayerDevice::Window() {
 FLASHMEM void PlayerDevice::Apply(int p) {
   switch (p) {
     case FILE_: break;  // Idle() loads it
-    case SPEED:  // streaming: forward only (0 .. 2x)
-      fx.SetSpeed(cur[SPEED] * 0.01f * rate);
-      stream.SetSpeed(cur[SPEED] * 0.01f * rate);
-      break;
+    case SPEED: {  // mode REV plays backwards (streamed files: forward only)
+      const float sp = cur[SPEED] * 0.01f * rate;
+      fx.SetSpeed(mode[SPEED] ? -sp : sp);
+      stream.SetSpeed(sp);
+    } break;
+    case LOOP: fx.SetLoop(cur[LOOP]); stream.SetLoop(cur[LOOP]); break;
     case START: case END: case SNAP: Window(); break;
     case XFADE:  // up to ~200 ms
       fx.SetSeam(16.0f + cur[XFADE] * 0.01f * 8800.0f);
@@ -1473,7 +1476,8 @@ FLASHMEM void PlayerDevice::Format(int p, char* buf, size_t n) const {
 FLASHMEM void PlayerDevice::Action(int a) {
   if (streaming) {
     if (a == 0 && stream.Playing()) stream.Stop();
-    else stream.Play();  // A: from the start of the loop; B: back to it
+    else if (a == 0) stream.Play();  // A: from the start of the loop
+    else stream.Retrigger();         // B: back to it, without a click
     return;
   }
   const auto st = fx.state();
@@ -1481,8 +1485,7 @@ FLASHMEM void PlayerDevice::Action(int a) {
     if (st == AudioEffectReel::PLAY) fx.Stop();
     else if (st == AudioEffectReel::STOPPED) fx.Press();
   } else if (st == AudioEffectReel::PLAY || st == AudioEffectReel::STOPPED) {
-    fx.Stop();
-    fx.Press();
+    fx.Retrigger();
   }
 }
 

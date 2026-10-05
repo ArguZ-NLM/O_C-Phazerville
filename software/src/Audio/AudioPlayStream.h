@@ -51,6 +51,8 @@ public:
   void SetLevel(float l) { level = l; }
   void SetSeam(float s) { seam = std::max(16.0f, s); }
   void Play() { pos = double(ws); playing = true; }
+  void Retrigger() { if (playing) retrig = true; else Play(); }  // dips ~5 ms, no click
+  void SetLoop(bool l) { loop_ = l; }
   void Stop() { playing = false; }  // fades out over ~5 ms
   bool Playing() const { return playing; }
   float HeadPos() const { return frames ? float(pos / frames) : 0.0f; }
@@ -106,7 +108,7 @@ private:
   volatile size_t rs = 0, rn = 0;  // ring: frames rs .. rs + rn
   volatile size_t cs = 0, cn = 0;  // cache: frames cs .. cs + cn
   volatile double pos = 0.0;
-  volatile bool playing = false, underrun = false;
+  volatile bool playing = false, underrun = false, retrig = false, loop_ = true;
   float run_g = 0.0f;  // start / stop glide
   volatile float speed = 1.0f, level = 1.0f, seam = 256.0f;
   bool pending_cache = false;
@@ -131,7 +133,7 @@ FASTRUN void AudioPlayStream::update() {
   const float wl = float(b - a), fade = std::min(float(seam), wl * 0.25f);
   double p = pos;
   constexpr float run_step = 1.0f / (0.005f * AUDIO_SAMPLE_RATE_EXACT);
-  const bool on = playing;
+  const bool on = playing && !retrig;
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
     run_g = on ? std::min(1.0f, run_g + run_step) : std::max(0.0f, run_g - run_step);
     const size_t i = size_t(p);
@@ -150,8 +152,12 @@ FASTRUN void AudioPlayStream::update() {
     out[0]->data[n] = __SSAT(int32_t(yl * run_g * 32767.0f), 16);
     out[1]->data[n] = __SSAT(int32_t(yr * run_g * 32767.0f), 16);
     p += sp;
-    if (p >= double(b)) p = double(a) + (p - double(b));
+    if (p >= double(b)) {
+      p = double(a) + (p - double(b));
+      if (!loop_) { playing = false; run_g = 0.0f; p = double(a); }  // once through
+    }
     if (p < double(a)) p = double(a);
+    if (retrig && run_g <= 0.0f) { retrig = false; p = double(a); }  // faded out: jump
   }
   pos = p;
   transmit(out[0], 0);
