@@ -119,6 +119,8 @@ namespace loom {
     AudioConnection link[NUM_TRACKS][SLOT_COUNT][8];
     AudioConnection to_mix[NUM_TRACKS][2];
     AudioConnection mix_out[NUM_TRACKS][2];
+    // every track's output into both tracks' INPUT (OUT L / OUT R)
+    AudioConnection cross[NUM_TRACKS][NUM_TRACKS][2];  // [from][to][channel]
   };
 
   Track tracks[NUM_TRACKS];
@@ -640,6 +642,12 @@ FLASHMEM void AppLoom::Resume() {
   if (!patch) patch = new Patch;
   active = true;
   for (int t = 0; t < NUM_TRACKS; t++) ConnectTrack(t);
+  AudioNoInterrupts();
+  for (int f = 0; f < NUM_TRACKS; f++)
+    for (int t = 0; t < NUM_TRACKS; t++)
+      for (int c = 0; c < 2; c++)
+        patch->cross[f][t][c].connect(*tracks[f].mix->out(), c, *tracks[t].input, 2 + 2 * f + c);
+  AudioInterrupts();
   OC::AudioIO::ClaimOutput(*mixer);
   OC::AudioIO::ResyncInput();  // L and R in the same order on every start
   AudioProcessorUsageMaxReset();
@@ -653,6 +661,9 @@ FLASHMEM void AppLoom::Suspend() {
   using namespace loom;
   if (!active) return;
   OC::AudioIO::ReleaseOutput();
+  AudioNoInterrupts();
+  for (auto& f : patch->cross) for (auto& t : f) for (auto& c : t) c.disconnect();
+  AudioInterrupts();
   for (int t = 0; t < NUM_TRACKS; t++) DisconnectTrack(t);
   active = false;
   l_held = false;
