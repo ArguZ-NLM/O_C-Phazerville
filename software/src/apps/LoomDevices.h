@@ -1258,6 +1258,7 @@ public:
   // the zoomed picture's wave, lowest / highest per column, filled a bit
   // every frame (from the card when streaming) and started over when the
   // view moves
+  mutable int zoom_edge = START;  // the edge the zoomed picture centres on
   mutable int64_t wv_v0 = -1;
   mutable size_t wv_span = 0, wv_next = 0, wv_end = 0;
   mutable int wv_file = -1;
@@ -1778,8 +1779,11 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
   const size_t n = Frames();
   // what part of the sample is on screen: zoomed around START / END while
   // the cursor is on them
-  const bool zoomed = view_cursor == START || view_cursor == END;
-  const int zm = zoomed ? mode[view_cursor] : 0;
+  // the whole second page (START END XFADE SNAP) keeps the zoom, centred on
+  // START or END, whichever the cursor was on last
+  if (view_cursor == START || view_cursor == END) zoom_edge = view_cursor;
+  const bool zoomed = view_cursor == START || view_cursor == END || view_cursor == XFADE || view_cursor == SNAP;
+  const int zm = zoomed ? mode[START] : 0;
   {
     // the top line: the name, then the zoom (time across) and SD at the right
     int right = x + w;
@@ -1808,7 +1812,7 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
   int64_t v0;
   if (zoomed) {
     span = ZoomSpan(zm);
-    v0 = int64_t(EdgeAt(view_cursor)) - int64_t(span / 2);
+    v0 = int64_t(EdgeAt(zoom_edge)) - int64_t(span / 2);
   } else if (eb0 > ea0 && (ea0 > 0 || eb0 < n)) {
     const size_t sec = eb0 - ea0, room = sec / 16;
     span = std::max<size_t>(w, sec + 2 * room);
