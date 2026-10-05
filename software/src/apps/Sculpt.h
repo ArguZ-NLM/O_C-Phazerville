@@ -1948,8 +1948,8 @@ FLASHMEM void AppSculpt::DrawScreensaver() const {
     }
   };
   constexpr int S = 40;  // segments per line
-  for (int j = 0; j < 8; j++) {  // across, on the front 60%
-    const float z = j / 7.0f * 0.6f * L;
+  for (int j = 0; j < 8; j++) {  // across, close together at the front, spreading out to 60% of the way back
+    const float z = powf(j / 7.0f, 1.7f) * 0.6f * L;
     float px = 0, py = 0;
     bool prev = at(-1.0f, z, px, py);
     for (int k = 1; k <= S; k++) {
