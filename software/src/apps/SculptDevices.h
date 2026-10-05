@@ -1015,7 +1015,10 @@ FLASHMEM void ReelDevice::DrawMini(int x, int y, int w, int h) {
     if ((millis() - cleared_at) / 200 % 2 == 0) gfxRect(x, y, w, h);
     return;
   }
-  if (st == AudioEffectReel::EMPTY) { gfxDottedLine(x, cy, x + w - 1, cy, 2); return; }
+  if (st == AudioEffectReel::EMPTY) {  // nothing recorded: a record circle
+    gfxCircle(x + w / 2, cy, std::min(w, h) / 2 - 1);
+    return;
+  }
   constexpr int HIST = AudioEffectReel::HIST;
   uint8_t hist[HIST];
   fx.ReadHistory(hist);
@@ -1147,7 +1150,8 @@ private:
   // loading
   File lf;
   bool loading = false, too_long = false;
-  int chans = 2;
+  int chans = 2, bytes = 2;  // per sample
+  bool is_float = false;
   size_t frames = 0, got = 0;
   float rate = 1.0f;  // file rate / 44.1 kHz
   void Load(int i);
@@ -1224,16 +1228,24 @@ FLASHMEM void PlayerDevice::Load(int i) {
     if (lf.read(c, 8) != 8) break;
     const uint32_t sz = c[4] | c[5] << 8 | c[6] << 16 | uint32_t(c[7]) << 24;
     if (!memcmp(c, "fmt ", 4)) {
-      uint8_t fm[16];
-      lf.read(fm, 16);
-      if (sz > 16) lf.seek(lf.position() + sz - 16);
+      uint8_t fm[40] = {};
+      const uint32_t take = std::min<uint32_t>(sz, 40);
+      lf.read(fm, take);
+      if (sz > take) lf.seek(lf.position() + sz - take);
       chans = fm[2];
       srate = fm[4] | fm[5] << 8 | fm[6] << 16 | uint32_t(fm[7]) << 24;
       bits = fm[14];
-      if ((fm[0] | fm[1] << 8) != 1) bits = 0;  // PCM only
+      // PCM (1), float (3), or "extensible" (0xFFFE), whose real format is
+      // the sub-format at byte 24
+      int tag = fm[0] | fm[1] << 8;
+      if (tag == 0xFFFE && take >= 26) tag = fm[24] | fm[25] << 8;
+      is_float = tag == 3;
+      if (tag != 1 && tag != 3) bits = 0;
     } else if (!memcmp(c, "data", 4)) {
-      if (bits != 16 || chans < 1 || chans > 2) break;
-      frames = sz / (2 * chans);
+      const bool ok_bits = is_float ? bits == 32 : (bits == 8 || bits == 16 || bits == 24 || bits == 32);
+      if (!ok_bits || chans < 1) break;
+      bytes = bits / 8;
+      frames = sz / (bytes * chans);
       if (frames > fx.Capacity()) { frames = fx.Capacity(); too_long = true; }
       got = 0;
       rate = srate / 44100.0f;
@@ -1250,14 +1262,31 @@ FLASHMEM void PlayerDevice::Idle() {
   if (!active) return;
   if (loaded != cur[FILE_] && !loading) Load(cur[FILE_]);
   if (!loading) return;
-  static int16_t tmp[IO_CHUNK * 2];
-  const size_t k = std::min(IO_CHUNK, frames - got);
-  const size_t rd = lf.read(reinterpret_cast<uint8_t*>(tmp), k * 2 * chans) / (2 * chans);
+  // any sample size / float, to 16 bit; the first two channels (mono: both)
+  static uint8_t raw[IO_CHUNK * 8];
+  const size_t frame = size_t(bytes) * chans;
+  const size_t k = std::min({IO_CHUNK, frames - got, sizeof(raw) / frame});
+  const size_t rd = lf.read(raw, k * frame) / frame;
   int16_t* l = fx.Data(0);
   int16_t* r = fx.Data(1);
+  auto sample = [&](const uint8_t* p) -> int16_t {
+    switch (bytes) {
+      case 1: return int16_t((p[0] - 128) << 8);  // 8-bit is unsigned
+      case 2: return int16_t(p[0] | p[1] << 8);
+      case 3: return int16_t(p[1] | p[2] << 8);
+      default:
+        if (is_float) {
+          float f;
+          memcpy(&f, p, 4);
+          return int16_t(constrain(f, -1.0f, 1.0f) * 32767.0f);
+        }
+        return int16_t(p[2] | p[3] << 8);
+    }
+  };
   for (size_t i = 0; i < rd; i++) {
-    l[got + i] = tmp[i * chans];
-    r[got + i] = tmp[i * chans + (chans - 1)];
+    const uint8_t* fp = raw + i * frame;
+    l[got + i] = sample(fp);
+    r[got + i] = sample(fp + (chans > 1 ? bytes : 0));
   }
   fx.MarkRange(got, got + rd);
   got += rd;
@@ -1391,7 +1420,13 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
 
 FLASHMEM void PlayerDevice::DrawMini(int x, int y, int w, int h) {
   const int cy = y + h / 2;
-  if (!fx.Length()) { gfxDottedLine(x, cy, x + w - 1, cy, 2); return; }
+  if (!fx.Length()) {  // nothing loaded: a play arrow
+    const int cx = x + w / 2, r = h / 2 - 1;
+    gfxLine(cx - r / 2 - 1, cy - r, cx + r / 2 + 2, cy);
+    gfxLine(cx + r / 2 + 2, cy, cx - r / 2 - 1, cy + r);
+    gfxLine(cx - r / 2 - 1, cy - r, cx - r / 2 - 1, cy + r);
+    return;
+  }
   constexpr int HIST = AudioEffectReel::HIST;
   uint8_t hist[HIST];
   fx.ReadHistory(hist);
