@@ -678,6 +678,7 @@ FLASHMEM void AppLoom::LinkCopy() {
       to->CopyFrom(*from);
     }
   }
+  memcpy(b.order, a.order, sizeof(b.order));  // the same effect order
   b.bypass = a.bypass;
   b.parked = 0;
   for (auto& at : b.park_at) at = millis() + 40;
