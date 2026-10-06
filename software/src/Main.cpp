@@ -795,6 +795,19 @@ void FASTRUN loop() {
           case ',': case '.':
             OC::ui.Inject(UI::EVENT_ENCODER, OC::CONTROL_ENCODER_L, cmd == '.' ? 1 : -1, 0);
             break;
+          // two at once: '&' = A+B (link modes), '!' = Z held + L push
+          // (screensaver), '%' = Z held long and let go (clock page)
+          case '&':
+            OC::ui.Inject(UI::EVENT_BUTTON_DOWN, OC::CONTROL_BUTTON_A, 0, OC::CONTROL_BUTTON_B);
+            OC::ui.Inject(UI::EVENT_BUTTON_PRESS, OC::CONTROL_BUTTON_A, 0, 0);
+            OC::ui.Inject(UI::EVENT_BUTTON_PRESS, OC::CONTROL_BUTTON_B, 0, 0);
+            break;
+          case '!':
+            OC::ui.Inject(UI::EVENT_BUTTON_DOWN, OC::CONTROL_BUTTON_L, 0, OC::CONTROL_BUTTON_Z);
+            break;
+          case '%':
+            OC::ui.Inject(UI::EVENT_BUTTON_LONG_RELEASE, OC::CONTROL_BUTTON_Z, 0, 0);
+            break;
           case '<': case '>':
             OC::ui.Inject(UI::EVENT_ENCODER, OC::CONTROL_ENCODER_R, cmd == '>' ? 1 : -1, 0);
             break;
