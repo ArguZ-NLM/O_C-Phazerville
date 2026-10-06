@@ -1838,7 +1838,8 @@ namespace loom {
   // 2: modulator types sorted by name; 3: second mod source, MOD E-H
   // 4: three choices per effect slot (RESONATOR: MODAL)
   // 5: OUTPUT page 2 LOW MID HIGH OTT (was BANDZ LOW MID HIGH)
-  constexpr uint8_t SAVE_VERSION = 5;
+  // 6: ECHO's reverb LEVEL PRE ROOM WALL (was LEVEL SIZE DECAY TONE)
+  constexpr uint8_t SAVE_VERSION = 6;
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -1895,6 +1896,9 @@ namespace loom {
     const bool remap_mix = use && !memcmp(tag, "MIX", 4) && n == 7;  // MIX came in first
     const bool reorder_out = use && !memcmp(tag, "MIX", 4) && load_version < 5;
     const bool remap_mdl = use && !memcmp(tag, "MDL", 4) && n == 7;  // MODEL came in before WET
+    // before v6 the reverb's 6th was SIZE (now PRE: left at its default);
+    // DECAY's value becomes ROOM, TONE's WALL (same places)
+    const bool skip_size = use && !memcmp(tag, "ECO", 4) && load_version < 6;
     for (int p = 0; p < n; p++) {
       int16_t v; uint8_t md; int8_t amt; uint16_t src; uint8_t bus;
       if (f.read(&v, 2) != 2 || f.read(&md, 1) != 1 || f.read(&amt, 1) != 1
@@ -1909,6 +1913,7 @@ namespace loom {
       // before v5 OUTPUT's page 2 was BANDZ LOW MID HIGH: now LOW MID HIGH OTT
       if (reorder_out && p >= 4) p = p == 4 ? 7 : p - 1;
       if (remap_mdl && p == 6) p = 7;
+      if (skip_size && p == 5) { p = q; continue; }
       d->mod_amt2[p] = constrain(amt2, -100, 100);
       d->mod_bus2[p] = bus2 <= MOD_BUSES ? bus2 : 0;
       const ParamDef& pd = d->param(p);

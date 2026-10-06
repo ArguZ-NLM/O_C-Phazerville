@@ -38,6 +38,7 @@ public:
   // allocate and clear everything; call while the stream is disconnected
   bool Acquire() {
     if (!mem) mem = static_cast<float*>(calloc(MEM_TOTAL, sizeof(float)));
+    if (!pre) pre = static_cast<int16_t*>(calloc(2 * PRE_MAX, sizeof(int16_t)));
     if (!rv) rv = TakeLines();
     for (auto& b : dbuf) {
       if (!b) b = static_cast<int16_t*>(extmem_malloc(dlen * sizeof(int16_t)));
@@ -49,6 +50,8 @@ public:
   void Release() {
     free(mem);
     mem = nullptr;
+    free(pre);
+    pre = nullptr;
     GiveLines(rv);
     rv = nullptr;
     for (auto& b : dbuf) {
@@ -57,12 +60,14 @@ public:
     }
   }
 
-  bool ready() const { return mem && rv && dbuf[0] && dbuf[1]; }
+  bool ready() const { return mem && rv && pre && dbuf[0] && dbuf[1]; }
 
   void Reset() {
     if (mem) std::fill(mem, mem + MEM_TOTAL, 0.0f);
     if (rv) memset(rv, 0, RV_TOTAL * sizeof(int16_t));
     for (auto& w : rv_wi) w = 0;
+    if (pre) memset(pre, 0, 2 * PRE_MAX * sizeof(int16_t));
+    pre_w = 0;
     for (auto& z : rv_lp) z = 0.0f;
     rv_hp_z[0] = rv_hp_z[1] = 0.0f;
     for (auto b : dbuf) if (b) memset(b, 0, dlen * sizeof(int16_t));
@@ -106,6 +111,13 @@ public:
   // approximate RT60 of the reverb tail in seconds
   void decay(float secs) { decay_secs = constrain(secs, 0.2f, 30.0f); }
 
+  // the gap before the reverb, 0..250 ms (a change crossfades, no bend)
+  void pre_delay(float ms) { pre_target = constrain(int(ms * 0.001f * AUDIO_SAMPLE_RATE_EXACT), 0, PRE_MAX - 1); }
+
+  // how quickly the echoes melt into a wash: 0 = audible reflections,
+  // 1 = an instant soft cloud (the input diffusers' strength)
+  void density(float d) { rv_diff = 0.4f + 0.6f * constrain(d, 0.0f, 1.0f); }
+
   void ReadViz(Viz& out) {
     AudioNoInterrupts();
     out = viz;
@@ -141,6 +153,7 @@ private:
   static constexpr int RV_TOTAL = 22868;
   static_assert(RV_TOTAL == 22868, "the RAM1 pool below has this size");
   static constexpr float RV_Q = 8192.0f;  // int16 per 1.0 (headroom x4)
+  static constexpr int PRE_MAX = 11026;   // 250 ms of pre-delay, a side
   // the lines live in RAM1 (no cache misses: the reverb costs half): room
   // for two reverbs (one per Loom track), more from the heap
   static int16_t* TakeLines();
@@ -163,6 +176,10 @@ private:
   int ix[NUM_AP] = {};
   int16_t* rv = nullptr;
   int rv_wi[RL] = {};               // each line's write position
+  int16_t* pre = nullptr;           // pre-delay, 2 x PRE_MAX
+  int pre_w = 0, pre_cur = 0, pre_next = 0, pre_xf = 0;
+  volatile int pre_target = 0;
+  volatile float rv_diff = 1.0f;
   float rv_sc_a = 1.0f, rv_sc_b = 1.0f;  // the lengths now / the ones fading in
   int rv_xf = 0;                    // samples left of that crossfade (0: none)
   static constexpr int RV_XF = 2048;  // ~46 ms
@@ -299,6 +316,10 @@ FASTRUN void AudioEffectEcho::update() {
   const float xfs = rv_xf ? 1.0f / RV_XF : 0.0f;
   const float rda = rv_damp_a + (1.0f - rv_damp_a) * frz;
   const float rv_hp_a = OnePoleCoeff(90.0f);  // the low cut at the input
+  // pre-delay: a new time crossfades in over ~12 ms
+  constexpr int PRE_XF = 512;
+  if (pre_xf == 0 && pre_target != pre_cur) { pre_next = pre_target; pre_xf = PRE_XF; }
+  const float dg = rv_diff;
   // the wobble: 4 lines, 0.3 .. 0.9 Hz, up to ~8 .. 16 samples
   static constexpr float LFO_HZ[4] = {0.31f, 0.47f, 0.69f, 0.89f};
   static constexpr float LFO_DEPTH[4] = {11.0f, 8.0f, 14.0f, 9.0f};
@@ -431,9 +452,18 @@ FASTRUN void AudioEffectEcho::update() {
     float rin[2];
     for (int c = 0; c < 2; c++) {
       float x = live * 0.5f * x1[c];
+      // pre-delay (int16 ring a side)
+      int16_t* pb = pre + c * PRE_MAX;
+      pb[pre_w] = ToQ15(x);
+      auto back = [&](int d) { int r = pre_w - d; if (r < 0) r += PRE_MAX; return pb[r] * (1.0f / 32768.0f); };
+      x = back(pre_cur);
+      if (pre_xf) {
+        const float wgt = float(PRE_XF - pre_xf + n) / PRE_XF;
+        x += std::min(1.0f, wgt) * (back(pre_next) - x);
+      }
       rv_hp_z[c] += rv_hp_a * (x - rv_hp_z[c]);  // low cut (no mud)
       x -= rv_hp_z[c];
-      for (int k = 0; k < 4; k++) x = Allpass(x, AP_IN_BASE + c * 4 + k, AP_IN_G[k]);
+      for (int k = 0; k < 4; k++) x = Allpass(x, AP_IN_BASE + c * 4 + k, AP_IN_G[k] * dg);
       rin[c] = x;
     }
     float y[RL];
@@ -442,6 +472,7 @@ FASTRUN void AudioEffectEcho::update() {
       y[i] = yb[i][n];  // read for the whole block above
       ysum += y[i];
     }
+    if (++pre_w >= PRE_MAX) pre_w = 0;
     // Householder: every line into every other, lossless
     const float hh = ysum * (2.0f / RL);
     for (int i = 0; i < RL; i++) {
@@ -462,6 +493,10 @@ FASTRUN void AudioEffectEcho::update() {
   if (rv_xf) {
     rv_xf -= AUDIO_BLOCK_SAMPLES;
     if (rv_xf <= 0) { rv_xf = 0; rv_sc_a = rv_sc_b; }
+  }
+  if (pre_xf) {
+    pre_xf -= AUDIO_BLOCK_SAMPLES;
+    if (pre_xf <= 0) { pre_xf = 0; pre_cur = pre_next; }
   }
 
   // write this block into the delay lines

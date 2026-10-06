@@ -2211,17 +2211,22 @@ PROGMEM static const DeviceDef ECHO_DEF = {
     {"TIME", 20, 6000, 450, UNI, 0, 4, 0, {}, {"FREE", "STR", "TRI", "DOT"}},
     {"FDBK", 0, 100, 45, UNI},
     {"SPRD", 0, 100, 40, UNI, 0, 3, 1, {}, {"PHASE", "PING", "DIFF"}},
-    {"LEVEL", 0, 100, 30, UNI, 0, 2, 0, {}, {"MIX", "SEND"}},  // the reverb's
-    {"SIZE", 0, 100, 60, UNI},
-    {"DECAY", 0, 100, 50, UNI},
-    {"TONE", -50, 50, -10, BI},
+    // the reverb, after the Tegeler Raummaschine: mix, pre-delay, room
+    // (size and decay together), walls (soft: dark and dense .. hard:
+    // bright with audible reflections; also the delay's tone)
+    {"LEVEL", 0, 100, 30, UNI, 0, 2, 0, {}, {"MIX", "SEND"}},
+    {"PRE", 0, 250, 20, UNI},
+    {"ROOM", 0, 100, 50, UNI},
+    {"WALL", -50, 50, -10, BI},
   },
   {"DELAY", "REVRB"},
 };
 
 class EchoDevice : public Device {
 public:
-  enum { DELAY, TIME, FEEDBACK, SPREAD, REVERB, SIZE, DECAY, TONE };
+  enum { DELAY, TIME, FEEDBACK, SPREAD, REVERB, PRE, ROOM, WALL };
+  // ROOM: decay 0.4 .. 16 s
+  float DecaySecs() const { return 0.4f * powf(40.0f, cur[ROOM] * 0.01f); }
   enum { PHASE, PING, DIFFUSE };
   static constexpr int TAPS = AudioEffectEcho::TAPS;
   static constexpr float MAX_SECS = 6.0f;
@@ -2284,7 +2289,7 @@ FLASHMEM uint32_t Device::TailMs() const { return 40; }
 // the reverb's decay plus a few rounds of echoes; frozen: never
 FLASHMEM uint32_t EchoDevice::TailMs() const {
   if (echo.frozen()) return UINT32_MAX;
-  const float decay = 0.3f * powf(60.0f, cur[DECAY] * 0.01f);
+  const float decay = DecaySecs() + cur[PRE] * 0.001f;
   const float echoes = tap_secs[0][TAPS - 1] * (1.0f + 8.0f * cur[FEEDBACK] * 0.01f);
   return uint32_t((decay + echoes) * 1000.0f) + 200;
 }
@@ -2315,15 +2320,18 @@ FLASHMEM void EchoDevice::Apply(int p) {
     case DELAY:    echo.delay_mix(v); echo.delay_send(mode[DELAY] == 1); break;
     case TIME:     SetTimes(); break;
     case REVERB:   echo.reverb_mix(v); echo.reverb_send(mode[REVERB] == 1); break;
-    case SIZE:     echo.size(v); break;
+    case PRE:      echo.pre_delay(cur[PRE]); break;
+    case ROOM:     echo.size(v); echo.decay(DecaySecs()); break;
     case FEEDBACK: echo.feedback(v); break;
     case SPREAD:
       echo.pingpong(mode[SPREAD] == PING ? v : 0.0f);
       echo.diffuse(mode[SPREAD] == DIFFUSE ? v : 0.0f);
       SetTimes();
       break;
-    case TONE:     echo.tone(cur[TONE] * 0.02f); break;
-    case DECAY:    echo.decay(0.3f * powf(60.0f, v)); break; // 0.3 .. 18 s
+    case WALL:  // soft walls: dark and dense; hard: bright, sparse reflections
+      echo.tone(cur[WALL] * 0.02f);
+      echo.density(0.5f - cur[WALL] * 0.01f);
+      break;
   }
 }
 
@@ -2341,8 +2349,10 @@ FLASHMEM void EchoDevice::Format(int p, char* buf, size_t n) const {
     const int ms = val[TIME];
     if (ms < 1000) snprintf(buf, n, "%dms", ms);
     else snprintf(buf, n, "%d.%02ds", ms / 1000, (ms % 1000) / 10);
-  } else if (p == DECAY) {
-    const int ds = int(3.0f * powf(60.0f, val[DECAY] * 0.01f)); // tenths
+  } else if (p == PRE) {
+    snprintf(buf, n, "%dms", val[PRE]);
+  } else if (p == ROOM) {  // shown as its decay time
+    const int ds = int(4.0f * powf(40.0f, val[ROOM] * 0.01f) + 0.5f);  // tenths
     snprintf(buf, n, "%d.%ds", ds / 10, ds % 10);
   } else {
     Device::Format(p, buf, n);
@@ -2417,20 +2427,22 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
       }
     }
   } else {
-    // page 2, the reverb: two walls that SIZE moves apart from 30% to the
+    // page 2, the reverb: two walls that ROOM moves apart from 30% to the
     // edges, and between them a wedge fading out from the middle to both
-    // sides, as tall as LEVEL and reaching towards the walls with DECAY,
-    // falling off like a real tail (quickly first, then a long low end).
-    // TONE fills it in: sparse when dark, solid when bright.
+    // sides, as tall as LEVEL and reaching towards the walls with ROOM,
+    // falling off like a real tail (quickly first, then a long low end);
+    // PRE leaves a gap in the middle. WALL fills it in: sparse when soft,
+    // solid when hard.
     static const uint8_t bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
     const int cx = x + w / 2, hw = w / 2 - 1;
-    const int wall = hw * (30 + 70 * cur[SIZE] / 100) / 100;
+    const int wall = hw * (30 + 70 * cur[ROOM] / 100) / 100;
+    const int gap = (wall - 2) * cur[PRE] / 250 / 2;  // the pre-delay
     const int th = int((h - 2) * sqrtf(cur[REVERB] * 0.01f));  // shows more early on (50% = 70% high)
-    const int len = std::max(2, (wall - 1) * cur[DECAY] / 100);
-    const int fill = 3 + (cur[TONE] + 50) * 13 / 100;  // 3..16 of 16
-    for (int i = 0; i < len; i++) {
+    const int len = std::max(2, (wall - 1 - gap) * (20 + 80 * cur[ROOM] / 100) / 100);
+    const int fill = 3 + (cur[WALL] + 50) * 13 / 100;  // 3..16 of 16
+    for (int i = gap; i < gap + len; i++) {
       constexpr float k = 4.0f, end = 0.0183156f;  // e^-4
-      const int hh = int(th * (expf(-k * i / len) - end) / (1.0f - end) + 0.5f);
+      const int hh = int(th * (expf(-k * (i - gap) / len) - end) / (1.0f - end) + 0.5f);
       for (int py = base - hh + 1; py <= base; py++) {
         const bool edge = py == base - hh + 1;  // keep the outline readable
         if (edge || bayer[py & 3][(cx + i) & 3] < fill) gfxPixel(cx + i, py);
