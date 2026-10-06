@@ -208,6 +208,12 @@ public:
   // a tail can ring out first; Parked() runs then, with the stream idle
   virtual uint32_t TailMs() const;
   virtual void Parked() {}
+  // parked (unpatched) or back in the chain: a device whose audio object
+  // would otherwise keep computing on silence stops while parked
+  virtual void Rest(bool on) {}
+  // resting at WET 0 (nothing of it heard) like a bypassed device; only
+  // where waking up costs nothing audible (no recorded buffer to go stale)
+  virtual bool RestsWhenDry() const { return false; }
 
   void Defaults();
   void ApplyAll();
@@ -3237,6 +3243,7 @@ public:
   RingsVoice voice;
   volatile float spread = 0.7f;
   volatile float peak = 0.0f;
+  volatile bool rest = false;  // parked: nothing to compute
   void update() override;
 private:
   audio_block_t* queue[1];
@@ -3244,7 +3251,7 @@ private:
 
 FASTRUN void AudioRings::update() {
   audio_block_t* in = receiveReadOnly(0);
-  if (!voice.ok()) { if (in) release(in); return; }
+  if (!voice.ok() || rest) { if (in) release(in); return; }
   audio_block_t* o[2] = {allocate(), allocate()};
   if (o[0] && o[1]) {
     static float fi[AUDIO_BLOCK_SAMPLES], fo[AUDIO_BLOCK_SAMPLES], fa[AUDIO_BLOCK_SAMPLES];
@@ -3304,6 +3311,8 @@ public:
   }
   void Apply(int p) override;
   void Action(int a) override { if (a == 0) { fx.voice.Strike(); hit_at = millis() | 1; } }
+  void Rest(bool on) override { fx.rest = on; }
+  bool RestsWhenDry() const override { return true; }  // WET 0: rests (wakes ringing from silence)
   void Format(int p, char* buf, size_t n) const override;
   void DrawViz(int x, int y, int w, int h) override;
   void DrawMini(int x, int y, int w, int h) override;
@@ -3440,6 +3449,7 @@ public:
   StretchVoice voice;
   volatile float fdbk = 0.0f, lp_a = 1.0f, hp_a = 0.0f;
   volatile float peak = 0.0f;
+  volatile bool rest = false;  // parked: nothing to compute
   void update() override;
 private:
   audio_block_t* queue[2];
@@ -3449,7 +3459,7 @@ private:
 
 FASTRUN void AudioStretch::update() {
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
-  if (!voice.ok()) { for (auto b : in) if (b) release(b); return; }
+  if (!voice.ok() || rest) { for (auto b : in) if (b) release(b); return; }
   audio_block_t* o[2] = {allocate(), allocate()};
   if (o[0] && o[1]) {
     static float fi[2 * AUDIO_BLOCK_SAMPLES], fo[2 * AUDIO_BLOCK_SAMPLES];
@@ -3508,6 +3518,7 @@ public:
   static constexpr float BUF_SECS = 4.0f;
   void FormatMode(int p, char* buf, size_t n) const override;
   StretchDevice() : Device(STRETCH_DEF) {}
+  void Rest(bool on) override { fx.rest = on; }
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
   bool ok() const override { return fx.voice.ok(); }

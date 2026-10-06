@@ -88,6 +88,7 @@ namespace loom {
     uint8_t bypass = 0;  // bit per slot (+ MIX_COL: its band stage): passed around
     uint8_t parked = 0;  // bit per slot: bypassed and unpatched (no CPU)
     uint32_t park_at[SLOT_COUNT] = {};  // when a bypassed device gets parked
+    uint32_t dry_at[SLOT_COUNT] = {};   // when a device resting at WET 0 gets parked (0: not dry)
     Device* inst[SLOT_COUNT][MAX_OPTIONS] = {};
     LoomFade* fade[SLOT_COUNT] = {};  // after each effect slot: bypass fade
     LoomGate* gate = nullptr;         // before ECHO: its tail rings out
@@ -464,6 +465,7 @@ FLASHMEM void AppLoom::Repatch(int t) {
     const int s = tr.order[k];
     Device* d = tr.current(s);
     if (!d || !d->in()) continue;
+    d->Rest(tr.parked >> s & 1);
     // bypassed slots stay patched while their fade (or tail) runs; parked
     // ones only pass the dry signal through the fade
     AudioConnection* l = link[s];
@@ -640,12 +642,29 @@ FLASHMEM void AppLoom::ParkBypassed(int t) {
   using namespace loom;
   Track& tr = tracks[t];
   uint8_t fresh = 0;
+  bool woke = false;
   for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
     const uint8_t bit = 1 << s;
-    if (!(tr.bypass & bit) || (tr.parked & bit) || !tr.current(s)) continue;
-    if (int32_t(millis() - tr.park_at[s]) < 0) continue;
+    const Device* d = tr.current(s);
+    // a device that rests at WET 0 (nothing of it heard): parked once its
+    // fade is done, back in the chain as soon as WET opens again
+    const bool dry = d && d->RestsWhenDry() && d->wet <= 0.0f && !(tr.bypass & bit);
+    if (!dry) tr.dry_at[s] = 0;
+    else if (!tr.dry_at[s]) tr.dry_at[s] = millis() + 300;
+    if (!dry && !(tr.bypass & bit) && (tr.parked & bit)) {
+      tr.parked &= ~bit;
+      woke = true;
+      continue;
+    }
+    if ((tr.parked & bit) || !d) continue;
+    if (dry) {
+      if (int32_t(millis() - tr.dry_at[s]) < 0) continue;
+    } else if (!(tr.bypass & bit) || int32_t(millis() - tr.park_at[s]) < 0) {
+      continue;
+    }
     fresh |= bit;
   }
+  if (woke && !fresh) Repatch(t);
   if (!fresh) return;
   tr.parked |= fresh;
   Repatch(t);

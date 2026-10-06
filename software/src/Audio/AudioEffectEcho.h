@@ -202,6 +202,7 @@ private:
   float fb = 0.0f, dmix = 0.4f, rmix = 0.3f, spread_ = 0.0f, freeze_amt = 0.0f;
   volatile bool dsend = false, rsend = false;
   float lp_z[2] = {}, hp_z[2] = {};
+  bool rv_cold = false;  // the reverb was off (LEVEL 0): cleared before it starts again
 
   Viz viz = {};
 
@@ -297,6 +298,23 @@ FASTRUN void AudioEffectEcho::update() {
 
   const float frz = freeze_amt;
   const float live = 1.0f - frz;
+  // a part whose LEVEL is 0 is not heard: it isn't computed (the delay
+  // still records the input, without its echoes; the reverb starts from
+  // silence when its LEVEL opens again)
+  if (dmix_target <= 0.0f && dmix < 1e-4f) dmix = 0.0f;
+  if (rmix_target <= 0.0f && rmix < 1e-4f) rmix = 0.0f;
+  const bool dly_on = dmix > 0.0f || dmix_target > 0.0f || freeze || frz > 1e-4f;
+  const bool rv_on = rmix > 0.0f || rmix_target > 0.0f;
+  if (!rv_on) {
+    rv_cold = true;
+  } else if (rv_cold) {
+    rv_cold = false;
+    memset(rv, 0, RV_TOTAL * sizeof(int16_t));
+    memset(pre, 0, 2 * PRE_MAX * sizeof(int16_t));
+    for (auto& z : rv_lp) z = 0.0f;
+    rv_hp_z[0] = rv_hp_z[1] = 0.0f;
+    std::fill(mem + AP_OFS[AP_IN_BASE], mem + MEM_TOTAL, 0.0f);
+  }
   const float s = spread_;
   const float g = ap_g * live;
   const float la = lp_a, ha = hp_a;
@@ -352,7 +370,7 @@ FASTRUN void AudioEffectEcho::update() {
   int16_t last[2][AUDIO_BLOCK_SAMPLES];
   int16_t blk[AUDIO_BLOCK_SAMPLES];
   int peak_tap[2][TAPS] = {};
-  for (int c = 0; c < 2; c++) {
+  for (int c = 0; c < 2 && dly_on; c++) {
     float* ts = tsum[c];
     for (int t = 0; t < TAPS; t++) {
       int16_t* dst = (t == TAPS - 1) ? last[c] : blk;
@@ -387,7 +405,7 @@ FASTRUN void AudioEffectEcho::update() {
   // longer than a block, so nothing read here is written in it. Read len
   // back (lines 0, 2, 5, 7 wobbled), interpolated, damped (TONE), loop gain.
   static float yb[RL][AUDIO_BLOCK_SAMPLES];
-  for (int i = 0; i < RL; i++) {
+  for (int i = 0; i < RL && rv_on; i++) {
     const int cap = RV_CAP[i];
     const int16_t* line = rv + RV_OFS[i];
     const int w0 = rv_wi[i];
@@ -418,7 +436,7 @@ FASTRUN void AudioEffectEcho::update() {
     const int16_t d0 = dry_in[0][n], d1 = dry_in[1][n];
     peak_in = std::max(peak_in, std::max(abs(d0), abs(d1)));
     const float dry[2] = {d0 * q, d1 * q};
-    const float lst[2] = {last[0][n] * q, last[1][n] * q};
+    const float lst[2] = {dly_on ? last[0][n] * q : 0.0f, dly_on ? last[1][n] * q : 0.0f};
 
     // --- delay write: input + processed feedback ---
     // ping-pong 0 = straight stereo, 1 = mono into L, L<->R in the loop
@@ -432,6 +450,7 @@ FASTRUN void AudioEffectEcho::update() {
       lst[1] + s * (lst[0] - lst[1]),
     };
     for (int c = 0; c < 2; c++) {
+      if (!dly_on) { wr[c][n] = ToQ15(inj[c]); continue; }  // the input only
       float x = fbsrc[c] * fb;
       lp_z[c] += la * (x - lp_z[c]);
       x = lp_z[c];
@@ -447,10 +466,19 @@ FASTRUN void AudioEffectEcho::update() {
     }
 
     // DELAY: crossfade dry -> echoes
-    const float x1[2] = {
-      dry[0] + dmix * (tsum[0][n] - (dsend ? 0.0f : dry[0])),
-      dry[1] + dmix * (tsum[1][n] - (dsend ? 0.0f : dry[1])),
-    };
+    float x1[2] = {dry[0], dry[1]};
+    if (dly_on) {
+      x1[0] += dmix * (tsum[0][n] - (dsend ? 0.0f : dry[0]));
+      x1[1] += dmix * (tsum[1][n] - (dsend ? 0.0f : dry[1]));
+    }
+    if (!rv_on) {
+      for (int c = 0; c < 2; c++) {
+        const int16_t o = ToQ15(x1[c]);
+        out[c]->data[n] = o;
+        peak_out = std::max(peak_out, abs(o));
+      }
+      continue;
+    }
 
     // --- REVERB: 8-line FDN fed by the delay stage ---
     float rin[2];
