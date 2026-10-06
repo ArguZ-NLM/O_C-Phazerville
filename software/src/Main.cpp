@@ -813,26 +813,29 @@ void FASTRUN loop() {
     }
 
     // check for frame buffer to have capture data ready
+    // as much of it as the USB send buffer takes right now (32 bytes = one
+    // 64-byte packet of hex at a time), so a busy main loop doesn't make the
+    // picture stutter; never waits for USB
     const uint8_t *capture_data = display::frame_buffer.captured();
-    if (capture_data && cap_send_time > 950) {
-      cap_send_time = 0;
-      capture_data += cap_idx; // start where we left off
-
-      // limit to n bytes every 950 micros
-      const size_t chunk_size = 32;
-      for (size_t i=0; i < chunk_size; i++) {
-        uint8_t n = *capture_data++;
-        if (n < 16) Serial.print("0");
-        Serial.print(n, HEX);
-
-        if (++cap_idx >= display::frame_buffer.kFrameSize) {
-          // we're done sending this one
-          Serial.println();
-          Serial.flush();
-          cap_idx = 0;
-          display::frame_buffer.capture_retire();
-          break;
-        }
+    (void)cap_send_time;
+    while (capture_data && Serial.availableForWrite() >= 64) {
+      static const char hexd[] = "0123456789ABCDEF";
+      char hx[64];
+      size_t k = 0;
+      bool done = false;
+      for (size_t i = 0; i < 32; i++) {
+        const uint8_t n = capture_data[cap_idx];
+        hx[k++] = hexd[n >> 4];
+        hx[k++] = hexd[n & 15];
+        if (++cap_idx >= display::frame_buffer.kFrameSize) { done = true; break; }
+      }
+      Serial.write(hx, k);
+      if (done) {
+        Serial.println();
+        Serial.flush();
+        cap_idx = 0;
+        display::frame_buffer.capture_retire();
+        break;
       }
     }
 
