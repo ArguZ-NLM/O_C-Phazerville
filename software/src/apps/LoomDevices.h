@@ -34,6 +34,7 @@
 #include "../Audio/AudioEffectBandz.h"
 #include "../Audio/AudioEffectResonator.h"
 #include "../Audio/RingsVoice.h"
+#include "../Audio/StretchVoice.h"
 #include "../Audio/AudioEffectClouds.h"
 #include "../Audio/AudioEffectReel.h"
 #include "../Audio/AudioPlayStream.h"
@@ -192,6 +193,7 @@ public:
   virtual bool ActionLit(int a) const { return false; }
   virtual void DrawViz(int x, int y, int w, int h) {}
   virtual void DrawMini(int x, int y, int w, int h) {}
+  virtual void Idle() {}  // main loop, while the device is in use
   // peak CPU % of this device's audio streams since the last call: parts[0]
   // is the device's own stream, parts[1] anything it owns (e.g. delay lines)
   virtual void CpuMax(float parts[2]) { parts[0] = parts[1] = 0.0f; }
@@ -3260,6 +3262,174 @@ FLASHMEM void ModalDevice::DrawMini(int x, int y, int w, int h) {
   }
 }
 
+/////////////////////////////////////////////////////////////////
+// STRETCH (Spray slot, 2nd choice): Mutable Instruments Clouds' pitch /
+// time mode (WSOLA, MIT, in src/extern/mi). The track is recorded (4 s,
+// unless frozen) and played back POS behind now, PITCH shifted without
+// changing the speed; frozen (A), it plays through the buffer at SPEED
+// without changing the pitch. SIZE: the window (short = grainy and quick,
+// long = smooth). TONE: Clouds' filter (left lowpass, right highpass).
+/////////////////////////////////////////////////////////////////
+class AudioStretch : public AudioStream {
+public:
+  AudioStretch() : AudioStream(2, queue) {}
+  StretchVoice voice;
+  volatile float fdbk = 0.0f, lp_a = 1.0f, hp_a = 0.0f;
+  volatile float peak = 0.0f;
+  void update() override;
+private:
+  audio_block_t* queue[2];
+  float last[2 * AUDIO_BLOCK_SAMPLES] = {};
+  float lp_z[2] = {}, hp_z[2] = {}, dc_z[2] = {};
+};
+
+FASTRUN void AudioStretch::update() {
+  audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
+  if (!voice.ok()) { for (auto b : in) if (b) release(b); return; }
+  audio_block_t* o[2] = {allocate(), allocate()};
+  if (o[0] && o[1]) {
+    static float fi[2 * AUDIO_BLOCK_SAMPLES], fo[2 * AUDIO_BLOCK_SAMPLES];
+    const float fb = fdbk;
+    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++)
+      for (int c = 0; c < 2; c++) {
+        float x = in[c] ? in[c]->data[n] * (1.0f / 32768.0f) : 0.0f;
+        // feedback: last block's output, DC taken out, softly limited
+        float f = last[2 * n + c];
+        dc_z[c] += 0.002f * (f - dc_z[c]);
+        f -= dc_z[c];
+        x += fb * f;
+        fi[2 * n + c] = x / (1.0f + fabsf(x) * 0.25f);
+      }
+    voice.Process(fi, fo, AUDIO_BLOCK_SAMPLES);
+    const float la = lp_a, ha = hp_a;
+    float pk = 0.0f;
+    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++)
+      for (int c = 0; c < 2; c++) {
+        float y = fo[2 * n + c];
+        lp_z[c] += la * (y - lp_z[c]);  // TONE: lowpass ...
+        y = lp_z[c];
+        hp_z[c] += ha * (y - hp_z[c]);  // ... or highpass
+        y -= hp_z[c];
+        last[2 * n + c] = y;
+        pk = std::max(pk, fabsf(y));
+        o[c]->data[n] = __SSAT(int32_t(y * 32767.0f), 16);
+      }
+    peak = std::max(float(peak), pk);
+    transmit(o[0], 0);
+    transmit(o[1], 1);
+  }
+  for (auto b : o) if (b) release(b);
+  for (auto b : in) if (b) release(b);
+}
+
+PROGMEM static const DeviceDef STRETCH_DEF = {
+  "STRETCH", "STR", 7, {"FRZ", ""},
+  {
+    {"PITCH", -24, 24, 0, BI},     // semitones, without changing the speed
+    {"POS", 0, 100, 20, UNI},      // how far back
+    {"SIZE", 0, 100, 50, UNI},     // the window: short = quick and grainy, long = smooth
+    {"SPEED", -200, 200, 100, BI}, // frozen: through the buffer (%, < 0 backwards)
+    {"TONE", -50, 50, 0, BI},      // left lowpass, right highpass
+    {"FDBK", 0, 100, 0, UNI},
+    {"MIX", 0, 100, 100, UNI},
+  },
+  {"", ""},
+};
+
+class StretchDevice : public Device {
+public:
+  enum { PITCH, POS, SIZE, SPEED, TONE, FDBK, MIX };
+  static constexpr float BUF_SECS = 4.0f;
+  StretchDevice() : Device(STRETCH_DEF) {}
+  AudioStream* in() override { return &fx; }
+  AudioStream* out() override { return &fx; }
+  bool ok() const override { return fx.voice.ok(); }
+  bool Activate() override {
+    if (!fx.voice.Init(BUF_SECS)) return false;
+    ApplyAll();
+    active = true;
+    return true;
+  }
+  void Deactivate() override {
+    AudioNoInterrupts();
+    fx.voice.Free();
+    AudioInterrupts();
+    active = false;
+  }
+  void Idle() override { if (active) fx.voice.Idle(); }
+  void Apply(int p) override;
+  void Action(int a) override { if (a == 0) { frozen = !frozen; Apply(PITCH); } }
+  bool ActionLit(int a) const override { return a == 0 && frozen; }
+  void Format(int p, char* buf, size_t n) const override;
+  void DrawViz(int x, int y, int w, int h) override;
+  void DrawMini(int x, int y, int w, int h) override;
+  void CpuMax(float parts[2]) override {
+    parts[0] = fx.processorUsageMax();
+    parts[1] = 0.0f;
+    fx.processorUsageMaxReset();
+  }
+private:
+  AudioStretch fx;
+  Meter out_m;
+  bool frozen = false;
+};
+
+FLASHMEM void StretchDevice::Apply(int p) {
+  switch (p) {
+    case MIX: wet = cur[MIX] * 0.01f; return;
+    case FDBK: fx.fdbk = 0.95f * cur[FDBK] * 0.01f; return;
+    case TONE: {  // Clouds' texture filter: left closes a lowpass, right opens a highpass
+      const float t = cur[TONE] * 0.02f;
+      const float lp_hz = t < 0.0f ? 18000.0f * powf(150.0f / 18000.0f, -t) : 18000.0f;
+      const float hp_hz = t > 0.0f ? 20.0f * powf(4000.0f / 20.0f, t) : 20.0f;
+      fx.lp_a = 1.0f - expf(-2.0f * float(M_PI) * lp_hz / AUDIO_SAMPLE_RATE_EXACT);
+      fx.hp_a = 1.0f - expf(-2.0f * float(M_PI) * hp_hz / AUDIO_SAMPLE_RATE_EXACT);
+      return;
+    }
+    default:
+      fx.voice.Set(cur[POS] * 0.01f, cur[SIZE] * 0.01f, cur[PITCH], cur[SPEED] * 0.01f, frozen);
+  }
+}
+
+FLASHMEM void StretchDevice::Format(int p, char* buf, size_t n) const {
+  if (p == SPEED) snprintf(buf, n, "%d%%", val[SPEED]);
+  else Device::Format(p, buf, n);
+}
+
+// the buffer as a line from the oldest (left) to now (right); the window
+// being played as a box POS back from now, as wide as SIZE, raised or
+// lowered by PITCH; frozen, it runs through the buffer at SPEED
+FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
+  const float pk = fx.peak;
+  fx.peak = 0.0f;
+  out_m.Hit(pk);
+  const int ww = w - 8, cy = y + h / 2;
+  gfxDottedLine(x, cy, x + ww - 1, cy, 2);
+  if (!frozen) gfxLine(x + ww - 1, y + 2, x + ww - 1, y + h - 3);  // now: the record head
+  float pos = cur[POS] * 0.01f + (frozen ? fx.voice.Scrub() : 0.0f);
+  pos -= floorf(pos);
+  const int px = x + int((1.0f - pos) * (ww - 1));
+  const int bw = 4 + cur[SIZE] * (ww / 4) / 100;
+  const int py = cy - cur[PITCH] * (h / 2 - 4) / 24;
+  gfxFrame(constrain(px - bw / 2, x, x + ww - bw), py - 3, bw, 7);
+  if (frozen) {
+    gfxPrint(x + 1, y + 1, PSTR("FRZ"));
+    gfxInvert(x, y, 20, 9);
+  }
+  gfxFrame(x + w - 4, y, 4, h);
+  DrawVMeter(x + w - 4, y, 4, h, out_m.v);
+}
+
+FLASHMEM void StretchDevice::DrawMini(int x, int y, int w, int h) {
+  const int cy = y + h / 2;
+  gfxLine(x, cy, x + w - 1, cy);
+  float pos = cur[POS] * 0.01f + (frozen ? fx.voice.Scrub() : 0.0f);
+  pos -= floorf(pos);
+  const int px = x + int((1.0f - pos) * (w - 1));
+  const int py = cy - cur[PITCH] * (h / 2 - 2) / 24;
+  gfxFrame(constrain(px - 2, x, x + w - 5), py - 2, 5, 5);
+}
+
 struct SlotDef {
   char name[10];
   char tag[5];       // chain box label, 3 letters (4 drawn tighter)
@@ -3269,7 +3439,7 @@ struct SlotDef {
 
 PROGMEM static const SlotDef SLOT_DEFS[SLOT_COUNT] = {
   {"SOURCE",   "SRC", 3, 3},  // INPUT, SPOOL, PLAYER (owned by the track, not made here)
-  {"SPRAY",    "SPR", 2, 1},  // BYPASS, SPRAY
+  {"SPRAY",    "SPR", 3, 1},  // BYPASS, SPRAY (grains), STRETCH (Clouds pitch / time)
   {"RESONATOR", "RES", 3, 1},  // BYPASS, RESONATOR (filter bank), MODAL (struck object)
   {"TEXTURE",  "TEX", 2, 1},  // BYPASS, TEXTURE
   {"ECHO",     "ECO", 2, 1},  // BYPASS, ECHO
@@ -3278,6 +3448,7 @@ PROGMEM static const SlotDef SLOT_DEFS[SLOT_COUNT] = {
 // nullptr = BYPASS. SOURCE/INPUT is owned by the track, not made here.
 FLASHMEM static Device* MakeDevice(int slot, int option) {
   if (slot == SPRAY && option == 1) return new SprayDevice;
+  if (slot == SPRAY && option == 2) return new StretchDevice;
   if (slot == RESONATOR && option == 1) return new ResonatorDevice;
   if (slot == RESONATOR && option == 2) return new ModalDevice;
   if (slot == TEXTURE && option == 1) return new DirtDevice;

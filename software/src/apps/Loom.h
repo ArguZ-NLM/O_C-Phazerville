@@ -1018,6 +1018,8 @@ FLASHMEM void AppLoom::MainLoop() {
         }
       }
       if (tr.player && tr.choice[SOURCE] == 2) tr.player->Idle();
+      for (int s = SOURCE + 1; s < SLOT_COUNT; s++)  // devices with main-loop work (STRETCH)
+        if (Device* d = tr.current(s)) d->Idle();
     }
     // the output is muted while a PLAYER reads a file in (the card reading
     // made a high whine on the output)
@@ -1458,6 +1460,7 @@ FLASHMEM void AppLoom::DrawChain() const {
                       : c == SOURCE ? (tr.choice[SOURCE] == 1 ? PSTR("SPL")
                                        : tr.choice[SOURCE] == 2 ? PSTR("PLY") : PSTR("IN"))
                       : c == RESONATOR && tr.choice[c] == 2 ? PSTR("MOD")  // MODAL
+                      : c == SPRAY && tr.choice[c] == 2 ? PSTR("STR")      // STRETCH
                       : SLOT_DEFS[c].tag;
       if (strlen(tag) <= 3) {
         gfxPrint(x + 1 + (bw - 1 - 6 * int(strlen(tag))) / 2, y + 3, tag);
@@ -1499,7 +1502,7 @@ FLASHMEM void AppLoom::DrawChain() const {
   if (!linked) gfxPrint(0, 56, track ? PSTR("B") : PSTR("A"));
   // the slot name; SOURCE names its source (INPUT, SPOOL or PLAYER)
   gfxPrint(8, 56, col == MIX_COL ? PSTR("OUTPUT")
-                  : (col == SOURCE || col == RESONATOR) && d ? d->def.name : SLOT_DEFS[col].name);
+                  : (col == SOURCE || col == RESONATOR || col == SPRAY) && d ? d->def.name : SLOT_DEFS[col].name);
   // bypass (when on) at the right end; the CPU load always left of its place
   const bool bp = !d || tr.shown_bypassed(col);
   const int right = 128 - 6 * 6 - 6;
