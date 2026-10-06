@@ -53,7 +53,7 @@ void Part::Init(uint16_t* reverb_buffer) {
     dc_blocker_[i].Init(1.0f - 10.0f / kSampleRate);
   }
   
-  reverb_.Init(reverb_buffer);
+  if (reverb_buffer) reverb_.Init(reverb_buffer);  // Loom: no buffer (no STRING_AND_REVERB model)
   limiter_.Init();
 
   note_filter_.Init(

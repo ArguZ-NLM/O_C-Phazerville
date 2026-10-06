@@ -10,11 +10,8 @@
 #include "rings/dsp/part.h"
 #include "rings/dsp/strummer.h"
 
-extern "C" void* extmem_malloc(size_t);
-extern "C" void extmem_free(void*);
 
 namespace {
-constexpr size_t kReverbWords = 32768;          // as on the module
 constexpr float kNoiseGateThreshold = 0.00003f;  // as on the module
 }
 
@@ -22,17 +19,13 @@ FLASHMEM bool RingsVoice::Init() {
   if (part_) return true;
   void* pm = malloc(sizeof(rings::Part));
   void* sm = malloc(sizeof(rings::Strummer));
-  reverb_ = static_cast<uint16_t*>(extmem_malloc(kReverbWords * sizeof(uint16_t)));
-  if (!pm || !sm || !reverb_) {
+  if (!pm || !sm) {
     free(pm); free(sm);
-    if (reverb_) extmem_free(reverb_);
-    reverb_ = nullptr;
     return false;
   }
-  memset(reverb_, 0, kReverbWords * sizeof(uint16_t));
   auto* part = new (pm) rings::Part();
   auto* strummer = new (sm) rings::Strummer();
-  part->Init(reverb_);
+  part->Init(nullptr);  // no reverb memory: the string + reverb model isn't offered
   part->set_polyphony(1);
   part->set_model(static_cast<rings::ResonatorModel>(model_));
   strummer->Init(0.01f, rings::kSampleRate / rings::kMaxBlockSize);
@@ -50,8 +43,6 @@ FLASHMEM void RingsVoice::Free() {
   free(p);
   free(strummer_);
   strummer_ = nullptr;
-  extmem_free(reverb_);
-  reverb_ = nullptr;
 }
 
 FLASHMEM void RingsVoice::SetModel(int m) {

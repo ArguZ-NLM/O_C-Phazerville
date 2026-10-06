@@ -17,7 +17,7 @@ public:
   // does the reverb)
   enum Model { MODAL, SYMPATHETIC, STRING, FM, SYMPATHETIC_QUANTIZED, MODELS };
 
-  bool Init();   // takes its memory (RAM2 heap + PSRAM for the reverb); false if there is none
+  bool Init();   // takes its memory (RAM2 heap); false if there is none
   void Free();
   bool ok() const { return part_ != nullptr; }
 
@@ -34,7 +34,6 @@ public:
 private:
   void* part_ = nullptr;
   void* strummer_ = nullptr;
-  uint16_t* reverb_ = nullptr;
   float note_ = 36.0f, structure_ = 0.5f, brightness_ = 0.5f, damping_ = 0.5f, position_ = 0.5f;
   int model_ = MODAL;
   volatile bool strike_ = false;
