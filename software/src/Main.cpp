@@ -519,10 +519,12 @@ FLASHMEM void setup() {
       }
       // screen requests (the screen-capture tool asks all the time) are
       // answered and don't end it; other USB commands (saving before a flash) do
-      while (Serial.available() && Serial.peek() == 'S') {
-        Serial.read();
-        display::frame_buffer.capture_request();
-        cap_idx = 0;
+      // (its request comes as a packet: 'S' and empty / control bytes)
+      while (Serial.available() && (Serial.peek() == 'S' || Serial.peek() < 0x20)) {
+        if (Serial.read() == 'S') {
+          display::frame_buffer.capture_request();
+          cap_idx = 0;
+        }
       }
       const uint8_t* cap = display::frame_buffer.captured();
       if (cap && cap_time > 950) {
