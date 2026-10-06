@@ -150,7 +150,10 @@ namespace loom {
   constexpr int CLK_CURSOR = 2 * NUM_MODS;
   constexpr int NUM_CV_OUTS = 8;
   constexpr int OUT_CURSOR = CLK_CURSOR + 1;
-  constexpr int LAST_CURSOR = OUT_CURSOR + NUM_CV_OUTS - 1;
+  // then the 32 MIDI maps M1-M32 (page 4)
+  constexpr int MIDI_CURSOR = OUT_CURSOR + NUM_CV_OUTS;
+  constexpr int LAST_CURSOR = MIDI_CURSOR + MIDIMAP_MAX - 1;
+  constexpr bool IsOutCursor(int c) { return c >= OUT_CURSOR && c < MIDI_CURSOR; }
   // what each CV output A-H sends (0-10 V): track L's MOD A-D, track R's
   // MOD A-D, the shared (L+R) E-H or the clock as a gate. Three groups
   // (L / R / LR, the L knob) of up to five (the R knob); off (0) is only
@@ -218,6 +221,11 @@ private:
   uint32_t clear_hold = 0;  // ... since then
   bool editing = false;   // device view: setting grabbed, R enc changes it
   bool out_editing = false;  // CV outputs page: output grabbed, R enc picks its modulator
+  // MIDI maps page: the map's editor open (-1: the grid), its field under
+  // the cursor (CHAN TYPE VOICE LOW HIGH), the field grabbed
+  int8_t map_field = -1;
+  bool map_grab = false;
+  bool maps_dirty = false;  // changed here: saved with the global settings on leaving the editor
   bool edit_mode = false; // the mode was just changed: show its name
   mutable elapsedMillis mode_shown;
   bool mod_mode = false;  // device view: L enc amount, R enc source
@@ -358,6 +366,7 @@ private:
   bool BypassKey() const;
   void DrawDevice() const;
   void DrawClockPage() const;
+  void DrawMidiMaps() const;
 };
 
 FLASHMEM loom::Device* AppLoom::FocusOn(int t) const {
@@ -1288,7 +1297,7 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
       l_held = false;
       if (l_used) return;
       // CV outputs page: L push bypasses the output (0 V)
-      if (view == MODS && mod_cursor >= OUT_CURSOR) cv_out_bypass ^= 1 << (mod_cursor - OUT_CURSOR);
+      if (view == MODS && IsOutCursor(mod_cursor)) cv_out_bypass ^= 1 << (mod_cursor - OUT_CURSOR);
       // L push: modulation on / off (starting with MOD1)
       if (view == DEVICE) {
         if (trig_mode) trig_mode = false;
@@ -1365,9 +1374,46 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
       return;
     }
   }
+  // MIDI maps page: R push opens the map (then grabs a field), A learns
+  // (the next CC or note), B clears it, Y steps back
+  if (view == MODS && mod_cursor >= MIDI_CURSOR) {
+    MIDIMapping& map = HS::frame.MIDIState.mapping[mod_cursor - MIDI_CURSOR];
+    switch (event.control) {
+      case OC::CONTROL_BUTTON_R:
+        if (map_field < 0) { map_field = 0; map_grab = false; }
+        else map_grab = !map_grab;
+        break;
+      case OC::CONTROL_BUTTON_UP:
+        map.AutoLearn();
+        maps_dirty = true;
+        break;
+      case OC::CONTROL_BUTTON_DOWN:
+        map.Init();
+        HS::frame.MIDIState.UpdateMidiChannelFilter();
+        HS::frame.MIDIState.UpdateMaxPolyphony();
+        maps_dirty = true;
+        break;
+      case OC::CONTROL_BUTTON_Y:
+        if (map_grab) map_grab = false;
+        else if (map_field >= 0) {
+          map_field = -1;
+          if (maps_dirty) { maps_dirty = false; OC::SaveAppData(); }
+        } else {
+          view = CHAIN;
+        }
+        break;
+      case OC::CONTROL_BUTTON_X:
+        map_field = -1; map_grab = false;
+        if (maps_dirty) { maps_dirty = false; OC::SaveAppData(); }
+        if (back.on) BackToDevice(); else view = CHAIN;
+        break;
+      default: break;
+    }
+    return;
+  }
   switch (event.control) {
     case OC::CONTROL_BUTTON_R:
-      if (view == MODS && mod_cursor >= OUT_CURSOR) {
+      if (view == MODS && IsOutCursor(mod_cursor)) {
         out_editing = !out_editing;
       } else if (view == MODS) {
         focus_mod = true;
@@ -1451,6 +1497,23 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
     tracks[track].player->BrowseMove(dir);  // either knob scrolls the browser
     return;
   }
+  if (view == MODS && mod_cursor >= MIDI_CURSOR && map_field >= 0) {
+    // the map's editor: R moves through the fields; grabbed, it changes one
+    if (left) return;
+    if (!map_grab) { map_field = constrain(map_field + dir, 0, 4); return; }
+    MIDIMapping& map = HS::frame.MIDIState.mapping[mod_cursor - MIDI_CURSOR];
+    switch (map_field) {
+      case 0: map.AdjustChannel(dir); break;
+      case 1: map.AdjustFunction(dir); break;
+      case 2: map.AdjustVoice(dir); break;
+      case 3: map.AdjustRangeLow(dir); break;
+      case 4: map.AdjustRangeHigh(dir); break;
+    }
+    HS::frame.MIDIState.UpdateMidiChannelFilter();
+    HS::frame.MIDIState.UpdateMaxPolyphony();
+    maps_dirty = true;
+    return;
+  }
   if (view == MODS) {
     if (!left) {
       if (out_editing) {
@@ -1461,7 +1524,7 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
       } else {
         mod_cursor = constrain(mod_cursor + dir, 0, LAST_CURSOR);
       }
-    } else if (mod_cursor >= OUT_CURSOR) {
+    } else if (IsOutCursor(mod_cursor)) {
       // L / R / LR, keeping the letter's place (A-D <-> E-H)
       uint8_t& s = cv_out_src[mod_cursor - OUT_CURSOR];
       const int g = constrain(OutGroup(s) + dir, 0, 2);
@@ -1836,6 +1899,7 @@ FLASHMEM void AppLoom::DrawDevice() const {
 // two pages of four plus CLOCK: the track's A-D, then the shared E-H
 FLASHMEM void AppLoom::DrawMods() const {
   using namespace loom;
+  if (mod_cursor >= MIDI_CURSOR) { DrawMidiMaps(); return; }
   if (mod_cursor >= OUT_CURSOR) { DrawOutputs(); return; }
   const int page = mod_cursor < NUM_MODS ? 0 : 1;
   if (linked && !page) DrawLinkLabel(1, 0);
@@ -1848,7 +1912,7 @@ FLASHMEM void AppLoom::DrawMods() const {
     gfxInvert(103, 0, 25, 8);
   } else {
     gfxPrint(110, 0, page + 1);
-    gfxPrint(116, 0, PSTR("/3"));
+    gfxPrint(116, 0, PSTR("/4"));
   }
   gfxLine(0, 9, 127, 9);
   constexpr int bw = 25;
@@ -1925,11 +1989,70 @@ FLASHMEM void AppLoom::DrawClockMark(int x, int y) {
 }
 
 // page 3: the 8 CV outputs, each with its source and its voltage as a bar
+// page 4: the MIDI maps M1-M32 (the same ones Phazerville's Setup edits),
+// in use filled; R push opens one: channel, type, voice, range
+FLASHMEM void AppLoom::DrawMidiMaps() const {
+  using namespace loom;
+  const int m = mod_cursor - MIDI_CURSOR;
+  const MIDIMapping& map = HS::frame.MIDIState.mapping[m];
+  char buf[24];
+  if (map_field < 0) gfxPrint(1, 0, PSTR("MIDI MAPS"));
+  else { snprintf(buf, sizeof(buf), "MIDI MAP M%d", m + 1); gfxPrint(1, 0, buf); }
+  DrawClockMark(96, 1);
+  gfxPrint(110, 0, PSTR("4/4"));
+  gfxLine(0, 9, 127, 9);
+  auto type_name = [&](char* b, size_t n) {
+    if (map.learning()) snprintf(b, n, "LEARN...");
+    else if (map.get_type() == MIDIMapSettings::CCONTROL) snprintf(b, n, "CC %d", map.get_subtype());
+    else snprintf(b, n, "%s", map.get_label());
+  };
+  auto chan_name = [&](char* b, size_t n) {
+    if (map.get_channel() >= 16) snprintf(b, n, "OMNI"); else snprintf(b, n, "%d", map.get_channel() + 1);
+  };
+  if (map_field < 0) {
+    // the grid: 8 x 4, numbered; in use filled, learning blinking
+    constexpr int cw = 16, ch = 11;
+    for (int i = 0; i < MIDIMAP_MAX; i++) {
+      const int x = (i % 8) * cw, y = 11 + (i / 8) * ch;
+      const MIDIMapping& mi = HS::frame.MIDIState.mapping[i];
+      snprintf(buf, sizeof(buf), "%d", i + 1);
+      gfxPrint(x + (cw - 6 * int(strlen(buf))) / 2, y + 2, buf);
+      if (mi.enabled() || (mi.learning() && (millis() / 300) % 2)) gfxInvert(x + 1, y + 1, cw - 2, ch - 1);
+      if (i == m) gfxFrame(x, y, cw, ch + 1);
+    }
+    // the map under the cursor
+    char t[12], c[8];
+    if (!map.enabled() && !map.learning()) snprintf(buf, sizeof(buf), "M%d  off", m + 1);
+    else { type_name(t, sizeof(t)); chan_name(c, sizeof(c)); snprintf(buf, sizeof(buf), "M%d ch%s %s", m + 1, c, t); }
+    gfxPrint(0, 56, buf);
+    return;
+  }
+  // the editor: five fields, R moves, R push grabs
+  static const char* const names[5] = {"CHAN", "TYPE", "VOICE", "LOW", "HIGH"};
+  for (int f = 0; f < 5; f++) {
+    const int y = 12 + f * 9;
+    gfxPrint(2, y, names[f]);
+    switch (f) {
+      case 0: chan_name(buf, sizeof(buf)); break;
+      case 1: type_name(buf, sizeof(buf)); break;
+      case 2: snprintf(buf, sizeof(buf), "%d", map.get_voice() + 1); break;
+      case 3: snprintf(buf, sizeof(buf), "%d", map.get_low()); break;
+      case 4: snprintf(buf, sizeof(buf), "%d", map.get_high()); break;
+    }
+    gfxPrint(44, y, buf);
+    if (f == map_field) {
+      gfxInvert(0, y - 1, 40, 9);
+      if (map_grab) gfxInvert(42, y - 1, 6 * int(strlen(buf)) + 3, 9);
+    }
+  }
+  gfxPrint(0, 56, PSTR("A:learn B:clear"));
+}
+
 FLASHMEM void AppLoom::DrawOutputs() const {
   using namespace loom;
   gfxPrint(1, 0, PSTR("CV OUTPUTS"));
   DrawClockMark(96, 1);
-  gfxPrint(110, 0, PSTR("3/3"));
+  gfxPrint(110, 0, PSTR("3/4"));
   gfxLine(0, 9, 127, 9);
   constexpr int bw = 32, bh = 21;
   for (int o = 0; o < NUM_CV_OUTS; o++) {
