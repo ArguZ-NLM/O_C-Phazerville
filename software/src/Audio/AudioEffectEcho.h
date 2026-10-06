@@ -38,7 +38,11 @@ public:
   // allocate and clear everything; call while the stream is disconnected
   bool Acquire() {
     if (!mem) mem = static_cast<float*>(calloc(MEM_TOTAL, sizeof(float)));
-    if (!pre) pre = static_cast<int16_t*>(calloc(2 * PRE_MAX, sizeof(int16_t)));
+    // the pre-delay is read in order: PSRAM suits it (RAM2 stays free)
+    if (!pre) {
+      pre = static_cast<int16_t*>(extmem_malloc(2 * PRE_MAX * sizeof(int16_t)));
+      if (pre) memset(pre, 0, 2 * PRE_MAX * sizeof(int16_t));
+    }
     if (!rv) rv = TakeLines();
     for (auto& b : dbuf) {
       if (!b) b = static_cast<int16_t*>(extmem_malloc(dlen * sizeof(int16_t)));
@@ -50,7 +54,7 @@ public:
   void Release() {
     free(mem);
     mem = nullptr;
-    free(pre);
+    if (pre) extmem_free(pre);
     pre = nullptr;
     GiveLines(rv);
     rv = nullptr;
