@@ -610,10 +610,12 @@ FLASHMEM __attribute__((noinline)) static void poll_unlock_combo() {
 }
 
 FLASHMEM __attribute__((noinline)) void Task() {
+#ifndef LOOM_ONLY  // Loom: the slot screen's gestures on any hardware, the bus only on the 200e
   if (!Buchla200eHardware()) return;
+#endif
   // bus address: 22 (the manager's) when active, default when passive
   static int8_t addr_mode = -1;
-  if (addr_mode != (int8_t)active_mode) {
+  if (Buchla200eHardware() && addr_mode != (int8_t)active_mode) {
     addr_mode = active_mode;
     PresetBus::SetModuleAddressRuntime(active_mode ? 0x22 : 0x3C);
   }
