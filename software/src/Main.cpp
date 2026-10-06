@@ -65,8 +65,8 @@ MIDI_CREATE_INSTANCE(HardwareSerial, Serial8, MIDI1);
 #include "Wire.h"
 #ifdef MULTIBOOT
 #include "util/cachedisable.h"
-extern "C" uint8_t external_psram_size;  // MB of PSRAM found at start (Teensy core)
 #endif
+extern "C" uint8_t external_psram_size;  // MB of PSRAM found at start (Teensy core)
 
 FLASHMEM
 void ScanI2C() {
