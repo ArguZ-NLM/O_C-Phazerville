@@ -38,7 +38,7 @@ public:
   // allocate and clear everything; call while the stream is disconnected
   bool Acquire() {
     if (!mem) mem = static_cast<float*>(calloc(MEM_TOTAL, sizeof(float)));
-    if (!rv) rv = static_cast<int16_t*>(calloc(RV_TOTAL, sizeof(int16_t)));
+    if (!rv) rv = TakeLines();
     for (auto& b : dbuf) {
       if (!b) b = static_cast<int16_t*>(extmem_malloc(dlen * sizeof(int16_t)));
     }
@@ -49,7 +49,7 @@ public:
   void Release() {
     free(mem);
     mem = nullptr;
-    free(rv);
+    GiveLines(rv);
     rv = nullptr;
     for (auto& b : dbuf) {
       if (b) extmem_free(b);
@@ -138,7 +138,12 @@ private:
   static constexpr int RV_CAP[RL] = {1585, 1941, 2279, 2645, 3039, 3401, 3797, 4181};  // RV_LEN + RV_MOD + 4
   static constexpr int RV_OFS[RL] = {0, 1585, 3526, 5805, 8450, 11489, 14890, 18687};
   static constexpr int RV_TOTAL = 22868;
+  static_assert(RV_TOTAL == 22868, "the RAM1 pool below has this size");
   static constexpr float RV_Q = 8192.0f;  // int16 per 1.0 (headroom x4)
+  // the lines live in RAM1 (no cache misses: the reverb costs half): room
+  // for two reverbs (one per Loom track), more from the heap
+  static int16_t* TakeLines();
+  static void GiveLines(int16_t* p);
 
   struct Tap {
     volatile int target = MIN_TAP;
@@ -212,6 +217,21 @@ private:
 
   void ReadTap(int ch, int t, int16_t* out);
 };
+
+static int16_t rv_pool[2][22868];  // RAM1 (= AudioEffectEcho::RV_TOTAL)
+static bool rv_pool_used[2] = {false, false};
+
+FLASHMEM int16_t* AudioEffectEcho::TakeLines() {
+  for (int k = 0; k < 2; k++)
+    if (!rv_pool_used[k]) { rv_pool_used[k] = true; memset(rv_pool[k], 0, sizeof(rv_pool[k])); return rv_pool[k]; }
+  return static_cast<int16_t*>(calloc(RV_TOTAL, sizeof(int16_t)));
+}
+
+FLASHMEM void AudioEffectEcho::GiveLines(int16_t* p) {
+  for (int k = 0; k < 2; k++)
+    if (p == rv_pool[k]) { rv_pool_used[k] = false; return; }
+  free(p);
+}
 
 // Reads one tap's block; crossfades when its time has changed.
 FLASHMEM void AudioEffectEcho::ReadTap(int ch, int t, int16_t* out) {
