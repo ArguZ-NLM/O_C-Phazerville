@@ -13,8 +13,9 @@
 
 class RingsVoice {
 public:
-  // the models, as on the module
-  enum Model { MODAL, SYMPATHETIC, STRING, FM, SYMPATHETIC_QUANTIZED, STRING_REVERB, MODELS };
+  // the models, as on the module (without STRING_AND_REVERB: Loom's ECHO
+  // does the reverb)
+  enum Model { MODAL, SYMPATHETIC, STRING, FM, SYMPATHETIC_QUANTIZED, MODELS };
 
   bool Init();   // takes its memory (RAM2 heap + PSRAM for the reverb); false if there is none
   void Free();

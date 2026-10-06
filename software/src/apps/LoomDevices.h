@@ -3059,9 +3059,9 @@ constexpr int MAX_OPTIONS = 3;
 /////////////////////////////////////////////////////////////////
 // MODAL (Resonator slot, 2nd choice): Mutable Instruments Rings (its DSP,
 // MIT, in src/extern/mi). MODEL picks the resonator: MODAL (a struck
-// object, ~60 partials), SYMP (sympathetic strings), STRNG (inharmonic
-// string), FM (FM voice), SYMQ (sympathetic strings on chords), S+REV
-// (string and reverb). The track (L+R) excites it and strums it by its
+// object, up to 32 partials), SYMP (sympathetic strings), STRNG
+// (inharmonic string), FM (FM voice), SYMQ (sympathetic strings on chords).
+// (Rings' string + reverb is left out: ECHO does the reverb.) The track (L+R) excites it and strums it by its
 // onsets; A (HIT) strikes it by hand. Odd partials / strings left, even
 // right, as far apart as SPRD.
 /////////////////////////////////////////////////////////////////
@@ -3173,7 +3173,7 @@ FLASHMEM void ModalDevice::Format(int p, char* buf, size_t n) const {
     static const char* const names[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
     snprintf(buf, n, "%s%d", names[val[NOTE] % 12], val[NOTE] / 12);
   } else if (p == MODEL) {
-    static const char* const models[RingsVoice::MODELS] = {"MODAL", "SYMP", "STRNG", "FM", "SYMQ", "S+REV"};
+    static const char* const models[RingsVoice::MODELS] = {"MODAL", "SYMP", "STRNG", "FM", "SYMQ"};
     snprintf(buf, n, "%s", models[constrain(val[MODEL], 0, RingsVoice::MODELS - 1)]);
   } else {
     Device::Format(p, buf, n);
@@ -3233,8 +3233,6 @@ FLASHMEM void ModalDevice::DrawViz(int x, int y, int w, int h) {
         py = yy;
       }
     }
-    if (model == RingsVoice::STRING_REVERB)  // the reverb: a few dots drifting off
-      for (int k = 0; k < 6; k++) gfxPixel(x + (millis() / 40 + k * 21) % ww, y + 2 + (k * 7) % (h - 4));
   }
   if (hit_at && millis() - hit_at < 120) gfxRect(x, y, 4, 4);
   gfxFrame(x + w - 4, y, 4, h);
