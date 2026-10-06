@@ -1169,9 +1169,12 @@ FLASHMEM void ReelDevice::DrawViz(int x, int y, int w, int h) {
   constexpr int HIST = AudioEffectReel::HIST;
   uint8_t hist[HIST];
   fx.ReadHistory(hist);
+  // scaled to the loop's loudest point, so a quiet loop still has a shape
+  int top = 32;
+  for (int k = 0; k < HIST; k++) top = std::max<int>(top, hist[k]);
   for (int k = 0; k < HIST; k++) {
     const int cx = x + k * w / HIST;
-    const int a = int(sqrtf(hist[k] / 255.0f) * (h / 2 - 1));
+    const int a = int(sqrtf(float(hist[k]) / top) * (h / 2 - 1));
     gfxLine(cx, cy - a, cx, cy + a);
   }
   if (st != AudioEffectReel::REC) {

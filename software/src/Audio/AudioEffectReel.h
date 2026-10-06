@@ -133,10 +133,20 @@ public:
   }
   // levels over the recorded loop (REC: over what is recorded so far),
   // HIST columns
+  // HIST columns, read from the audio itself (a short loop only covers a
+  // slot or two of the coarse hist, which drew a solid block)
   void ReadHistory(uint8_t* dst) const {
     const size_t n = st == REC ? wpos : len;
-    for (int k = 0; k < HIST; k++)
-      dst[k] = n && cap ? hist[std::min<size_t>(HIST - 1, size_t(k) * n / cap)] : 0;
+    if (!n || !cap) { std::fill(dst, dst + HIST, 0); return; }
+    const size_t span = std::max<size_t>(1, n / HIST);
+    const size_t step = std::max<size_t>(1, span / 48);  // ~48 reads a column is plenty
+    for (int k = 0; k < HIST; k++) {
+      const size_t from = size_t(k) * n / HIST, to = std::min(n, from + span);
+      int pk = 0;
+      for (size_t i = from; i < to; i += step)
+        pk = std::max(pk, std::max(abs(buf[0][i]), abs(buf[1][i])));
+      dst[k] = uint8_t(std::min(255, pk >> 7));
+    }
   }
 
   void update() override;
