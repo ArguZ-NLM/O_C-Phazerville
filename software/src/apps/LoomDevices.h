@@ -1039,7 +1039,7 @@ FLASHMEM void InputDevice::DrawMini(int x, int y, int w, int h) {
 // through the track's input; IN is the input's source, so it is set here too.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef SPOOL_DEF = {
-  "SPOOL", "REL", 7, {"REC", "STP"},  // tag REL kept for saved files (was REEL)
+  "SPOOL", "REL", 8, {"REC", "STP"},  // tag REL kept for saved files (was REEL)
   {
     {"IN", 0, 4, 1, UNI},  // like INPUT's SOURC
     {"SPEED", -200, 200, 100, BI},
@@ -1048,13 +1048,17 @@ PROGMEM static const DeviceDef SPOOL_DEF = {
     {"DUB", 0, 100, 80, UNI},  // how much of the old loop stays when overdubbing
     {"MON", 0, 100, 100, UNI}, // the live input passed through
     {"LEVEL", 0, 100, 100, UNI},
+    {"VIEW", 0, 9, 0, UNI},  // the picture only: ALL, or a window round the play head (REEL_VIEW_MS)
   },
   {"", ""},
 };
 
+// SPOOL's VIEW steps after ALL, in ms
+PROGMEM static const uint16_t REEL_VIEW_MS[9] = {2000, 1000, 500, 200, 100, 50, 20, 10, 5};
+
 class ReelDevice : public Device {
 public:
-  enum { IN, SPEED, START, LEN, DUB, MON, LEVEL };
+  enum { IN, SPEED, START, LEN, DUB, MON, LEVEL, VIEW };
   static constexpr float MAX_SECS = 16.0f;
   explicit ReelDevice(InputDevice* i) : Device(SPOOL_DEF), input(i) {}
   int Step(int p, int v, int dir) const override {  // OUT A only on track B
@@ -1092,6 +1096,8 @@ public:
 private:
   AudioEffectReel fx;
   InputDevice* input;
+  float view_range = 1024.0f;  // zoomed picture's auto range
+  void DrawZoom(int x, int y, int w, int h);
 };
 
 // called while the stream is not patched in
@@ -1128,6 +1134,12 @@ FLASHMEM void ReelDevice::Apply(int p) {
 FLASHMEM void ReelDevice::Format(int p, char* buf, size_t n) const {
   if (p == SPEED || p == START || p == LEN) snprintf(buf, n, "%d%%", val[p]);
   else if (p == IN) snprintf(buf, n, "%s", InputSourceName(val[p]));
+  else if (p == VIEW && val[p] <= 0) snprintf(buf, n, "ALL");
+  else if (p == VIEW) {
+    const int ms = REEL_VIEW_MS[constrain(val[p] - 1, 0, 8)];
+    if (ms >= 1000) snprintf(buf, n, "%ds", ms / 1000);
+    else snprintf(buf, n, "%dms", ms);
+  }
   else Device::Format(p, buf, n);
 }
 
@@ -1166,6 +1178,9 @@ FLASHMEM void ReelDevice::DrawViz(int x, int y, int w, int h) {
     gfxPrint(x + w / 2 - 21, cy - 12, PSTR("A: REC"));
     return;
   }
+  if (cur[VIEW] > 0) {
+    DrawZoom(x, y, w, h);
+  } else {
   constexpr int HIST = AudioEffectReel::HIST;
   uint8_t hist[HIST];
   fx.ReadHistory(hist);
@@ -1192,6 +1207,7 @@ FLASHMEM void ReelDevice::DrawViz(int x, int y, int w, int h) {
   const int cl = std::max(x, hx - 1), cr = std::min(x + w - 1, hx + 1);
   graphics.clearRect(cl, y + 1, cr - cl + 1, h - 2);
   gfxLine(hx, y + 1, hx, base - 1);
+  }
   // saving: A held fills a bar, then the file is written, then its name
   if (save_hold > 0.0f || saving >= 0.0f || (saved_at && millis() - saved_at < 1500)) {
     char t[24];
@@ -1226,6 +1242,48 @@ FLASHMEM void ReelDevice::DrawViz(int x, int y, int w, int h) {
       gfxInvert(x + w - 26, y, 20, 9);
     }
   }
+}
+
+// VIEW zoomed: the waveform round the play head (in the middle; while
+// recording, at the right edge), the loop's ends marked where they show
+FLASHMEM void ReelDevice::DrawZoom(int x, int y, int w, int h) {
+  const int cy = y + h / 2, base = y + h - 1, half = h / 2 - 1;
+  const auto st = fx.state();
+  const bool rec = st == AudioEffectReel::REC;
+  const long span = long(REEL_VIEW_MS[constrain(cur[VIEW] - 1, 0, 8)] * (AUDIO_SAMPLE_RATE_EXACT / 1000.0f));
+  const long head = long(fx.HeadFrame());
+  const int hx = rec ? x + w - 1 : x + w / 2;
+  const long from = head - span * (hx - x) / w;
+  int16_t lo[128], hi[128];
+  const int cols = std::min(w, 128);
+  fx.ReadWave(from, span, cols, lo, hi);
+  int pk = 0;
+  for (int k = 0; k < cols; k++) pk = std::max({pk, abs(int(lo[k])), abs(int(hi[k]))});
+  view_range = std::max({float(pk), view_range * 0.95f, 1024.0f});
+  const int range = int(view_range) + 1;
+  gfxDottedLine(x, cy, x + w - 1, cy, 3);
+  int plo = 0, phi = 0;
+  for (int k = 0; k < cols; k++) {
+    int a = lo[k] * half / range, b = hi[k] * half / range;
+    if (k) { a = std::min(a, phi); b = std::max(b, plo); }  // joined to the last column
+    if (lo[k] || hi[k]) gfxLine(x + k, cy - b, x + k, cy - a);
+    plo = lo[k] * half / range; phi = hi[k] * half / range;
+  }
+  // the looping part's ends, where they fall in view
+  if (!rec && fx.Length()) {
+    float fa, fb;
+    fx.Window(fa, fb);
+    const long n = long(fx.Length());
+    for (long e : {long(fa * n), long(std::min(fb, 1.0f) * n)}) {
+      for (long rep = -1; rep <= 1; rep++) {  // the view may wrap round the loop
+        const long px = x + (e + rep * n - from) * w / span;
+        if (px < x || px >= x + w) continue;
+        for (int k = 0; k < 5; k++) { gfxPixel(px, y + k); gfxPixel(px, base - k); }
+      }
+    }
+  }
+  graphics.clearRect(std::max(x, hx - 1), y + 1, std::min(3, x + w - std::max(x, hx - 1)), h - 2);
+  gfxLine(hx, y + 1, hx, base - 1);
 }
 
 FLASHMEM void ReelDevice::DrawMini(int x, int y, int w, int h) {

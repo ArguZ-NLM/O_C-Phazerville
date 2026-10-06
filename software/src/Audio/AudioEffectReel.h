@@ -133,6 +133,30 @@ public:
   }
   // levels over the recorded loop (REC: over what is recorded so far),
   // HIST columns
+  // the zoomed picture: cols columns of `span` frames from `from` (may be
+  // < 0 or past the end: wraps round the loop when playing, blank while
+  // recording), the lowest / highest point of each (L and R mixed)
+  size_t HeadFrame() const {
+    if (st == REC) return wpos;
+    return len ? (ws + size_t(off)) % len : 0;
+  }
+  void ReadWave(long from, long span, int cols, int16_t* lo, int16_t* hi) const {
+    const long n = long(st == REC ? wpos : len);
+    for (int k = 0; k < cols; k++) {
+      const long a = from + span * k / cols, b = std::max(a + 1, from + span * (k + 1) / cols);
+      const long step = std::max(1L, (b - a) / 48);
+      int l = 32767, h = -32768;
+      for (long i = a; i < b && n > 0; i += step) {
+        long j = i;
+        if (st == REC) { if (j < 0 || j >= n) continue; }
+        else j = ((j % n) + n) % n;
+        const int v = (buf[0][j] + buf[1][j]) >> 1;
+        l = std::min(l, v); h = std::max(h, v);
+      }
+      if (l > h) l = h = 0;
+      lo[k] = int16_t(l); hi[k] = int16_t(h);
+    }
+  }
   // HIST columns, read from the audio itself (a short loop only covers a
   // slot or two of the coarse hist, which drew a solid block)
   void ReadHistory(uint8_t* dst) const {
