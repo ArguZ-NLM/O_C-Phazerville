@@ -1634,12 +1634,10 @@ FLASHMEM void AppLoom::DrawDevice() const {
       if (show_mode) d->FormatMode(p, mb, sizeof(mb));
       const char* nm = show_mode ? mb : d->Name(p);
       PrintCentred(x, 43, nm);
-      // has modes: a small square (a 5-letter name: just outside its column)
-      if (pd.nmodes) {
-        if (strlen(nm) >= 5) gfxRect(x + 33, 43, 2, 2);  // in the gap before the next name
-        else gfxRect(x + 29, 43, 2, 2);
-      }
     }
+    // has modes (the left knob): a small square at the right end of the
+    // value lane, out of the way of the names
+    if (pd.nmodes) gfxRect(x + 29, 59, 2, 2);
     if (d->ModsLive(p) && !(sel && mod_mode)) { // modulated: small wave mark
       gfxPixel(x + 27, 49); gfxPixel(x + 28, 48); gfxPixel(x + 29, 49); gfxPixel(x + 30, 48);
     }
