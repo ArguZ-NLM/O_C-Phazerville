@@ -49,6 +49,46 @@ public:
     for (auto b : old) if (b) extmem_free(b);
     return true;
   }
+  // --- SPOOL: memory only for what is recorded ---
+  // Empty, it keeps just PARK frames (the live input still passes through);
+  // REC first takes the longest buffer that fits (Grow, whole seconds down
+  // to 1 s), and when the recording ends the loop moves into a buffer of its
+  // own length (Shrink), so the rest goes back for the other track.
+  static constexpr size_t PARK = 2 * AUDIO_BLOCK_SAMPLES;
+  // UI thread, while EMPTY, right before the press that starts REC
+  bool Grow(float secs) {
+    for (int s = int(secs); s >= 1; s--) {
+      const size_t n = size_t(s * AUDIO_SAMPLE_RATE_EXACT);
+      if (n <= cap) return true;
+      if (Swap(n, false)) return true;
+    }
+    return cap > PARK;
+  }
+  // main loop, while the stream is not patched in: just the small buffer
+  bool Begin() { Release(); return Swap(PARK, true); }
+  // main loop: empty again (cleared) -> back to the small buffer
+  void Park() {
+    if (st == EMPTY && !press && cap > PARK) Swap(PARK, true);
+  }
+  // main loop: after the first recording, keep just the loop
+  void Shrink() {
+    if ((st != PLAY && st != STOPPED) || !len || cap <= len + PARK) return;
+    const size_t n = len;
+    int16_t* l = static_cast<int16_t*>(extmem_malloc(n * sizeof(int16_t)));
+    int16_t* r = l ? static_cast<int16_t*>(extmem_malloc(n * sizeof(int16_t))) : nullptr;
+    if (!l || !r) { if (l) extmem_free(l); return; }
+    memcpy(l, buf[0], n * sizeof(int16_t));
+    memcpy(r, buf[1], n * sizeof(int16_t));
+    int16_t* old[2] = {l, r};
+    AudioNoInterrupts();
+    if ((st == PLAY || st == STOPPED) && len == n) {  // not overdubbing meanwhile
+      old[0] = buf[0]; old[1] = buf[1];
+      buf[0] = l; buf[1] = r;
+      cap = n;
+    }
+    AudioInterrupts();
+    for (auto b : old) extmem_free(b);
+  }
   void Release() {
     for (auto& b : buf) { if (b) extmem_free(b); b = nullptr; }
     cap = 0;
@@ -202,6 +242,22 @@ private:
   volatile size_t ex_ws = 0, ex_wl = 0;
   volatile bool exact = false;
   uint8_t hist[HIST] = {};
+
+  // a new, empty buffer of n frames swapped in between two audio updates
+  // (cleared or not: REC writes before anything is read)
+  bool Swap(size_t n, bool clear) {
+    int16_t* l = static_cast<int16_t*>(clear ? extmem_calloc(n, sizeof(int16_t)) : extmem_malloc(n * sizeof(int16_t)));
+    int16_t* r = l ? static_cast<int16_t*>(clear ? extmem_calloc(n, sizeof(int16_t)) : extmem_malloc(n * sizeof(int16_t))) : nullptr;
+    if (!l || !r) { if (l) extmem_free(l); return false; }
+    int16_t* old[2];
+    AudioNoInterrupts();
+    old[0] = buf[0]; old[1] = buf[1];
+    buf[0] = l; buf[1] = r;
+    cap = n;
+    AudioInterrupts();
+    for (auto b : old) if (b) extmem_free(b);
+    return true;
+  }
 
   void Reset() {
     st = EMPTY;

@@ -43,10 +43,10 @@
 extern "C" uint8_t external_psram_size;  // MB of PSRAM found at start (Teensy core)
 
 namespace loom {
-// the longest SPOOL loop / PLAYER sample held in memory: 16 s with 16 MB of
-// PSRAM; 8 s with less, so both tracks still fit (SPOOL or PLAYER, SPRAY and
-// ECHO each: about 4.6 MB a track at 16 s)
-inline float BigSecs() { return external_psram_size >= 16 ? 16.0f : 8.0f; }
+// the longest SPOOL loop / PLAYER sample held in memory. They take only
+// what they hold (SPOOL: what is free when REC starts, then just the loop),
+// so on 8 MB of PSRAM they share what ECHO and SPRAY leave
+inline float BigSecs() { return 16.0f; }
 
 enum ParamKind : uint8_t { UNI, BI, LIST };
 
@@ -1087,6 +1087,9 @@ public:
     fx.processorUsageMaxReset();
   }
   void ClearLoop() { fx.Clear(); cleared_at = millis() | 1; hold = 0.0f; }  // B held for 3 s
+  void Idle() override;
+  size_t HeldFrames() const { return fx.Capacity(); }
+  uint32_t no_mem_at = 0;   // REC found no memory free (shown for a moment)
   // saving the loop to the SD card (the app writes it, A held for 2 s)
   const int16_t* LoopData(int c) const { return fx.Data(c); }
   size_t LoopLength() const {
@@ -1109,7 +1112,7 @@ private:
 // called while the stream is not patched in
 FLASHMEM bool ReelDevice::Activate() {
   if (active) return fx.ready();
-  fx.Acquire(MaxSecs());
+  fx.Begin();  // a small buffer: the big one comes with REC (see Action)
   // IN is the input's own choice: take it over rather than impose ours
   if (input) val[IN] = cur[IN] = input->val[0];
   ApplyAll();
@@ -1152,8 +1155,24 @@ FLASHMEM void ReelDevice::Format(int p, char* buf, size_t n) const {
 // A: REC -> PLAY -> DUB -> PLAY (stopped: play from the start); B: stop
 // (held for 3 s: clear, see the app)
 FLASHMEM void ReelDevice::Action(int a) {
-  if (a == 0) fx.Press();
-  else fx.Stop();
+  if (a == 0) {
+    // the first REC: as much memory as is free, up to MaxSecs
+    if (fx.state() == AudioEffectReel::EMPTY && !fx.Grow(MaxSecs())) {
+      no_mem_at = millis() | 1;
+      return;
+    }
+    fx.Press();
+  } else {
+    fx.Stop();
+  }
+}
+
+// main loop: a finished recording keeps just its length; cleared, the
+// buffer goes back to the small one
+FLASHMEM void ReelDevice::Idle() {
+  if (!active) return;
+  fx.Shrink();
+  fx.Park();
 }
 
 FLASHMEM bool ReelDevice::ActionLit(int a) const {
@@ -1164,6 +1183,10 @@ FLASHMEM bool ReelDevice::ActionLit(int a) const {
 // the loop as a waveform, the looping part (START / LEN) bracketed, the
 // play head running through it; REC / DUB in the corner
 FLASHMEM void ReelDevice::DrawViz(int x, int y, int w, int h) {
+  if (no_mem_at && millis() - no_mem_at < 1500) {
+    gfxPrint(x + 22, y + h / 2 - 4, PSTR("memory full"));
+    return;
+  }
   if (!fx.ready()) {
     gfxPrint(x + 22, y + h / 2 - 4, PSTR("out of memory"));
     return;

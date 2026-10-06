@@ -1158,6 +1158,7 @@ FLASHMEM void AppLoom::MainLoop() {
         }
       }
       if (tr.player && tr.choice[SOURCE] == 2) tr.player->Idle();
+      if (tr.reel && tr.choice[SOURCE] == 1) tr.reel->Idle();
       for (int s = SOURCE + 1; s < SLOT_COUNT; s++)  // devices with main-loop work (STRETCH)
         if (Device* d = tr.current(s)) d->Idle();
     }
@@ -1203,6 +1204,10 @@ FLASHMEM void AppLoom::MainLoop() {
   AudioProcessorUsageMaxReset();
   AudioMemoryUsageMaxReset();
   Serial.printf("  load:%s\n", loom::load_note);
+  for (int t = 0; t < loom::NUM_TRACKS; t++)  // SPOOL's memory: the loop, or the small buffer
+    if (loom::tracks[t].reel && loom::tracks[t].choice[loom::SOURCE] == 1)
+      Serial.printf("  SPOOL %c: %u frames held, loop %u\n", 'A' + t,
+        unsigned(loom::tracks[t].reel->HeldFrames()), unsigned(loom::tracks[t].reel->LoopLength()));
   for (int t = 0; t < loom::NUM_TRACKS; t++) {
     if (!loom::tracks[t].player || loom::tracks[t].choice[loom::SOURCE] != 2) continue;
     char dbg[200];
