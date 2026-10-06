@@ -1927,6 +1927,7 @@ namespace loom {
     const bool remap_mix = use && !memcmp(tag, "MIX", 4) && n == 7;  // MIX came in first
     const bool reorder_out = use && !memcmp(tag, "MIX", 4) && load_version < 5;
     const bool remap_mdl = use && !memcmp(tag, "MDL", 4) && n == 7;  // MODEL came in before WET
+    const bool remap_str = use && !memcmp(tag, "STR", 4) && n == 7;  // SPRD came in before MIX
     // before v6 the reverb's 6th was SIZE (now PRE: left at its default);
     // DECAY's value becomes ROOM, TONE's WALL (same places)
     const bool skip_size = use && !memcmp(tag, "ECO", 4) && load_version < 6;
@@ -1943,7 +1944,7 @@ namespace loom {
       if (remap_mix) p = q + 1;
       // before v5 OUTPUT's page 2 was BANDZ LOW MID HIGH: now LOW MID HIGH OTT
       if (reorder_out && p >= 4) p = p == 4 ? 7 : p - 1;
-      if (remap_mdl && p == 6) p = 7;
+      if ((remap_mdl || remap_str) && p == 6) p = 7;
       if (skip_size && p == 5) { p = q; continue; }
       d->mod_amt2[p] = constrain(amt2, -100, 100);
       d->mod_bus2[p] = bus2 <= MOD_BUSES ? bus2 : 0;
@@ -1963,7 +1964,7 @@ namespace loom {
       bi = mv(bi); bi2 = mv(bi2);
     }
     if (remap_mix) { bi = uint8_t(bi << 1); bi2 = uint8_t(bi2 << 1); }
-    if (remap_mdl) {
+    if (remap_mdl || remap_str) {
       auto mv = [](uint8_t b) { return uint8_t((b & 0x3F) | ((b & 0x40) << 1)); };
       bi = mv(bi); bi2 = mv(bi2);
     }

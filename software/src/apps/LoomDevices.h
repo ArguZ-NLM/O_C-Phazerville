@@ -3456,14 +3456,16 @@ FASTRUN void AudioStretch::update() {
 }
 
 PROGMEM static const DeviceDef STRETCH_DEF = {
-  "STRETCH", "STR", 7, {"FRZ", ""},
+  "STRETCH", "STR", 8, {"FRZ", ""},
   {
-    {"PITCH", -24, 24, 0, BI},     // semitones, without changing the speed
-    {"POS", 0, 100, 20, UNI},      // how far back
-    {"SIZE", 0, 100, 50, UNI},     // the window: short = quick and grainy, long = smooth
+    // modes (like SPRAY's): random variation per window
+    {"PITCH", -24, 24, 0, BI, 0, 25, 0},  // semitones, without changing the speed; mode: pitch spread 0..24
+    {"POS", 0, 100, 20, UNI, 0, 21, 0},   // how far back; mode: position variation 0..100% in 5% steps
+    {"SIZE", 0, 100, 50, UNI, 0, 21, 0},  // the window: short = quick and grainy, long = smooth; mode: size spread
     {"SPEED", -200, 200, 100, BI}, // frozen: through the buffer (%, < 0 backwards)
     {"TONE", -50, 50, 0, BI},      // left lowpass, right highpass
     {"FDBK", 0, 100, 0, UNI},
+    {"SPRD", 0, 100, 0, UNI},      // stereo spread: the windows wander left / right
     {"MIX", 0, 100, 100, UNI},
   },
   {"", ""},
@@ -3471,8 +3473,9 @@ PROGMEM static const DeviceDef STRETCH_DEF = {
 
 class StretchDevice : public Device {
 public:
-  enum { PITCH, POS, SIZE, SPEED, TONE, FDBK, MIX };
+  enum { PITCH, POS, SIZE, SPEED, TONE, FDBK, SPRD, MIX };
   static constexpr float BUF_SECS = 4.0f;
+  void FormatMode(int p, char* buf, size_t n) const override;
   StretchDevice() : Device(STRETCH_DEF) {}
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
@@ -3521,7 +3524,16 @@ FLASHMEM void StretchDevice::Apply(int p) {
     }
     default:
       fx.voice.Set(cur[POS] * 0.01f, cur[SIZE] * 0.01f, cur[PITCH], cur[SPEED] * 0.01f, frozen);
+      fx.voice.SetSpread(mode[PITCH], mode[SIZE] * 0.05f, mode[POS] * 0.025f, cur[SPRD] * 0.01f);
   }
+}
+
+// the spreads, as on SPRAY: OFF, then +-semitones (PITCH) or percent
+FLASHMEM void StretchDevice::FormatMode(int p, char* buf, size_t n) const {
+  if ((p == PITCH || p == SIZE || p == POS) && mode[p] == 0) snprintf(buf, n, "OFF");
+  else if (p == PITCH) snprintf(buf, n, "+-%d", mode[p]);
+  else if (p == SIZE || p == POS) snprintf(buf, n, "%d%%", mode[p] * 5);
+  else Device::FormatMode(p, buf, n);
 }
 
 FLASHMEM void StretchDevice::Format(int p, char* buf, size_t n) const {
@@ -3536,15 +3548,40 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
   const float pk = fx.peak;
   fx.peak = 0.0f;
   out_m.Hit(pk);
-  const int ww = w - 8, cy = y + h / 2;
+  const int ww = w - 8, cy = y + h / 2, base = y + h - 1;
   gfxDottedLine(x, cy, x + ww - 1, cy, 2);
   if (!frozen) gfxLine(x + ww - 1, y + 2, x + ww - 1, y + h - 3);  // now: the record head
   float pos = cur[POS] * 0.01f + (frozen ? fx.voice.Scrub() : 0.0f);
   pos -= floorf(pos);
-  const int px = x + int((1.0f - pos) * (ww - 1));
-  const int bw = 4 + cur[SIZE] * (ww / 4) / 100;
-  const int py = cy - cur[PITCH] * (h / 2 - 4) / 24;
-  gfxFrame(constrain(px - bw / 2, x, x + ww - bw), py - 3, bw, 7);
+  auto pos_x = [&](float p) { p -= floorf(p); return x + int((1.0f - p) * (ww - 1)); };
+  const float semis_px = float(h / 2 - 4) / 24.0f;
+  // the variations' reach, like SPRAY's: POS as brackets either side, PITCH
+  // as a dotted line up and down through the middle
+  const float pv = mode[POS] * 0.025f;
+  if (pv > 0.0f) {
+    const int wl = std::max(x, pos_x(pos + pv)), wr = std::min(x + ww - 1, pos_x(pos - pv));
+    for (int px = wl; px <= wr; px++) { gfxPixel(px, y); gfxPixel(px, base); }
+    for (int k = 0; k < 5; k++) {
+      gfxPixel(wl, y + k); gfxPixel(wr, y + k);
+      gfxPixel(wl, base - k); gfxPixel(wr, base - k);
+    }
+  }
+  const int pyc = cy - int(cur[PITCH] * semis_px);
+  if (mode[PITCH] > 0) {
+    const int a = int(mode[PITCH] * semis_px);
+    for (int yy = std::max(y + 1, pyc - a); yy <= std::min(base - 1, pyc + a); yy += 2) gfxPixel(pos_x(pos), yy);
+  }
+  // the window playing now: POS back from now (plus its variation), as wide
+  // as SIZE, raised or lowered by PITCH; frozen, it runs through the buffer
+  const int px = pos_x(pos + fx.voice.DPos());
+  const float sz = constrain(cur[SIZE] * 0.01f + fx.voice.DSize(), 0.0f, 1.0f);
+  const int bw = 4 + int(sz * (ww / 4));
+  const int py = cy - int((cur[PITCH] + fx.voice.DPitch()) * semis_px);
+  const int bx = constrain(px - bw / 2, x, x + ww - bw);
+  graphics.clearRect(bx, py - 3, bw, 7);
+  gfxFrame(bx, py - 3, bw, 7);
+  // SPRD: a dot inside the box, where it sits left / right
+  if (cur[SPRD] > 0) gfxPixel(bx + 1 + int((fx.voice.Pan() + 1.0f) * 0.5f * (bw - 3)), py);
   if (frozen) {
     gfxPrint(x + 1, y + 1, PSTR("FRZ"));
     gfxInvert(x, y, 20, 9);
