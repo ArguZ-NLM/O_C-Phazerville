@@ -790,11 +790,12 @@ FLASHMEM void MixDevice::DrawMini(int x, int y, int w, int h) {
 // INPUT (Source): picks the track's source from the audio inputs
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef INPUT_DEF = {
-  "INPUT", "IN", 3, {"", ""},
+  "INPUT", "IN", 4, {"", ""},
   {
     {"SOURC", 0, 4, 0, UNI},  // L+R, L, R, OFF, and on track B: OUT A (see InputSourceName)
     {"GAIN", 0, 200, 100, UNI},
     {"WIDTH", 0, 200, 100, UNI},
+    {"VIEW", 0, 8, 2, UNI},   // the picture only: how much time it shows (see VIEW_MS)
   }
 };
 
@@ -804,6 +805,9 @@ static const char* InputSourceName(int s) {
   static const char* const names[5] = {"L+R", "L", "R", "OFF", "OUT A"};
   return names[constrain(s, 0, 4)];
 }
+
+// INPUT's VIEW steps, in ms
+PROGMEM static const uint16_t VIEW_MS[9] = {2, 5, 10, 20, 50, 100, 200, 500, 1000};
 
 class InputDevice : public Device, public AudioStream {
   uint32_t heard_at = 0;  // last time the mini picture saw a signal
@@ -818,6 +822,8 @@ public:
   }
   void Format(int p, char* buf, size_t n) const override {
     if (p == 0) snprintf(buf, n, "%s", InputSourceName(val[0]));
+    else if (p == 3 && VIEW_MS[constrain(val[3], 0, 8)] >= 1000) snprintf(buf, n, "1s");
+    else if (p == 3) snprintf(buf, n, "%dms", VIEW_MS[constrain(val[3], 0, 8)]);
     else Device::Format(p, buf, n);
   }
   AudioStream* in() override { return this; }
@@ -841,14 +847,21 @@ private:
   // the picture: a stretch of the input taken from a rising edge (like a
   // scope's trigger), so a steady sound stands still; with no edge for a
   // while it takes one anyway
-  static constexpr int SCOPE_N = 512;   // ~12 ms
+  // Each column keeps the lowest and highest point of its stretch (and
+  // starts from where the last one ended, so the line stays joined).
   static constexpr int SCOPE_HYST = 160; // the edge must cross -this .. +this
-  int16_t scope[SCOPE_N] = {};
-  volatile uint16_t scope_fill = 0;     // recording while 0 < fill < N
+  int16_t scope_lo[128] = {}, scope_hi[128] = {};
+  volatile int16_t scope_col = -1;      // recording into this column; -1: waiting for an edge
   volatile bool scope_ready = false;    // a full picture waits for the screen
+  volatile uint16_t scope_ms = 10;      // VIEW
+  volatile uint8_t scope_cols = 104;    // the picture's width (set by the screen)
+  uint16_t scope_k = 0, scope_spc = 1;  // samples in this column so far / per column
+  uint8_t scope_ncol = 104;             // columns in this picture
+  int16_t scope_last = 0;
   bool scope_low = false;
   uint8_t scope_wait = 0;               // blocks without an edge
   int8_t col_lo[128] = {}, col_hi[128] = {};
+  void ScopeStart(int16_t v);
   float scope_range = 1024.0f;          // auto range: follows the loudest point, slowly back down
   void Poll();
   void Scope(const int16_t* l, const int16_t* r);
@@ -869,6 +882,7 @@ FLASHMEM void InputDevice::Apply(int p) {
     case 0: source = cur[0]; break;
     case 1: gain = cur[1] * 0.01f; break;
     case 2: width = cur[2] * 0.01f; break;
+    case 3: scope_ms = VIEW_MS[constrain(cur[3], 0, 8)]; break;
   }
 }
 
@@ -921,25 +935,39 @@ FASTRUN void InputDevice::update() {
   for (auto b : in) if (b) release(b);
 }
 
+FASTRUN void InputDevice::ScopeStart(int16_t v) {
+  const int total = std::max(1, int(scope_ms * (AUDIO_SAMPLE_RATE_EXACT / 1000.0f)));
+  scope_ncol = std::min<int>(scope_cols, total);
+  scope_spc = total / scope_ncol;
+  scope_col = 0;
+  scope_k = 0;
+  scope_last = v;
+  scope_wait = 0;
+}
+
 FASTRUN void InputDevice::Scope(const int16_t* l, const int16_t* r) {
   if (scope_ready) return;  // the screen hasn't taken the last one yet
-  uint16_t fill = scope_fill;
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
     const int16_t v = (l[n] + r[n]) >> 1;
-    if (fill) {
-      scope[fill++] = v;
-      if (fill == SCOPE_N) { scope_ready = true; break; }
+    if (scope_col >= 0) {
+      const int c = scope_col;
+      if (scope_k == 0) scope_lo[c] = scope_hi[c] = scope_last;
+      scope_lo[c] = std::min(scope_lo[c], v);
+      scope_hi[c] = std::max(scope_hi[c], v);
+      scope_last = v;
+      if (++scope_k >= scope_spc) {
+        scope_k = 0;
+        if (c + 1 >= scope_ncol) { scope_col = -1; scope_ready = true; return; }
+        scope_col = c + 1;
+      }
     } else if (v < -SCOPE_HYST) {
       scope_low = true;
     } else if (v > SCOPE_HYST && scope_low) {  // a rising edge
       scope_low = false;
-      scope[0] = v;
-      fill = 1;
+      ScopeStart(v);
     }
   }
-  if (!fill && !scope_ready && ++scope_wait > 30) fill = 1;  // ~90 ms without an edge
-  if (fill) scope_wait = 0;
-  scope_fill = scope_ready ? 0 : fill;
+  if (scope_col < 0 && ++scope_wait > 30) ScopeStart(0);  // ~90 ms without an edge
 }
 
 FLASHMEM void InputDevice::DrawViz(int x, int y, int w, int h) {
@@ -950,17 +978,18 @@ FLASHMEM void InputDevice::DrawViz(int x, int y, int w, int h) {
   const int half = h / 2 - 1;
   // a new picture: the lowest and highest point in each column (each one
   // reaching back to the column before, so the line stays joined)
+  scope_cols = ww;
   if (scope_ready) {
+    const int nc = scope_ncol;
     int pk = 0;
-    for (int k = 0; k < SCOPE_N; k++) pk = std::max(pk, abs(int(scope[k])));
+    for (int k = 0; k < nc; k++) pk = std::max({pk, abs(int(scope_lo[k])), abs(int(scope_hi[k]))});
     scope_range = std::max({float(pk), scope_range * 0.97f, 1024.0f});
     const int range = int(scope_range) + 1;
+    // fewer columns than pixels (a very short VIEW): each one drawn wider
     for (int i = 0; i < ww; i++) {
-      const int a = std::max(0, i * SCOPE_N / ww - 1), b = (i + 1) * SCOPE_N / ww;
-      int lo = scope[a], hi = scope[a];
-      for (int k = a + 1; k < b; k++) { lo = std::min<int>(lo, scope[k]); hi = std::max<int>(hi, scope[k]); }
-      col_lo[i] = constrain(lo * half / range, -half, half);
-      col_hi[i] = constrain(hi * half / range, -half, half);
+      const int k = i * nc / ww;
+      col_lo[i] = constrain(scope_lo[k] * half / range, -half, half);
+      col_hi[i] = constrain(scope_hi[k] * half / range, -half, half);
     }
     scope_ready = false;  // armed again
   }
