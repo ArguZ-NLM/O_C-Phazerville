@@ -82,7 +82,7 @@ void StretchVoice::NextWindow() {
   d_pos_ = Rand() * pos_sp_;
   const float size = std::min(1.0f, std::max(0.0f, size_ + d_size_));
   // the player's window: kMaxWSOLASize at size 1, 5 octaves shorter at 0
-  hop_left_ = std::max(64, int32_t(clouds::kMaxWSOLASize * exp2f((size - 1.0f) * 5.0f)) / 2);
+  hop_left_ = std::max<int32_t>(64, int32_t(clouds::kMaxWSOLASize * exp2f((size - 1.0f) * 5.0f)) / 2);
   pan_to_ = Rand() * stereo_sp_;
   pan_step_ = (pan_to_ - pan_) / hop_left_;
 }
