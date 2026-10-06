@@ -3219,7 +3219,7 @@ FLASHMEM void ModalDevice::DrawViz(int x, int y, int w, int h) {
     }
     gfxDottedLine(x, y + h - 1, x + ww - 1, y + h - 1, 3);
   } else {
-    // strings: one (STRNG, S+REV) or the sympathetic set, each a wave
+    // strings: one (STRNG) or the sympathetic set, each a wave
     const int strings = (model == RingsVoice::SYMPATHETIC || model == RingsVoice::SYMPATHETIC_QUANTIZED) ? 4 : 1;
     const float amp = out_m.v * (h / (2.0f * strings) - 1);
     const float t = millis() * 0.02f;
