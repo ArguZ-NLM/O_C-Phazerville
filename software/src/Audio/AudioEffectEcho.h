@@ -271,12 +271,22 @@ FASTRUN void AudioEffectEcho::update() {
   // the wobble: 4 lines, 0.3 .. 0.9 Hz, up to ~8 .. 16 samples
   static constexpr float LFO_HZ[4] = {0.31f, 0.47f, 0.69f, 0.89f};
   static constexpr float LFO_DEPTH[4] = {11.0f, 8.0f, 14.0f, 9.0f};
+  // (worked out per block, straight lines in between: it moves slowly)
   float wob[4], wob_step[4];
   for (int k = 0; k < 4; k++) {
-    wob[k] = lfo_ph[k];
-    wob_step[k] = LFO_HZ[k] / AUDIO_SAMPLE_RATE_EXACT;
-    lfo_ph[k] += wob_step[k] * AUDIO_BLOCK_SAMPLES;
+    const float a = LFO_DEPTH[k] * sinf(2.0f * float(M_PI) * lfo_ph[k]);
+    lfo_ph[k] += LFO_HZ[k] * AUDIO_BLOCK_SAMPLES / AUDIO_SAMPLE_RATE_EXACT;
     lfo_ph[k] -= floorf(lfo_ph[k]);
+    const float b = LFO_DEPTH[k] * sinf(2.0f * float(M_PI) * lfo_ph[k]);
+    wob[k] = a;
+    wob_step[k] = (b - a) / AUDIO_BLOCK_SAMPLES;
+  }
+  // the line lengths with their wobble, per sample: start + n * step
+  float dl0[RL], dls[RL];
+  for (int i = 0; i < RL; i++) {
+    const int wk = i == 0 ? 0 : i == 2 ? 1 : i == 5 ? 2 : i == 7 ? 3 : -1;
+    dl0[i] = len[i] + (wk >= 0 ? wob[wk] : 0.0f);
+    dls[i] = wk >= 0 ? wob_step[wk] : 0.0f;
   }
 
   // --- read the taps a block at a time ---
@@ -366,9 +376,7 @@ FASTRUN void AudioEffectEcho::update() {
     float ysum = 0.0f;
     for (int i = 0; i < RL; i++) {
       // read len samples back (lines 0, 2, 5, 7 wobbled), interpolated
-      float dl = len[i];
-      const int wk = i == 0 ? 0 : i == 2 ? 1 : i == 5 ? 2 : i == 7 ? 3 : -1;
-      if (wk >= 0) dl += LFO_DEPTH[wk] * sinf(2.0f * float(M_PI) * (wob[wk] + n * wob_step[wk]));
+      const float dl = dl0[i] + n * dls[i];
       const int cap = RV_CAP[i];
       float rp = float(rv_wi[i]) - dl;
       if (rp < 0.0f) rp += cap;
