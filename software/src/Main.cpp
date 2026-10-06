@@ -498,18 +498,54 @@ FLASHMEM void setup() {
   // arrives); that touch only ends the picture
   if (!start_cal) {
     uint32_t idle = OC::ui.idle_time();
+    size_t cap_idx = 0;
+    elapsedMicros cap_time = 0;
+    const DAC_CHANNEL outs[DAC_CHANNEL_COUNT] = {
+      DAC_CHANNEL_A, DAC_CHANNEL_B, DAC_CHANNEL_C, DAC_CHANNEL_D,
+      DAC_CHANNEL_E, DAC_CHANNEL_F, DAC_CHANNEL_G, DAC_CHANNEL_H,
+    };
     while (true) {
       GRAPHICS_BEGIN_FRAME(true);
       loom::DrawWave();
       loom::DrawTitle();
       GRAPHICS_END_FRAME();
+      // the CV outputs: a wave running from A to H, 0..5 V (half the range;
+      // 8.5 "volts" in the code are 10 V at the jacks, see Loom)
+      const float t = millis() * 0.001f;
+      for (int o = 0; o < DAC_CHANNEL_COUNT; o++) {
+        const float v = 0.5f - 0.5f * cosf(2.0f * float(M_PI) * (t * 0.5f - o / 8.0f));
+        const int32_t pitch = int32_t(v * 0.5f * 8.5f * (12 << 7));
+        OC::DAC::set(outs[o], OC::DAC::PitchToScaledDAC(outs[o], pitch, OC::VOLTAGE_SCALING_1V_PER_OCT, false));
+      }
+      // screen requests (the screen-capture tool asks all the time) are
+      // answered and don't end it; other USB commands (saving before a flash) do
+      while (Serial.available() && Serial.peek() == 'S') {
+        Serial.read();
+        display::frame_buffer.capture_request();
+        cap_idx = 0;
+      }
+      const uint8_t* cap = display::frame_buffer.captured();
+      if (cap && cap_time > 950) {
+        cap_time = 0;
+        cap += cap_idx;
+        for (size_t i = 0; i < 32; i++) {
+          const uint8_t b = *cap++;
+          if (b < 16) Serial.print("0");
+          Serial.print(b, HEX);
+          if (++cap_idx >= display::frame_buffer.kFrameSize) {
+            Serial.println();
+            Serial.flush();
+            cap_idx = 0;
+            display::frame_buffer.capture_retire();
+            break;
+          }
+        }
+      }
       const uint32_t now_idle = OC::ui.idle_time();
-      // screen requests (the screen-capture tool asks all the time) don't
-      // end it; other USB commands (saving before a flash) do
-      while (Serial.available() && Serial.peek() == 'S') Serial.read();
       if (now_idle < idle || Serial.available()) break;  // something happened
       idle = now_idle;
     }
+    for (int o = 0; o < DAC_CHANNEL_COUNT; o++) OC::DAC::set(outs[o], OC::DAC::get_zero_offset(outs[o]));
     OC::ui.SetButtonIgnoreMask();
     OC::ui.FlushEvents();
   }
