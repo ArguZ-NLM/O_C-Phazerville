@@ -1648,29 +1648,11 @@ FLASHMEM void AppLoom::DrawDevice() const {
     PrintCentred(x, 52, buf);
     if (sel && (editing || mod_mode)) gfxInvert(x, 51, 32, 9);
 
-    // value bar; modulated, the reach of the modulation instead. In
-    // modulation: the two sources instead, 1 above 2, from the middle by
-    // their amount (- to the left); bipolar ones spread both ways
+    // no value bar (the number says it); a modulated setting shows the
+    // stretch its sources can reach (a line with end ticks) and the
+    // playhead where they put it right now
     const int span = std::max(1, pd.max - pd.min);
-    if (mod_mode) {
-      const int c = x + 15;
-      gfxLine(c, 61, c, 62);
-      for (int k = 0; k < 2; k++) {
-        const int amt = k ? d->mod_amt2[p] : d->mod_amt[p];
-        const bool on = k ? d->mod_bus2[p] && d->mod_bus : d->ModSourceOn(p);
-        if (!amt || !on) continue;
-        // an empty modulator: the line dotted (it does nothing)
-        const int bus = k ? d->mod_bus2[p] : d->mod_bus_sel[p];
-        const bool empty = bus && d->mod_bus && d->mod_bus[bus - 1] < 0.0f;
-        const int len = std::max(1, abs(amt) * 14 / 100);
-        const bool bi = k ? d->Bipolar2(p) : d->Bipolar(p);
-        const int ry = 60 + 2 * k;
-        const int x0 = bi || amt < 0 ? c - len : c, x1 = bi || amt > 0 ? c + len : c;
-        for (int px = x0; px <= x1; px++) if (!empty || !(px & 1)) gfxPixel(px, ry);
-      }
-    } else if (pd.kind != LIST && d->ModsLive(p)) {
-      // modulated: the stretch both sources together can reach (a line with
-      // end ticks) and the playhead where they put it right now
+    if (pd.kind != LIST && d->ModsLive(p)) {
       auto px = [&](int v) {
         return pd.kind == BI ? x + 15 + v * 15 / std::max(1, (int)pd.max)
                              : x + 1 + (v - pd.min) * 29 / span;
@@ -1682,19 +1664,6 @@ FLASHMEM void AppLoom::DrawDevice() const {
       gfxPixel(x0, 61);
       gfxPixel(x1, 61);
       gfxLine(px(d->cur[p]), 59, px(d->cur[p]), 63);
-    } else if (pd.kind == BI) {
-      const int c = x + 15, len = d->val[p] * 15 / std::max(1, (int)pd.max);
-      gfxPixel(c, 61);
-      if (len > 0) gfxRect(c, 61, len, 2);
-      else if (len < 0) gfxRect(c + len, 61, -len, 2);
-    } else if (pd.kind == LIST) {
-      for (int k = 0; k < pd.nlabels; k++) {
-        const int bx = x + 1 + k * 7;
-        if (k == d->cur[p]) gfxRect(bx, 61, 5, 2);
-        else gfxPixel(bx + 2, 62);
-      }
-    } else {
-      gfxRect(x + 1, 61, (d->val[p] - pd.min) * 29 / span, 2);
     }
     if (sel) gfxInvert(x, 42, 32, 9);
   }
