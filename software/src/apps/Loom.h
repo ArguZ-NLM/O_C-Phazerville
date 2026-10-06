@@ -67,6 +67,7 @@
 #include "../OC_gpio.h"
 #include "../HSMIDI.h"
 #include "../PhzConfig.h"
+#include <new>
 #include "../PresetEngine.h"
 #include "LoomDevices.h"
 #include "LoomMods.h"
@@ -322,6 +323,29 @@ public:
   void UnlinkNow();  // straight to FREE, no TIGHT copy on the way (USB remote, for screen captures)
 private:
   void LinkCopy();   // the track under the cursor copied to the other one
+  // TIGHT copies A onto B; B's own settings are kept here meanwhile and come
+  // back when TIGHT is left, so going round the modes loses nothing
+  struct DevState {
+    bool has = false;
+    int16_t val[loom::MAX_PARAMS];
+    uint8_t mode[loom::MAX_PARAMS];
+    int8_t mod_amt[loom::MAX_PARAMS], mod_amt2[loom::MAX_PARAMS];
+    HS::CVInputMap mod_in[loom::MAX_PARAMS];
+    uint8_t mod_bus_sel[loom::MAX_PARAMS], mod_bus2[loom::MAX_PARAMS];
+    uint8_t mod_bi = 0, mod_bi2 = 0, act_trig[2] = {};
+    void Take(const loom::Device* d);
+    void Give(loom::Device* d) const;
+  };
+  struct TrackSnap {
+    uint8_t choice[loom::SLOT_COUNT], last_choice[loom::SLOT_COUNT], order[loom::SLOT_COUNT - 1];
+    uint8_t bypass, mod_type[loom::NUM_MODS];
+    DevState input, reel, player, mix;
+    DevState inst[loom::SLOT_COUNT][loom::MAX_OPTIONS];
+    DevState mods[loom::NUM_MODS][loom::MOD_TYPES];
+  };
+  TrackSnap* b_own = nullptr;  // track B before TIGHT
+  void KeepB();
+  void BringBackB();
   void StereoOn(int master);  // linked as a stereo pair (master: the track whose PLAYER file both play)
   void StereoOff();  // ... and back to each track's own input / file
   void RouteStereo(bool on);
@@ -680,12 +704,14 @@ FLASHMEM void AppLoom::ToggleLink() {
     track = 0;  // the cursor lives on row A while linked
   } else if (link_rel) {
     link_rel = false;  // TIGHT
+    KeepB();
     LinkCopy();
     SetPans(0, 0);
   } else {
     if (link_stereo) StereoOff();
     link_stereo = false;
     linked = false;    // FREE
+    BringBackB();      // B as it was before TIGHT
     if (unlinked_pan[0] != INT16_MIN) SetPans(unlinked_pan[0], unlinked_pan[1]);  // their own again
     unlinked_pan[0] = INT16_MIN;
   }
@@ -705,6 +731,7 @@ FLASHMEM void AppLoom::UnlinkNow() {
   if (linked) {
     if (link_stereo) StereoOff();
     link_stereo = link_rel = linked = false;
+    BringBackB();
     if (unlinked_pan[0] != INT16_MIN) SetPans(unlinked_pan[0], unlinked_pan[1]);
     unlinked_pan[0] = INT16_MIN;
   }
@@ -735,6 +762,82 @@ FLASHMEM void AppLoom::StereoOff() {
     p->SetFile(player_stash.dir, player_stash.name);
   }
   player_stash.valid = false;
+}
+
+FLASHMEM void AppLoom::DevState::Take(const loom::Device* d) {
+  has = d != nullptr;
+  if (!d) return;
+  memcpy(val, d->val, sizeof(val));
+  memcpy(mode, d->mode, sizeof(mode));
+  memcpy(mod_amt, d->mod_amt, sizeof(mod_amt));
+  memcpy(mod_amt2, d->mod_amt2, sizeof(mod_amt2));
+  for (int p = 0; p < loom::MAX_PARAMS; p++) mod_in[p] = d->mod_in[p];
+  memcpy(mod_bus_sel, d->mod_bus_sel, sizeof(mod_bus_sel));
+  memcpy(mod_bus2, d->mod_bus2, sizeof(mod_bus2));
+  mod_bi = d->mod_bi; mod_bi2 = d->mod_bi2;
+  memcpy(act_trig, d->act_trig, sizeof(act_trig));
+}
+
+FLASHMEM void AppLoom::DevState::Give(loom::Device* d) const {
+  if (!has || !d) return;
+  memcpy(d->val, val, sizeof(val));
+  memcpy(d->mode, mode, sizeof(mode));
+  memcpy(d->mod_amt, mod_amt, sizeof(mod_amt));
+  memcpy(d->mod_amt2, mod_amt2, sizeof(mod_amt2));
+  for (int p = 0; p < loom::MAX_PARAMS; p++) d->mod_in[p] = mod_in[p];
+  memcpy(d->mod_bus_sel, mod_bus_sel, sizeof(mod_bus_sel));
+  memcpy(d->mod_bus2, mod_bus2, sizeof(mod_bus2));
+  d->mod_bi = mod_bi; d->mod_bi2 = mod_bi2;
+  memcpy(d->act_trig, act_trig, sizeof(act_trig));
+  d->ApplyAll();
+}
+
+FLASHMEM void AppLoom::KeepB() {
+  using namespace loom;
+  if (!b_own) b_own = new (std::nothrow) TrackSnap;
+  if (!b_own) return;  // no memory: TIGHT just copies, as before
+  const Track& b = tracks[1];
+  TrackSnap& k = *b_own;
+  memcpy(k.choice, b.choice, sizeof(k.choice));
+  memcpy(k.last_choice, b.last_choice, sizeof(k.last_choice));
+  memcpy(k.order, b.order, sizeof(k.order));
+  k.bypass = b.bypass;
+  memcpy(k.mod_type, b.mod_type, sizeof(k.mod_type));
+  k.input.Take(b.input);
+  k.reel.Take(b.reel);
+  k.player.Take(b.player);
+  k.mix.Take(b.mix);
+  for (int s = 0; s < SLOT_COUNT; s++)
+    for (int o = 0; o < MAX_OPTIONS; o++) k.inst[s][o].Take(s > SOURCE ? b.inst[s][o] : nullptr);
+  for (int i = 0; i < NUM_MODS; i++)
+    for (int t = 0; t < MOD_TYPES; t++) k.mods[i][t].Take(b.mods[i][t]);
+}
+
+FLASHMEM void AppLoom::BringBackB() {
+  using namespace loom;
+  if (!b_own) return;
+  Track& b = tracks[1];
+  const TrackSnap& k = *b_own;
+  for (int s = SOURCE; s < SLOT_COUNT; s++) SetChoice(1, s, k.choice[s]);
+  memcpy(b.last_choice, k.last_choice, sizeof(b.last_choice));
+  memcpy(b.order, k.order, sizeof(b.order));
+  b.bypass = k.bypass;
+  b.parked = 0;
+  for (auto& at : b.park_at) at = millis() + 40;
+  k.input.Give(b.input);
+  k.reel.Give(b.reel);
+  k.player.Give(b.player);
+  k.mix.Give(b.mix);
+  for (int s = SOURCE + 1; s < SLOT_COUNT; s++)
+    for (int o = 0; o < MAX_OPTIONS; o++) k.inst[s][o].Give(b.inst[s][o]);
+  Repatch(1);
+  if (active) ApplyBypass(1);
+  for (int i = 0; i < NUM_MODS; i++) {
+    for (int t = 1; t < MOD_TYPES; t++) k.mods[i][t].Give(b.mods[i][t]);
+    SetModType(1, i, k.mod_type[i]);
+  }
+  delete b_own;
+  b_own = nullptr;
 }
 
 FLASHMEM void AppLoom::LinkCopy() {
@@ -2078,6 +2181,8 @@ FLASHMEM void AppLoom::SaveFile() const {
 }
 
 FLASHMEM void AppLoom::LoadFile() {
+  delete b_own;  // a loaded state has nothing to go back to
+  b_own = nullptr;
   using namespace loom;
   File f = PhzConfig::myfs.open(SAVE_FILE, FILE_READ);
   if (!f) f = PhzConfig::myfs.open("SCULPT.BIN", FILE_READ);  // from before the rename
