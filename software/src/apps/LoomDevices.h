@@ -2425,7 +2425,7 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
     static const uint8_t bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
     const int cx = x + w / 2, hw = w / 2 - 1;
     const int wall = hw * (30 + 70 * cur[SIZE] / 100) / 100;
-    const int th = (h - 2) * cur[REVERB] / 100;
+    const int th = int((h - 2) * sqrtf(cur[REVERB] * 0.01f));  // shows more early on (50% = 70% high)
     const int len = std::max(2, (wall - 1) * cur[DECAY] / 100);
     const int fill = 3 + (cur[TONE] + 50) * 13 / 100;  // 3..16 of 16
     for (int i = 0; i < len; i++) {

@@ -99,7 +99,8 @@ public:
     rv_damp_a = OnePoleCoeff(rv_hz);
   }
 
-  // 0..1: the room, 0.35 .. 1x the line lengths (they glide there)
+  // 0..1: the room, 0.35 .. 1x the line lengths (a new size is crossfaded
+  // in, so the tail keeps its pitch)
   void size(float s) { rv_scale_target = 0.35f + 0.65f * constrain(s, 0.0f, 1.0f); }
 
   // approximate RT60 of the reverb tail in seconds
@@ -162,7 +163,9 @@ private:
   int ix[NUM_AP] = {};
   int16_t* rv = nullptr;
   int rv_wi[RL] = {};               // each line's write position
-  float rv_scale = 1.0f;            // the lengths now (gliding to the target)
+  float rv_sc_a = 1.0f, rv_sc_b = 1.0f;  // the lengths now / the ones fading in
+  int rv_xf = 0;                    // samples left of that crossfade (0: none)
+  static constexpr int RV_XF = 2048;  // ~46 ms
   volatile float rv_scale_target = 1.0f;
   volatile float rv_damp_a = 0.5f;
   float rv_lp[RL] = {};
@@ -278,14 +281,22 @@ FASTRUN void AudioEffectEcho::update() {
   const float la = lp_a, ha = hp_a;
   // the reverb, per block: SIZE glides (~0.15 s), the lines' loop gains
   // follow their lengths and DECAY, frozen = no loss, no damping
-  rv_scale += 0.02f * (rv_scale_target - rv_scale);
-  float lg[RL], len[RL];
+  // a new SIZE: read the lines at the old and the new lengths at once and
+  // crossfade (a glide would bend the pitch)
+  if (rv_xf == 0 && fabsf(rv_scale_target - rv_sc_a) > 0.002f) {
+    rv_sc_b = rv_scale_target;
+    rv_xf = RV_XF;
+  }
+  float lg[RL], len[RL], lenb[RL];
   const float rt = decay_secs * AUDIO_SAMPLE_RATE_EXACT;
   for (int i = 0; i < RL; i++) {
-    len[i] = RV_LEN[i] * rv_scale;
-    const float gi = exp2f(-9.966f * len[i] / rt);  // 10^(-3 len / rt)
+    len[i] = RV_LEN[i] * rv_sc_a;
+    lenb[i] = RV_LEN[i] * rv_sc_b;
+    const float gi = exp2f(-9.966f * (rv_xf ? lenb[i] : len[i]) / rt);  // 10^(-3 len / rt)
     lg[i] = gi + (1.0f - gi) * frz;
   }
+  const float xf0 = rv_xf ? float(RV_XF - rv_xf) / RV_XF : 0.0f;  // the new one's share at n = 0
+  const float xfs = rv_xf ? 1.0f / RV_XF : 0.0f;
   const float rda = rv_damp_a + (1.0f - rv_damp_a) * frz;
   const float rv_hp_a = OnePoleCoeff(90.0f);  // the low cut at the input
   // the wobble: 4 lines, 0.3 .. 0.9 Hz, up to ~8 .. 16 samples
@@ -302,10 +313,12 @@ FASTRUN void AudioEffectEcho::update() {
     wob_step[k] = (b - a) / AUDIO_BLOCK_SAMPLES;
   }
   // the line lengths with their wobble, per sample: start + n * step
-  float dl0[RL], dls[RL];
+  float dl0[RL], dlb[RL], dls[RL];
   for (int i = 0; i < RL; i++) {
     const int wk = i == 0 ? 0 : i == 2 ? 1 : i == 5 ? 2 : i == 7 ? 3 : -1;
-    dl0[i] = len[i] + (wk >= 0 ? wob[wk] : 0.0f);
+    const float wb = wk >= 0 ? wob[wk] : 0.0f;
+    dl0[i] = len[i] + wb;
+    dlb[i] = lenb[i] + wb;
     dls[i] = wk >= 0 ? wob_step[wk] : 0.0f;
   }
 
@@ -353,16 +366,23 @@ FASTRUN void AudioEffectEcho::update() {
     const int cap = RV_CAP[i];
     const int16_t* line = rv + RV_OFS[i];
     const int w0 = rv_wi[i];
-    const float g_i = lg[i], d0i = dl0[i], dsi = dls[i];
+    const float g_i = lg[i], d0i = dl0[i], dbi = dlb[i], dsi = dls[i];
     float z = rv_lp[i];
-    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
-      float rp = float(w0 + n) - (d0i + n * dsi);
+    auto read = [&](float back, int n) {
+      float rp = float(w0 + n) - back;
       if (rp < 0.0f) rp += cap;
       else if (rp >= cap) rp -= cap;
       const int i0 = int(rp);
       const int i1 = i0 + 1 >= cap ? 0 : i0 + 1;
       const float fr = rp - i0;
-      const float d = (line[i0] + fr * (line[i1] - line[i0])) * (1.0f / RV_Q);
+      return (line[i0] + fr * (line[i1] - line[i0])) * (1.0f / RV_Q);
+    };
+    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+      float d = read(d0i + n * dsi, n);
+      if (rv_xf) {  // crossfading to the new size
+        const float wgt = std::min(1.0f, xf0 + n * xfs);
+        d += wgt * (read(dbi + n * dsi, n) - d);
+      }
       z += rda * (d - z);
       yb[i][n] = z * g_i;
     }
@@ -437,6 +457,11 @@ FASTRUN void AudioEffectEcho::update() {
       out[c]->data[n] = o;
       peak_out = std::max(peak_out, abs(o));
     }
+  }
+
+  if (rv_xf) {
+    rv_xf -= AUDIO_BLOCK_SAMPLES;
+    if (rv_xf <= 0) { rv_xf = 0; rv_sc_a = rv_sc_b; }
   }
 
   // write this block into the delay lines
