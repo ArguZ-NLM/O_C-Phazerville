@@ -34,6 +34,7 @@ public:
 private:
   void* part_ = nullptr;
   void* strummer_ = nullptr;
+  bool part_ext_ = false, strum_ext_ = false;  // in PSRAM (RAM2 was full)
   float note_ = 36.0f, structure_ = 0.5f, brightness_ = 0.5f, damping_ = 0.5f, position_ = 0.5f;
   int model_ = MODAL;
   volatile bool strike_ = false;

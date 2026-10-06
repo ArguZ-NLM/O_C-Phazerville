@@ -40,7 +40,7 @@
 
 namespace rings {
 
-const size_t kDelayLineSize = 2048;
+const size_t kDelayLineSize = 1024;  // Loom: half (two voices fit RAM2; strings down to ~43 Hz)
 
 class DampingFilter {
  public:

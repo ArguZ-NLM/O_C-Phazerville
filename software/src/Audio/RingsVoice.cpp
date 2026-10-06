@@ -11,16 +11,30 @@
 #include "rings/dsp/strummer.h"
 
 
+extern "C" void* extmem_malloc(size_t);
+extern "C" void extmem_free(void*);
+extern "C" uint8_t external_psram_size;
+
 namespace {
 constexpr float kNoiseGateThreshold = 0.00003f;  // as on the module
+
+// RAM2 first; if that's full, the PSRAM (slower, but it works)
+void* Take(size_t n, bool& in_ext) {
+  void* p = malloc(n);
+  in_ext = false;
+  if (!p && external_psram_size) { p = extmem_malloc(n); in_ext = p != nullptr; }
+  return p;
+}
+void Give(void* p, bool in_ext) { if (in_ext) extmem_free(p); else free(p); }
 }
 
 FLASHMEM bool RingsVoice::Init() {
   if (part_) return true;
-  void* pm = malloc(sizeof(rings::Part));
-  void* sm = malloc(sizeof(rings::Strummer));
+  void* pm = Take(sizeof(rings::Part), part_ext_);
+  void* sm = Take(sizeof(rings::Strummer), strum_ext_);
   if (!pm || !sm) {
-    free(pm); free(sm);
+    if (pm) Give(pm, part_ext_);
+    if (sm) Give(sm, strum_ext_);
     return false;
   }
   auto* part = new (pm) rings::Part();
@@ -40,8 +54,8 @@ FLASHMEM void RingsVoice::Free() {
   part_ = nullptr;
   static_cast<rings::Part*>(p)->~Part();
   static_cast<rings::Strummer*>(strummer_)->~Strummer();
-  free(p);
-  free(strummer_);
+  Give(p, part_ext_);
+  Give(strummer_, strum_ext_);
   strummer_ = nullptr;
 }
 
