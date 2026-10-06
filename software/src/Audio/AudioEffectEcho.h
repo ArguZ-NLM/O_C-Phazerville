@@ -14,7 +14,10 @@
 // to the new one. The write signal is input plus feedback from the last tap,
 // filtered (TONE), diffused / cross-fed (SPREAD) and soft clipped. DELAY
 // crossfades the taps against the dry signal, then REVERB crossfades that
-// against a 4-line FDN fed by it.
+// against an 8-line feedback delay network fed by it: a low cut and four
+// diffusers at its input, a Householder mix (every line into every other),
+// a damping lowpass per line set by TONE, four lines slowly wobbled so the
+// tail doesn't ring metallic, and line lengths that glide when SIZE moves.
 class AudioEffectEcho : public AudioStream {
 public:
   static constexpr int TAPS = 4;
@@ -35,6 +38,7 @@ public:
   // allocate and clear everything; call while the stream is disconnected
   bool Acquire() {
     if (!mem) mem = static_cast<float*>(calloc(MEM_TOTAL, sizeof(float)));
+    if (!rv) rv = static_cast<int16_t*>(calloc(RV_TOTAL, sizeof(int16_t)));
     for (auto& b : dbuf) {
       if (!b) b = static_cast<int16_t*>(extmem_malloc(dlen * sizeof(int16_t)));
     }
@@ -45,20 +49,25 @@ public:
   void Release() {
     free(mem);
     mem = nullptr;
+    free(rv);
+    rv = nullptr;
     for (auto& b : dbuf) {
       if (b) extmem_free(b);
       b = nullptr;
     }
   }
 
-  bool ready() const { return mem && dbuf[0] && dbuf[1]; }
+  bool ready() const { return mem && rv && dbuf[0] && dbuf[1]; }
 
   void Reset() {
     if (mem) std::fill(mem, mem + MEM_TOTAL, 0.0f);
+    if (rv) memset(rv, 0, RV_TOTAL * sizeof(int16_t));
+    for (auto& w : rv_wi) w = 0;
+    for (auto& z : rv_lp) z = 0.0f;
+    rv_hp_z[0] = rv_hp_z[1] = 0.0f;
     for (auto b : dbuf) if (b) memset(b, 0, dlen * sizeof(int16_t));
     for (auto& i : ix) i = 0;
     for (int c = 0; c < 2; c++) lp_z[c] = hp_z[c] = 0.0f;
-    for (auto& z : damp_z) z = 0.0f;
   }
 
   // --- parameters, set from the UI thread ---
@@ -85,24 +94,16 @@ public:
     const float hp_hz = t > 0.0f ? 15.0f * powf(2500.0f / 15.0f, t) : 15.0f;
     lp_a = OnePoleCoeff(lp_hz);
     hp_a = OnePoleCoeff(hp_hz);
+    // the reverb tail: dark 1.8 kHz .. 6 kHz (flat) .. bright 14 kHz
+    const float rv_hz = t < 0.0f ? 6000.0f * powf(1800.0f / 6000.0f, -t) : 6000.0f * powf(14000.0f / 6000.0f, t);
+    rv_damp_a = OnePoleCoeff(rv_hz);
   }
 
-  // 0..1, scales the reverb line lengths
-  void size(float s) {
-    s = constrain(s, 0.0f, 1.0f);
-    for (int i = 0; i < LINES; i++) {
-      line_len[i] = static_cast<int>(LINE_LEN[i] * (0.3f + 0.7f * s));
-    }
-    decay(decay_secs);
-  }
+  // 0..1: the room, 0.35 .. 1x the line lengths (they glide there)
+  void size(float s) { rv_scale_target = 0.35f + 0.65f * constrain(s, 0.0f, 1.0f); }
 
   // approximate RT60 of the reverb tail in seconds
-  void decay(float secs) {
-    decay_secs = constrain(secs, 0.2f, 30.0f);
-    for (int i = 0; i < LINES; i++) {
-      line_g[i] = powf(10.0f, -3.0f * line_len[i] / (decay_secs * AUDIO_SAMPLE_RATE_EXACT));
-    }
-  }
+  void decay(float secs) { decay_secs = constrain(secs, 0.2f, 30.0f); }
 
   void ReadViz(Viz& out) {
     AudioNoInterrupts();
@@ -116,31 +117,28 @@ public:
 
 private:
   static constexpr float TAP_GAIN[TAPS] = {0.30f, 0.40f, 0.55f, 0.80f};
-  static constexpr float REV_DAMP = 0.35f;
   static constexpr int XFADE = 4 * AUDIO_BLOCK_SAMPLES; // ~10 ms
 
-  // reverb memory: one RAM2 allocation
-  static constexpr int LINES = 4;
-  static constexpr int NUM_AP = 8; // 4 in the feedback path, 4 at reverb input
+  // allpasses (float, RAM2): 4 in the delay's feedback path (2 a side),
+  // 8 diffusers at the reverb's input (4 a side)
+  static constexpr int NUM_AP = 12;
   static constexpr int AP_FB_BASE = 0;
   static constexpr int AP_IN_BASE = 4;
-  static constexpr int LINE_LEN[LINES] = {2371, 2711, 3137, 3539};
-  static constexpr int AP_LEN[NUM_AP] = {241, 467, 263, 503, 142, 379, 107, 277};
-  static constexpr int LINE_OFS[LINES] = {
-    0, 2371, 2371 + 2711, 2371 + 2711 + 3137
-  };
-  static constexpr int LINES_TOTAL = 2371 + 2711 + 3137 + 3539;
-  static constexpr int AP_OFS[NUM_AP] = {
-    LINES_TOTAL,
-    LINES_TOTAL + 241,
-    LINES_TOTAL + 241 + 467,
-    LINES_TOTAL + 241 + 467 + 263,
-    LINES_TOTAL + 241 + 467 + 263 + 503,
-    LINES_TOTAL + 241 + 467 + 263 + 503 + 142,
-    LINES_TOTAL + 241 + 467 + 263 + 503 + 142 + 379,
-    LINES_TOTAL + 241 + 467 + 263 + 503 + 142 + 379 + 107,
-  };
-  static constexpr int MEM_TOTAL = AP_OFS[NUM_AP - 1] + 277;
+  static constexpr int AP_LEN[NUM_AP] = {241, 467, 263, 503,
+                                         142, 107, 379, 277, 151, 113, 397, 283};
+  static constexpr int AP_OFS[NUM_AP] = {0, 241, 708, 971, 1474, 1616, 1723, 2102, 2379, 2530, 2643, 3040};
+  static constexpr int MEM_TOTAL = 3323;
+  static constexpr float AP_IN_G[4] = {0.75f, 0.70f, 0.65f, 0.60f};
+
+  // the reverb's 8 lines (int16, RAM2): lengths with no common factors,
+  // 35 .. 94 ms at full SIZE; each holds that plus room for the wobble
+  static constexpr int RL = 8;
+  static constexpr int RV_LEN[RL] = {1557, 1913, 2251, 2617, 3011, 3373, 3769, 4153};
+  static constexpr int RV_MOD = 24;  // wobble depth room, samples
+  static constexpr int RV_CAP[RL] = {1585, 1941, 2279, 2645, 3039, 3401, 3797, 4181};  // RV_LEN + RV_MOD + 4
+  static constexpr int RV_OFS[RL] = {0, 1585, 3526, 5805, 8450, 11489, 14890, 18687};
+  static constexpr int RV_TOTAL = 22868;
+  static constexpr float RV_Q = 8192.0f;  // int16 per 1.0 (headroom x4)
 
   struct Tap {
     volatile int target = MIN_TAP;
@@ -156,19 +154,25 @@ private:
   Tap tap_[2][TAPS];
 
   float* mem = nullptr;
-  int ix[LINES + NUM_AP] = {};
-  int line_len[LINES] = {LINE_LEN[0], LINE_LEN[1], LINE_LEN[2], LINE_LEN[3]};
+  int ix[NUM_AP] = {};
+  int16_t* rv = nullptr;
+  int rv_wi[RL] = {};               // each line's write position
+  float rv_scale = 1.0f;            // the lengths now (gliding to the target)
+  volatile float rv_scale_target = 1.0f;
+  volatile float rv_damp_a = 0.5f;
+  float rv_lp[RL] = {};
+  float rv_hp_z[2] = {};
+  float lfo_ph[4] = {0.0f, 0.25f, 0.5f, 0.75f};
 
   volatile float fb_target = 0.0f, dmix_target = 0.4f, rmix_target = 0.3f;
   volatile float spread_target = 0.0f, ap_g = 0.0f;
   volatile float lp_a = 1.0f, hp_a = 0.0f;
   volatile bool freeze = false;
-  float line_g[LINES] = {0.8f, 0.8f, 0.8f, 0.8f};
-  float decay_secs = 3.0f;
+  volatile float decay_secs = 3.0f;
 
   float fb = 0.0f, dmix = 0.4f, rmix = 0.3f, spread_ = 0.0f, freeze_amt = 0.0f;
   volatile bool dsend = false, rsend = false;
-  float lp_z[2] = {}, hp_z[2] = {}, damp_z[LINES] = {};
+  float lp_z[2] = {}, hp_z[2] = {};
 
   Viz viz = {};
 
@@ -188,7 +192,7 @@ private:
 
   __attribute__((always_inline)) inline float Allpass(float x, int i, float g) {
     float* buf = mem + AP_OFS[i];
-    int& p = ix[LINES + i];
+    int& p = ix[i];
     const float d = buf[p];
     const float v = x + g * d;
     buf[p] = v;
@@ -251,14 +255,28 @@ FASTRUN void AudioEffectEcho::update() {
   const float live = 1.0f - frz;
   const float s = spread_;
   const float g = ap_g * live;
-  const float damp = REV_DAMP * live;
   const float la = lp_a, ha = hp_a;
-  float lg[LINES];
-  int len[LINES];
-  for (int i = 0; i < LINES; i++) {
-    lg[i] = line_g[i] + (1.0f - line_g[i]) * frz;
-    len[i] = line_len[i];
-    if (ix[i] >= len[i]) ix[i] = 0; // SIZE got smaller
+  // the reverb, per block: SIZE glides (~0.15 s), the lines' loop gains
+  // follow their lengths and DECAY, frozen = no loss, no damping
+  rv_scale += 0.02f * (rv_scale_target - rv_scale);
+  float lg[RL], len[RL];
+  const float rt = decay_secs * AUDIO_SAMPLE_RATE_EXACT;
+  for (int i = 0; i < RL; i++) {
+    len[i] = RV_LEN[i] * rv_scale;
+    const float gi = exp2f(-9.966f * len[i] / rt);  // 10^(-3 len / rt)
+    lg[i] = gi + (1.0f - gi) * frz;
+  }
+  const float rda = rv_damp_a + (1.0f - rv_damp_a) * frz;
+  const float rv_hp_a = OnePoleCoeff(90.0f);  // the low cut at the input
+  // the wobble: 4 lines, 0.3 .. 0.9 Hz, up to ~8 .. 16 samples
+  static constexpr float LFO_HZ[4] = {0.31f, 0.47f, 0.69f, 0.89f};
+  static constexpr float LFO_DEPTH[4] = {11.0f, 8.0f, 14.0f, 9.0f};
+  float wob[4], wob_step[4];
+  for (int k = 0; k < 4; k++) {
+    wob[k] = lfo_ph[k];
+    wob_step[k] = LFO_HZ[k] / AUDIO_SAMPLE_RATE_EXACT;
+    lfo_ph[k] += wob_step[k] * AUDIO_BLOCK_SAMPLES;
+    lfo_ph[k] -= floorf(lfo_ph[k]);
   }
 
   // --- read the taps a block at a time ---
@@ -335,30 +353,42 @@ FASTRUN void AudioEffectEcho::update() {
       dry[1] + dmix * (tsum[1][n] - (dsend ? 0.0f : dry[1])),
     };
 
-    // --- REVERB: 4-line FDN fed by the delay stage ---
+    // --- REVERB: 8-line FDN fed by the delay stage ---
     float rin[2];
     for (int c = 0; c < 2; c++) {
       float x = live * 0.5f * x1[c];
-      x = Allpass(x, AP_IN_BASE + c * 2, 0.6f);
-      rin[c] = Allpass(x, AP_IN_BASE + c * 2 + 1, 0.6f);
+      rv_hp_z[c] += rv_hp_a * (x - rv_hp_z[c]);  // low cut (no mud)
+      x -= rv_hp_z[c];
+      for (int k = 0; k < 4; k++) x = Allpass(x, AP_IN_BASE + c * 4 + k, AP_IN_G[k]);
+      rin[c] = x;
     }
-    float y[LINES];
-    for (int i = 0; i < LINES; i++) {
-      const float d = mem[LINE_OFS[i] + ix[i]];
-      damp_z[i] += (1.0f - damp) * (d - damp_z[i]);
-      y[i] = damp_z[i] * lg[i];
+    float y[RL];
+    float ysum = 0.0f;
+    for (int i = 0; i < RL; i++) {
+      // read len samples back (lines 0, 2, 5, 7 wobbled), interpolated
+      float dl = len[i];
+      const int wk = i == 0 ? 0 : i == 2 ? 1 : i == 5 ? 2 : i == 7 ? 3 : -1;
+      if (wk >= 0) dl += LFO_DEPTH[wk] * sinf(2.0f * float(M_PI) * (wob[wk] + n * wob_step[wk]));
+      const int cap = RV_CAP[i];
+      float rp = float(rv_wi[i]) - dl;
+      if (rp < 0.0f) rp += cap;
+      const int i0 = int(rp);
+      const int i1 = i0 + 1 >= cap ? 0 : i0 + 1;
+      const float fr = rp - i0;
+      const int16_t* line = rv + RV_OFS[i];
+      const float d = (line[i0] + fr * (line[i1] - line[i0])) * (1.0f / RV_Q);
+      rv_lp[i] += rda * (d - rv_lp[i]);  // damping (TONE)
+      y[i] = rv_lp[i] * lg[i];
+      ysum += y[i];
     }
-    // Hadamard mix keeps the loop lossless when frozen
-    const float a = y[0] + y[1], b = y[0] - y[1];
-    const float cc = y[2] + y[3], dd = y[2] - y[3];
-    mem[LINE_OFS[0] + ix[0]] = 0.5f * (a + cc) + rin[0];
-    mem[LINE_OFS[1] + ix[1]] = 0.5f * (b + dd) + rin[1];
-    mem[LINE_OFS[2] + ix[2]] = 0.5f * (a - cc) + rin[0];
-    mem[LINE_OFS[3] + ix[3]] = 0.5f * (b - dd) - rin[1];
-    for (int i = 0; i < LINES; i++) {
-      if (++ix[i] >= len[i]) ix[i] = 0;
+    // Householder: every line into every other, lossless
+    const float hh = ysum * (2.0f / RL);
+    for (int i = 0; i < RL; i++) {
+      const float v = y[i] - hh + rin[i & 1] * ((i & 2) ? -0.5f : 0.5f);
+      rv[RV_OFS[i] + rv_wi[i]] = int16_t(__SSAT(int32_t(v * RV_Q), 16));
+      if (++rv_wi[i] >= RV_CAP[i]) rv_wi[i] = 0;
     }
-    const float tail[2] = {0.9f * (y[0] + y[2]), 0.9f * (y[1] - y[3])};
+    const float tail[2] = {0.42f * (y[0] - y[2] + y[4] - y[6]), 0.42f * (y[1] - y[3] + y[5] - y[7])};
     peak_tail = std::max(peak_tail, std::max(fabsf(tail[0]), fabsf(tail[1])));
 
     for (int c = 0; c < 2; c++) {
