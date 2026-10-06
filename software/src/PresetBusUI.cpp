@@ -139,7 +139,9 @@ FLASHMEM static void persist_assignments() {
 }
 
 FLASHMEM void Enter() {
+#ifndef LOOM_ONLY  // Loom: the 30 slots on any hardware (only the bus needs the 200e)
   if (!Buchla200eHardware()) return;
+#endif
   const int last = PresetEngine::BusSlot();
   if (last >= 0) sel = (uint8_t)last;
   cursor = 0;

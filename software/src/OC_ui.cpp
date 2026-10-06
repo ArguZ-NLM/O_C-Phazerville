@@ -176,7 +176,11 @@ UiMode Ui::DispatchEvents(const RuntimeSlot &appslot) {
                (CONTROL_BUTTON_L == event.control || CONTROL_BUTTON_R == event.control) &&
                (event.mask & (CONTROL_BUTTON_L | CONTROL_BUTTON_R))
                    == (CONTROL_BUTTON_L | CONTROL_BUTTON_R) &&
+#ifdef LOOM_ONLY
+               !app->OwnsEncoderChord()) {  // Loom: the preset slots on any hardware
+#else
                OC::Buchla200eHardware() && !app->OwnsEncoderChord()) {
+#endif
       OC::PresetBusUI::Enter();
       continue;
     }
