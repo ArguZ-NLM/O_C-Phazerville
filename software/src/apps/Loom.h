@@ -1256,7 +1256,7 @@ FLASHMEM void AppLoom::MainLoop() {
   // per device: own stream + owned streams (e.g. ECHO core + delay lines)
   using namespace loom;
   for (int t = 0; t < NUM_TRACKS; t++) {
-    Serial.printf("  %c", t ? 'R' : 'L');
+    Serial.printf("  %c [bypass %02x parked %02x]", t ? 'R' : 'L', tracks[t].bypass, tracks[t].parked);
     for (int s = SOURCE; s < SLOT_COUNT; s++) {
       Device* d = tracks[t].current(s);
       if (!d) continue;
