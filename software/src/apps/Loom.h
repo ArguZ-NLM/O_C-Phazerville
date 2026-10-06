@@ -630,30 +630,33 @@ FLASHMEM void AppLoom::ToggleBypass(int s) {
   }
 }
 
-// UP+DOWN cycles: off -> SPLIT -> MIRROR -> LINKED -> off. Linked, the controls
+// UP+DOWN cycles: off -> LINKED -> MIRROR -> SPLIT -> off. Linked, the controls
 // of both tracks are the same; SPLIT also makes them one stereo pair (track
 // L the left input / left side of the PLAYER's file, track R the right),
 // MIRROR copies A to B; LINKED keeps B's values and moves them by A's changes; both keep each track's own input and file.
 FLASHMEM void AppLoom::ToggleLink() {
   using namespace loom;
   if (!linked) {
-    const int master = track;  // LinkCopy moves the cursor to row 1
+    // LINKED: B keeps its own values; A's changes move them by as much
     unlinked_pan[0] = tracks[0].mix->val[MixDevice::PAN];
     unlinked_pan[1] = tracks[1].mix->val[MixDevice::PAN];
     linked = true;
-    link_stereo = true;
+    link_rel = true;
+    link_stereo = false;
+    track = 0;  // the cursor lives on row A while linked
+  } else if (link_rel) {
+    // MIRROR: B becomes a copy of A, both in the middle
     link_rel = false;
     LinkCopy();
-    StereoOn(master);
-  } else if (link_stereo) {
+    SetPans(0, 0);
+  } else if (!link_stereo) {
+    // SPLIT: one stereo pair, A left, B right
+    link_stereo = true;
+    StereoOn(0);
+  } else {
     StereoOff();
     link_stereo = false;
-    SetPans(0, 0);  // MIRROR: both in the middle
-  } else if (!link_rel) {
-    link_rel = true;  // LINKED: B keeps its values, A's changes move them along
-  } else {
     linked = false;
-    link_rel = false;
     if (unlinked_pan[0] != INT16_MIN) SetPans(unlinked_pan[0], unlinked_pan[1]);  // their own again
     unlinked_pan[0] = INT16_MIN;
   }
