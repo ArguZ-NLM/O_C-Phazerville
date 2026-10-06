@@ -808,6 +808,12 @@ void FASTRUN loop() {
           case '%':
             OC::ui.Inject(UI::EVENT_BUTTON_LONG_RELEASE, OC::CONTROL_BUTTON_Z, 0, 0);
             break;
+#ifdef ENABLE_APP_LOOM
+          case '~': {  // link mode straight to FREE (no TIGHT copy on the way)
+            extern void (*g_loom_unlink)();
+            if (g_loom_unlink) g_loom_unlink();
+          } break;
+#endif
           case '<': case '>':
             OC::ui.Inject(UI::EVENT_ENCODER, OC::CONTROL_ENCODER_R, cmd == '>' ? 1 : -1, 0);
             break;

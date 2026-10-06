@@ -173,6 +173,9 @@ namespace loom {
   bool audio_hw() { return I2S2_Audio_ADC && I2S2_Audio_DAC; }
 }
 
+// the USB remote's '~' (screen captures): link mode straight back to FREE
+void (*g_loom_unlink)() = nullptr;
+
 OC_APP_CLASS(AppLoom, TWOCCS("LM"), "Loom", "Loom"),
   public HSApplication {
 public:
@@ -315,6 +318,9 @@ private:
   void ConnectTrack(int t);
   void DisconnectTrack(int t);
   void ToggleLink();
+public:
+  void UnlinkNow();  // straight to FREE, no TIGHT copy on the way (USB remote, for screen captures)
+private:
   void LinkCopy();   // the track under the cursor copied to the other one
   void StereoOn(int master);  // linked as a stereo pair (master: the track whose PLAYER file both play)
   void StereoOff();  // ... and back to each track's own input / file
@@ -335,6 +341,9 @@ FLASHMEM loom::Device* AppLoom::FocusOn(int t) const {
 }
 
 FLASHMEM void AppLoom::Start() {
+  static AppLoom* self;
+  self = this;
+  g_loom_unlink = [] { self->UnlinkNow(); };
   using namespace loom;
   // Create every device up front in chain order, so the audio update order
   // follows the signal flow (no extra block of latency per hop). Devices only
@@ -681,6 +690,25 @@ FLASHMEM void AppLoom::ToggleLink() {
     unlinked_pan[0] = INT16_MIN;
   }
   link_note_at = millis() | 1;  // the mode, shown for a moment
+}
+
+FLASHMEM void AppLoom::UnlinkNow() {
+  using namespace loom;
+  if (threaded) {
+    Track& b = tracks[1];
+    b.input->val[0] = thread_in >= 0 ? thread_in : 0;
+    b.input->ApplyAll();
+    if (b.reel) { b.reel->val[ReelDevice::IN] = thread_in >= 0 ? thread_spool_in : 0; b.reel->ApplyAll(); }
+    thread_in = -1;
+    threaded = false;
+  }
+  if (linked) {
+    if (link_stereo) StereoOff();
+    link_stereo = link_rel = linked = false;
+    if (unlinked_pan[0] != INT16_MIN) SetPans(unlinked_pan[0], unlinked_pan[1]);
+    unlinked_pan[0] = INT16_MIN;
+  }
+  link_note_at = millis() | 1;
 }
 
 FLASHMEM void AppLoom::StereoOff() {
