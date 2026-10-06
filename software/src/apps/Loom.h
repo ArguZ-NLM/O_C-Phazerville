@@ -258,7 +258,9 @@ private:
   bool reload_on_resume = false;  // a preset recall replaced LOOM.BIN
   bool linked = false;
   bool link_stereo = false;  // linked as SPLIT
-  bool link_rel = false;     // linked as LINKED: B keeps its values, A's changes add to them (else MIRROR)
+  bool link_rel = false;     // linked as LOOSE: B keeps its values, A's changes add to them (else TIGHT)
+  bool threaded = false;     // THREAD: B's source is A's output (not linked)
+  int16_t thread_in = -1, thread_spool_in = 0;  // B's own source from before THREAD
   // the link squares: TIGHT both filled, LOOSE both hollow
   bool LinkSquareFilled(bool top) const { (void)top; return !link_rel; }
   uint32_t link_note_at = 0;   // when the link mode changed (shown briefly)
@@ -635,17 +637,36 @@ FLASHMEM void AppLoom::ToggleBypass(int s) {
 // of both tracks are the same; SPLIT also makes them one stereo pair (track
 // L the left input / left side of the PLAYER's file, track R the right),
 // MIRROR copies A to B; LINKED keeps B's values and moves them by A's changes; both keep each track's own input and file.
-// A+B cycles FREE -> LOOSE -> TIGHT -> FREE. FREE: two separate stereo
-// tracks. LOOSE: B keeps its own values, A's changes move them by as much.
-// TIGHT: B becomes a copy of A and follows it. (SPLIT, one stereo pair over
-// both tracks, is still here but not in the cycle.)
+// A+B cycles FREE -> THREAD -> LOOSE -> TIGHT -> FREE. FREE: two separate
+// stereo tracks. THREAD: B's source is A's output, the two chains one after
+// the other (controls separate, A still heard). LOOSE: B keeps its own
+// values, A's changes move them by as much. TIGHT: B becomes a copy of A and
+// follows it. (SPLIT, one stereo pair over both tracks, is still here but
+// not in the cycle.)
 FLASHMEM void AppLoom::ToggleLink() {
   using namespace loom;
-  if (!linked) {
+  if (!linked && !threaded) {
+    // THREAD: B listens to A (its own source comes back after)
+    Track& b = tracks[1];
+    thread_in = b.input->val[0];
+    thread_spool_in = b.reel ? b.reel->val[ReelDevice::IN] : 0;
+    b.input->val[0] = InputDevice::OUT_A;
+    b.input->ApplyAll();
+    if (b.reel) { b.reel->val[ReelDevice::IN] = InputDevice::OUT_A; b.reel->ApplyAll(); }
+    threaded = true;
+  } else if (threaded) {
+    // B's own source again, then LOOSE: B keeps its own values; A's changes
+    // move them by as much
+    Track& b = tracks[1];
+    b.input->val[0] = thread_in >= 0 ? thread_in : 0;
+    b.input->ApplyAll();
+    if (b.reel) { b.reel->val[ReelDevice::IN] = thread_in >= 0 ? thread_spool_in : 0; b.reel->ApplyAll(); }
+    thread_in = -1;
+    threaded = false;
     unlinked_pan[0] = tracks[0].mix->val[MixDevice::PAN];
     unlinked_pan[1] = tracks[1].mix->val[MixDevice::PAN];
     linked = true;
-    link_rel = true;   // LOOSE
+    link_rel = true;
     link_stereo = false;
     track = 0;  // the cursor lives on row A while linked
   } else if (link_rel) {
@@ -1458,6 +1479,12 @@ FLASHMEM void AppLoom::DrawChain() const {
     }
   }
 
+  if (threaded) {
+    // THREAD: an arrow from A down into B
+    gfxLine(2, 19, 2, 31);
+    gfxLine(0, 29, 2, 31);
+    gfxLine(4, 29, 2, 31);
+  }
   if (linked) {
     // two squares between L and R: filled = SPLIT, hollow = MIRROR, top filled = LINKED
     for (const int sy : {21, 27}) {
@@ -1942,7 +1969,7 @@ FLASHMEM void AppLoom::SaveFile() const {
   if (!f) return;
   f.write("SCU", 3);  // the file's mark since it was Sculpt; kept so all files load
   f.write(&SAVE_VERSION, 1);
-  const uint8_t lk = linked ? (link_stereo ? 2 : link_rel ? 3 : 1) : 0;  // 1 TIGHT, 2 SPLIT, 3 LOOSE
+  const uint8_t lk = threaded ? 4 : linked ? (link_stereo ? 2 : link_rel ? 3 : 1) : 0;  // 1 TIGHT, 2 SPLIT, 3 LOOSE, 4 THREAD
   f.write(&lk, 1);
   WriteDevice(f, tempo_clock);
   for (auto& tr : tracks) {
@@ -2131,7 +2158,8 @@ FLASHMEM void AppLoom::LoadFile() {
     if (tracks[t].input->val[0] > top) tracks[t].input->val[0] = 0;
     if (tracks[t].reel && tracks[t].reel->val[ReelDevice::IN] > top) tracks[t].reel->val[ReelDevice::IN] = 0;
   }
-  linked = lk != 0;
+  threaded = lk == 4;   // B's source is saved as OUT A already
+  linked = lk != 0 && !threaded;
   link_stereo = false;  // SPLIT (2) is out of the cycle: such files come back TIGHT
   link_rel = lk == 3;
   if (linked) track = 0;
@@ -2158,7 +2186,7 @@ FLASHMEM void AppLoom::View() const {
   // the link mode, for a moment after it changed: in a box with a double
   // outline (like the boot picture's LOOM, smaller)
   if (link_note_at && millis() - link_note_at < 1200) {
-    const char* txt = !linked ? PSTR("FREE") : link_stereo ? PSTR("SPLIT") : link_rel ? PSTR("LOOSE") : PSTR("TIGHT");
+    const char* txt = threaded ? PSTR("THREAD") : !linked ? PSTR("FREE") : link_stereo ? PSTR("SPLIT") : link_rel ? PSTR("LOOSE") : PSTR("TIGHT");
     const int tw = 6 * int(strlen(txt)), bw = tw + 14, bx = (128 - bw) / 2;
     graphics.clearRect(bx, 21, bw, 19);
     gfxFrame(bx, 21, bw, 19);
