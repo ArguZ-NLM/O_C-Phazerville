@@ -1637,9 +1637,12 @@ FLASHMEM void AppLoom::DrawDevice() const {
     }
     // has modes (the left knob): a small square at the right end of the
     // value lane, out of the way of the names
-    if (pd.nmodes) gfxRect(x + 30, 61, 2, 2);  // beside the bar's right end, below the grab box
-    if (d->ModsLive(p) && !(sel && mod_mode)) { // modulated: small wave mark
-      gfxPixel(x + 27, 49); gfxPixel(x + 28, 48); gfxPixel(x + 29, 49); gfxPixel(x + 30, 48);
+    // has modes (the left knob): the name dotted underneath, in the free
+    // row between name and number
+    if (pd.nmodes && !(sel && mod_mode)) {
+      const int w = 6 * int(strlen(d->Name(p)));
+      const int x0 = x + std::max(0, (32 - w) / 2) + 1;
+      for (int px = x0; px < x0 + w - 1; px += 2) gfxPixel(px, 51);
     }
 
     // value row: always the number
