@@ -808,6 +808,9 @@ void FASTRUN loop() {
           case '#':  // A held down (let go with the next A press); SPOOL: saves the loop after 2 s
             OC::ui.Inject(UI::EVENT_BUTTON_DOWN, OC::CONTROL_BUTTON_A, 0, OC::CONTROL_BUTTON_A);
             break;
+          case '@':  // X held down (let go with the next X press); CARD: deletes the file after 2 s
+            OC::ui.Inject(UI::EVENT_BUTTON_DOWN, OC::CONTROL_BUTTON_X, 0, OC::CONTROL_BUTTON_X);
+            break;
           case '^':  // Z held + R push (Loom <-> CARD)
             OC::ui.Inject(UI::EVENT_BUTTON_DOWN, OC::CONTROL_BUTTON_R, 0, OC::CONTROL_BUTTON_Z);
             break;

@@ -1347,8 +1347,8 @@ struct WavWriter {
     if (!SD.exists(LOOP_DIR)) SD.mkdir(LOOP_DIR);
     if (!SD.exists(REC_DIR)) SD.mkdir(REC_DIR);
     char path[48];
-    for (int k = 1; k < 1000; k++) {  // the next free LOOPnnn.WAV
-      snprintf(name, sizeof(name), "LOOP%03d.WAV", k);
+    for (int k = 1; k < 1000; k++) {  // the next free Spool_nnn.wav
+      snprintf(name, sizeof(name), "Spool_%03d.wav", k);
       snprintf(path, sizeof(path), "%s/%s", REC_DIR, name);
       if (!SD.exists(path)) break;
     }
