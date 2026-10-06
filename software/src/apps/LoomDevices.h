@@ -33,7 +33,7 @@
 #include "../Audio/AudioEffectDirt.h"
 #include "../Audio/AudioEffectBandz.h"
 #include "../Audio/AudioEffectResonator.h"
-#include "../Audio/AudioEffectModalResonator.h"
+#include "../Audio/RingsVoice.h"
 #include "../Audio/AudioEffectClouds.h"
 #include "../Audio/AudioEffectReel.h"
 #include "../Audio/AudioPlayStream.h"
@@ -3065,20 +3065,59 @@ enum Slot : uint8_t { SOURCE, SPRAY, RESONATOR, TEXTURE, ECHO, SLOT_COUNT };
 constexpr int MAX_OPTIONS = 3;
 
 /////////////////////////////////////////////////////////////////
-// MODAL (Resonator slot, 2nd choice): a struck object, like the ModalRes
-// applet: 12 sharply tuned modes (the partials of a string, bar or bell)
-// that ring on, excited by the track (L+R) and by A (HIT). Odd modes left,
-// even right, as far apart as SPRD.
+// MODAL (Resonator slot, 2nd choice): Mutable Instruments Rings (its DSP,
+// MIT, in src/extern/mi). MODEL picks the resonator: MODAL (a struck
+// object, ~60 partials), SYMP (sympathetic strings), STRNG (inharmonic
+// string), FM (FM voice), SYMQ (sympathetic strings on chords), S+REV
+// (string and reverb). The track (L+R) excites it and strums it by its
+// onsets; A (HIT) strikes it by hand. Odd partials / strings left, even
+// right, as far apart as SPRD.
 /////////////////////////////////////////////////////////////////
+class AudioRings : public AudioStream {
+public:
+  AudioRings() : AudioStream(1, queue) {}
+  RingsVoice voice;
+  volatile float spread = 0.7f;
+  volatile float peak = 0.0f;
+  void update() override;
+private:
+  audio_block_t* queue[1];
+};
+
+FASTRUN void AudioRings::update() {
+  audio_block_t* in = receiveReadOnly(0);
+  if (!voice.ok()) { if (in) release(in); return; }
+  audio_block_t* o[2] = {allocate(), allocate()};
+  if (o[0] && o[1]) {
+    static float fi[AUDIO_BLOCK_SAMPLES], fo[AUDIO_BLOCK_SAMPLES], fa[AUDIO_BLOCK_SAMPLES];
+    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) fi[n] = in ? in->data[n] * (1.0f / 32768.0f) : 0.0f;
+    voice.Process(fi, fo, fa, AUDIO_BLOCK_SAMPLES);
+    const float a = 0.5f + 0.5f * spread, b = 1.0f - a;
+    float pk = 0.0f;
+    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+      const float l = fo[n] * a + fa[n] * b, r = fa[n] * a + fo[n] * b;
+      pk = std::max(pk, std::max(fabsf(l), fabsf(r)));
+      o[0]->data[n] = __SSAT(int32_t(l * 32767.0f), 16);
+      o[1]->data[n] = __SSAT(int32_t(r * 32767.0f), 16);
+    }
+    peak = std::max(float(peak), pk);
+    transmit(o[0], 0);
+    transmit(o[1], 1);
+  }
+  for (auto b : o) if (b) release(b);
+  if (in) release(in);
+}
+
 PROGMEM static const DeviceDef MODAL_DEF = {
-  "MODAL", "MDL", 7, {"HIT", ""},
+  "MODAL", "MDL", 8, {"HIT", ""},
   {
     {"NOTE", 0, 72, 36, UNI},      // C0 .. C6, C3 in the middle
-    {"STRUC", 0, 100, 70, UNI},    // 0 tube, 50 string (harmonic), 100 bell
-    {"BRITE", 0, 100, 60, UNI},    // how long the upper partials ring
-    {"DAMP", 0, 100, 65, UNI},     // short knock .. long sustain
-    {"POS", 0, 100, 25, UNI},      // where it is struck (which partials sound)
-    {"SPRD", 0, 100, 70, UNI},     // odd / even partials apart
+    {"STRUC", 0, 100, 70, UNI},    // the module's STRUCTURE (SYMQ: the chord)
+    {"BRITE", 0, 100, 60, UNI},
+    {"DAMP", 0, 100, 65, UNI},
+    {"POS", 0, 100, 25, UNI},      // where it is struck
+    {"SPRD", 0, 100, 70, UNI},     // odd / even apart
+    {"MODEL", 0, RingsVoice::MODELS - 1, 0, UNI},
     {"WET", 0, 100, 100, UNI},
   },
   {"", ""},
@@ -3086,15 +3125,27 @@ PROGMEM static const DeviceDef MODAL_DEF = {
 
 class ModalDevice : public Device {
 public:
-  enum { NOTE, STRUC, BRITE, DAMP, POS, SPRD, WET };
+  enum { NOTE, STRUC, BRITE, DAMP, POS, SPRD, MODEL, WET };
   ModalDevice() : Device(MODAL_DEF), sum_l(in_mix, 0, fx, 0) {
     in_mix.gain(0, 0.5f); in_mix.gain(1, 0.5f); in_mix.gain(2, 0.0f); in_mix.gain(3, 0.0f);
   }
   AudioStream* in() override { return &in_mix; }   // L + R summed
-  AudioStream* out() override { return &fx; }     // odd modes left, even right
-  bool Activate() override { fx.Acquire(); fx.setSplit(true); ApplyAll(); active = true; return true; }
+  AudioStream* out() override { return &fx; }
+  bool ok() const override { return fx.voice.ok(); }
+  bool Activate() override {
+    if (!fx.voice.Init()) return false;
+    ApplyAll();
+    active = true;
+    return true;
+  }
+  void Deactivate() override {
+    AudioNoInterrupts();
+    fx.voice.Free();
+    AudioInterrupts();
+    active = false;
+  }
   void Apply(int p) override;
-  void Action(int a) override { if (a == 0) { fx.strike(1.0f); hit_at = millis() | 1; } }
+  void Action(int a) override { if (a == 0) { fx.voice.Strike(); hit_at = millis() | 1; } }
   void Format(int p, char* buf, size_t n) const override;
   void DrawViz(int x, int y, int w, int h) override;
   void DrawMini(int x, int y, int w, int h) override;
@@ -3105,25 +3156,33 @@ public:
   }
 private:
   AudioMixer4 in_mix;
-  AudioEffectModalResonator fx;
+  AudioRings fx;
   AudioConnection sum_l;
   Meter out_m;
   uint32_t hit_at = 0;
   float Hz() const { return 16.352f * powf(2.0f, cur[NOTE] / 12.0f); }  // C0 = 16.35 Hz
-  // the partials as the engine places them (its stiffness model), for the picture
+  // the partials of a struck object (an approximation of Rings' modal
+  // model), for the picture
   void Partials(float ratio[12], float gain[12]) const;
 };
 
 FLASHMEM void ModalDevice::Apply(int p) {
-  if (p == WET) { wet = cur[WET] * 0.01f; return; }
-  if (p == SPRD) { fx.setSpread(cur[SPRD] * 0.01f); return; }
-  fx.updateCoeffs(Hz(), cur[STRUC] * 0.01f, cur[BRITE] * 0.01f, cur[DAMP] * 0.01f, cur[POS] * 0.01f);
+  switch (p) {
+    case WET: wet = cur[WET] * 0.01f; return;
+    case SPRD: fx.spread = cur[SPRD] * 0.01f; return;
+    case MODEL: fx.voice.SetModel(cur[MODEL]); return;
+    default:
+      fx.voice.SetPatch(cur[NOTE], cur[STRUC] * 0.01f, cur[BRITE] * 0.01f, cur[DAMP] * 0.01f, cur[POS] * 0.01f);
+  }
 }
 
 FLASHMEM void ModalDevice::Format(int p, char* buf, size_t n) const {
   if (p == NOTE) {
     static const char* const names[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
     snprintf(buf, n, "%s%d", names[val[NOTE] % 12], val[NOTE] / 12);
+  } else if (p == MODEL) {
+    static const char* const models[RingsVoice::MODELS] = {"MODAL", "SYMP", "STRNG", "FM", "SYMQ", "S+REV"};
+    snprintf(buf, n, "%s", models[constrain(val[MODEL], 0, RingsVoice::MODELS - 1)]);
   } else {
     Device::Format(p, buf, n);
   }
@@ -3138,7 +3197,7 @@ FLASHMEM void ModalDevice::Partials(float ratio[12], float gain[12]) const {
   for (int k = 0; k < 12; k++) {
     ratio[k] = stretch;
     const float sg = sinf(float(M_PI) * pos * (k + 1));
-    gain[k] = sg * sg * q;  // struck there, and how long it rings next to the lowest
+    gain[k] = sg * sg * q;
     stretch += stiffness;
     stiffness *= stiffness < 0.0f ? 0.93f : 0.98f;
     q_loss += q_rate * (1.0f - q_loss);
@@ -3146,38 +3205,68 @@ FLASHMEM void ModalDevice::Partials(float ratio[12], float gain[12]) const {
   }
 }
 
-// the partials as lines along a pitch scale (6 octaves across): height =
-// how strongly it is struck and how long it rings; a hit flashes them
+// MODAL / FM: the partials as lines along a pitch scale (6 octaves across);
+// the string models: their strings, shaking with the sound. Output meter
+// on the right; a hit flashes the corner.
 FLASHMEM void ModalDevice::DrawViz(int x, int y, int w, int h) {
-  float r[12], g[12];
-  Partials(r, g);
+  const float pk = fx.peak;
+  fx.peak = 0.0f;
+  out_m.Hit(pk);
   const int ww = w - 8;
-  out_m.Hit(fx.readOutputPeak() / 32768.0f);
-  const float lo = 16.352f;  // C0 at the left edge, C6 at the right
-  for (int k = 0; k < 12; k++) {
-    const float hz = Hz() * r[k];
-    const float pos = log2f(hz / lo) / 6.0f;
-    if (pos < 0.0f || pos > 1.0f) continue;
-    const int px = x + int(pos * (ww - 1));
-    const int ph = std::max(1, int(sqrtf(std::min(1.0f, g[k])) * (h - 2)));
-    gfxLine(px, y + h - 1, px, y + h - ph);
-    if (k == 0) gfxRect(px - 1, y + h - ph - 2, 3, 2);  // the fundamental
+  const int model = cur[MODEL];
+  if (model == RingsVoice::MODAL || model == RingsVoice::FM) {
+    float r[12], g[12];
+    Partials(r, g);
+    for (int k = 0; k < 12; k++) {
+      const float pos = log2f(Hz() * r[k] / 16.352f) / 6.0f;
+      if (pos < 0.0f || pos > 1.0f) continue;
+      const int px = x + int(pos * (ww - 1));
+      const int ph = std::max(1, int(sqrtf(std::min(1.0f, g[k])) * (h - 2)));
+      gfxLine(px, y + h - 1, px, y + h - ph);
+      if (k == 0) gfxRect(px - 1, y + h - ph - 2, 3, 2);  // the fundamental
+    }
+    gfxDottedLine(x, y + h - 1, x + ww - 1, y + h - 1, 3);
+  } else {
+    // strings: one (STRNG, S+REV) or the sympathetic set, each a wave
+    const int strings = (model == RingsVoice::SYMPATHETIC || model == RingsVoice::SYMPATHETIC_QUANTIZED) ? 4 : 1;
+    const float amp = out_m.v * (h / (2.0f * strings) - 1);
+    const float t = millis() * 0.02f;
+    for (int s = 0; s < strings; s++) {
+      const int cy = y + (2 * s + 1) * h / (2 * strings);
+      int py = cy;
+      for (int i = 0; i < ww; i++) {
+        const float u = float(i) / (ww - 1);
+        const int yy = cy + int(amp * sinf(float(M_PI) * u) * sinf(t * (1.0f + 0.37f * s) + u * 6.0f * (s + 1)));
+        if (i) gfxLine(x + i - 1, py, x + i, yy);
+        py = yy;
+      }
+    }
+    if (model == RingsVoice::STRING_REVERB)  // the reverb: a few dots drifting off
+      for (int k = 0; k < 6; k++) gfxPixel(x + (millis() / 40 + k * 21) % ww, y + 2 + (k * 7) % (h - 4));
   }
-  gfxDottedLine(x, y + h - 1, x + ww - 1, y + h - 1, 3);
   if (hit_at && millis() - hit_at < 120) gfxRect(x, y, 4, 4);
   gfxFrame(x + w - 4, y, 4, h);
   DrawVMeter(x + w - 4, y, 4, h, out_m.v);
 }
 
 FLASHMEM void ModalDevice::DrawMini(int x, int y, int w, int h) {
-  float r[12], g[12];
-  Partials(r, g);
-  for (int k = 0; k < 12; k++) {
-    const float pos = log2f(r[k]) / 4.0f;  // 4 octaves above the fundamental
-    if (pos > 1.0f) continue;
-    const int px = x + int(pos * (w - 1));
-    const int ph = std::max(1, int(sqrtf(std::min(1.0f, g[k])) * h));
-    gfxLine(px, y + h - 1, px, y + h - ph);
+  const int model = cur[MODEL];
+  if (model == RingsVoice::MODAL || model == RingsVoice::FM) {
+    float r[12], g[12];
+    Partials(r, g);
+    for (int k = 0; k < 12; k++) {
+      const float pos = log2f(r[k]) / 4.0f;
+      if (pos > 1.0f) continue;
+      const int px = x + int(pos * (w - 1));
+      const int ph = std::max(1, int(sqrtf(std::min(1.0f, g[k])) * h));
+      gfxLine(px, y + h - 1, px, y + h - ph);
+    }
+  } else {
+    const int strings = (model == RingsVoice::SYMPATHETIC || model == RingsVoice::SYMPATHETIC_QUANTIZED) ? 4 : 1;
+    for (int s = 0; s < strings; s++) {
+      const int cy = y + (2 * s + 1) * h / (2 * strings);
+      gfxLine(x, cy, x + w - 1, cy);
+    }
   }
 }
 
