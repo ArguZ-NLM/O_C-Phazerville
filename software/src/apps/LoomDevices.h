@@ -838,9 +838,19 @@ private:
   volatile float gain = 1.0f, width = 1.0f;
   float peak[2] = {};
   Meter meters[2];
-  float wave[32] = {};   // rolling level history of the input
-  uint8_t wave_pos = 0;
+  // the picture: a stretch of the input taken from a rising edge (like a
+  // scope's trigger), so a steady sound stands still; with no edge for a
+  // while it takes one anyway
+  static constexpr int SCOPE_N = 512;   // ~12 ms
+  static constexpr int SCOPE_HYST = 160; // the edge must cross -this .. +this
+  int16_t scope[SCOPE_N] = {};
+  volatile uint16_t scope_fill = 0;     // recording while 0 < fill < N
+  volatile bool scope_ready = false;    // a full picture waits for the screen
+  bool scope_low = false;
+  uint8_t scope_wait = 0;               // blocks without an edge
+  int8_t col_lo[128] = {}, col_hi[128] = {};
   void Poll();
+  void Scope(const int16_t* l, const int16_t* r);
 };
 
 FLASHMEM void InputDevice::Poll() {
@@ -902,6 +912,7 @@ FASTRUN void InputDevice::update() {
     }
     for (int c = 0; c < 2; c++) peak[c] = std::max(peak[c], pk[c] * (1.0f / 32768.0f));
     level = std::max(pk[0], pk[1]) * (1.0f / 32768.0f);
+    Scope(l, r);
     transmit(out[0], 0);
     transmit(out[1], 1);
   }
@@ -909,21 +920,48 @@ FASTRUN void InputDevice::update() {
   for (auto b : in) if (b) release(b);
 }
 
+FASTRUN void InputDevice::Scope(const int16_t* l, const int16_t* r) {
+  if (scope_ready) return;  // the screen hasn't taken the last one yet
+  uint16_t fill = scope_fill;
+  for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+    const int16_t v = (l[n] + r[n]) >> 1;
+    if (fill) {
+      scope[fill++] = v;
+      if (fill == SCOPE_N) { scope_ready = true; break; }
+    } else if (v < -SCOPE_HYST) {
+      scope_low = true;
+    } else if (v > SCOPE_HYST && scope_low) {  // a rising edge
+      scope_low = false;
+      scope[0] = v;
+      fill = 1;
+    }
+  }
+  if (!fill && !scope_ready && ++scope_wait > 30) fill = 1;  // ~90 ms without an edge
+  if (fill) scope_wait = 0;
+  scope_fill = scope_ready ? 0 : fill;
+}
+
 FLASHMEM void InputDevice::DrawViz(int x, int y, int w, int h) {
   Poll();
   const float l = meters[0].v, r = meters[1].v;
 
-  // scrolling level history, mirrored around the centre line like a waveform
-  wave[wave_pos] = std::max(l, r);
-  wave_pos = (wave_pos + 1) % 32;
-  const int cy = y + h / 2, ww = w - 22;
-  gfxDottedLine(x, cy, x + ww, cy, 3);
-  for (int i = 0; i < 32; i++) {
-    const float v = wave[(wave_pos + i) % 32];
-    const int a = constrain(int(v * (h / 2 - 1)), 0, h / 2 - 1);
-    const int xx = x + i * ww / 32;
-    if (a) gfxLine(xx, cy - a, xx, cy + a);
+  const int cy = y + h / 2, ww = std::min(w - 22, 128);
+  const int half = h / 2 - 1;
+  // a new picture: the lowest and highest point in each column (each one
+  // reaching back to the column before, so the line stays joined)
+  if (scope_ready) {
+    for (int i = 0; i < ww; i++) {
+      const int a = std::max(0, i * SCOPE_N / ww - 1), b = (i + 1) * SCOPE_N / ww;
+      int lo = scope[a], hi = scope[a];
+      for (int k = a + 1; k < b; k++) { lo = std::min<int>(lo, scope[k]); hi = std::max<int>(hi, scope[k]); }
+      col_lo[i] = constrain(lo * half / 32768, -half, half);
+      col_hi[i] = constrain(hi * half / 32768, -half, half);
+    }
+    scope_ready = false;  // armed again
   }
+  gfxDottedLine(x, cy, x + ww, cy, 3);
+  for (int i = 0; i < ww; i++)
+    if (col_lo[i] || col_hi[i]) gfxLine(x + i, cy - col_hi[i], x + i, cy - col_lo[i]);
   // meters at the right edge: L and R for the stereo input, one for a
   // single input, none when off
   if (cur[0] == STEREO) {
