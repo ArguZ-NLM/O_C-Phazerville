@@ -40,7 +40,13 @@
 #include "../Audio/AudioPlayStream.h"
 #include <SD.h>
 
+extern "C" uint8_t external_psram_size;  // MB of PSRAM found at start (Teensy core)
+
 namespace loom {
+// the longest SPOOL loop / PLAYER sample held in memory: 16 s with 16 MB of
+// PSRAM; 8 s with less, so both tracks still fit (SPOOL or PLAYER, SPRAY and
+// ECHO each: about 4.6 MB a track at 16 s)
+inline float BigSecs() { return external_psram_size >= 16 ? 16.0f : 8.0f; }
 
 enum ParamKind : uint8_t { UNI, BI, LIST };
 
@@ -1059,7 +1065,7 @@ PROGMEM static const uint16_t REEL_VIEW_MS[9] = {2000, 1000, 500, 200, 100, 50, 
 class ReelDevice : public Device {
 public:
   enum { IN, SPEED, START, LEN, DUB, MON, LEVEL, VIEW };
-  static constexpr float MAX_SECS = 16.0f;
+  static float MaxSecs() { return BigSecs(); }
   explicit ReelDevice(InputDevice* i) : Device(SPOOL_DEF), input(i) {}
   int Step(int p, int v, int dir) const override {  // OUT A only on track B
     return p == IN && input ? input->Step(0, v, dir) : v + dir;
@@ -1103,7 +1109,7 @@ private:
 // called while the stream is not patched in
 FLASHMEM bool ReelDevice::Activate() {
   if (active) return fx.ready();
-  fx.Acquire(MAX_SECS);
+  fx.Acquire(MaxSecs());
   // IN is the input's own choice: take it over rather than impose ours
   if (input) val[IN] = cur[IN] = input->val[0];
   ApplyAll();
@@ -1413,7 +1419,7 @@ PROGMEM static const DeviceDef PLAYER_DEF = {
 class PlayerDevice : public Device {
 public:
   enum { FILE_, LOOP, LEVEL, SPEED, START, END, XFADE, SNAP };
-  static constexpr float MAX_SECS = 16.0f;
+  static float MaxSecs() { return BigSecs(); }
   static constexpr size_t MIN_BUF = 11025;  // 0.25 s: the buffer before a file
   // FILE mode MEM on a long file: the section in memory, in file frames
   // (len 0: none chosen yet, the first 16 s); kept in the saved settings
@@ -1761,7 +1767,7 @@ FLASHMEM void PlayerDevice::Load(int i) {
       rate = srate / 44100.0f;
       got = 0;
       // MEM on a long file: only the chosen section goes into memory
-      const size_t max_frames = size_t(MAX_SECS * AUDIO_SAMPLE_RATE_EXACT);
+      const size_t max_frames = size_t(MaxSecs() * AUDIO_SAMPLE_RATE_EXACT);
       if (mode[FILE_] == 1 && frames > max_frames) {
         if (!sec_len || sec_off >= frames) { sec_off = 0; sec_len = max_frames; }
         sec_len = uint32_t(std::min<size_t>({size_t(sec_len), max_frames, frames - sec_off}));
@@ -1783,7 +1789,7 @@ FLASHMEM void PlayerDevice::Load(int i) {
       idx_n = frames / IDX_FRAMES + 1;
       idx = static_cast<uint8_t*>(extmem_calloc(idx_n, 1));
       if (!stream.ready() || !idx) {  // no room to stream either: the start of it
-        fx.Resize(size_t(MAX_SECS * AUDIO_SAMPLE_RATE_EXACT)) || fx.Resize(size_t(2 * AUDIO_SAMPLE_RATE_EXACT));
+        fx.Resize(size_t(MaxSecs() * AUDIO_SAMPLE_RATE_EXACT)) || fx.Resize(size_t(2 * AUDIO_SAMPLE_RATE_EXACT));
         too_long = true; frames = fx.Capacity(); loading = true; return;
       }
       // streams straight away; the level index (the overview picture) is
@@ -1947,7 +1953,7 @@ FLASHMEM void PlayerDevice::Apply(int p) {
           const size_t a = EdgeAt(START), b = EdgeAt(END);
           sec_off = uint32_t(a);
           sec_len = uint32_t(std::min<size_t>(std::max<size_t>(b - std::min(a, b), 2 * AUDIO_BLOCK_SAMPLES),
-                                              size_t(MAX_SECS * AUDIO_SAMPLE_RATE_EXACT)));
+                                              size_t(MaxSecs() * AUDIO_SAMPLE_RATE_EXACT)));
           ex_pos[0] = 0; ex_pos[1] = sec_len;
           ex_valid = keep_exact = true;
         } else if (mode[FILE_] == 0 && clipped) {
@@ -2093,7 +2099,7 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
     ShortName(names[fi], (right - x) / 6 - 1, nm, sizeof(nm));
     gfxPrint(x, y, nm);
   }
-  if (too_long) gfxPrint(x + w - 24, y, PSTR("16s"));
+  if (too_long) { char t[6]; snprintf(t, sizeof(t), "%ds", int(MaxSecs())); gfxPrint(x + w - 6 * int(strlen(t)), y, t); }
   else if (clipped) gfxPrint(x + w - 18, y, PSTR("MEM"));
   if (streaming) {  // streamed from the card; blinks if the card fell behind
     const bool late = stream.Underran();

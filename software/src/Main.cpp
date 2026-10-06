@@ -508,6 +508,19 @@ FLASHMEM void setup() {
       GRAPHICS_BEGIN_FRAME(true);
       loom::DrawWave();
       loom::DrawTitle();
+      {
+        // how much PSRAM there is: Loom's loops, samples, grains and delays
+        // live in it (16 MB: everything on both tracks; 8 MB: 8 s loops)
+        extern "C" uint8_t external_psram_size;
+        char t[24];
+        if (external_psram_size) snprintf(t, sizeof(t), "PSRAM %dMB", external_psram_size);
+        else snprintf(t, sizeof(t), "NO PSRAM!");
+        const int w = 6 * int(strlen(t));
+        graphics.clearRect(64 - w / 2 - 3, 54, w + 6, 10);
+        graphics.setPrintPos(64 - w / 2, 55);
+        graphics.print(t);
+        if (!external_psram_size && (millis() / 400) % 2) graphics.invertRect(64 - w / 2 - 3, 54, w + 6, 10);
+      }
       GRAPHICS_END_FRAME();
       // the CV outputs: a wave running from A to H, 0..5 V (half the range;
       // 8.5 "volts" in the code are 10 V at the jacks, see Loom)
