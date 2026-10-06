@@ -65,6 +65,7 @@ MIDI_CREATE_INSTANCE(HardwareSerial, Serial8, MIDI1);
 #include "Wire.h"
 #ifdef MULTIBOOT
 #include "util/cachedisable.h"
+extern "C" uint8_t external_psram_size;  // MB of PSRAM found at start (Teensy core)
 #endif
 
 FLASHMEM
@@ -511,7 +512,6 @@ FLASHMEM void setup() {
       {
         // how much PSRAM there is: Loom's loops, samples, grains and delays
         // live in it (16 MB: everything on both tracks; 8 MB: 8 s loops)
-        extern "C" uint8_t external_psram_size;
         char t[24];
         if (external_psram_size) snprintf(t, sizeof(t), "PSRAM %dMB", external_psram_size);
         else snprintf(t, sizeof(t), "NO PSRAM!");
