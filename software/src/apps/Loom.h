@@ -1198,8 +1198,8 @@ FLASHMEM void AppLoom::MainLoop() {
   stats_timer = 0;
   const float usage = AudioProcessorUsageMax();
   cpu = int(usage + 0.5f);
-  Serial.printf("Loom: AudioProcessorUsageMax %d.%d%%  mem %u/%d blocks\n",
-    int(usage), int(usage * 10) % 10, AudioMemoryUsageMax(), OC::AudioIO::AUDIO_MEMORY);
+  Serial.printf("Loom: AudioProcessorUsageMax %d.%d%%  mem %u/%d blocks  PSRAM %dMB\n",
+    int(usage), int(usage * 10) % 10, AudioMemoryUsageMax(), OC::AudioIO::AUDIO_MEMORY, external_psram_size);
   AudioProcessorUsageMaxReset();
   AudioMemoryUsageMaxReset();
   Serial.printf("  load:%s\n", loom::load_note);
