@@ -259,8 +259,8 @@ private:
   bool linked = false;
   bool link_stereo = false;  // linked as SPLIT
   bool link_rel = false;     // linked as LINKED: B keeps its values, A's changes add to them (else MIRROR)
-  // the link squares: SPLIT both filled, MIRROR both hollow, LINKED the top one
-  bool LinkSquareFilled(bool top) const { return link_stereo || (link_rel && top); }
+  // the link squares: TIGHT both filled, LOOSE both hollow
+  bool LinkSquareFilled(bool top) const { (void)top; return !link_rel; }
   uint32_t link_note_at = 0;   // when the link mode changed (shown briefly)
   int16_t unlinked_in[2] = {-1, -1}, unlinked_spool_in[2] = {0, 0};  // input choices from before the link
   // the other track's PLAYER from before the link (its own file comes back)
@@ -634,29 +634,27 @@ FLASHMEM void AppLoom::ToggleBypass(int s) {
 // of both tracks are the same; SPLIT also makes them one stereo pair (track
 // L the left input / left side of the PLAYER's file, track R the right),
 // MIRROR copies A to B; LINKED keeps B's values and moves them by A's changes; both keep each track's own input and file.
+// A+B cycles FREE -> LOOSE -> TIGHT -> FREE. FREE: two separate stereo
+// tracks. LOOSE: B keeps its own values, A's changes move them by as much.
+// TIGHT: B becomes a copy of A and follows it. (SPLIT, one stereo pair over
+// both tracks, is still here but not in the cycle.)
 FLASHMEM void AppLoom::ToggleLink() {
   using namespace loom;
   if (!linked) {
-    // LINKED: B keeps its own values; A's changes move them by as much
     unlinked_pan[0] = tracks[0].mix->val[MixDevice::PAN];
     unlinked_pan[1] = tracks[1].mix->val[MixDevice::PAN];
     linked = true;
-    link_rel = true;
+    link_rel = true;   // LOOSE
     link_stereo = false;
     track = 0;  // the cursor lives on row A while linked
   } else if (link_rel) {
-    // MIRROR: B becomes a copy of A, both in the middle
-    link_rel = false;
+    link_rel = false;  // TIGHT
     LinkCopy();
     SetPans(0, 0);
-  } else if (!link_stereo) {
-    // SPLIT: one stereo pair, A left, B right
-    link_stereo = true;
-    StereoOn(0);
   } else {
-    StereoOff();
+    if (link_stereo) StereoOff();
     link_stereo = false;
-    linked = false;
+    linked = false;    // FREE
     if (unlinked_pan[0] != INT16_MIN) SetPans(unlinked_pan[0], unlinked_pan[1]);  // their own again
     unlinked_pan[0] = INT16_MIN;
   }
@@ -1960,7 +1958,7 @@ FLASHMEM void AppLoom::SaveFile() const {
   if (!f) return;
   f.write("SCU", 3);  // the file's mark since it was Sculpt; kept so all files load
   f.write(&SAVE_VERSION, 1);
-  const uint8_t lk = linked ? (link_stereo ? 2 : link_rel ? 3 : 1) : 0;  // 1 MIRROR, 2 SPLIT, 3 LINKED
+  const uint8_t lk = linked ? (link_stereo ? 2 : link_rel ? 3 : 1) : 0;  // 1 TIGHT, 2 SPLIT, 3 LOOSE
   f.write(&lk, 1);
   WriteDevice(f, tempo_clock);
   for (auto& tr : tracks) {
@@ -2144,7 +2142,7 @@ FLASHMEM void AppLoom::LoadFile() {
            version, ok, stage, int(f.position()), int(f.size()));
   f.close();
   linked = lk != 0;
-  link_stereo = lk == 2;
+  link_stereo = false;  // SPLIT (2) is out of the cycle: such files come back TIGHT
   link_rel = lk == 3;
   if (linked) track = 0;
   // SPLIT: each PLAYER its own side (the rest is in the saved settings)
@@ -2170,7 +2168,7 @@ FLASHMEM void AppLoom::View() const {
   // the link mode, for a moment after it changed: in a box with a double
   // outline (like the boot picture's LOOM, smaller)
   if (link_note_at && millis() - link_note_at < 1200) {
-    const char* txt = !linked ? PSTR("UNLINKED") : link_stereo ? PSTR("SPLIT") : link_rel ? PSTR("LINKED") : PSTR("MIRROR");
+    const char* txt = !linked ? PSTR("FREE") : link_stereo ? PSTR("SPLIT") : link_rel ? PSTR("LOOSE") : PSTR("TIGHT");
     const int tw = 6 * int(strlen(txt)), bw = tw + 14, bx = (128 - bw) / 2;
     graphics.clearRect(bx, 21, bw, 19);
     gfxFrame(bx, 21, bw, 19);
