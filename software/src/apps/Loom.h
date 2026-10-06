@@ -164,9 +164,9 @@ namespace loom {
   inline int OutIndex(int s) { return s >= OUT_L ? s - OUT_GROUP_START[OutGroup(s)] : 0; }
   FLASHMEM void FormatOutSource(int s, char* buf, size_t n, bool long_name) {
     if (s >= OUT_CLOCK) snprintf(buf, n, long_name ? "clock (beats)" : "CK");
-    else if (s >= OUT_SHARED) snprintf(buf, n, long_name ? "L+R MOD %c" : "LR%c", 'E' + s - OUT_SHARED);
-    else if (s >= OUT_R) snprintf(buf, n, long_name ? "track R MOD %c" : "R%c", 'A' + s - OUT_R);
-    else if (s >= OUT_L) snprintf(buf, n, long_name ? "track L MOD %c" : "L%c", 'A' + s - OUT_L);
+    else if (s >= OUT_SHARED) snprintf(buf, n, long_name ? "A+B MOD %c" : "AB%c", 'E' + s - OUT_SHARED);
+    else if (s >= OUT_R) snprintf(buf, n, long_name ? "track B MOD %c" : "B%c", 'A' + s - OUT_R);
+    else if (s >= OUT_L) snprintf(buf, n, long_name ? "track A MOD %c" : "A%c", 'A' + s - OUT_L);
     else snprintf(buf, n, long_name ? "off" : "--");
   }
 
@@ -257,7 +257,10 @@ private:
   bool active = false;
   bool reload_on_resume = false;  // a preset recall replaced LOOM.BIN
   bool linked = false;
-  bool link_stereo = false;  // linked as SPLIT (else TWIN)
+  bool link_stereo = false;  // linked as SPLIT
+  bool link_rel = false;     // linked as LINKED: B keeps its values, A's changes add to them (else MIRROR)
+  // the link squares: SPLIT both filled, MIRROR both hollow, LINKED the top one
+  bool LinkSquareFilled(bool top) const { return link_stereo || (link_rel && top); }
   uint32_t link_note_at = 0;   // when the link mode changed (shown briefly)
   int16_t unlinked_in[2] = {-1, -1}, unlinked_spool_in[2] = {0, 0};  // input choices from before the link
   // the other track's PLAYER from before the link (its own file comes back)
@@ -529,7 +532,17 @@ FLASHMEM void AppLoom::Mirror(loom::Device* d, int p) const {
   // PLAYER's FILE goes along only when linked as SPLIT (one file for both)
   if (!focus_mod && col == SOURCE && p == 0 && !(d == tracks[track].player && link_stereo)) return;
   if (!focus_mod && col == MIX_COL && p == MixDevice::PAN) return;
-  tw->val[p] = d->val[p];
+  if (link_rel) {
+    // LINKED: B keeps its own value and moves by as much as A just did
+    if (d->last_delta[p]) {
+      const ParamDef& pd = tw->param(p);
+      tw->val[p] = constrain(tw->val[p] + d->last_delta[p], pd.min, pd.max);
+      d->last_delta[p] = 0;
+      if (tw == tracks[1 - track].player) tracks[1 - track].player->ex_valid = false;  // its own edges, roughly
+    }
+  } else {
+    tw->val[p] = d->val[p];
+  }
   tw->mode[p] = d->mode[p];
   tw->mod_amt[p] = d->mod_amt[p];
   tw->mod_in[p] = d->mod_in[p];
@@ -617,10 +630,10 @@ FLASHMEM void AppLoom::ToggleBypass(int s) {
   }
 }
 
-// UP+DOWN cycles: off -> SPLIT -> TWIN -> off. Linked, the controls
+// UP+DOWN cycles: off -> SPLIT -> MIRROR -> LINKED -> off. Linked, the controls
 // of both tracks are the same; SPLIT also makes them one stereo pair (track
 // L the left input / left side of the PLAYER's file, track R the right),
-// TWIN keeps each track's own input and file.
+// MIRROR copies A to B; LINKED keeps B's values and moves them by A's changes; both keep each track's own input and file.
 FLASHMEM void AppLoom::ToggleLink() {
   using namespace loom;
   if (!linked) {
@@ -629,14 +642,18 @@ FLASHMEM void AppLoom::ToggleLink() {
     unlinked_pan[1] = tracks[1].mix->val[MixDevice::PAN];
     linked = true;
     link_stereo = true;
+    link_rel = false;
     LinkCopy();
     StereoOn(master);
   } else if (link_stereo) {
     StereoOff();
     link_stereo = false;
-    SetPans(0, 0);  // TWIN: both in the middle
+    SetPans(0, 0);  // MIRROR: both in the middle
+  } else if (!link_rel) {
+    link_rel = true;  // LINKED: B keeps its values, A's changes move them along
   } else {
     linked = false;
+    link_rel = false;
     if (unlinked_pan[0] != INT16_MIN) SetPans(unlinked_pan[0], unlinked_pan[1]);  // their own again
     unlinked_pan[0] = INT16_MIN;
   }
@@ -757,7 +774,7 @@ FLASHMEM void AppLoom::StereoOn(int master) {
   Track& a = tracks[master];
   Track& b = tracks[1 - master];
   // linked = one stereo pair: track L hears the left input, track R the
-  // right one (their own choices come back with TWIN / unlinking)
+  // right one (their own choices come back with MIRROR / unlinking)
   for (int t = 0; t < NUM_TRACKS; t++) {
     Track& tr = tracks[t];
     unlinked_in[t] = tr.input->val[0];
@@ -1399,8 +1416,8 @@ FLASHMEM void AppLoom::DrawChain() const {
     const int y = t * (bh + 1);
     // L / R drawn by hand at the left edge (text can't start left of x 0)
     static const uint8_t glyph[2][7] = {
-      {0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F},  // L
-      {0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11},  // R
+      {0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11},  // A
+      {0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E},  // B
     };
     for (int r = 0; r < 7; r++)
       for (int c = 0; c < 5; c++)
@@ -1442,9 +1459,9 @@ FLASHMEM void AppLoom::DrawChain() const {
   }
 
   if (linked) {
-    // two squares between L and R: filled = SPLIT, hollow = TWIN
+    // two squares between L and R: filled = SPLIT, hollow = MIRROR, top filled = LINKED
     for (const int sy : {21, 27}) {
-      if (link_stereo) gfxRect(0, sy, 5, 5);
+      if (LinkSquareFilled(sy == 21)) gfxRect(0, sy, 5, 5);
       else gfxFrame(0, sy, 5, 5);
     }
   }
@@ -1452,7 +1469,7 @@ FLASHMEM void AppLoom::DrawChain() const {
   // status line: what is under the cursor, CPU load
   const Track& tr = tracks[track];
   Device* d = tr.at(col);
-  if (!linked) gfxPrint(0, 56, track ? PSTR("R") : PSTR("L"));
+  if (!linked) gfxPrint(0, 56, track ? PSTR("B") : PSTR("A"));
   // the slot name; SOURCE names its source (INPUT, SPOOL or PLAYER)
   gfxPrint(8, 56, col == MIX_COL ? PSTR("OUTPUT")
                   : col == SOURCE && d ? d->def.name : SLOT_DEFS[col].name);
@@ -1493,10 +1510,10 @@ FLASHMEM void AppLoom::DrawDevice() const {
   if (both) {
     // linked: L, squares, R; the shared mods L+R
     if (linked && !SharedFocus()) DrawLinkLabel(1, 1);
-    else gfxPrint(1, 1, PSTR("L+R"));
+    else gfxPrint(1, 1, PSTR("A+B"));
     gfxInvert(0, 0, 21, 9);
   } else {
-    gfxPrint(1, 1, track ? PSTR("R") : PSTR("L"));
+    gfxPrint(1, 1, track ? PSTR("B") : PSTR("A"));
     gfxInvert(0, 0, 9, 9);
   }
   if (focus_mod && mod_cursor < CLK_CURSOR) {
@@ -1690,8 +1707,8 @@ FLASHMEM void AppLoom::DrawMods() const {
   if (mod_cursor >= OUT_CURSOR) { DrawOutputs(); return; }
   const int page = mod_cursor < NUM_MODS ? 0 : 1;
   if (linked && !page) DrawLinkLabel(1, 0);
-  else if (linked || page) gfxPrint(1, 0, PSTR("L+R"));
-  else gfxPrint(1, 0, track ? PSTR("R") : PSTR("L"));
+  else if (linked || page) gfxPrint(1, 0, PSTR("A+B"));
+  else gfxPrint(1, 0, track ? PSTR("B") : PSTR("A"));
   gfxPrint(linked || page ? 24 : 12, 0, page ? PSTR("SHARED") : PSTR("MODULATORS"));
   DrawClockMark(96, 1);
   if (Muted() && (millis() / 300) % 2) {
@@ -1754,15 +1771,15 @@ FLASHMEM void AppLoom::DrawClockPage() const {
 }
 
 // linked tracks in the top line: L and R with the two squares of the chain
-// view between them, filled for SPLIT, hollow for TWIN
+// view between them, filled for SPLIT, hollow for MIRROR, top filled for LINKED
 FLASHMEM void AppLoom::DrawLinkLabel(int x, int y) const {
-  gfxPrint(x, y, PSTR("L"));
-  // stacked like in the chain view, between L and R (R where it was in L+R)
+  gfxPrint(x, y, PSTR("A"));
+  // stacked like in the chain view, between A and B
   for (const int sy : {y, y + 4}) {
-    if (link_stereo) gfxRect(x + 8, sy, 3, 3);
+    if (LinkSquareFilled(sy == y)) gfxRect(x + 8, sy, 3, 3);
     else gfxFrame(x + 8, sy, 3, 3);
   }
-  gfxPrint(x + 12, y, PSTR("R"));
+  gfxPrint(x + 12, y, PSTR("B"));
 }
 
 // the clock in the top line: a play triangle while it runs, a square when
@@ -1940,7 +1957,7 @@ FLASHMEM void AppLoom::SaveFile() const {
   if (!f) return;
   f.write("SCU", 3);  // the file's mark since it was Sculpt; kept so all files load
   f.write(&SAVE_VERSION, 1);
-  const uint8_t lk = linked ? (link_stereo ? 2 : 1) : 0;  // 2 = SPLIT
+  const uint8_t lk = linked ? (link_stereo ? 2 : link_rel ? 3 : 1) : 0;  // 1 MIRROR, 2 SPLIT, 3 LINKED
   f.write(&lk, 1);
   WriteDevice(f, tempo_clock);
   for (auto& tr : tracks) {
@@ -2125,6 +2142,7 @@ FLASHMEM void AppLoom::LoadFile() {
   f.close();
   linked = lk != 0;
   link_stereo = lk == 2;
+  link_rel = lk == 3;
   if (linked) track = 0;
   // SPLIT: each PLAYER its own side (the rest is in the saved settings)
   if (link_stereo && tracks[0].player && tracks[1].player) {
@@ -2149,7 +2167,7 @@ FLASHMEM void AppLoom::View() const {
   // the link mode, for a moment after it changed: in a box with a double
   // outline (like the boot picture's LOOM, smaller)
   if (link_note_at && millis() - link_note_at < 1200) {
-    const char* txt = !linked ? PSTR("UNLINKED") : link_stereo ? PSTR("SPLIT") : PSTR("TWIN");
+    const char* txt = !linked ? PSTR("UNLINKED") : link_stereo ? PSTR("SPLIT") : link_rel ? PSTR("LINKED") : PSTR("MIRROR");
     const int tw = 6 * int(strlen(txt)), bw = tw + 14, bx = (128 - bw) / 2;
     graphics.clearRect(bx, 21, bw, 19);
     gfxFrame(bx, 21, bw, 19);

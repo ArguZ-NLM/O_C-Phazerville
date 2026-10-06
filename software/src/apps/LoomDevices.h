@@ -145,6 +145,7 @@ class Device {
 public:
   const DeviceDef& def;
   int16_t val[MAX_PARAMS] = {};      // what the user set
+  int16_t last_delta[MAX_PARAMS] = {};  // the last change by hand (LINKED moves the twin by it)
   int16_t cur[MAX_PARAMS] = {};      // after modulation; Apply() uses this
   uint8_t mode[MAX_PARAMS] = {};
   int8_t mod_amt[MAX_PARAMS] = {};   // -100..100 % of the range, 0 = off
@@ -347,7 +348,9 @@ FLASHMEM void Device::ModSourceName(int p, char* buf, size_t n) const {
 
 FLASHMEM void Device::Nudge(int p, int dir) {
   const ParamDef& d = param(p);
+  const int16_t was = val[p];
   val[p] = constrain(Step(p, val[p], dir), d.min, d.max);
+  last_delta[p] = val[p] - was;  // for a LINKED twin
   Refresh(p);
 }
 
@@ -796,7 +799,7 @@ PROGMEM static const DeviceDef INPUT_DEF = {
 // INPUT's sources: the jacks, or a track's own output (OUT L / OUT R) for
 // chains through both tracks and feedback loops
 static const char* InputSourceName(int s) {
-  static const char* const names[6] = {"L+R", "L", "R", "OFF", "OUT L", "OUT R"};
+  static const char* const names[6] = {"L+R", "L", "R", "OFF", "OUT A", "OUT B"};
   return names[constrain(s, 0, 5)];
 }
 
