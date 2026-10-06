@@ -72,7 +72,7 @@ void Part::ConfigureResonators() {
   switch (model_) {
     case RESONATOR_MODEL_MODAL:
       {
-        int32_t resolution = 64 / polyphony_ - 4;
+        int32_t resolution = std::min<int32_t>(64 / polyphony_ - 4, 32);  // Loom: at most 32 modes (CPU, two tracks)
         for (int32_t i = 0; i < polyphony_; ++i) {
           resonator_[i].Init();
           resonator_[i].set_resolution(resolution);
