@@ -3543,7 +3543,7 @@ public:
   void DrawMini(int x, int y, int w, int h) override;
   void CpuMax(float parts[2]) override {
     parts[0] = fx.processorUsageMax();
-    parts[1] = 0.0f;
+    parts[1] = fx.rest ? 1.0f : 0.0f;  // (debug: resting)
     fx.processorUsageMaxReset();
   }
 private:
