@@ -571,7 +571,7 @@ PROGMEM static const DeviceDef MIX_DEF = {
     {"LOW", -24, 24, 0, BI, 0, 3, 1, {}, {"120", "250", "500"}},
     {"MID", -24, 24, 0, BI},
     {"HIGH", -24, 24, 0, BI, 0, 3, 1, {}, {"1.5k", "3k", "6k"}},
-    {"OTT", 0, 100, 0, UNI},  // one-knob 3-band compression (after 3-Bandz)
+    {"COMP", 0, 100, 0, UNI},  // one-knob 3-band compression (after 3-Bandz; was OTT)
   }
 };
 
@@ -694,7 +694,7 @@ FLASHMEM void MixDevice::DrawViz(int x, int y, int w, int h) {
   }
 
   // output meters with the pan position underneath, on the right (page 2:
-  // above OTT)
+  // above COMP)
   const float l = meters[0].Hit(level[0]), r = meters[1].Hit(level[1]);
   const int ox = x + 96 + 6;
   gfxFrame(ox, y, 8, h - 4);
