@@ -114,10 +114,14 @@ FLASHMEM void AppCard::DrawMenu() const {
   gfxLine(0, 10, 127, 10);
   if (!SDcard_Ready) return;
   if (!on) {  // waiting: how to connect, instead of the list
-    gfxPrint(0, 16, "open OpenMTP on the");
-    gfxPrint(0, 25, "computer; if no card:");
-    gfxPrint(0, 34, "card-mode.sh");
+    gfxPrint(0, 16, "Open the card on the");
+    gfxPrint(0, 25, "computer (Mac: in");
+    gfxPrint(0, 34, "OpenMTP).");
+#ifdef LOOM_ONLY
+    gfxPrint(0, 52, "back: Z + R push");
+#else
     gfxPrint(0, 52, "back: app menu");
+#endif
     return;
   }
   // connected: the folder, then 5 entries around the selection
