@@ -3460,7 +3460,7 @@ PROGMEM static const DeviceDef STRETCH_DEF = {
   {
     // modes (like SPRAY's): random variation per window
     {"PITCH", -24, 24, 0, BI, 0, 25, 0},  // semitones, without changing the speed; mode: pitch spread 0..24
-    {"POS", 0, 100, 20, UNI, 0, 21, 0},   // how far back; mode: position variation 0..100% in 5% steps
+    {"POS", 0, 100, 80, UNI, 0, 21, 0},   // like SPRAY: 0 = the oldest audio (left), 100 = now (right); mode: position variation
     {"SIZE", 0, 100, 50, UNI, 0, 21, 0},  // the window: short = quick and grainy, long = smooth; mode: size spread
     {"SPEED", -200, 200, 100, BI}, // frozen: through the buffer (%, < 0 backwards)
     {"TONE", -50, 50, 0, BI},      // left lowpass, right highpass
@@ -3523,7 +3523,7 @@ FLASHMEM void StretchDevice::Apply(int p) {
       return;
     }
     default:
-      fx.voice.Set(cur[POS] * 0.01f, cur[SIZE] * 0.01f, cur[PITCH], cur[SPEED] * 0.01f, frozen);
+      fx.voice.Set(1.0f - cur[POS] * 0.01f, cur[SIZE] * 0.01f, cur[PITCH], cur[SPEED] * 0.01f, frozen);
       fx.voice.SetSpread(mode[PITCH], mode[SIZE] * 0.05f, mode[POS] * 0.025f, cur[SPRD] * 0.01f);
   }
 }
@@ -3551,7 +3551,7 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
   const int ww = w - 8, cy = y + h / 2, base = y + h - 1;
   gfxDottedLine(x, cy, x + ww - 1, cy, 2);
   if (!frozen) gfxLine(x + ww - 1, y + 2, x + ww - 1, y + h - 3);  // now: the record head
-  float pos = cur[POS] * 0.01f + (frozen ? fx.voice.Scrub() : 0.0f);
+  float pos = 1.0f - cur[POS] * 0.01f + (frozen ? fx.voice.Scrub() : 0.0f);  // back from now
   pos -= floorf(pos);
   auto pos_x = [&](float p) { p -= floorf(p); return x + int((1.0f - p) * (ww - 1)); };
   const float semis_px = float(h / 2 - 4) / 24.0f;
@@ -3593,7 +3593,7 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
 FLASHMEM void StretchDevice::DrawMini(int x, int y, int w, int h) {
   const int cy = y + h / 2;
   gfxLine(x, cy, x + w - 1, cy);
-  float pos = cur[POS] * 0.01f + (frozen ? fx.voice.Scrub() : 0.0f);
+  float pos = 1.0f - cur[POS] * 0.01f + (frozen ? fx.voice.Scrub() : 0.0f);  // back from now
   pos -= floorf(pos);
   const int px = x + int((1.0f - pos) * (w - 1));
   const int py = cy - cur[PITCH] * (h / 2 - 2) / 24;

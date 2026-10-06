@@ -1870,7 +1870,8 @@ namespace loom {
   // 4: three choices per effect slot (RESONATOR: MODAL)
   // 5: OUTPUT page 2 LOW MID HIGH OTT (was BANDZ LOW MID HIGH)
   // 6: ECHO's reverb LEVEL PRE ROOM WALL (was LEVEL SIZE DECAY TONE)
-  constexpr uint8_t SAVE_VERSION = 6;
+  // 7: STRETCH POS turned round (0 = oldest, 100 = now, like SPRAY)
+  constexpr uint8_t SAVE_VERSION = 7;
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -1928,6 +1929,8 @@ namespace loom {
     const bool reorder_out = use && !memcmp(tag, "MIX", 4) && load_version < 5;
     const bool remap_mdl = use && !memcmp(tag, "MDL", 4) && n == 7;  // MODEL came in before WET
     const bool remap_str = use && !memcmp(tag, "STR", 4) && n == 7;  // SPRD came in before MIX
+    // before v7 STRETCH's POS ran the other way (0 = now)
+    const bool flip_pos = use && !memcmp(tag, "STR", 4) && load_version < 7;
     // before v6 the reverb's 6th was SIZE (now PRE: left at its default);
     // DECAY's value becomes ROOM, TONE's WALL (same places)
     const bool skip_size = use && !memcmp(tag, "ECO", 4) && load_version < 6;
@@ -1954,6 +1957,11 @@ namespace loom {
       d->mod_amt[p] = constrain(amt, -100, 100);
       d->mod_in[p].Unpack(src);
       d->mod_bus_sel[p] = bus <= MOD_BUSES ? bus : 0;
+      if (flip_pos && p == 1) {
+        d->val[p] = 100 - d->val[p];
+        d->mod_amt[p] = -d->mod_amt[p];
+        d->mod_amt2[p] = -d->mod_amt2[p];
+      }
       p = q;
     }
     uint8_t bi, bi2 = 0, trig[2];
