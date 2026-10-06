@@ -390,7 +390,7 @@ FLASHMEM void AppLoom::Start() {
   }
   Device* v2 = tracks[1].inst[ECHO][1];
   v2->val[EchoDevice::TIME] = 680;
-  v2->val[EchoDevice::TONE] = 15;
+  v2->val[EchoDevice::WALL] = 15;
   v2->mode[EchoDevice::SPREAD] = EchoDevice::DIFFUSE;
 
   tempo_clock = new ClockDevice;
