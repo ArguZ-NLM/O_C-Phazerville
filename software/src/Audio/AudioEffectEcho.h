@@ -345,6 +345,30 @@ FASTRUN void AudioEffectEcho::update() {
   int peak_in = 0, peak_out = 0;
   constexpr float q = 1.0f / 32768.0f;
 
+  // the reverb lines' outputs for the whole block first: every line is
+  // longer than a block, so nothing read here is written in it. Read len
+  // back (lines 0, 2, 5, 7 wobbled), interpolated, damped (TONE), loop gain.
+  static float yb[RL][AUDIO_BLOCK_SAMPLES];
+  for (int i = 0; i < RL; i++) {
+    const int cap = RV_CAP[i];
+    const int16_t* line = rv + RV_OFS[i];
+    const int w0 = rv_wi[i];
+    const float g_i = lg[i], d0i = dl0[i], dsi = dls[i];
+    float z = rv_lp[i];
+    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+      float rp = float(w0 + n) - (d0i + n * dsi);
+      if (rp < 0.0f) rp += cap;
+      else if (rp >= cap) rp -= cap;
+      const int i0 = int(rp);
+      const int i1 = i0 + 1 >= cap ? 0 : i0 + 1;
+      const float fr = rp - i0;
+      const float d = (line[i0] + fr * (line[i1] - line[i0])) * (1.0f / RV_Q);
+      z += rda * (d - z);
+      yb[i][n] = z * g_i;
+    }
+    rv_lp[i] = z;
+  }
+
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
     const int16_t d0 = dry_in[0][n], d1 = dry_in[1][n];
     peak_in = std::max(peak_in, std::max(abs(d0), abs(d1)));
@@ -395,18 +419,7 @@ FASTRUN void AudioEffectEcho::update() {
     float y[RL];
     float ysum = 0.0f;
     for (int i = 0; i < RL; i++) {
-      // read len samples back (lines 0, 2, 5, 7 wobbled), interpolated
-      const float dl = dl0[i] + n * dls[i];
-      const int cap = RV_CAP[i];
-      float rp = float(rv_wi[i]) - dl;
-      if (rp < 0.0f) rp += cap;
-      const int i0 = int(rp);
-      const int i1 = i0 + 1 >= cap ? 0 : i0 + 1;
-      const float fr = rp - i0;
-      const int16_t* line = rv + RV_OFS[i];
-      const float d = (line[i0] + fr * (line[i1] - line[i0])) * (1.0f / RV_Q);
-      rv_lp[i] += rda * (d - rv_lp[i]);  // damping (TONE)
-      y[i] = rv_lp[i] * lg[i];
+      y[i] = yb[i][n];  // read for the whole block above
       ysum += y[i];
     }
     // Householder: every line into every other, lossless
