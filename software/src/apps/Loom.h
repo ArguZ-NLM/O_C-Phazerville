@@ -133,7 +133,7 @@ namespace loom {
     AudioConnection out_mix[NUM_TRACKS][4];  // source (dry) and chain (wet) into the OUTPUT fade
     AudioConnection mix_out[NUM_TRACKS][2];
     // every track's output into both tracks' INPUT (OUT L / OUT R)
-    AudioConnection cross[NUM_TRACKS][NUM_TRACKS][2];  // [from][to][channel]
+    AudioConnection chain_ab[2];  // track A's output into track B's INPUT (OUT A)
   };
 
   Track tracks[NUM_TRACKS];
@@ -340,6 +340,7 @@ FLASHMEM void AppLoom::Start() {
   for (int t = 0; t < NUM_TRACKS; t++) {
     Track& tr = tracks[t];
     tr.input = new InputDevice;
+    tr.input->chained = t == 1;  // track B may take track A's output
     tr.input->mod_bus = tr.mod_out;
     tr.input->Defaults();
     tr.input->val[0] = t ? InputDevice::IN2 : InputDevice::IN1;
@@ -816,10 +817,7 @@ FLASHMEM void AppLoom::Resume() {
   active = true;
   for (int t = 0; t < NUM_TRACKS; t++) ConnectTrack(t);
   AudioNoInterrupts();
-  for (int f = 0; f < NUM_TRACKS; f++)
-    for (int t = 0; t < NUM_TRACKS; t++)
-      for (int c = 0; c < 2; c++)
-        patch->cross[f][t][c].connect(*tracks[f].mix->out(), c, *tracks[t].input, 2 + 2 * f + c);
+  for (int c = 0; c < 2; c++) patch->chain_ab[c].connect(*tracks[0].mix->out(), c, *tracks[1].input, 2 + c);
   AudioInterrupts();
   OC::AudioIO::ClaimOutput(*mixer);
   OC::AudioIO::ResyncInput();  // L and R in the same order on every start
@@ -835,7 +833,7 @@ FLASHMEM void AppLoom::Suspend() {
   if (!active) return;
   OC::AudioIO::ReleaseOutput();
   AudioNoInterrupts();
-  for (auto& f : patch->cross) for (auto& t : f) for (auto& c : t) c.disconnect();
+  for (auto& c : patch->chain_ab) c.disconnect();
   AudioInterrupts();
   for (int t = 0; t < NUM_TRACKS; t++) DisconnectTrack(t);
   active = false;
@@ -2127,6 +2125,12 @@ FLASHMEM void AppLoom::LoadFile() {
   snprintf(load_note + strlen(load_note), sizeof(load_note) - strlen(load_note), " v%d ok %d stage %d pos %d/%d",
            version, ok, stage, int(f.position()), int(f.size()));
   f.close();
+  // OUT A is only for track B (older files had more track outputs)
+  for (int t = 0; t < NUM_TRACKS; t++) {
+    const int top = t == 1 ? InputDevice::OUT_A : InputDevice::OFF;
+    if (tracks[t].input->val[0] > top) tracks[t].input->val[0] = 0;
+    if (tracks[t].reel && tracks[t].reel->val[ReelDevice::IN] > top) tracks[t].reel->val[ReelDevice::IN] = 0;
+  }
   linked = lk != 0;
   link_stereo = false;  // SPLIT (2) is out of the cycle: such files come back TIGHT
   link_rel = lk == 3;

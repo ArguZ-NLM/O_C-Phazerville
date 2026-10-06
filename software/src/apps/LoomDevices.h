@@ -790,30 +790,34 @@ FLASHMEM void MixDevice::DrawMini(int x, int y, int w, int h) {
 PROGMEM static const DeviceDef INPUT_DEF = {
   "INPUT", "IN", 3, {"", ""},
   {
-    {"SOURC", 0, 5, 0, UNI},  // L+R, L, R, OFF, OUT L, OUT R (see InputSourceName)
+    {"SOURC", 0, 4, 0, UNI},  // L+R, L, R, OFF, and on track B: OUT A (see InputSourceName)
     {"GAIN", 0, 200, 100, UNI},
     {"WIDTH", 0, 200, 100, UNI},
   }
 };
 
-// INPUT's sources: the jacks, or a track's own output (OUT L / OUT R) for
-// chains through both tracks and feedback loops
+// INPUT's sources: the jacks, or (track B only) track A's output, so both
+// chains run one after the other
 static const char* InputSourceName(int s) {
-  static const char* const names[6] = {"L+R", "L", "R", "OFF", "OUT A", "OUT B"};
-  return names[constrain(s, 0, 5)];
+  static const char* const names[5] = {"L+R", "L", "R", "OFF", "OUT A"};
+  return names[constrain(s, 0, 4)];
 }
 
 class InputDevice : public Device, public AudioStream {
   uint32_t heard_at = 0;  // last time the mini picture saw a signal
 public:
-  // inputs 0-1: the jacks; 2-3: track L's output; 4-5: track R's output
-  enum Source { STEREO, IN1, IN2, OFF, OUT_L, OUT_R };
-  InputDevice() : Device(INPUT_DEF), AudioStream(6, queue) {}
+  // inputs 0-1: the jacks; 2-3: track A's output (track B's INPUT only)
+  enum Source { STEREO, IN1, IN2, OFF, OUT_A };
+  InputDevice() : Device(INPUT_DEF), AudioStream(4, queue) {}
+  bool chained = false;  // track B: may take OUT A
+  int Step(int p, int v, int dir) const override {
+    const int r = v + dir;
+    return p == 0 && !chained ? std::min(r, int(OFF)) : r;
+  }
   void Format(int p, char* buf, size_t n) const override {
     if (p == 0) snprintf(buf, n, "%s", InputSourceName(val[0]));
     else Device::Format(p, buf, n);
   }
-  bool Guarding() const { return guard < 0.99f; }  // the feedback safety is turning it down
   AudioStream* in() override { return this; }
   AudioStream* out() override { return this; }
   void Apply(int p) override;
@@ -827,13 +831,8 @@ public:
   void update() override;
   volatile float level = 0.0f; // last block's peak, for FOLLOW
 private:
-  audio_block_t* queue[6];
+  audio_block_t* queue[4];
   volatile uint8_t source = STEREO;
-  // feedback safety for the track outputs: DC blocker, a limiter at -6 dB,
-  // and a guard that fades the input down while the limiter is pinned
-  float dc_x[2] = {}, dc_y[2] = {};
-  float env = 0.0f, guard = 1.0f;
-  uint32_t pinned = 0;  // samples in a row the limiter has been working hard
   volatile float gain = 1.0f, width = 1.0f;
   float peak[2] = {};
   Meter meters[2];
@@ -861,41 +860,19 @@ FLASHMEM void InputDevice::Apply(int p) {
 }
 
 FASTRUN void InputDevice::update() {
-  audio_block_t* in[6];
-  for (int i = 0; i < 6; i++) in[i] = receiveReadOnly(i);
+  audio_block_t* in[4];
+  for (int i = 0; i < 4; i++) in[i] = receiveReadOnly(i);
   audio_block_t* out[2] = {allocate(), allocate()};
   if (out[0] && out[1]) {
     static const int16_t silence[AUDIO_BLOCK_SAMPLES] = {};
     uint8_t src = source;
-    // a track's output: made safe first, then taken like the stereo jacks
-    static int16_t safe[2][AUDIO_BLOCK_SAMPLES];
-    const bool from_track = src == OUT_L || src == OUT_R;
-    if (from_track) {
-      const int base = src == OUT_L ? 2 : 4;
-      constexpr float CEIL = 16384.0f;  // -6 dB
-      const float rel = 1.0f - 1.0f / (0.2f * AUDIO_SAMPLE_RATE_EXACT);
-      for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
-        float v[2];
-        for (int c = 0; c < 2; c++) {
-          const float x = in[base + c] ? in[base + c]->data[n] : 0.0f;
-          dc_y[c] = x - dc_x[c] + 0.995f * dc_y[c];  // DC blocker
-          dc_x[c] = x;
-          v[c] = dc_y[c] * gain;
-        }
-        const float pk = std::max(fabsf(v[0]), fabsf(v[1]));
-        env = pk > env ? pk : env * rel;
-        const float lim = env > CEIL ? CEIL / env : 1.0f;
-        // pinned for 1.5 s: fade the loop down; calm: let it come back
-        pinned = lim < 0.5f ? pinned + 1 : 0;
-        if (pinned > uint32_t(1.5f * AUDIO_SAMPLE_RATE_EXACT)) guard = std::max(0.0f, guard - 1.0f / (0.5f * AUDIO_SAMPLE_RATE_EXACT));
-        else if (lim > 0.9f) guard = std::min(1.0f, guard + 1.0f / (3.0f * AUDIO_SAMPLE_RATE_EXACT));
-        for (int c = 0; c < 2; c++) safe[c][n] = int16_t(v[c] * lim * guard);
-      }
-    }
+    // OUT A: track A's output, taken like the stereo jacks
+    const bool from_a = src == OUT_A;
+    if (from_a) src = STEREO;
+    const int base = from_a ? 2 : 0;
     // channel 0 is L (the input is resynced at start, see AudioIO)
-    const int16_t* a = from_track ? safe[0] : in[0] ? in[0]->data : silence;
-    const int16_t* b = from_track ? safe[1] : in[1] ? in[1]->data : silence;
-    if (from_track) src = STEREO;
+    const int16_t* a = in[base] ? in[base]->data : silence;
+    const int16_t* b = in[base + 1] ? in[base + 1]->data : silence;
     const int32_t g = static_cast<int32_t>(gain * 16384.0f);   // Q14, up to 2.0
     const int32_t wd = static_cast<int32_t>(width * 16384.0f); // Q14
     int16_t* l = out[0]->data;
@@ -915,7 +892,7 @@ FASTRUN void InputDevice::update() {
           y = m - sd;
         } break;
       }
-      const int32_t gg = from_track ? 16384 : g;  // GAIN already applied before the limiter
+      const int32_t gg = g;
       l[n] = __SSAT((x * gg) >> 14, 16);
       r[n] = __SSAT((y * gg) >> 14, 16);
       pk[0] = std::max<int32_t>(pk[0], abs(l[n]));
@@ -990,7 +967,7 @@ FLASHMEM void InputDevice::DrawMini(int x, int y, int w, int h) {
 PROGMEM static const DeviceDef SPOOL_DEF = {
   "SPOOL", "REL", 7, {"REC", "STP"},  // tag REL kept for saved files (was REEL)
   {
-    {"IN", 0, 5, 1, UNI},  // like INPUT's SOURC
+    {"IN", 0, 4, 1, UNI},  // like INPUT's SOURC
     {"SPEED", -200, 200, 100, BI},
     {"START", 0, 100, 0, UNI},
     {"LEN", 1, 100, 100, UNI},
@@ -1006,6 +983,9 @@ public:
   enum { IN, SPEED, START, LEN, DUB, MON, LEVEL };
   static constexpr float MAX_SECS = 16.0f;
   explicit ReelDevice(InputDevice* i) : Device(SPOOL_DEF), input(i) {}
+  int Step(int p, int v, int dir) const override {  // OUT A only on track B
+    return p == IN && input ? input->Step(0, v, dir) : v + dir;
+  }
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
   bool Activate() override;
