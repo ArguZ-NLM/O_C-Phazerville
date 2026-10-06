@@ -805,6 +805,9 @@ void FASTRUN loop() {
           case '!':
             OC::ui.Inject(UI::EVENT_BUTTON_DOWN, OC::CONTROL_BUTTON_L, 0, OC::CONTROL_BUTTON_Z);
             break;
+          case '#':  // A held down (let go with the next A press); SPOOL: saves the loop after 2 s
+            OC::ui.Inject(UI::EVENT_BUTTON_DOWN, OC::CONTROL_BUTTON_A, 0, OC::CONTROL_BUTTON_A);
+            break;
           case '^':  // Z held + R push (Loom <-> CARD)
             OC::ui.Inject(UI::EVENT_BUTTON_DOWN, OC::CONTROL_BUTTON_R, 0, OC::CONTROL_BUTTON_Z);
             break;

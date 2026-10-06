@@ -1315,6 +1315,7 @@ FLASHMEM void ReelDevice::DrawMini(int x, int y, int w, int h) {
 // screen keeps going and the audio interrupt is never held up.
 /////////////////////////////////////////////////////////////////
 constexpr char LOOP_DIR[] = "/LOOM";
+constexpr char REC_DIR[] = "/LOOM/RECORDINGS";  // SPOOL's saved loops
 constexpr int MAX_FILES = 48, NAME_LEN = 80;
 constexpr size_t IO_CHUNK = 2048;  // sample frames per step
 
@@ -1344,10 +1345,11 @@ struct WavWriter {
   FLASHMEM bool Begin(const int16_t* l, const int16_t* r, size_t frames) {
     if (!SDcard_Ready || !frames) return false;
     if (!SD.exists(LOOP_DIR)) SD.mkdir(LOOP_DIR);
-    char path[40];
+    if (!SD.exists(REC_DIR)) SD.mkdir(REC_DIR);
+    char path[48];
     for (int k = 1; k < 1000; k++) {  // the next free LOOPnnn.WAV
       snprintf(name, sizeof(name), "LOOP%03d.WAV", k);
-      snprintf(path, sizeof(path), "%s/%s", LOOP_DIR, name);
+      snprintf(path, sizeof(path), "%s/%s", REC_DIR, name);
       if (!SD.exists(path)) break;
     }
     f = SD.open(path, FILE_WRITE);
@@ -1483,7 +1485,7 @@ public:
   // the WAVs in the current folder, sorted; Select picks one in /LOOM by
   // name (after a save), SetFile any folder + name (from the settings)
   void Scan();
-  void Select(const char* name) { SetFile(LOOP_DIR, name); }
+  void Select(const char* name) { SetFile(REC_DIR, name); }  // a loop SPOOL just saved
   void SetFile(const char* folder, const char* name);
   const char* Folder() const { return dir; }
   void SetPick(uint8_t p) { fx.pick = p; }
