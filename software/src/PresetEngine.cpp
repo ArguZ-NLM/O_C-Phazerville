@@ -1246,6 +1246,11 @@ FLASHMEM void BootRecall() {
   persisted_app = app;
   if (app && app != global_settings.current_app_id) cur_slot_dirty_ms = StampMs();
   if (slot < 0 || !SlotUsed((uint8_t)slot)) return;
+#ifdef LOOM_ONLY
+  // Loom starts the way it was left (its own saved state); presets come
+  // back only when recalled
+  return;
+#endif
   serial_printf("PresetEngine: boot recall slot %d\n", slot);
   enqueue(REQ_BOOT_RECALL, slot);
 }
