@@ -1637,12 +1637,13 @@ FLASHMEM void AppLoom::DrawDevice() const {
     }
     // has modes (the left knob): a small square at the right end of the
     // value lane, out of the way of the names
-    // has modes (the left knob): the name dotted underneath, in the free
-    // row between name and number
+    // has modes (the left knob): two dots under each end of the name, in the
+    // free row between name and number
     if (pd.nmodes && !(sel && mod_mode)) {
       const int w = 6 * int(strlen(d->Name(p)));
       const int x0 = x + std::max(0, (32 - w) / 2) + 1;
-      for (int px = x0; px < x0 + w - 1; px += 2) gfxPixel(px, 51);
+      // just the ends: two dots at each side of the name
+      for (int px : {x0, x0 + 2, x0 + w - 4, x0 + w - 2}) gfxPixel(px, 51);
     }
 
     // value row: always the number
