@@ -566,10 +566,10 @@ PROGMEM static const DeviceDef MIX_DEF = {
     {"LEVEL", 0, 100, 80, UNI},
     {"PAN", -50, 50, 0, BI},
     {"MUTE", 0, 1, 0, LIST, 2, 0, 0, {"off", "ON"}},
-    {"BANDZ", 0, 100, 0, UNI},
     {"LOW", -24, 24, 0, BI, 0, 3, 1, {}, {"120", "250", "500"}},
     {"MID", -24, 24, 0, BI},
     {"HIGH", -24, 24, 0, BI, 0, 3, 1, {}, {"1.5k", "3k", "6k"}},
+    {"OTT", 0, 100, 0, UNI},  // one-knob 3-band compression (after 3-Bandz)
   }
 };
 
@@ -577,7 +577,7 @@ PROGMEM static const DeviceDef MIX_DEF = {
 // The track's audio runs through the band stage, then into the mixer.
 class MixDevice : public Device {
 public:
-  enum { DRYWET, LEVEL, PAN, MUTE, BANDZ, B_LOW, B_MID, B_HIGH };
+  enum { DRYWET, LEVEL, PAN, MUTE, B_LOW, B_MID, B_HIGH, BANDZ };
   LoomFade* out_fade = nullptr;  // source (dry) against the chain (wet), before the band stage
   explicit MixDevice(int t) : Device(MIX_DEF), track(t) {}
   AudioStream* in() override { return &bandz; }
@@ -658,7 +658,7 @@ FLASHMEM void MixDevice::Apply(int p) {
 
 // band gains in 0.5 dB steps
 FLASHMEM void MixDevice::Format(int p, char* buf, size_t n) const {
-  if (p >= B_LOW) {
+  if (p >= B_LOW && p <= B_HIGH) {
     const int v = val[p];
     snprintf(buf, n, "%s%d.%d", v < 0 ? "-" : v > 0 ? "+" : "", abs(v) / 2, abs(v) % 2 ? 5 : 0);
   } else {
@@ -680,7 +680,7 @@ FLASHMEM void MixDevice::DrawViz(int x, int y, int w, int h) {
   // compression hanging from the top
   if (view_page == 0) DrawSpectrum(x, y, 94, h);
   for (int b = 0; b < 3 && view_page == 1; b++) {
-    const int bx = x + (b + 1) * 32;  // above LOW / MID / HIGH
+    const int bx = x + b * 32;  // above LOW / MID / HIGH
     const int gain = cur[B_LOW + b] * (h / 2 - 1) / 24;
     gfxDottedLine(bx + 3, cy, bx + 28, cy, 2);
     if (gain > 0) gfxRect(bx + 10, cy - gain, 8, gain);
@@ -691,10 +691,10 @@ FLASHMEM void MixDevice::DrawViz(int x, int y, int w, int h) {
     if (gr > 0) gfxRect(bx + 25, y, 2, gr);
   }
 
-  // output meters with the pan position underneath: right of the spectrum
-  // (page 1), above BANDZ (page 2)
+  // output meters with the pan position underneath, on the right (page 2:
+  // above OTT)
   const float l = meters[0].Hit(level[0]), r = meters[1].Hit(level[1]);
-  const int ox = view_page == 1 ? x + 6 : x + 96 + 6;
+  const int ox = x + 96 + 6;
   gfxFrame(ox, y, 8, h - 4);
   gfxFrame(ox + 11, y, 8, h - 4);
   DrawVMeter(ox + 1, y + 1, 6, h - 6, l);

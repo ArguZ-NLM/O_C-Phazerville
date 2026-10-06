@@ -1840,7 +1840,8 @@ namespace loom {
   constexpr char SAVE_TMP[] = "LOOM.TMP";
   // 2: modulator types sorted by name; 3: second mod source, MOD E-H
   // 4: three choices per effect slot (RESONATOR: MODAL)
-  constexpr uint8_t SAVE_VERSION = 4;
+  // 5: OUTPUT page 2 LOW MID HIGH OTT (was BANDZ LOW MID HIGH)
+  constexpr uint8_t SAVE_VERSION = 5;
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -1895,6 +1896,7 @@ namespace loom {
     const bool use = d && !memcmp(tag, d->def.tag, 4) && n <= d->num_params();
     const bool remap_spr = use && !memcmp(tag, "SPR", 4) && n == 7;
     const bool remap_mix = use && !memcmp(tag, "MIX", 4) && n == 7;  // MIX came in first
+    const bool reorder_out = use && !memcmp(tag, "MIX", 4) && load_version < 5;
     for (int p = 0; p < n; p++) {
       int16_t v; uint8_t md; int8_t amt; uint16_t src; uint8_t bus;
       if (f.read(&v, 2) != 2 || f.read(&md, 1) != 1 || f.read(&amt, 1) != 1
@@ -1906,6 +1908,8 @@ namespace loom {
       const int q = p;
       if (remap_spr && p == 6) p = 7;
       if (remap_mix) p = q + 1;
+      // before v5 OUTPUT's page 2 was BANDZ LOW MID HIGH: now LOW MID HIGH OTT
+      if (reorder_out && p >= 4) p = p == 4 ? 7 : p - 1;
       d->mod_amt2[p] = constrain(amt2, -100, 100);
       d->mod_bus2[p] = bus2 <= MOD_BUSES ? bus2 : 0;
       const ParamDef& pd = d->param(p);
@@ -1924,6 +1928,10 @@ namespace loom {
       bi = mv(bi); bi2 = mv(bi2);
     }
     if (remap_mix) { bi = uint8_t(bi << 1); bi2 = uint8_t(bi2 << 1); }
+    if (reorder_out) {  // bit 4 (BANDZ) to 7, bits 5-7 down one
+      auto ro = [](uint8_t b) { return uint8_t((b & 0x0F) | ((b & 0xE0) >> 1) | ((b & 0x10) << 3)); };
+      bi = ro(bi); bi2 = ro(bi2);
+    }
     if (use) {
       d->mod_bi = bi;
       d->mod_bi2 = bi2;
