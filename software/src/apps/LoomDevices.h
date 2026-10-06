@@ -849,6 +849,7 @@ private:
   bool scope_low = false;
   uint8_t scope_wait = 0;               // blocks without an edge
   int8_t col_lo[128] = {}, col_hi[128] = {};
+  float scope_range = 1024.0f;          // auto range: follows the loudest point, slowly back down
   void Poll();
   void Scope(const int16_t* l, const int16_t* r);
 };
@@ -950,12 +951,16 @@ FLASHMEM void InputDevice::DrawViz(int x, int y, int w, int h) {
   // a new picture: the lowest and highest point in each column (each one
   // reaching back to the column before, so the line stays joined)
   if (scope_ready) {
+    int pk = 0;
+    for (int k = 0; k < SCOPE_N; k++) pk = std::max(pk, abs(int(scope[k])));
+    scope_range = std::max({float(pk), scope_range * 0.97f, 1024.0f});
+    const int range = int(scope_range) + 1;
     for (int i = 0; i < ww; i++) {
       const int a = std::max(0, i * SCOPE_N / ww - 1), b = (i + 1) * SCOPE_N / ww;
       int lo = scope[a], hi = scope[a];
       for (int k = a + 1; k < b; k++) { lo = std::min<int>(lo, scope[k]); hi = std::max<int>(hi, scope[k]); }
-      col_lo[i] = constrain(lo * half / 32768, -half, half);
-      col_hi[i] = constrain(hi * half / 32768, -half, half);
+      col_lo[i] = constrain(lo * half / range, -half, half);
+      col_hi[i] = constrain(hi * half / range, -half, half);
     }
     scope_ready = false;  // armed again
   }
