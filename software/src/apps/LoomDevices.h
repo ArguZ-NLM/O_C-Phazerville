@@ -3800,7 +3800,7 @@ FASTRUN void AudioStretch::update() {
     // the correlator's search, here after the block (up to 0.3 ms): the
     // same on every page (from the main loop it got less time while the
     // chain view drew, and sounded different)
-    voice.Work(300);
+    if (StretchVoice::audio_search) voice.Work(300);
     const float la = lp_a, ha = hp_a;
     float pk = 0.0f;
     for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++)

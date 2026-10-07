@@ -62,6 +62,8 @@ FLASHMEM void StretchVoice::Free() {
   buf_ = nullptr;
 }
 
+volatile bool StretchVoice::audio_search = false;
+
 void StretchVoice::Work(uint32_t budget_us) {
   if (!ready_) return;
   auto* p = static_cast<Impl*>(impl_);

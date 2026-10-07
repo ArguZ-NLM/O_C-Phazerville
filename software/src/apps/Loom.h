@@ -1278,6 +1278,8 @@ FLASHMEM void AppLoom::WriteOutputs() {
 }
 
 FLASHMEM void AppLoom::MainLoop() {
+  // Loom runs: STRETCH may search from the audio now
+  if (!StretchVoice::audio_search && millis() > 10000) StretchVoice::audio_search = true;
   if (active) ReadMIDI();
   {
     using namespace loom;
