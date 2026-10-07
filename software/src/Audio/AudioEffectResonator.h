@@ -137,10 +137,13 @@ FASTRUN void AudioEffectResonator::update() {
       }
     }
   }
-  // damp * bp: unity gain at a band's centre
+  // damp * bp: unity gain at a band's centre; then a soft limit (unity
+  // when quiet), as a note right on a ringing band can get loud
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
-    sum[0][n] *= dmp[n];
-    sum[1][n] *= dmp[n];
+    for (int c = 0; c < 2; c++) {
+      const float v = sum[c][n] * dmp[n];
+      sum[c][n] = v / sqrtf(1.0f + v * v);
+    }
   }
 
   float peak_out = 0.0f;

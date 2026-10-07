@@ -3244,7 +3244,7 @@ PROGMEM static const DeviceDef RESONATOR_DEF = {
     {"CUT", 0, 100, 70, UNI},
     {"SLOPE", -50, 50, -50, BI},
     {"RESO", 0, 100, 20, UNI},
-    {"DCAY", 0, 100, 40, UNI, 0, 2, 0, {}, {"SUST", "CHOKE"}},
+    {"DCAY", 0, 100, 50, UNI, 0, 2, 0, {}, {"SUST", "CHOKE"}},  // Q 4 .. 1000: from the middle up, the bands ring as pitches
     {"PITCH", -24, 24, 0, BI},
     {"TONE", -50, 50, 0, BI},
     {"SCALE", 0, 3, 0, LIST, 4, 0, 0, {"CHROM", "MAJOR", "MINOR", "PENTA"}},
@@ -3277,7 +3277,8 @@ private:
   float Base(float k) const;
   float Bump(float k) const;
   float View(float k) const;
-  float Q() const { return 2.0f * powf(100.0f, cur[DECAY] * 0.01f); } // 2 .. 200
+  static float QOf(int v) { return 4.0f * powf(250.0f, v * 0.01f); }  // 4 .. 1000
+  float Q() const { return QOf(cur[DECAY]); }
 };
 
 // band k sits 2 semitones above band k-1, from C1, moved by PITCH and
@@ -3292,7 +3293,10 @@ FLASHMEM void ResonatorDevice::Rebuild() {
   };
   const uint16_t mask = scale_masks[constrain(cur[SCALE], 0, 3)];
   const float q = Q();
-  const float level = 0.5f * (1.0f + 0.2f * log2f(q / 2.0f));
+  // a narrow band lets through less of the sound (its share goes with 1/Q):
+  // made up with sqrt(Q), so ringing bands are as loud as wide ones (the
+  // engine limits the sum softly)
+  const float level = 0.5f * sqrtf(q / 4.0f);
   float f[BANDS], g[BANDS];
   for (int k = 0; k < BANDS; k++) {
     int note = 24 + 2 * k + cur[PITCH];  // MIDI note, C1 = 24
@@ -3304,7 +3308,7 @@ FLASHMEM void ResonatorDevice::Rebuild() {
     f[k] = hz < 8000.0f ? 2.0f * sinf(float(M_PI) * hz / AUDIO_SAMPLE_RATE_EXACT) : 0.0f;
 
     const float gk = Base(k) * (1.0f + cur[RESO] * 0.06f * Bump(k))
-        * powf(2.0f, cur[TONE] * 0.02f * (k - BANDS / 2) / float(BANDS / 2));
+        * powf(4.0f, cur[TONE] * 0.02f * (k - BANDS / 2) / float(BANDS / 2));  // +-12 dB at the ends
     g[k] = gk * level;
   }
   fx.SetBank(f, g, 1.0f / q, mode[DECAY] == 1, cur[WET] * 0.01f);
@@ -3342,7 +3346,7 @@ FLASHMEM void ResonatorDevice::Format(int p, char* buf, size_t n) const {
     const int note = 24 + 2 * int(val[CUT] * 0.01f * (BANDS - 1) + 0.5f);
     snprintf(buf, n, "%s%d", names[note % 12], note / 12 - 1);
   } else if (p == DECAY) {
-    snprintf(buf, n, "Q%d", int(2.0f * powf(100.0f, val[DECAY] * 0.01f) + 0.5f));
+    snprintf(buf, n, "Q%d", int(QOf(val[DECAY]) + 0.5f));
   } else {
     Device::Format(p, buf, n);
   }
