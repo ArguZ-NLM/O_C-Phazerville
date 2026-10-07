@@ -189,6 +189,11 @@ private:
     volatile float texture_  = 0.5f;  // 0=rect, 0.5=tri, 1.0=Hann
     volatile float feedback_ = 0.0f;  // 0..1
     volatile bool  freeze_   = false;
+public:
+    // resting (switched out of a chain): only the recording goes on, so the
+    // buffer is up to date when it comes back; no grains, nothing sent
+    volatile bool rest = false;
+private:
     volatile float source_   = 0.0f;  // −1..+1 (stereo)
     volatile float sspread_  = 0.0f;  // 0..1 (stereo)
 
@@ -275,6 +280,13 @@ FASTRUN void AudioEffectClouds::update() {
             hist_pos_ = (hist_pos_ + 1) % HIST;
             hist_peak_ = 0;
         }
+    }
+
+    if (rest) {
+        for (auto& g : grains) g.active = false;  // none left over on return
+        memset(feedback_buf_, 0, sizeof(feedback_buf_));
+        release_blocks(in, out);
+        return;
     }
 
     // ── Pass 1: grain scheduling ───────────────────────────────────────────

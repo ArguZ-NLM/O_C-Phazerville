@@ -87,6 +87,23 @@ void StretchVoice::NextWindow() {
   pan_step_ = (pan_to_ - pan_) / hop_left_;
 }
 
+void StretchVoice::Record(const float* in, size_t n) {
+  if (!ready_) return;
+  auto* p = static_cast<Impl*>(impl_);
+  for (size_t done = 0; done < n; done += kChunk) {
+    const size_t size = std::min(n - done, kChunk);
+    for (int c = 0; c < 2; c++) p->buffer[c].WriteFade(&in[2 * done + c], int32_t(size), 2, !freeze_);
+  }
+}
+
+// the windows that were playing point at audio recorded over since
+void StretchVoice::Restart() {
+  if (!ready_) return;
+  auto* p = static_cast<Impl*>(impl_);
+  p->player.Init(&p->correlator, 2);
+  hop_left_ = 0;
+}
+
 void StretchVoice::Process(const float* in, float* out, size_t n) {
   if (!ready_) {
     for (size_t i = 0; i < 2 * n; i++) out[i] = 0.0f;

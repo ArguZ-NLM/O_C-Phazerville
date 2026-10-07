@@ -20,6 +20,10 @@ public:
 
   // n stereo frames, interleaved (L R L R ...)
   void Process(const float* in, float* out, size_t n);
+  // switched out of the chain: only record (cheap), so the buffer is up to
+  // date when it comes back; Restart() then begins with fresh windows
+  void Record(const float* in, size_t n);
+  void Restart();
   // main loop: the correlator's search (a slice at a time)
   void Idle();
 

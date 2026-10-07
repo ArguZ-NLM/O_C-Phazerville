@@ -214,6 +214,9 @@ public:
   // resting at WET 0 (nothing of it heard) like a bypassed device; only
   // where waking up costs nothing audible (no recorded buffer to go stale)
   virtual bool RestsWhenDry() const { return false; }
+  // keeps its input while parked (it records, Rest() stops the rest): its
+  // buffer has no gap of old audio when it comes back
+  virtual bool FeedsWhileParked() const { return false; }
 
   void Defaults();
   void ApplyAll();
@@ -3039,6 +3042,8 @@ public:
   enum { RATE, SIZE, PITCH, POS, SHAPE, FDBK, SPREAD, LEVEL };
   static constexpr float BUF_SECS = 4.0f;
   SprayDevice();
+  void Rest(bool on) override { fx.rest = on; }
+  bool FeedsWhileParked() const override { return true; }
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
   bool Activate() override;
@@ -3455,14 +3460,29 @@ private:
   audio_block_t* queue[2];
   float last[2 * AUDIO_BLOCK_SAMPLES] = {};
   float lp_z[2] = {}, hp_z[2] = {}, dc_z[2] = {};
+  bool resting = false;
 };
 
 FASTRUN void AudioStretch::update() {
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
-  if (!voice.ok() || rest) { for (auto b : in) if (b) release(b); return; }
+  if (!voice.ok()) { for (auto b : in) if (b) release(b); return; }
+  static float fi[2 * AUDIO_BLOCK_SAMPLES], fo[2 * AUDIO_BLOCK_SAMPLES];
+  if (rest) {  // out of the chain: keep recording only
+    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++)
+      for (int c = 0; c < 2; c++) fi[2 * n + c] = in[c] ? in[c]->data[n] * (1.0f / 32768.0f) : 0.0f;
+    voice.Record(fi, AUDIO_BLOCK_SAMPLES);
+    resting = true;
+    for (auto b : in) if (b) release(b);
+    return;
+  }
+  if (resting) {  // back: fresh windows, no old feedback or filter state
+    resting = false;
+    voice.Restart();
+    memset(last, 0, sizeof(last));
+    for (int c = 0; c < 2; c++) lp_z[c] = hp_z[c] = dc_z[c] = 0.0f;
+  }
   audio_block_t* o[2] = {allocate(), allocate()};
   if (o[0] && o[1]) {
-    static float fi[2 * AUDIO_BLOCK_SAMPLES], fo[2 * AUDIO_BLOCK_SAMPLES];
     const float fb = fdbk;
     for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++)
       for (int c = 0; c < 2; c++) {
@@ -3519,6 +3539,7 @@ public:
   void FormatMode(int p, char* buf, size_t n) const override;
   StretchDevice() : Device(STRETCH_DEF) {}
   void Rest(bool on) override { fx.rest = on; }
+  bool FeedsWhileParked() const override { return true; }
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
   bool ok() const override { return fx.voice.ok(); }

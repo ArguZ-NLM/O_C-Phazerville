@@ -89,6 +89,11 @@ namespace loom {
     uint8_t parked = 0;  // bit per slot: bypassed and unpatched (no CPU)
     uint32_t park_at[SLOT_COUNT] = {};  // when a bypassed device gets parked
     uint32_t dry_at[SLOT_COUNT] = {};   // when a device resting at WET 0 gets parked (0: not dry)
+    // a device chosen on the panel: the slot fades to dry first, then it
+    // changes (at choice_at) and the new one fades in; -1: none waiting
+    static_assert(SLOT_COUNT == 5, "next_choice: one -1 per slot");
+    int8_t next_choice[SLOT_COUNT] = {-1, -1, -1, -1, -1};
+    uint32_t choice_at[SLOT_COUNT] = {};
     Device* inst[SLOT_COUNT][MAX_OPTIONS] = {};
     LoomFade* fade[SLOT_COUNT] = {};  // after each effect slot: bypass fade
     LoomGate* gate = nullptr;         // before ECHO: its tail rings out
@@ -108,6 +113,8 @@ namespace loom {
       }
       return inst[s][choice[s]];
     }
+    // the device chosen, also while the slot still fades out the old one
+    int shown_choice(int s) const { return next_choice[s] >= 0 ? next_choice[s] : choice[s]; }
     bool bypassed(int s) const { return s < SLOT_COUNT && (bypass >> s & 1); }
     bool shown_bypassed(int c) const { return bypass >> c & 1; } // incl. OUT
     Device* at(int col) const {
@@ -126,14 +133,34 @@ namespace loom {
     }
   };
 
+  // a patch cord that remembers where Repatch wants it: Want() for each
+  // cord in use (Drop() for the rest), then Release() on all takes down only
+  // the ones that change and Raise() puts up the new ones. A cord left up
+  // keeps the block waiting in it (taking it down would drop that: a click).
+  struct LoomCord : AudioConnection {
+    AudioStream* want_src = nullptr;
+    AudioStream* want_dst = nullptr;
+    uint8_t want_si = 0, want_di = 0;
+    void Want(AudioStream& s, int si, AudioStream& d, int di) {
+      want_src = &s; want_si = si; want_dst = &d; want_di = di;
+    }
+    void Drop() { want_src = nullptr; }
+    bool Stays() const {
+      return isConnected && want_src && src == want_src && dst == want_dst &&
+             src_index == want_si && dest_index == want_di;
+    }
+    void Release() { if (!Stays()) disconnect(); }
+    void Raise() { if (want_src && !isConnected) connect(*want_src, want_si, *want_dst, want_di); }
+  };
+
   // patch cords live on the heap: no RAM1 until Loom is first opened
   struct Patch {
     AudioConnection in[NUM_TRACKS][2];
-    // per slot: in -> (gate ->) device, in -> fade dry, device -> fade wet
-    AudioConnection link[NUM_TRACKS][SLOT_COUNT][8];
-    AudioConnection to_mix[NUM_TRACKS][2];
-    AudioConnection out_mix[NUM_TRACKS][4];  // source (dry) and chain (wet) into the OUTPUT fade
-    AudioConnection mix_out[NUM_TRACKS][2];
+    // per slot: in -> fade dry, in -> (gate ->) device, device -> fade wet
+    LoomCord link[NUM_TRACKS][SLOT_COUNT][8];
+    LoomCord to_mix[NUM_TRACKS][2];
+    LoomCord out_mix[NUM_TRACKS][4];  // source (dry) and chain (wet) into the OUTPUT fade
+    LoomCord mix_out[NUM_TRACKS][2];
     // every track's output into both tracks' INPUT (OUT L / OUT R)
     AudioConnection chain_ab[2];  // track A's output into track B's INPUT (OUT A)
   };
@@ -319,6 +346,8 @@ private:
   void WriteOutputs();
   void SetChoice(int t, int s, int option);
   void SetChoiceLinked(int s, int option);
+  void ChoiceFaded(int t, int s, int option);
+  void SwitchChoices(int t);
   void ToggleBypass(int s);
   loom::Device* Twin(loom::Device* d) const;
   void Mirror(loom::Device* d, int p) const;
@@ -449,13 +478,10 @@ FLASHMEM void AppLoom::Repatch(int t) {
   Track& tr = tracks[t];
   auto& link = patch->link[t];
   AudioNoInterrupts();
-  for (auto& slot : link) for (auto& c : slot) c.disconnect();
-  for (auto& c : patch->to_mix[t]) c.disconnect();
-  for (auto& c : patch->mix_out[t]) c.disconnect();
-  for (auto& c : patch->out_mix[t]) c.disconnect();
+  for (auto& slot : link) for (auto& c : slot) c.Drop();
   AudioStream* prev = tr.input;
   if (tr.choice[SOURCE] == 1 && tr.reel) {  // SPOOL records and plays after the input
-    for (int c = 0; c < 2; c++) link[SOURCE][c].connect(*tr.input, c, *tr.reel->in(), c);
+    for (int c = 0; c < 2; c++) link[SOURCE][c].Want(*tr.input, c, *tr.reel->in(), c);
     prev = tr.reel->out();
   } else if (tr.choice[SOURCE] == 2 && tr.player) {  // PLAYER instead of the input
     prev = tr.player->out();
@@ -464,34 +490,48 @@ FLASHMEM void AppLoom::Repatch(int t) {
   for (int k = 0; k < SLOT_COUNT - 1; k++) {  // the effects in their order
     const int s = tr.order[k];
     Device* d = tr.current(s);
-    if (!d || !d->in()) continue;
+    LoomCord* l = link[s];
+    // the dry signal always on the slot's first two cords, so it is never
+    // taken down when the device comes or goes
+    for (int c = 0; c < 2; c++) (l++)->Want(*prev, c, *tr.fade[s], c);
+    AudioStream* const before = prev;
+    prev = tr.fade[s];
+    if (!d || !d->in()) continue;  // empty slot: only the dry signal
     d->Rest(tr.parked >> s & 1);
     // bypassed slots stay patched while their fade (or tail) runs; parked
-    // ones only pass the dry signal through the fade
-    AudioConnection* l = link[s];
+    // ones only pass the dry signal through the fade (and a device with a
+    // recording keeps its input)
     if (tr.parked >> s & 1) {
-      for (int c = 0; c < 2; c++) (l++)->connect(*prev, c, *tr.fade[s], c);
-      prev = tr.fade[s];
+      if (d->FeedsWhileParked())
+        for (int c = 0; c < 2; c++) (l++)->Want(*before, c, *d->in(), c);
       continue;
     }
-    AudioStream* feed = prev;
+    AudioStream* feed = before;
     if (s == ECHO && tr.gate) {
-      for (int c = 0; c < 2; c++) (l++)->connect(*prev, c, *tr.gate, c);
+      for (int c = 0; c < 2; c++) (l++)->Want(*before, c, *tr.gate, c);
       feed = tr.gate;
     }
-    for (int c = 0; c < 2; c++) (l++)->connect(*feed, c, *d->in(), c);
-    for (int c = 0; c < 2; c++) (l++)->connect(*prev, c, *tr.fade[s], c);
-    for (int c = 0; c < 2; c++) (l++)->connect(*d->out(), c, *tr.fade[s], 2 + c);
-    prev = tr.fade[s];
+    for (int c = 0; c < 2; c++) (l++)->Want(*feed, c, *d->in(), c);
+    for (int c = 0; c < 2; c++) (l++)->Want(*d->out(), c, *tr.fade[s], 2 + c);
   }
   // OUTPUT's MIX: the source (dry) against the chain (wet), then through the
   // track's band stage into the mixer
   for (int c = 0; c < 2; c++) {
-    patch->out_mix[t][c].connect(*source, c, *tr.out_fade, c);
-    patch->out_mix[t][2 + c].connect(*prev, c, *tr.out_fade, 2 + c);
-    patch->to_mix[t][c].connect(*tr.out_fade, c, *tr.mix->in(), c);
+    patch->out_mix[t][c].Want(*source, c, *tr.out_fade, c);
+    patch->out_mix[t][2 + c].Want(*prev, c, *tr.out_fade, 2 + c);
+    patch->to_mix[t][c].Want(*tr.out_fade, c, *tr.mix->in(), c);
   }
-  for (int c = 0; c < 2; c++) patch->mix_out[t][c].connect(*tr.mix->out(), c, *mixer, t * 2 + c);
+  for (int c = 0; c < 2; c++) patch->mix_out[t][c].Want(*tr.mix->out(), c, *mixer, t * 2 + c);
+  // only the cords that change are taken down (that drops the block waiting
+  // in them: a click), all of them first, then the new ones go up
+  auto each = [&](auto f) {
+    for (auto& slot : link) for (auto& c : slot) f(c);
+    for (auto& c : patch->to_mix[t]) f(c);
+    for (auto& c : patch->mix_out[t]) f(c);
+    for (auto& c : patch->out_mix[t]) f(c);
+  };
+  each([](LoomCord& c) { c.Release(); });
+  each([](LoomCord& c) { c.Raise(); });
   AudioInterrupts();
   ApplyBypass(t);
 }
@@ -503,6 +543,12 @@ FLASHMEM void AppLoom::ApplyBypass(int t) {
   Track& tr = tracks[t];
   for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
     if (!tr.fade[s]) continue;
+    // an empty slot, or one about to change its device: dry only
+    if (!tr.current(s) || tr.next_choice[s] >= 0) {
+      tr.fade[s]->Set(1.0f, 0.0f);
+      if (s == ECHO) tr.gate->Set(0.0f);
+      continue;
+    }
     const bool bp = tr.bypassed(s);
     if (s == ECHO) {
       tr.fade[s]->Set(bp ? 1.0f : 0.0f, 1.0f);
@@ -523,6 +569,7 @@ FLASHMEM void AppLoom::SetChoice(int t, int s, int option) {
   using namespace loom;
   Track& tr = tracks[t];
   option = constrain(option, 0, SLOT_DEFS[s].noptions - 1);
+  tr.next_choice[s] = -1;
   if (option == tr.choice[s]) return;
   Device* old = tr.current(s);
   tr.choice[s] = option;
@@ -630,8 +677,49 @@ FLASHMEM void AppLoom::SetModType(int t, int i, int type) {
 }
 
 FLASHMEM void AppLoom::SetChoiceLinked(int s, int option) {
-  SetChoice(track, s, option);
-  if (linked) SetChoice(1 - track, s, loom::tracks[track].choice[s]);
+  using namespace loom;
+  if (s == SOURCE) {
+    SetChoice(track, s, option);
+    if (linked) SetChoice(1 - track, s, tracks[track].choice[s]);
+    return;
+  }
+  option = constrain(option, 0, SLOT_DEFS[s].noptions - 1);
+  for (int t = 0; t < NUM_TRACKS; t++)
+    if (t == track || linked) ChoiceFaded(t, s, option);
+}
+
+// a device change on the panel without a click: while the old device is
+// heard, the slot first fades to dry (ApplyBypass) and SwitchChoices()
+// changes it after the fade; the new one then fades in
+FLASHMEM void AppLoom::ChoiceFaded(int t, int s, int option) {
+  using namespace loom;
+  Track& tr = tracks[t];
+  const bool heard = active && tr.current(s) && !(tr.parked >> s & 1);
+  if (!heard) {
+    tr.next_choice[s] = -1;
+    SetChoice(t, s, option);
+    return;
+  }
+  if (option == tr.choice[s]) {  // back to the one still there
+    tr.next_choice[s] = -1;
+    ApplyBypass(t);
+    return;
+  }
+  if (tr.next_choice[s] < 0) tr.choice_at[s] = millis() + 20;  // 15 ms fade + a block
+  tr.next_choice[s] = option;
+  ApplyBypass(t);
+}
+
+FLASHMEM void AppLoom::SwitchChoices(int t) {
+  using namespace loom;
+  Track& tr = tracks[t];
+  for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
+    if (tr.next_choice[s] < 0 || int32_t(millis() - tr.choice_at[s]) < 0) continue;
+    const int option = tr.next_choice[s];
+    tr.next_choice[s] = -1;
+    SetChoice(t, s, option);
+    ApplyBypass(t);
+  }
 }
 
 // one-click bypass of a slot: the device stays (and keeps its settings and
@@ -1210,6 +1298,7 @@ FLASHMEM void AppLoom::MainLoop() {
     mod_timer = 0;
     ModulateAll();
     for (int t = 0; t < loom::NUM_TRACKS; t++) {
+      SwitchChoices(t);
       ApplyBypass(t);  // follows SPRAY LEVEL
       ParkBypassed(t);
     }
@@ -1576,7 +1665,7 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
       tracks[track].mix->Nudge(MixDevice::LEVEL, dir);
       Mirror(tracks[track].mix, MixDevice::LEVEL);
     } else {
-      SetChoiceLinked(col, tracks[track].choice[col] + dir);  // SOURCE: INPUT / SPOOL
+      SetChoiceLinked(col, tracks[track].shown_choice(col) + dir);  // SOURCE: INPUT / SPOOL
     }
     return;
   }
