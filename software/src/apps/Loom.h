@@ -352,6 +352,8 @@ private:
   loom::Device* Twin(loom::Device* d) const;
   void ResetFocused();
   uint32_t reset_at = 0;  // when a device went back to its defaults (DEFAULTS shown)
+  bool reset_held = false;  // R held on a device page ...
+  uint32_t reset_hold = 0;  // ... since then
   loom::PlayerDevice* meta_page = nullptr;  // the PLAYER whose page is open
   void Mirror(loom::Device* d, int p) const;
   void Repatch(int t);
@@ -1310,6 +1312,10 @@ FLASHMEM void AppLoom::MainLoop() {
     }
     if (held && ms >= 3000) clear_held = false;
   }
+  if (reset_held && millis() - reset_hold >= 3000) {
+    reset_held = false;
+    ResetFocused();
+  }
   if (active && mod_timer >= 1000) { // follow the sources about once per ms
     mod_timer = 0;
     ModulateAll();
@@ -1408,17 +1414,18 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
     if (event.type == UI::EVENT_BUTTON_DOWN) {
       r_held = view == CHAIN;
       r_moved = false;
+      // held 3 s on a device page: the device back to its defaults (see
+      // MainLoop); letting go before, or turning a knob, does nothing
+      const PlayerDevice* pl = tracks[track].player;
+      reset_held = view == DEVICE && Focused() && !(pl && pl->browsing && Focused() == pl);
+      reset_hold = millis();
       return;
     }
     if (event.type == UI::EVENT_BUTTON_PRESS || event.type == UI::EVENT_BUTTON_LONG_RELEASE) {
       r_held = false;
+      reset_held = false;
       if (r_moved) { r_moved = false; return; }  // it was a move, not a push
-      if (event.type == UI::EVENT_BUTTON_LONG_RELEASE) {
-        // held on a device page: the device back to its defaults
-        const PlayerDevice* pl = tracks[track].player;
-        if (view == DEVICE && !(pl && pl->browsing && Focused() == pl)) ResetFocused();
-        return;
-      }
+      if (event.type == UI::EVENT_BUTTON_LONG_RELEASE) return;
     }
   }
   if (event.control == OC::CONTROL_BUTTON_L) {
@@ -1631,6 +1638,7 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
   dirty = true;
   const int dir = event.value;
   const bool left = event.control == OC::CONTROL_ENCODER_L;
+  reset_held = false;  // a knob turned: no reset
   if (view == DEVICE && !focus_mod && col == SOURCE && tracks[track].player &&
       tracks[track].player->browsing && Focused() == tracks[track].player) {
     tracks[track].player->BrowseMove(dir);  // either knob scrolls the browser
@@ -2618,6 +2626,13 @@ FLASHMEM void AppLoom::View() const {
   }
   // saving: a bar fills while Y is held, then SAVED
   const uint32_t since = millis() - saved_at;
+  if (reset_held && millis() - reset_hold > 250) {  // R held: a bar fills over 3 s
+    const int fill = std::min<int>(64, (millis() - reset_hold) * 64 / 3000);
+    graphics.clearRect(31, 22, 66, 15);
+    gfxFrame(31, 22, 66, 15);
+    gfxPrint(43, 26, PSTR("RESET..."));
+    gfxInvert(32, 23, fill, 13);
+  }
   if (saved_at && since < 1200) {
     graphics.clearRect(36, 22, 56, 15);
     gfxFrame(36, 22, 56, 15);
