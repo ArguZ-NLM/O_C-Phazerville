@@ -1234,6 +1234,9 @@ FLASHMEM void ReelDevice::FormatMode(int p, char* buf, size_t n) const {
     else FormatMs(SPOOL_ZOOM_MS[mode[p] - 1], buf, n);
   } else if (p == MON) {
     snprintf(buf, n, "DUB%d", mode[p] * 5);
+  } else if (p == VIEW) {  // how close the view is (it had no name: blank)
+    if (mode[p] == 0) snprintf(buf, n, "ALL");
+    else FormatMs(REEL_VIEW_MS[constrain(mode[p] - 1, 0, 8)], buf, n);
   } else {
     Device::FormatMode(p, buf, n);
   }
