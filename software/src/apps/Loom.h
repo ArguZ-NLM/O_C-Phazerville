@@ -292,6 +292,7 @@ private:
     back.on = false;
   }
   bool trig_mode = false; // device view: L / R enc trigger source per action
+  uint32_t r_click_at = 0; // the last R push (a second one soon after: double click)
   elapsedMicros mod_timer;
   uint8_t chord_releases = 0; // UP/DOWN releases to swallow after UP+DOWN
   bool active = false;
@@ -1654,6 +1655,19 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
       } else {
         editing = !editing;
         edit_mode = false;
+        // SPOOL's MON pushed twice quickly: 100 <-> 0 (the two pushes leave
+        // the grab as it was)
+        ReelDevice* rl = tracks[track].reel;
+        if (d == rl && !focus_mod && cursor == ReelDevice::MON) {
+          if (millis() - r_click_at < 350) {
+            rl->val[ReelDevice::MON] = rl->val[ReelDevice::MON] ? 0 : 100;
+            rl->Refresh(ReelDevice::MON);
+            Mirror(rl, ReelDevice::MON);
+            r_click_at = 0;
+          } else {
+            r_click_at = millis();
+          }
+        }
       }
       break;
     case OC::CONTROL_BUTTON_Y:
