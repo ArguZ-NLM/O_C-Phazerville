@@ -2,8 +2,8 @@
 // StretchVoice.h. The DSP is Mutable Instruments' code (Emilie Gillet,
 // MIT), unchanged; this file drives it the way Clouds' processor did in its
 // STRETCH mode (record with a crossfade unless frozen, play the WSOLA
-// player, search with the correlator outside the audio, like Clouds' main
-// loop did: here from a timer, so it gets the same time on every page).
+// player, search with the correlator - Clouds did that in its main loop;
+// here after each audio block, so it gets the same time on every page).
 
 #include <Arduino.h>
 #include <new>
