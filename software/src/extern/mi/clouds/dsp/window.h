@@ -65,6 +65,10 @@ class Window {
     phase_increment_ = phase_increment;
     phase_ = 0;
     regenerated_ = false;
+    // Loom: a started window is playing (as published, done_ stayed true
+    // from Init() and no window was ever heard)
+    done_ = false;
+    half_ = false;
     envelope_phase_increment_ = 2.0f / static_cast<float>(width);
   }
   
