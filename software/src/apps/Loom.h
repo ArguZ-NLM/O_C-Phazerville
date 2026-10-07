@@ -2002,7 +2002,7 @@ FLASHMEM void AppLoom::DrawDevice() const {
   // the clock mark; not over BYP / MUTE
   char info[12];
   if (!mod_mode && !byp_on && !mute_turn && d->HeaderInfo(info, sizeof(info)))
-    gfxPrint(101 - 6 * int(strlen(info)), 1, info);
+    gfxPrint(98 - 6 * int(strlen(info)), 1, info);
   // a muted track shows MUTE blinking on every page, in the second action
   // place; where a device has its own action there, the two take turns
   if (mute_turn && (millis() / 300) % 2) {
