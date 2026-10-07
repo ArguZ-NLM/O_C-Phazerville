@@ -3132,10 +3132,18 @@ FLASHMEM void DirtDevice::DrawViz(int x, int y, int w, int h) {
     const float ph = 2.0f * float(M_PI) * (i - 1) / (bs - 3);
     const float in = sinf(ph);
     const int gy = int(in * boost * lim);
-    // the dotted input (as FOLD boosts it) only while nothing is crushed:
-    // then the steps / the thinned line are the picture
-    if (cur[CRUSH] <= 0 && abs(gy) < half && (i & 1)) gfxPixel(x + i, cyw - gy);
-    float yo = AudioEffectDirt::Shape(AudioEffectDirt::Fold(in, fld), drv);
+    // dotted: with DRIVE up, how far it pushes the sound out, drawn the
+    // other way - from the line inwards (on the line at 0); with DRIVE and
+    // CRUSH at 0, the input as FOLD boosts it
+    const float folded = AudioEffectDirt::Fold(in, fld);
+    if (drv > 0.0f) {
+      const float d = 2.0f * folded - AudioEffectDirt::Shape(folded, drv);
+      if (i & 1) gfxPixel(x + i, cyw - int(constrain(d, -1.0f, 1.0f) * lim));
+    } else if (cur[CRUSH] <= 0 && abs(gy) < half && (i & 1)) {
+      gfxPixel(x + i, cyw - gy);
+    }
+    // solid: the sine with FOLD and CRUSH (not DRIVE - that is the dots)
+    float yo = folded;
     if (levels > 0.0f) yo = roundf(constrain(yo, -1.0f, 1.0f) * levels) / levels;
     ys[i - 1] = cyw - int(constrain(yo, -1.0f, 1.0f) * lim);
   }
