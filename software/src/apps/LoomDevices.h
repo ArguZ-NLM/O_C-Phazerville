@@ -431,7 +431,8 @@ FLASHMEM void Device::NudgeMode(int p, int dir) {
 
 FLASHMEM void Device::FormatMode(int p, char* buf, size_t n) const {
   const int m = mode[p];
-  if (m < 4) snprintf(buf, n, "%s", param(p).modes[m]);
+  // unnamed modes (amounts, zoom steps): the number, never a blank
+  if (m < 4 && param(p).modes[m][0]) snprintf(buf, n, "%s", param(p).modes[m]);
   else snprintf(buf, n, "%d", m);
 }
 
