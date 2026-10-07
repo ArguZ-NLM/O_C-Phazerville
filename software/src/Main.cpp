@@ -531,13 +531,17 @@ FLASHMEM void setup() {
         const int32_t pitch = int32_t(v * 0.5f * 8.5f * (12 << 7));
         OC::DAC::set(outs[o], OC::DAC::PitchToScaledDAC(outs[o], pitch, OC::VOLTAGE_SCALING_1V_PER_OCT, false));
       }
-      // screen requests (the screen-capture tool asks all the time) are
-      // answered and don't end it; other USB commands (saving before a flash) do
-      // (its request comes as a packet: 'S' and empty / control bytes)
-      while (Serial.available() && (Serial.peek() == 'S' || Serial.peek() < 0x20)) {
-        if (Serial.read() == 'S') {
+      // screen requests (the screen-capture tool asks all the time) and
+      // version requests are answered and don't end it; other USB commands
+      // (saving before a flash) do (a request comes as a packet: the letter
+      // and empty / control bytes)
+      while (Serial.available() && (Serial.peek() == 'S' || Serial.peek() == 'V' || Serial.peek() < 0x20)) {
+        const int c = Serial.read();
+        if (c == 'S') {
           display::frame_buffer.capture_request();
           cap_idx = 0;
+        } else if (c == 'V') {
+          Serial.printf("Version (build %s%s)\n", OC::Strings::VERSION, OC::Strings::BUILD_TAG);
         }
       }
       const uint8_t* cap = display::frame_buffer.captured();
@@ -692,6 +696,9 @@ void FASTRUN loop() {
         int cmd = Serial.read();
         switch (cmd) {
 #if defined(__IMXRT1062__)
+          case 'V':  // the version only (answered by the boot picture too, without ending it)
+            Serial.printf("Version (build %s%s)\n", OC::Strings::VERSION, OC::Strings::BUILD_TAG);
+            break;
           case 'K':  // the crash log the firmware keeps after a crash
             for (const char* fn : {"BOOT.LOG", "CRASH.LOG"}) {
               File cl = PhzConfig::myfs.open(fn, FILE_READ);
