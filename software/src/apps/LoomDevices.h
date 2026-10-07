@@ -2722,7 +2722,7 @@ PROGMEM static const DeviceDef ECHO_DEF = {
     // (size and decay together), walls (soft: dark and dense .. hard:
     // bright with audible reflections; also the delay's tone)
     {"LEVEL", 0, 100, 30, UNI, 0, 2, 0, {}, {"MIX", "SEND"}},
-    {"PRE", 0, 250, 20, UNI},
+    {"PRE", 0, 150, 20, UNI},
     {"ROOM", 0, 100, 50, UNI},
     {"WALL", -50, 50, -10, BI},
   },
@@ -2943,7 +2943,7 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
     static const uint8_t bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
     const int cx = x + w / 2, hw = w / 2 - 1;
     const int wall = hw * (30 + 70 * cur[ROOM] / 100) / 100;
-    const int gap = (wall - 2) * cur[PRE] / 250 / 2;  // the pre-delay
+    const int gap = (wall - 2) * cur[PRE] / 150 / 4;  // the pre-delay, at most a quarter of the way to each wall
     const int th = int((h - 2) * sqrtf(cur[REVERB] * 0.01f));  // shows more early on (50% = 70% high)
     const int len = std::max(2, (wall - 1 - gap) * (20 + 80 * cur[ROOM] / 100) / 100);
     const int fill = 3 + (cur[WALL] + 50) * 13 / 100;  // 3..16 of 16

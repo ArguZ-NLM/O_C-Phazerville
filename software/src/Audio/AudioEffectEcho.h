@@ -115,7 +115,7 @@ public:
   // approximate RT60 of the reverb tail in seconds
   void decay(float secs) { decay_secs = constrain(secs, 0.2f, 30.0f); }
 
-  // the gap before the reverb, 0..250 ms (a change crossfades, no bend)
+  // the gap before the reverb, 0..150 ms (a change crossfades, no bend)
   void pre_delay(float ms) { pre_target = constrain(int(ms * 0.001f * AUDIO_SAMPLE_RATE_EXACT), 0, PRE_MAX - 1); }
 
   // how quickly the echoes melt into a wash: 0 = audible reflections,
@@ -157,7 +157,7 @@ private:
   static constexpr int RV_TOTAL = 22868;
   static_assert(RV_TOTAL == 22868, "the RAM1 pool below has this size");
   static constexpr float RV_Q = 8192.0f;  // int16 per 1.0 (headroom x4)
-  static constexpr int PRE_MAX = 11026;   // 250 ms of pre-delay, a side
+  static constexpr int PRE_MAX = 7201;    // 150 ms of pre-delay, a side
   // the lines live in RAM1 (no cache misses: the reverb costs half): room
   // for two reverbs (one per Loom track), more from the heap
   static int16_t* TakeLines();
