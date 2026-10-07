@@ -750,8 +750,8 @@ FLASHMEM void MixDevice::DrawViz(int x, int y, int w, int h) {
   const int cy = y + h / 2;
   // page 1: spectrum of the track's output; page 2: the three bands sit
   // above their LOW / MID / HIGH settings (columns of 32 px): gain as a bar
-  // from the centre line, the band's level as a thin meter beside it,
-  // compression hanging from the top
+  // from the centre line, and beside it the band's gain reduction, filling
+  // a framed column from the top down (full = 18 dB)
   if (view_page == 0) DrawSpectrum(x, y, 94, h);
   for (int b = 0; b < 3 && view_page == 1; b++) {
     const int bx = x + b * 32;  // above LOW / MID / HIGH
@@ -760,9 +760,9 @@ FLASHMEM void MixDevice::DrawViz(int x, int y, int w, int h) {
     if (gain > 0) gfxRect(bx + 10, cy - gain, 8, gain);
     else if (gain < 0) gfxRect(bx + 10, cy, 8, -gain);
     else gfxLine(bx + 10, cy, bx + 17, cy);
-    DrawVMeter(bx + 21, y, 2, h, band_m[b].v);
-    const int gr = int(gr_m[b].v * h);
-    if (gr > 0) gfxRect(bx + 25, y, 2, gr);
+    gfxFrame(bx + 21, y, 6, h);
+    const int gr = int(gr_m[b].v * (h - 2) + 0.5f);
+    if (gr > 0) gfxRect(bx + 22, y + 1, 4, gr);
   }
 
   // output meters with the pan position underneath, on the right (page 2:
