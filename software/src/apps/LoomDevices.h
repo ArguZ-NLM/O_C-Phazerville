@@ -1168,6 +1168,7 @@ public:
   void Idle() override;
   size_t HeldFrames() const { return fx.Capacity(); }
   uint32_t no_mem_at = 0;   // REC found no memory free (shown for a moment)
+  Meter in_m[2];            // the input level, as on INPUT
   // saving the loop to the SD card (the app writes it, A held for 2 s)
   const int16_t* LoopData(int c) const { return fx.Data(c); }
   size_t LoopLength() const {
@@ -1261,6 +1262,18 @@ FLASHMEM bool ReelDevice::ActionLit(int a) const {
 // the loop as a waveform, the looping part (START / LEN) bracketed, the
 // play head running through it; REC / DUB in the corner
 FLASHMEM void ReelDevice::DrawViz(int x, int y, int w, int h) {
+  // the input level at the right edge, as on INPUT (what REC takes in);
+  // the loop's picture to the left of it
+  {
+    float pl, pr;
+    fx.TakeInPeak(pl, pr);
+    const int mx = x + w - 18;
+    gfxFrame(mx, y, 8, h);
+    gfxFrame(mx + 9, y, 8, h);
+    DrawVMeter(mx + 1, y + 1, 6, h - 2, in_m[0].Hit(pl));
+    DrawVMeter(mx + 10, y + 1, 6, h - 2, in_m[1].Hit(pr));
+    w -= 22;
+  }
   if (no_mem_at && millis() - no_mem_at < 1500) {
     gfxPrint(x + 22, y + h / 2 - 4, PSTR("memory full"));
     return;

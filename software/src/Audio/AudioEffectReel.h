@@ -139,6 +139,11 @@ public:
   void SetDub(float keep) { keep_ = keep; }
   void SetMonitor(float m) { mon = m; }
   void SetLevel(float l) { level = l; }
+  // the loudest input since the last call, 0..1 a side
+  void TakeInPeak(float& l, float& r) {
+    l = in_peak[0] / 32768.0f; r = in_peak[1] / 32768.0f;
+    in_peak[0] = in_peak[1] = 0;
+  }
 
   State state() const { return st; }
   size_t Length() const { return len; }
@@ -236,6 +241,7 @@ private:
   volatile State st = EMPTY;
   volatile bool press = false, clear = false, stop = false, retrig = false, loop_ = true;
   volatile int32_t press_in = -1;
+  volatile int in_peak[2] = {};
   volatile float speed = 1.0f, start_ = 0.0f, len_ = 1.0f, keep_ = 0.8f, mon = 1.0f, level = 1.0f;
   volatile float seam = 256.0f;
   volatile bool xfade_loop = false;
@@ -283,6 +289,12 @@ private:
 
 FASTRUN void AudioEffectReel::update() {
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
+  for (int c = 0; c < 2; c++) {  // the input's peak, for the meters
+    if (!in[c]) continue;
+    int pk = 0;
+    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) pk = std::max(pk, abs(int(in[c]->data[n])));
+    if (pk > in_peak[c]) in_peak[c] = pk;
+  }
   audio_block_t* out[2] = {allocate(), allocate()};
   if (!out[0] || !out[1] || !ready()) {
     for (auto b : out) if (b) release(b);
