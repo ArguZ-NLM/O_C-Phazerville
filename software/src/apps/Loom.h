@@ -1655,13 +1655,17 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
       } else {
         editing = !editing;
         edit_mode = false;
-        // SPOOL pushed twice quickly: MON 100 <-> 0, SPEED reversed (the
-        // two pushes leave the grab as it was)
+        // SPOOL pushed twice quickly: MON 100 <-> 0, SPEED reversed, START /
+        // FADE to 0, END to the loop's end (the two pushes leave the grab as
+        // it was)
         ReelDevice* rl = tracks[track].reel;
-        if (d == rl && !focus_mod && (cursor == ReelDevice::MON || cursor == ReelDevice::SPEED)) {
+        if (d == rl && !focus_mod && cursor != ReelDevice::IN && cursor <= ReelDevice::MON) {
           if (millis() - r_click_at < 350) {
             int16_t& v = rl->val[cursor];
-            v = cursor == ReelDevice::MON ? (v ? 0 : 100) : -v;
+            if (cursor == ReelDevice::MON) v = v ? 0 : 100;
+            else if (cursor == ReelDevice::SPEED) v = -v;
+            else if (cursor == ReelDevice::END) v = 10000;
+            else v = 0;
             rl->Refresh(cursor);
             Mirror(rl, cursor);
             r_click_at = 0;
