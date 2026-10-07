@@ -3050,9 +3050,10 @@ private:
   float PictureLevels() const {
     const float crs = cur[CRUSH] * 0.01f;
     if (crs <= 0.0f || mode[CRUSH] == AudioEffectDirt::CRUSH_REDUX) return 0.0f;
-    // coarse early: about 14 steps a side at the start (already visible at
-    // this size), down to the sound's 1.4 at 100
-    return 1.4f + 12.6f * (1.0f - crs) * (1.0f - crs);
+    // coarse early: 14 steps a side at the start (already visible at this
+    // size) down to 2 at 100; whole steps, so the top one is the sine's top
+    // (with 1.4 the line was cut off and looked folded)
+    return roundf(2.0f + 12.0f * (1.0f - crs) * (1.0f - crs));
   }
   float NoiseDecaySecs() const { return 0.01f * powf(200.0f, cur[NDECAY] * 0.01f); } // 10 ms .. 2 s
 };
