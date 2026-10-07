@@ -2952,7 +2952,7 @@ FLASHMEM void EchoDevice::DrawMini(int x, int y, int w, int h) {
 PROGMEM static const DeviceDef DIRT_DEF = {
   "TEXTURE", "TEX", 8, {"", ""},
   {
-    {"DRIVE", 0, 100, 30, UNI},
+    {"DRIVE", 0, 100, 0, UNI},
     {"FOLD", 0, 100, 0, UNI},
     {"CRSH", 0, 100, 0, UNI, 0, 3, 0, {}, {"BIT", "REDUX", "BOTH"}},
     {"TILT", -50, 50, 0, BI, 0, 3, 1, {}, {"LOW", "MID", "HIGH"}},
