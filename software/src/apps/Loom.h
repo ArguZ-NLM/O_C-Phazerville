@@ -1394,6 +1394,9 @@ FLASHMEM void AppLoom::MainLoop() {
 FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
   using namespace loom;
   dirty = true;
+  // another button while L is held: a combination, so letting go of L
+  // does not open the triggers page as well
+  if (l_held && event.control != OC::CONTROL_BUTTON_L && event.type == UI::EVENT_BUTTON_DOWN) l_used = true;
   if (event.control == OC::CONTROL_BUTTON_Z) {
     // anywhere in the app: clock start / stop; held: the clock page, on
     // letting go (Z held + an encoder push is a shortcut, which swallows
@@ -1417,7 +1420,7 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
       // held 3 s on a device page: the device back to its defaults (see
       // MainLoop); letting go before, or turning a knob, does nothing
       const PlayerDevice* pl = tracks[track].player;
-      reset_held = view == DEVICE && Focused() && !(pl && pl->browsing && Focused() == pl);
+      reset_held = view == DEVICE && !l_held && Focused() && !(pl && pl->browsing && Focused() == pl);
       reset_hold = millis();
       return;
     }
@@ -1517,6 +1520,7 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
     }
     if (event.control == OC::CONTROL_BUTTON_R && cursor == PlayerDevice::FILE_ && !mod_mode) {
       pl->OpenBrowser();
+      trig_mode = false;
       return;
     }
   }
@@ -1905,7 +1909,8 @@ FLASHMEM void AppLoom::DrawDevice() const {
     gfxPrint(64, 1, mod_slot ? PSTR("MOD2") : PSTR("MOD1"));
     gfxInvert(63, 0, 26, 9);
   }
-  if (trig_mode) {
+  const bool browsing = !focus_mod && col == SOURCE && d == tracks[track].player && tracks[track].player->browsing;
+  if (trig_mode && !browsing) {
     // which outside signal presses A / B for you: a gate (TR1-4), a CV
     // input used as a gate, or a MIDI mapping; the knobs pick them
     gfxFrame(0, 10, 128, 32);
@@ -1948,7 +1953,7 @@ FLASHMEM void AppLoom::DrawDevice() const {
   gfxLine(0, 9, 127, 9);
 
   // PLAYER's file browser takes the whole page
-  if (!focus_mod && col == SOURCE && d == tracks[track].player && tracks[track].player->browsing) {
+  if (browsing) {
     tracks[track].player->DrawBrowser(0, 11, 128, 53);
     return;
   }
