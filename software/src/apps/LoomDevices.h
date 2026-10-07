@@ -3214,7 +3214,7 @@ PROGMEM static const DeviceDef DIRT_DEF = {
     {"FOLD", 0, 100, 0, UNI},
     {"CRSH", 0, 100, 0, UNI, 0, 3, 0, {}, {"BIT", "REDUX", "BOTH"}},
     {"TILT", -50, 50, 0, BI, 0, 3, 1, {}, {"LOW", "MID", "HIGH"}},
-    {"NOIS", 0, 100, 0, UNI, 0, 3, 1, {}, {"WHITE", "PINK", "DUST"}},
+    {"NOICE", 0, 100, 0, UNI, 0, 3, 1, {}, {"WHITE", "PINK", "DUST"}},
     {"N.DCY", 0, 100, 40, UNI},
     {"N.TON", 0, 100, 50, UNI},
     {"WET", 0, 100, 100, UNI},
