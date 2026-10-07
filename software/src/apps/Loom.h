@@ -666,7 +666,9 @@ FLASHMEM void AppLoom::Mirror(loom::Device* d, int p) const {
   Device* tw = Twin(d);
   if (!tw) return;
   // PLAYER's FILE goes along only when linked as SPLIT (one file for both)
-  if (!focus_mod && col == SOURCE && p == 0 && !(d == tracks[track].player && link_stereo)) return;
+  // INPUT's source and SPOOL's IN stay per track
+  if (!focus_mod && col == SOURCE && d == tracks[track].reel && p == ReelDevice::IN) return;
+  if (!focus_mod && col == SOURCE && d != tracks[track].reel && p == 0 && !(d == tracks[track].player && link_stereo)) return;
   if (!focus_mod && col == MIX_COL && p == MixDevice::PAN) return;
   if (link_rel) {
     // LINKED: B keeps its own value and moves by as much as A just did
@@ -2326,7 +2328,7 @@ namespace loom {
   // 5: OUTPUT page 2 LOW MID HIGH OTT (was BANDZ LOW MID HIGH)
   // 6: ECHO's reverb LEVEL PRE ROOM WALL (was LEVEL SIZE DECAY TONE)
   // 7: STRETCH POS turned round (0 = oldest, 100 = now, like SPRAY)
-  constexpr uint8_t SAVE_VERSION = 10;
+  constexpr uint8_t SAVE_VERSION = 11;
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -2396,6 +2398,11 @@ namespace loom {
     const bool view_mode = use && !memcmp(tag, "REL", 4) && load_version < 9;
     // before v10 SPOOL had START / LEN in % (now START / END in 1/10000)
     const bool start_len = use && !memcmp(tag, "REL", 4) && load_version < 10;
+    // before v11 SPOOL was IN SPEED START END DUB MON LEVEL VIEW: now SPEED
+    // START END FADE IN MON LEVEL VIEW, DUB the mode of MON
+    const bool spool_order = use && !memcmp(tag, "REL", 4) && load_version < 11;
+    static constexpr int8_t SPOOL_MAP[8] = {4, 0, 1, 2, -1, 5, 6, 7};
+    int old_dub = -1;
     for (int p = 0; p < n; p++) {
       int16_t v; uint8_t md; int8_t amt; uint16_t src; uint8_t bus;
       if (f.read(&v, 2) != 2 || f.read(&md, 1) != 1 || f.read(&amt, 1) != 1
@@ -2411,6 +2418,10 @@ namespace loom {
       if (reorder_out && p >= 4) p = p == 4 ? 7 : p - 1;
       if ((remap_mdl || remap_str) && p == 6) p = 7;
       if (skip_size && p == 5) { p = q; continue; }
+      if (spool_order) {
+        if (SPOOL_MAP[q] < 0) { old_dub = v; continue; }
+        p = SPOOL_MAP[q];
+      }
       d->mod_amt2[p] = constrain(amt2, -100, 100);
       d->mod_bus2[p] = bus2 <= MOD_BUSES ? bus2 : 0;
       const ParamDef& pd = d->param(p);
@@ -2433,6 +2444,7 @@ namespace loom {
       if (view_mode && p == ReelDevice::VIEW) { d->mode[p] = uint8_t(constrain(v, 0, 9)); d->val[p] = -1; }
       p = q;
     }
+    if (old_dub >= 0) d->mode[ReelDevice::MON] = uint8_t(constrain((old_dub + 2) / 5, 0, 20));
     uint8_t bi, bi2 = 0, trig[2];
     if (f.read(&bi, 1) != 1 || (load_version >= 3 && f.read(&bi2, 1) != 1)
         || f.read(trig, 2) != 2) return false;
@@ -2448,6 +2460,14 @@ namespace loom {
     if (reorder_out) {  // bit 4 (BANDZ) to 7, bits 5-7 down one
       auto ro = [](uint8_t b) { return uint8_t((b & 0x0F) | ((b & 0xE0) >> 1) | ((b & 0x10) << 3)); };
       bi = ro(bi); bi2 = ro(bi2);
+    }
+    if (spool_order) {  // the bits move with the settings (DUB's is dropped)
+      auto so = [](uint8_t b) {
+        uint8_t o = 0;
+        for (int k = 0; k < 8; k++) if ((b >> k & 1) && SPOOL_MAP[k] >= 0) o |= uint8_t(1 << SPOOL_MAP[k]);
+        return o;
+      };
+      bi = so(bi); bi2 = so(bi2);
     }
     if (use) {
       d->mod_bi = bi;

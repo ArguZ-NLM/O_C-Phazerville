@@ -1119,14 +1119,16 @@ FLASHMEM void InputDevice::DrawMini(int x, int y, int w, int h) {
 PROGMEM static const DeviceDef SPOOL_DEF = {
   "SPOOL", "REL", 8, {"REC", "PLAY"},  // tag REL kept for saved files (was REEL); A: REC / DUB, B: PLAY / STOP
   {
-    {"IN", 0, 4, 1, UNI},  // like INPUT's SOURC
     {"SPEED", -200, 200, 100, BI},
     // the loop's edges, as PLAYER's: 0..10000 of the recording; mode (L):
     // the picture zooms in on the edge (SPOOL_ZOOM_MS)
     {"START", 0, 10000, 0, UNI, 0, 8, 0},
     {"END", 0, 10000, 10000, UNI, 0, 8, 0},
-    {"DUB", 0, 100, 80, UNI},  // how much of the old loop stays when overdubbing
-    {"MON", 0, 100, 100, UNI}, // the live input passed through
+    {"FADE", 0, 100, 20, UNI, 0, 2, 0, {}, {"CROSS", "INOUT"}},  // the loop's seam, as PLAYER's
+    {"IN", 0, 4, 1, UNI},  // like INPUT's SOURC
+    // the live input passed through; mode (L): DUB, how much of the old loop
+    // stays when overdubbing, 0..100 % in 5 % steps
+    {"MON", 0, 100, 100, UNI, 0, 21, 16},
     {"LEVEL", 0, 100, 100, UNI},
     // the picture only. Mode (L): ALL, or how much time a closer view shows
     // (REEL_VIEW_MS); value (R): where it looks, HEAD (-1: follows the play
@@ -1147,7 +1149,7 @@ static void FormatMs(int ms, char* buf, size_t n) {
 
 class ReelDevice : public Device {
 public:
-  enum { IN, SPEED, START, END, DUB, MON, LEVEL, VIEW };
+  enum { SPEED, START, END, XFADE, IN, MON, LEVEL, VIEW };
   static float MaxSecs() { return BigSecs(); }
   explicit ReelDevice(InputDevice* i) : Device(SPOOL_DEF), input(i) {}
   void Reset() override {
@@ -1230,6 +1232,8 @@ FLASHMEM void ReelDevice::FormatMode(int p, char* buf, size_t n) const {
   if (p == START || p == END) {
     if (mode[p] == 0) snprintf(buf, n, "all");
     else FormatMs(SPOOL_ZOOM_MS[mode[p] - 1], buf, n);
+  } else if (p == MON) {
+    snprintf(buf, n, "DUB%d", mode[p] * 5);
   } else {
     Device::FormatMode(p, buf, n);
   }
@@ -1262,8 +1266,17 @@ FLASHMEM void ReelDevice::Apply(int p) {
     case START: case END:
       fx.SetWindow(cur[START] * 0.0001f, std::max(0.005f, (cur[END] - cur[START]) * 0.0001f));
       break;
-    case DUB:   fx.SetDub(v); break;
-    case MON:   fx.SetMonitor(v); break;
+    case XFADE: {  // as PLAYER: up to 1 s (finer at the short end); CROSS or INOUT (a dip)
+      const float f = cur[XFADE] * 0.01f;
+      fx.SetSeam(16.0f + f * f * AUDIO_SAMPLE_RATE_EXACT);
+      fx.SetCrossfade(mode[XFADE] == 0);
+      fx.SetDeferWindow(true);  // a new START / END waits for the loop's end
+      break;
+    }
+    case MON:  // and its mode: DUB
+      fx.SetMonitor(v);
+      fx.SetDub(mode[MON] * 0.05f);
+      break;
     case LEVEL: fx.SetLevel(v); break;
   }
 }
