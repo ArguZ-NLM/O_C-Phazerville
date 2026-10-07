@@ -8,12 +8,15 @@
 //
 // Signal chain: tilt -> noise -> fold -> drive -> crush -> wet/dry.
 //   TILT     two bands split at 80 Hz / 650 Hz / 2.5 kHz; + lifts the highs
-//            and drops the lows, - the other way round
+//            and drops the lows, - the other way round; the level is
+//            brought back so it sounds about as loud
 //   NOISE    white, pink or dust (random bursts), its level follows the input
 //            (N.DCY = how long it trails), band-passed (N.TON)
 //   FOLD     sine wavefolder, West-coast style, clean at 0
-//   DRIVE    soft saturation, clean at 0
-//   CRUSH    bit depth, sample-rate reduction with jitter, or both
+//   DRIVE    soft saturation, clean at 0; made up so a usual level stays
+//            about as loud
+//   CRUSH    bit depth (10 bits down to 1.5, smoothly), sample-rate
+//            reduction with jitter, or both
 class AudioEffectDirt : public AudioStream {
 public:
   enum CrushMode : uint8_t { CRUSH_BIT, CRUSH_REDUX, CRUSH_BOTH };
@@ -27,7 +30,12 @@ public:
   AudioEffectDirt() : AudioStream(2, input_queue_array) {}
 
   // --- parameters, set from the UI thread ---
-  void drive(float d) { drive_ = constrain(d, 0.0f, 1.0f); }
+  void drive(float d) {
+    drive_ = constrain(d, 0.0f, 1.0f);
+    // DRIVE lifts quiet signals (up to 13x) and keeps full scale where it
+    // is: bring a usual level (DRIVE_REF) back to where it was
+    drive_gain = DRIVE_REF / Shape(DRIVE_REF, drive_);
+  }
   void crush(float c, uint8_t mode) { crush_ = constrain(c, 0.0f, 1.0f); crush_mode = mode; }
   void fold(float f) { fold_ = constrain(f, 0.0f, 1.0f); }
   void tilt(float t, uint8_t xover) {
@@ -40,6 +48,11 @@ public:
     const float corner = std::min(hz[xover % 3] * tilt_hi, 18000.0f);
     tilt_a = 1.0f - expf(-2.0f * float(M_PI) * corner / AUDIO_SAMPLE_RATE_EXACT);
     tilt_on = t != 0.0f;
+    // loudness: most of a sound's energy sits low, so weight the two gains
+    // by roughly how much of it is below the crossover
+    static const float below[3] = {0.3f, 0.75f, 0.92f};
+    const float wl = below[xover % 3];
+    tilt_gain = 1.0f / sqrtf(wl * tilt_lo * tilt_lo + (1.0f - wl) * tilt_hi * tilt_hi);
   }
   void noise(float amt, uint8_t mode) { noise_amt = constrain(amt, 0.0f, 1.0f); noise_mode = mode; }
   void noise_decay(float secs) { noise_rel = expf(-1.0f / (std::max(secs, 0.001f) * AUDIO_SAMPLE_RATE_EXACT)); }
@@ -66,7 +79,10 @@ public:
     const float norm = (1.0f + d) / d;                  // full scale stays full scale
     return x + std::min(1.0f, drive * 4.0f) * (s * norm - x);
   }
-  static inline int CrushBits(float c) { return 16 - int(c * 14.0f + 0.5f); } // 16 .. 2
+  // bit depth as levels per side of zero: 10 bits at the start (just
+  // audible on quiet sounds) down to 1.5 bits, without steps between
+  static inline float CrushLevels(float c) { return exp2f(9.0f - 8.5f * c); }  // 512 .. 1.4
+  static constexpr float DRIVE_REF = 0.3f;
   static inline int ReduxHold(float c) { return 1 + int(c * c * 31.0f); }     // 1 .. 32
 
   void ReadViz(Viz& v) {
@@ -85,7 +101,8 @@ private:
   volatile uint8_t crush_mode = CRUSH_BIT, noise_mode = NOISE_PINK;
   volatile float fold_ = 0.0f;
   volatile bool tilt_on = false;
-  volatile float tilt_lo = 1.0f, tilt_hi = 1.0f, tilt_a = 0.1f;
+  volatile float tilt_lo = 1.0f, tilt_hi = 1.0f, tilt_a = 0.1f, tilt_gain = 1.0f;
+  volatile float drive_gain = 1.0f;
   volatile float noise_amt = 0.0f, noise_rel = 0.999f, svf_f = 0.1f;
 
   // state
@@ -119,7 +136,8 @@ FASTRUN void AudioEffectDirt::update() {
   const uint8_t cmode = crush_mode, nmode = noise_mode;
   const bool do_bits = crs > 0.0f && cmode != CRUSH_REDUX;
   const bool do_redux = crs > 0.0f && cmode != CRUSH_BIT;
-  const int shift = 16 - CrushBits(crs);
+  const float levels = CrushLevels(crs), inv_levels = 1.0f / levels;
+  const float dg = drive_gain, tg = tilt_gain;
   const int hold = ReduxHold(crs);
   const float tl = tilt_lo, th = tilt_hi, ta = tilt_a;
   const bool tilt = tilt_on;
@@ -152,7 +170,7 @@ FASTRUN void AudioEffectDirt::update() {
       float v = x[c];
       if (tilt) {
         tilt_z[c] += ta * (v - tilt_z[c]);
-        v = tilt_z[c] * tl + (v - tilt_z[c]) * th;
+        v = (tilt_z[c] * tl + (v - tilt_z[c]) * th) * tg;
       }
       if (namt > 0.0f) {
         float nz = Rand();
@@ -172,11 +190,8 @@ FASTRUN void AudioEffectDirt::update() {
         v += svf_bp[c] * env_in * namt * 2.0f;
       }
       v = Fold(v, fld);
-      v = Shape(v, drv);
-      if (do_bits) {
-        const int32_t s = __SSAT(int32_t(v * 32767.0f), 16);
-        v = ((s >> shift) << shift) * q;
-      }
+      v = Shape(v, drv) * dg;
+      if (do_bits) v = roundf(constrain(v, -1.0f, 1.0f) * levels) * inv_levels;
       if (do_redux) {
         if (take) hold_val[c] = v;
         v = hold_val[c];

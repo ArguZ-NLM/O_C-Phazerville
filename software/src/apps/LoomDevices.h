@@ -2686,6 +2686,15 @@ private:
   AudioEffectDirt fx;
   Meter in_m, out_m, noise_m;
   void Poll();
+  // the bit steps for the picture (levels per side, 0: none): the sound's
+  // own, squeezed (2 x square root) so the early ones are too fine to see,
+  // like they are to hear, and they get fewer all the way up
+  float PictureLevels() const {
+    const float crs = cur[CRUSH] * 0.01f;
+    if (crs <= 0.0f || mode[CRUSH] == AudioEffectDirt::CRUSH_REDUX) return 0.0f;
+    const float l = AudioEffectDirt::CrushLevels(crs);
+    return std::min(l, 2.0f * sqrtf(l));
+  }
   float NoiseDecaySecs() const { return 0.01f * powf(200.0f, cur[NDECAY] * 0.01f); } // 10 ms .. 2 s
 };
 
@@ -2741,10 +2750,8 @@ FLASHMEM void DirtDevice::DrawViz(int x, int y, int w, int h) {
   // DRIVE rounds it and CRUSH adds steps. One whole cycle, standing still.
   const int bs = 52, half = h / 2 - 1, cyw = y + h / 2, lim = half;
   if (sect == 0) gfxFrame(x, y, bs, h);
-  const float drv = cur[DRIVE] * 0.01f, crs = cur[CRUSH] * 0.01f, fld = cur[FOLD] * 0.01f;
-  const bool bits = crs > 0.0f && mode[CRUSH] != AudioEffectDirt::CRUSH_REDUX;
-  // the picture exaggerates the steps so they are visible at this size
-  const int levels = bits ? std::max(2, 1 << std::min(4, AudioEffectDirt::CrushBits(crs) - 12)) : 0;
+  const float drv = cur[DRIVE] * 0.01f, fld = cur[FOLD] * 0.01f;
+  const float levels = PictureLevels();
   const float boost = 1.0f + 6.0f * fld * std::min(1.0f, fld * 4.0f);
   int py = -1;
   for (int i = 1; i < bs - 1; i++) {
@@ -2753,7 +2760,7 @@ FLASHMEM void DirtDevice::DrawViz(int x, int y, int w, int h) {
     const int gy = int(in * boost * lim);
     if (abs(gy) < half && (i & 1)) gfxPixel(x + i, cyw - gy);
     float yo = AudioEffectDirt::Shape(AudioEffectDirt::Fold(in, fld), drv);
-    if (levels) yo = roundf(yo * levels) / levels;
+    if (levels > 0.0f) yo = roundf(constrain(yo, -1.0f, 1.0f) * levels) / levels;
     const int yy = cyw - int(constrain(yo, -1.0f, 1.0f) * lim);
     if (py >= 0) gfxLine(x + i - 1, py, x + i, yy);
     py = yy;
@@ -2830,15 +2837,14 @@ FLASHMEM void DirtDevice::DrawViz(int x, int y, int w, int h) {
 // the fold picture in small, standing still like on the page
 FLASHMEM void DirtDevice::DrawMini(int x, int y, int w, int h) {
   Poll();
-  const float drv = cur[DRIVE] * 0.01f, crs = cur[CRUSH] * 0.01f, fld = cur[FOLD] * 0.01f;
-  const bool bits = crs > 0.0f && mode[CRUSH] != AudioEffectDirt::CRUSH_REDUX;
-  const int levels = bits ? std::max(2, 1 << std::min(3, AudioEffectDirt::CrushBits(crs) - 12)) : 0;
+  const float drv = cur[DRIVE] * 0.01f, fld = cur[FOLD] * 0.01f;
+  const float levels = PictureLevels();
   const int cy = y + h / 2, lim = h / 2;
   int py = -1;
   for (int i = 0; i < w; i++) {
     const float in = sinf(2.0f * float(M_PI) * i / (w - 1));
     float yo = AudioEffectDirt::Shape(AudioEffectDirt::Fold(in, fld), drv);
-    if (levels) yo = roundf(yo * levels) / levels;
+    if (levels > 0.0f) yo = roundf(constrain(yo, -1.0f, 1.0f) * levels) / levels;
     const int yy = cy - int(constrain(yo, -1.0f, 1.0f) * lim);
     if (py >= 0) gfxLine(x + i - 1, py, x + i, yy);
     py = yy;
