@@ -66,9 +66,9 @@ public:
     static const float below[3] = {0.3f, 0.75f, 0.92f};
     const float wl = below[xover % 3];
     tilt_gain = 1.0f / sqrtf(wl * tilt_lo * tilt_lo + (1.0f - wl) * tilt_hi * tilt_hi);
-    // lifting the highs drops the lows too, which the ear misses more than
-    // the energy says: only half the correction (in dB) that way
-    if (t > 0.0f) tilt_gain = sqrtf(tilt_gain);
+    // lifting the highs: no correction (it already sounds quieter, as the
+    // lows go down)
+    if (t > 0.0f) tilt_gain = 1.0f;
   }
   void noise(float amt, uint8_t mode) { noise_amt = constrain(amt, 0.0f, 1.0f); noise_mode = mode; }
   void noise_decay(float secs) { noise_rel = expf(-1.0f / (std::max(secs, 0.001f) * AUDIO_SAMPLE_RATE_EXACT)); }
