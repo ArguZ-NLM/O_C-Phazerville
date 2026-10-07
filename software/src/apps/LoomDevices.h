@@ -2956,12 +2956,12 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
         if (i && (edge || bayer[py & 3][(cx - i) & 3] < fill)) gfxPixel(cx - i, py);
       }
     }
-    // the walls: hard (WALL +50) a crisp line; softer, it spreads up to 4
+    // the walls: hard (WALL +50) a crisp line; softer, it spreads up to 2
     // pixels each side, thinning out from the middle - a diffuse surface.
     // A fixed threshold per screen place, so nothing flickers while WALL
     // turns.
     const float soft = (50 - cur[WALL]) * 0.01f;  // 0 hard .. 1 soft
-    const int spread = int(soft * 4.0f + 0.5f);
+    const int spread = int(soft * 2.0f + 0.5f);
     for (int wx : {cx - wall, cx + wall}) {
       for (int d = -spread; d <= spread; d++) {
         const int px = wx + d;
