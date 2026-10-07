@@ -1498,8 +1498,8 @@ struct WavWriter {
 // PSRAM (up to 16 s, like SPOOL) and played by the same engine: START / END
 // pick the loop, SPEED plays it at any rate (backwards below zero), XFADE
 // is the fade at the loop ends. START / END zoom the picture (their mode)
-// and, with SNAP on, land on the nearest beat (when a tempo was found) and
-// the quietest point there. Longer files stream
+// and SNAP lands them on the quietest point nearby (ZERO) or on the nearest
+// beat when a tempo was found (BEAT). Longer files stream
 // from the card (FILE mode STRM); FILE mode MEM copies a section of them
 // (START..END when switched, at most 16 s) into memory and plays that as
 // the sample, START / END then within it; back to STRM puts them back.
@@ -1514,7 +1514,7 @@ PROGMEM static const DeviceDef PLAYER_DEF = {
     {"START", 0, 10000, 0, UNI, 0, 10, 0},      // mode: zoom, all .. 0.3 ms across
     {"END", 0, 10000, 10000, UNI, 0, 10, 0},
     {"FADE", 0, 100, 20, UNI, 0, 2, 0, {}, {"CROSS", "INOUT"}},  // the loop's seam
-    {"SNAP", 0, 1, 0, LIST, 2, 0, 0, {"OFF", "ON"}},
+    {"SNAP", 0, 2, 0, LIST, 3, 0, 0, {"OFF", "ZERO", "BEAT"}},  // ZERO: the quietest point; BEAT: the nearest beat
   },
   {"", ""},
 };
@@ -1522,6 +1522,7 @@ PROGMEM static const DeviceDef PLAYER_DEF = {
 class PlayerDevice : public Device {
 public:
   enum { FILE_, LOOP, LEVEL, SPEED, START, END, XFADE, SNAP };
+  enum { SNAP_OFF, SNAP_ZERO, SNAP_BEAT };
   enum { DIR_REV, DIR_FWD, DIR_SYNC };  // SPEED's modes
   static float MaxSecs() { return BigSecs(); }
   static constexpr size_t MIN_BUF = 11025;  // 0.25 s: the buffer before a file
@@ -2271,11 +2272,11 @@ FLASHMEM size_t PlayerDevice::SnapQuiet(size_t at) const {
   return best;
 }
 
-// SNAP: with a tempo found, the nearest beat, then the quietest sample just
-// around it; without one only the quietest sample
+// SNAP: ZERO the quietest sample nearby; BEAT (with a tempo found) the
+// nearest beat, then the quietest sample just around it
 FLASHMEM size_t PlayerDevice::SnapPoint(size_t at) const {
   const size_t n = Frames();
-  if (bpm <= 0.0f || !n) return SnapQuiet(at);
+  if (cur[SNAP] != SNAP_BEAT || bpm <= 0.0f || !n) return SnapQuiet(at);
   const double beat = BeatFrames();
   const double g = bpm_phase + std::round((double(at) - bpm_phase) / beat) * beat;
   return SnapQuiet(size_t(std::clamp(g, 0.0, double(n - 1))));
@@ -2295,7 +2296,7 @@ FLASHMEM void PlayerDevice::Window() {
   size_t a = EdgeAt(START), b = EdgeAt(END);
   if (cur[SNAP]) {
     a = SnapPoint(a); b = SnapPoint(b);
-    if (bpm > 0.0f && b <= a) b = std::min(n, SnapQuiet(std::min(n - 1, a + size_t(BeatFrames()))));  // at least a beat
+    if (cur[SNAP] == SNAP_BEAT && bpm > 0.0f && b <= a) b = std::min(n, SnapQuiet(std::min(n - 1, a + size_t(BeatFrames()))));  // at least a beat
   }
   if (b <= a + AUDIO_BLOCK_SAMPLES) b = std::min(n, a + AUDIO_BLOCK_SAMPLES * 2);
   if (streaming) stream.SetWindow(a, b);
@@ -2567,11 +2568,11 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
   size_t ea = ea0, eb = eb0;
   if (!streaming && cur[SNAP]) {
     ea = SnapPoint(ea); eb = SnapPoint(eb);
-    if (bpm > 0.0f && eb <= ea) eb = std::min(n, SnapQuiet(std::min(n - 1, ea + size_t(BeatFrames()))));
+    if (cur[SNAP] == SNAP_BEAT && bpm > 0.0f && eb <= ea) eb = std::min(n, SnapQuiet(std::min(n - 1, ea + size_t(BeatFrames()))));
   }
-  // SNAP with a tempo found: the beats as ticks along the bottom (when
+  // SNAP BEAT with a tempo found: the beats as ticks along the bottom (when
   // they are at least 4 pixels apart)
-  if (cur[SNAP] && bpm > 0.0f) {
+  if (cur[SNAP] == SNAP_BEAT && bpm > 0.0f) {
     const double beat = BeatFrames();
     if (beat * (w - 1) / double(span) >= 4.0) {
       double k = std::ceil((double(v0) - bpm_phase) / beat);
