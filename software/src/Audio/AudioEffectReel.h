@@ -240,7 +240,7 @@ private:
   float o_off = 0.0f;
   int xf = 0;
   float dub_g = 0.0f;  // overdub fading in / out (~10 ms), so it doesn't click
-  float run_g = 0.0f;  // playback fading in / out (~5 ms) on start and stop
+  float run_g = 0.0f;  // playback fading in / out (20 ms) on start and stop
   volatile State st = EMPTY;
   volatile bool dub = false;
   volatile bool press = false, clear = false, stop = false, retrig = false, loop_ = true;
@@ -451,8 +451,9 @@ FASTRUN void AudioEffectReel::update() {
       // memory full: the loop closes and plays, as B would
       if (++wpos >= cap) { len = cap; ws = 0; wl = len; off = 0.0f; xf = 0; st = PLAY; }
     } else if ((st == PLAY || st == DUB || run_g > 0.0f) && len) {
-      // start / stop glide instead of switching
-      constexpr float run_step = 1.0f / (0.005f * AUDIO_SAMPLE_RATE_EXACT);
+      // start / stop glide instead of switching: 20 ms, eased at both ends
+      // (5 ms straight still clicked on low notes)
+      constexpr float run_step = 1.0f / (0.02f * AUDIO_SAMPLE_RATE_EXACT);
       run_g = (st == PLAY || st == DUB) ? std::min(1.0f, run_g + run_step) : std::max(0.0f, run_g - run_step);
       read(ws, wl, off, yl, yr);
       // in the crossfade: the incoming part, read like the main head
@@ -479,8 +480,9 @@ FASTRUN void AudioEffectReel::update() {
         step(o_off, o_wl);
         xf--;
       }
-      yl *= run_g;
-      yr *= run_g;
+      const float rg = run_g * run_g * (3.0f - 2.0f * run_g);
+      yl *= rg;
+      yr *= rg;
       const size_t i0 = (ws + size_t(off)) % len;
       // overdub: the input comes in and the old loop goes down to DUB,
       // both gliding with dub_g
