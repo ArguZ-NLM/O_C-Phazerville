@@ -357,7 +357,10 @@ private:
   loom::Device* undo_dev[2] = {};
   loom::Device::Saved undo_state[2];
   uint32_t undone_at = 0;  // UNDO shown
+  bool undo_held = false, undo_armed = false;  // L held for the undo ...
+  uint32_t undo_hold = 0;                      // ... since then
   void UndoReset();
+  static constexpr uint32_t HOLD_MS = 2000;  // reset / undo: how long to hold
   bool reset_held = false;  // R held on a device page ...
   uint32_t reset_hold = 0;  // ... since then
   loom::PlayerDevice* meta_page = nullptr;  // the PLAYER whose page is open
@@ -1330,9 +1333,13 @@ FLASHMEM void AppLoom::MainLoop() {
     }
     if (held && ms >= 3000) clear_held = false;
   }
-  if (reset_held && millis() - reset_hold >= 3000) {
+  if (reset_held && millis() - reset_hold >= HOLD_MS) {
     reset_held = false;
     ResetFocused();
+  }
+  if (undo_held && millis() - undo_hold >= HOLD_MS) {
+    undo_held = false;
+    if (undo_dev[0] && Focused() == undo_dev[0]) UndoReset();
   }
   // the undo is there only while that device's page is open
   if (undo_dev[0] && (view != DEVICE || Focused() != undo_dev[0])) undo_dev[0] = undo_dev[1] = nullptr;
@@ -1416,7 +1423,10 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
   dirty = true;
   // another button while L is held: a combination, so letting go of L
   // does not open the triggers page as well
-  if (l_held && event.control != OC::CONTROL_BUTTON_L && event.type == UI::EVENT_BUTTON_DOWN) l_used = true;
+  if (l_held && event.control != OC::CONTROL_BUTTON_L && event.type == UI::EVENT_BUTTON_DOWN) {
+    l_used = true;
+    undo_held = false;
+  }
   // the triggers page takes no other input (the knobs pick the sources);
   // L push or Y closes it
   if (view == DEVICE && trig_mode && event.control != OC::CONTROL_BUTTON_L) {
@@ -1443,7 +1453,7 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
     if (event.type == UI::EVENT_BUTTON_DOWN) {
       r_held = view == CHAIN;
       r_moved = false;
-      // held 3 s on a device page: the device back to its defaults (see
+      // held 2 s on a device page: the device back to its defaults (see
       // MainLoop); letting go before, or turning a knob, does nothing
       const PlayerDevice* pl = tracks[track].player;
       reset_held = view == DEVICE && !l_held && Focused() && !(pl && pl->browsing && Focused() == pl);
@@ -1461,18 +1471,21 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
     if (event.type == UI::EVENT_BUTTON_DOWN) {
       l_held = true;
       l_used = false;
+      // right after a reset: held 2 s undoes it (a bar fills, see MainLoop)
+      undo_armed = undo_held = view == DEVICE && !trig_mode && undo_dev[0] && Focused() == undo_dev[0];
+      undo_hold = millis();
     } else if (event.type == UI::EVENT_BUTTON_LONG_RELEASE) {
       l_held = false;
-      // L held (and not used with R enc for a mode): right after a reset
-      // its undo, else the action triggers page
-      if (!l_used && view == DEVICE && !trig_mode && undo_dev[0] && Focused() == undo_dev[0]) {
-        UndoReset();
-      } else if (!l_used && view == DEVICE && !editing) {
+      undo_held = false;
+      // L held (and not used with R enc for a mode): the action triggers
+      // page; not when the hold was for the undo (done or let go early)
+      if (!l_used && !undo_armed && view == DEVICE && !editing) {
         trig_mode = !trig_mode;
         mod_mode = false;
       }
     } else if (event.type == UI::EVENT_BUTTON_PRESS) {
       l_held = false;
+      undo_held = false;
       if (l_used) return;
       // CV outputs page: L push bypasses the output (0 V)
       if (view == MODS && IsOutCursor(mod_cursor)) cv_out_bypass ^= 1 << (mod_cursor - OUT_CURSOR);
@@ -1671,7 +1684,7 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
   dirty = true;
   const int dir = event.value;
   const bool left = event.control == OC::CONTROL_ENCODER_L;
-  reset_held = false;  // a knob turned: no reset
+  reset_held = undo_held = false;  // a knob turned: no reset, no undo
   if (view == DEVICE && !focus_mod && col == SOURCE && tracks[track].player &&
       tracks[track].player->browsing && Focused() == tracks[track].player) {
     tracks[track].player->BrowseMove(dir);  // either knob scrolls the browser
@@ -2666,11 +2679,15 @@ FLASHMEM void AppLoom::View() const {
   }
   // saving: a bar fills while Y is held, then SAVED
   const uint32_t since = millis() - saved_at;
-  if (reset_held && millis() - reset_hold > 250) {  // R held: a bar fills over 3 s
-    const int fill = std::min<int>(64, (millis() - reset_hold) * 64 / 3000);
+  // R held: a bar fills until the reset; L held after it: until the undo
+  for (int k = 0; k < 2; k++) {
+    const bool held = k ? undo_held : reset_held;
+    const uint32_t ms = millis() - (k ? undo_hold : reset_hold);
+    if (!held || ms <= 250) continue;
+    const int fill = std::min<int>(64, ms * 64 / HOLD_MS);
     graphics.clearRect(31, 22, 66, 15);
     gfxFrame(31, 22, 66, 15);
-    gfxPrint(43, 26, PSTR("RESET..."));
+    gfxPrint(k ? 43 : 40, 26, k ? PSTR("UNDO...") : PSTR("RESET..."));
     gfxInvert(32, 23, fill, 13);
   }
   if (saved_at && since < 1200) {
