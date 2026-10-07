@@ -1669,7 +1669,26 @@ private:
   bool ReadMeta();
   // the file is in: what it has now is the start (only changes get written,
   // so stepping through files leaves nothing behind)
-  void MetaBaseline() { if (!meta_known) { TakeMeta(meta_was); meta_known = true; } }
+  void MetaBaseline() { if (!meta_known) { TakeMeta(meta_was); meta_known = true; } BpmStart(); }
+  // tempo: the hits' envelope (one level per IDX_FRAMES frames, up to
+  // BPM_BINS of them from START) and how regularly it rises, worked out a
+  // slice at a time from Idle() once the file is in
+  static constexpr int BPM_BINS = 6000;  // ~32 s at 48 kHz
+  float bpm = 0.0f;           // the file's tempo at SPEED 100 (0: none found)
+  int bpm_got = -1;           // levels read so far (-1: no analysis running)
+  int bpm_n = 0;
+  size_t bpm_from = 0;
+  float* bpm_env = nullptr;   // RAM2, only while it runs
+  void BpmStart();
+  void BpmIdle();
+  void BpmSolve();
+  float FileRate() const { return rate * AUDIO_SAMPLE_RATE_EXACT; }
+  // the head, in frames of the whole file
+  size_t HeadFrame() const {
+    const size_t n = Frames();
+    const size_t at = size_t((streaming ? stream.HeadPos() : fx.HeadPos()) * n);
+    return at + (clipped ? sec_off : 0);
+  }
   // START / END settings from the exact edges, once the length is known
   void EdgesToSettings() {
     const size_t n = Frames();
@@ -1796,6 +1815,78 @@ FLASHMEM void PlayerDevice::WriteMeta() {
   meta_known = true;
 }
 
+FLASHMEM void PlayerDevice::BpmStart() {
+  if (bpm_env) { free(bpm_env); bpm_env = nullptr; }
+  bpm = 0.0f;
+  bpm_got = -1;
+  const size_t n = Frames();
+  bpm_from = EdgeAt(START);
+  if (bpm_from + 800 * IDX_FRAMES > n) bpm_from = 0;  // too little after START: from the beginning
+  bpm_n = int(std::min<size_t>((n - bpm_from) / IDX_FRAMES, BPM_BINS));
+  if (bpm_n < 800) return;  // under ~4 s: no tempo
+  bpm_env = static_cast<float*>(malloc(sizeof(float) * bpm_n));
+  if (bpm_env) bpm_got = 0;
+}
+
+FLASHMEM void PlayerDevice::BpmIdle() {
+  if (bpm_got < 0 || !bpm_env || loading || analysing) return;
+  if (streaming && indexing) return;  // the level index is still being read
+  // the envelope, 400 levels at a time (in dB-like steps, so quiet hits
+  // count as well as loud ones)
+  for (int k = 0; k < 400 && bpm_got < bpm_n; k++, bpm_got++) {
+    const size_t a = bpm_from + size_t(bpm_got) * IDX_FRAMES;
+    bpm_env[bpm_got] = logf(1.0f + PeakAt(a, a + IDX_FRAMES) * (1.0f / 128.0f));
+  }
+  if (bpm_got < bpm_n) return;
+  BpmSolve();
+  free(bpm_env);
+  bpm_env = nullptr;
+  bpm_got = -1;
+}
+
+// where the envelope rises (the hits), then how alike it is to itself one,
+// two, three and four beats later, for every tempo from 70 to 180 BPM in
+// 0.1 steps; a gentle preference for tempos near 120 decides between a
+// tempo and its half / double
+FLASHMEM void PlayerDevice::BpmSolve() {
+  float* o = bpm_env;
+  const int n = bpm_n;
+  for (int i = n - 1; i > 0; i--) o[i] = std::max(0.0f, o[i] - o[i - 1]);
+  o[0] = 0.0f;
+  float mean = 0.0f;
+  for (int i = 0; i < n; i++) mean += o[i];
+  mean /= n;
+  for (int i = 0; i < n; i++) o[i] -= mean;
+  const float bin_s = IDX_FRAMES / FileRate();
+  const int lmax = std::min(n / 2, int(4.0f * 60.0f / (70.0f * bin_s)) + 2);
+  float* r = static_cast<float*>(malloc(sizeof(float) * (lmax + 1)));
+  if (!r) return;
+  for (int l = 0; l <= lmax; l++) {
+    float acc = 0.0f;
+    for (int i = 0; i + l < n; i++) acc += o[i] * o[i + l];
+    r[l] = acc / float(n - l);
+  }
+  if (r[0] <= 0.0f) { free(r); return; }
+  auto at = [&](float l) {
+    const int i = int(l);
+    if (i + 1 > lmax) return 0.0f;
+    const float f = l - float(i);
+    return (r[i] + (r[i + 1] - r[i]) * f) / r[0];
+  };
+  float best = 0.0f, best_s = 0.0f;
+  for (int t = 700; t <= 1800; t++) {
+    const float b = t * 0.1f;
+    const float l = 60.0f / (b * bin_s);
+    float sc = 0.0f;
+    for (int k = 1; k <= 4; k++) sc += at(k * l);
+    const float oct = log2f(b / 120.0f) / 0.6f;
+    sc *= expf(-0.5f * oct * oct);
+    if (sc > best_s) { best_s = sc; best = b; }
+  }
+  free(r);
+  bpm = best_s > 0.25f ? best : 0.0f;  // too little alike: no clear beat
+}
+
 // --- the browser: sub-folders first (with a /), then WAVs; ".." goes up
 FLASHMEM void PlayerDevice::List() {
   bcount = 0;
@@ -1906,6 +1997,8 @@ FLASHMEM void PlayerDevice::Deactivate() {
   loading = streaming = analysing = false;
   stream.Release();
   if (idx) { extmem_free(idx); idx = nullptr; }
+  if (bpm_env) { free(bpm_env); bpm_env = nullptr; }
+  bpm_got = -1;
   fx.Release();
   loaded = -1;
   active = false;
@@ -1914,6 +2007,9 @@ FLASHMEM void PlayerDevice::Deactivate() {
 // reads the WAV header, then Idle() fills the buffer
 FLASHMEM void PlayerDevice::Load(int i) {
   WriteMeta();  // what the last file had, before it goes
+  if (bpm_env) { free(bpm_env); bpm_env = nullptr; }
+  bpm_got = -1;
+  bpm = 0.0f;
   if (loading || streaming || analysing) lf.close();
   loading = streaming = analysing = false;
   stream.Stop();
@@ -2049,6 +2145,7 @@ FLASHMEM size_t PlayerDevice::ReadFrames(int16_t* l, int16_t* r, size_t n) {
 
 FLASHMEM void PlayerDevice::Idle() {
   if (!active) return;
+  BpmIdle();
   if (!nfiles && millis() - scanned_at > 3000) Scan();  // card / files may come later
   if ((loaded != cur[FILE_] || loaded_mode != mode[FILE_]) && !loading && !analysing) Load(cur[FILE_]);
   static int16_t tl[IO_CHUNK], tr[IO_CHUNK];
@@ -2305,6 +2402,14 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
       right -= 6 * int(strlen(zt)) + 2;
       gfxPrint(right + 2, y, zt);
     }
+    // the head's place in the whole file, m:ss.t
+    if (Frames() && !too_long) {
+      const uint32_t ds = uint32_t(HeadFrame() * 10.0f / FileRate());
+      char ct[12];
+      snprintf(ct, sizeof(ct), "%lu:%02lu.%lu", (unsigned long)(ds / 600), (unsigned long)(ds / 10 % 60), (unsigned long)(ds % 10));
+      right -= 6 * int(strlen(ct)) + 4;
+      gfxPrint(right + 2, y, ct);
+    }
     char nm[24];
     ShortName(names[fi], (right - x) / 6 - 1, nm, sizeof(nm));
     gfxPrint(x, y, nm);
@@ -2435,6 +2540,16 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
     const int hx = sx(size_t((streaming ? stream.HeadPos() : fx.HeadPos()) * n));
     if (hx >= x && hx < x + w) gfxInvert(hx, wy, 1, wh);
   }
+  // the tempo as heard (with SPEED), bottom right; ... while it is worked out
+  char bt[12];
+  if (bpm_got >= 0) snprintf(bt, sizeof(bt), "...BPM");
+  else if (bpm > 0.0f) {
+    const int tb = int(bpm * cur[SPEED] + 5.0f) / 10;  // tenths
+    snprintf(bt, sizeof(bt), "%d.%dBPM", tb / 10, tb % 10);
+  } else snprintf(bt, sizeof(bt), "-BPM");
+  const int bw = 6 * int(strlen(bt));
+  graphics.clearRect(x + w - bw - 1, base - 7, bw + 1, 8);
+  gfxPrint(x + w - bw, base - 7, bt);
 }
 
 // (L+R)/2 of a few frames, for the close-in picture: from memory, or from
