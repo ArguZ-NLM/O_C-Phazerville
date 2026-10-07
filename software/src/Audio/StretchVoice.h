@@ -24,8 +24,9 @@ public:
   // date when it comes back; Restart() then begins with fresh windows
   void Record(const float* in, size_t n);
   void Restart();
-  // main loop: the correlator's search (a slice at a time)
-  void Idle();
+  // the correlator's search, from a low-priority timer (below the audio):
+  // goes on until it is done or budget_us have passed
+  void Work(uint32_t budget_us);
 
   // position 0..1 (how far back, from now to the oldest), size 0..1 (window
   // length), pitch in semitones, speed (frozen: how fast it plays through

@@ -3849,15 +3849,21 @@ public:
     if (!fx.voice.Init(BUF_SECS)) return false;
     ApplyAll();
     active = true;
+    Searching(true);
     return true;
   }
   void Deactivate() override {
+    Searching(false);
     AudioNoInterrupts();
     fx.voice.Free();
     AudioInterrupts();
     active = false;
   }
-  void Idle() override { if (active) fx.voice.Idle(); }
+  // the correlator's search runs from a timer every 0.5 ms, below the
+  // audio and above the main loop: the same on every page (from the main
+  // loop it got less time while the chain view drew, and sounded different)
+  void Search() { if (!fx.rest) fx.voice.Work(120); }
+  void Searching(bool on);
   void Apply(int p) override;
   void Action(int a) override { if (a == 0) { frozen = !frozen; Apply(PITCH); } }
   bool ActionLit(int a) const override { return a == 0 && frozen; }
@@ -3874,6 +3880,24 @@ private:
   Meter out_m;
   bool frozen = false;
 };
+
+static StretchDevice* stretch_live[2] = {};
+static IntervalTimer stretch_timer;
+static bool stretch_timer_on = false;
+
+static void StretchSearchTick() {
+  for (StretchDevice* d : stretch_live) if (d) d->Search();
+}
+
+FLASHMEM void StretchDevice::Searching(bool on) {
+  for (auto& d : stretch_live) if (d == this) d = nullptr;
+  if (!on) return;
+  for (auto& d : stretch_live) if (!d) { d = this; break; }
+  if (!stretch_timer_on) {
+    stretch_timer.priority(240);  // the audio (208) comes first
+    stretch_timer_on = stretch_timer.begin(StretchSearchTick, 500);
+  }
+}
 
 FLASHMEM void StretchDevice::Apply(int p) {
   switch (p) {
