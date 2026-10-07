@@ -5,9 +5,13 @@ namespace OC {
   namespace Strings {
 
   const char * const VERSION =
+#ifdef LOOM_ONLY
+    "Loom Alpha 1 "  // Loom's own version, not Phazerville's
+#else
 #include "OC_version.h"
 #ifdef OC_VERSION_EXTRA
     OC_VERSION_EXTRA
+#endif
 #endif
     ;
 #ifdef OC_BUILD_TAG

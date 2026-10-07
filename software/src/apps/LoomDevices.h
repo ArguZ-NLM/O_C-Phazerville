@@ -1505,7 +1505,7 @@ PROGMEM static const DeviceDef PLAYER_DEF = {
     {"FILE", 0, MAX_FILES - 1, 0, UNI, 0, 2, 0, {}, {"STRM", "MEM"}},
     {"LOOP", 0, 1, 1, LIST, 2, 0, 0, {"OFF", "ON"}},
     {"LEVEL", 0, 100, 100, UNI},
-    {"SPEED", 0, 200, 100, UNI, 0, 2, 1, {}, {"REV", "FWD"}},  // mode: direction, REV left
+    {"SPEED", 0, 200, 100, UNI, 0, 3, 1, {}, {"REV", "FWD", "SYNC"}},  // mode: direction, REV left; SYNC: forward at the clock's tempo
     {"START", 0, 10000, 0, UNI, 0, 10, 0},      // mode: zoom, all .. 0.3 ms across
     {"END", 0, 10000, 10000, UNI, 0, 10, 0},
     {"FADE", 0, 100, 20, UNI, 0, 2, 0, {}, {"CROSS", "INOUT"}},  // the loop's seam
@@ -1517,7 +1517,7 @@ PROGMEM static const DeviceDef PLAYER_DEF = {
 class PlayerDevice : public Device {
 public:
   enum { FILE_, LOOP, LEVEL, SPEED, START, END, XFADE, SNAP };
-  enum { DIR_REV, DIR_FWD };  // SPEED's modes
+  enum { DIR_REV, DIR_FWD, DIR_SYNC };  // SPEED's modes
   static float MaxSecs() { return BigSecs(); }
   static constexpr size_t MIN_BUF = 11025;  // 0.25 s: the buffer before a file
   // FILE mode MEM on a long file: the section in memory, in file frames
@@ -1686,6 +1686,12 @@ private:
   void BpmIdle();
   void BpmSolve();
   float FileRate() const { return rate * AUDIO_SAMPLE_RATE_EXACT; }
+  // SYNC: how much faster the file plays so its tempo is the clock's (1:
+  // not synced, or no tempo found); SPEED then multiplies that
+  float SyncRatio() const {
+    return mode[SPEED] == DIR_SYNC && bpm > 0.0f ? tempo_bpm / bpm : 1.0f;
+  }
+  float synced_at = 0.0f, synced_bpm = 0.0f;  // the clock tempo / file tempo SPEED was set for
   // the head, in frames of the whole file
   size_t HeadFrame() const {
     const size_t n = Frames();
@@ -2149,6 +2155,8 @@ FLASHMEM size_t PlayerDevice::ReadFrames(int16_t* l, int16_t* r, size_t n) {
 FLASHMEM void PlayerDevice::Idle() {
   if (!active) return;
   BpmIdle();
+  // SYNC: follow the clock's tempo (and the file's, once it is found)
+  if (mode[SPEED] == DIR_SYNC && (synced_at != tempo_bpm || synced_bpm != bpm)) Refresh(SPEED);
   if (!nfiles && millis() - scanned_at > 3000) Scan();  // card / files may come later
   if ((loaded != cur[FILE_] || loaded_mode != mode[FILE_]) && !loading && !analysing) Load(cur[FILE_]);
   static int16_t tl[IO_CHUNK], tr[IO_CHUNK];
@@ -2276,7 +2284,9 @@ FLASHMEM void PlayerDevice::Apply(int p) {
       applied_mode = mode[FILE_];
     } break;
     case SPEED: {  // mode REV (0) plays backwards (streamed files: forward only)
-      const float sp = cur[SPEED] * 0.01f * rate;
+      const float sp = cur[SPEED] * 0.01f * rate * SyncRatio();
+      synced_at = tempo_bpm;
+      synced_bpm = bpm;
       fx.SetSpeed(mode[SPEED] == DIR_REV ? -sp : sp);
       stream.SetSpeed(sp);
     } break;
@@ -2547,7 +2557,7 @@ FLASHMEM bool PlayerDevice::HeaderInfo(char* buf, size_t n) const {
   } else if (bpm_got >= 0) {
     snprintf(buf, n, "...BPM");
   } else if (bpm > 0.0f) {
-    const int tb = int(bpm * cur[SPEED] + 5.0f) / 10;  // tenths
+    const int tb = int(bpm * SyncRatio() * cur[SPEED] + 5.0f) / 10;  // tenths
     snprintf(buf, n, "%d.%dBPM", tb / 10, tb % 10);
   } else {
     snprintf(buf, n, "-BPM");
