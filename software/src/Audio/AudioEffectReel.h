@@ -370,8 +370,10 @@ FASTRUN void AudioEffectReel::update() {
   // is inside the new window
   if (len && st != REC) {
     const size_t nws = std::min<size_t>(len - 1, exact ? ex_ws : size_t(start_ * len));
+    // SPOOL's START / LEN: the loop ends at the recording's end at the
+    // latest (no running on into its beginning)
     const size_t nwl = std::max<size_t>(AUDIO_BLOCK_SAMPLES,
-                                        std::min<size_t>(len, exact ? ex_wl : size_t(len_ * len)));
+                                        std::min<size_t>(exact ? len : len - nws, exact ? ex_wl : size_t(len_ * len)));
     const bool forward_loop = defer_win && loop_ && speed > 0.0f && (st == PLAY || st == DUB);
     if (forward_loop && (nws != ws || nwl != wl)) {
       // playing on: the new window starts when the loop comes round
