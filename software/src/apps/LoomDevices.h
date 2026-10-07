@@ -1270,7 +1270,9 @@ FLASHMEM void ReelDevice::Apply(int p) {
       const float f = cur[XFADE] * 0.01f;
       fx.SetSeam(16.0f + f * f * AUDIO_SAMPLE_RATE_EXACT);
       fx.SetCrossfade(mode[XFADE] == 0);
-      fx.SetDeferWindow(true);  // a new START / END waits for the loop's end
+      // START / END move at once (a short fade from the old window), not
+      // when the loop comes round as on PLAYER
+      fx.SetDeferWindow(false);
       break;
     }
     case MON:  // and its mode: DUB
