@@ -1498,7 +1498,8 @@ struct WavWriter {
 // PSRAM (up to 16 s, like SPOOL) and played by the same engine: START / END
 // pick the loop, SPEED plays it at any rate (backwards below zero), XFADE
 // is the fade at the loop ends. START / END zoom the picture (their mode)
-// and, with SNAP on, land on the quietest point nearby. Longer files stream
+// and, with SNAP on, land on the nearest beat (when a tempo was found) and
+// the quietest point there. Longer files stream
 // from the card (FILE mode STRM); FILE mode MEM copies a section of them
 // (START..END when switched, at most 16 s) into memory and plays that as
 // the sample, START / END then within it; back to STRM puts them back.
@@ -1691,6 +1692,9 @@ private:
   void BpmStart();
   void BpmIdle();
   void BpmSolve();
+  double bpm_phase = 0.0;     // a frame a beat falls on (with bpm)
+  double BeatFrames() const { return 60.0 * FileRate() / bpm; }
+  size_t SnapPoint(size_t at) const;
   float FileRate() const { return rate * AUDIO_SAMPLE_RATE_EXACT; }
   // SYNC: how much faster the file plays so its tempo is the clock's (1:
   // not synced, or no tempo found); SPEED then multiplies that
@@ -1900,6 +1904,22 @@ FLASHMEM void PlayerDevice::BpmSolve() {
   }
   free(r);
   bpm = best_s > 0.25f ? best : 0.0f;  // too little alike: no clear beat
+  if (bpm <= 0.0f) return;
+  // where the beats fall: the hits folded onto one beat as angles, their
+  // weighted average (finer than a level entry). A rise shows in the entry
+  // the hit is in, so the middle of it.
+  const float l = 60.0f / (bpm * bin_s);
+  float sc = 0.0f, cc = 0.0f;
+  for (int i = 0; i < n; i++) {
+    if (o[i] <= 0.0f) continue;
+    const float an = 2.0f * float(M_PI) * fmodf(float(i), l) / l;
+    sc += o[i] * sinf(an);
+    cc += o[i] * cosf(an);
+  }
+  float ph = atan2f(sc, cc) / (2.0f * float(M_PI)) * l;
+  if (ph < 0.0f) ph += l;
+  bpm_phase = double(bpm_from) + (double(ph) + 0.5) * IDX_FRAMES;
+  Window();  // SNAP can use the beats now
 }
 
 // --- the browser: sub-folders first (with a /), then WAVs; ".." goes up
@@ -2251,6 +2271,16 @@ FLASHMEM size_t PlayerDevice::SnapQuiet(size_t at) const {
   return best;
 }
 
+// SNAP: with a tempo found, the nearest beat, then the quietest sample just
+// around it; without one only the quietest sample
+FLASHMEM size_t PlayerDevice::SnapPoint(size_t at) const {
+  const size_t n = Frames();
+  if (bpm <= 0.0f || !n) return SnapQuiet(at);
+  const double beat = BeatFrames();
+  const double g = bpm_phase + std::round((double(at) - bpm_phase) / beat) * beat;
+  return SnapQuiet(size_t(std::clamp(g, 0.0, double(n - 1))));
+}
+
 // to the sample when set by hand; from the setting when it is modulated
 // (or nothing finer is known)
 FLASHMEM size_t PlayerDevice::EdgeAt(int p) const {
@@ -2263,7 +2293,10 @@ FLASHMEM void PlayerDevice::Window() {
   const size_t n = Frames();
   if (!n) return;
   size_t a = EdgeAt(START), b = EdgeAt(END);
-  if (cur[SNAP]) { a = SnapQuiet(a); b = SnapQuiet(b); }
+  if (cur[SNAP]) {
+    a = SnapPoint(a); b = SnapPoint(b);
+    if (bpm > 0.0f && b <= a) b = std::min(n, SnapQuiet(std::min(n - 1, a + size_t(BeatFrames()))));  // at least a beat
+  }
   if (b <= a + AUDIO_BLOCK_SAMPLES) b = std::min(n, a + AUDIO_BLOCK_SAMPLES * 2);
   if (streaming) stream.SetWindow(a, b);
   else fx.SetWindowSamples(a, b - a);
@@ -2532,7 +2565,23 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
   // where they are set (a new loop waits for the old one to come round,
   // the lines show the new one at once); SNAP shown for files in memory
   size_t ea = ea0, eb = eb0;
-  if (!streaming && cur[SNAP]) { ea = SnapQuiet(ea); eb = SnapQuiet(eb); }
+  if (!streaming && cur[SNAP]) {
+    ea = SnapPoint(ea); eb = SnapPoint(eb);
+    if (bpm > 0.0f && eb <= ea) eb = std::min(n, SnapQuiet(std::min(n - 1, ea + size_t(BeatFrames()))));
+  }
+  // SNAP with a tempo found: the beats as ticks along the bottom (when
+  // they are at least 4 pixels apart)
+  if (cur[SNAP] && bpm > 0.0f) {
+    const double beat = BeatFrames();
+    if (beat * (w - 1) / double(span) >= 4.0) {
+      double k = std::ceil((double(v0) - bpm_phase) / beat);
+      for (double pos = bpm_phase + k * beat; pos < double(v0) + double(span); pos += beat) {
+        if (pos < 0.0 || pos >= double(n)) continue;
+        const int bx = sx(size_t(pos));
+        if (bx >= x && bx < x + w) gfxLine(bx, base - 2, bx, base);
+      }
+    }
+  }
   for (const size_t e : {ea, eb}) {
     const int ex = sx(e);
     if (ex < x || ex >= x + w) continue;
