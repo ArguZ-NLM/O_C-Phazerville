@@ -293,6 +293,13 @@ private:
   }
   bool trig_mode = false; // device view: L / R enc trigger source per action
   uint32_t r_click_at = 0; // the last R push (a second one soon after: double click)
+  const loom::Device* r_click_dev = nullptr;
+  int r_click_p = -1;
+  // what a double click put back to its default, to bring it back
+  const loom::Device* dc_dev = nullptr;
+  int dc_p = -1;
+  int16_t dc_prev = 0;
+  void DoubleClick(loom::Device* d, int p);
   elapsedMicros mod_timer;
   uint8_t chord_releases = 0; // UP/DOWN releases to swallow after UP+DOWN
   bool active = false;
@@ -1655,23 +1662,17 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
       } else {
         editing = !editing;
         edit_mode = false;
-        // SPOOL pushed twice quickly: MON 100 <-> 0, SPEED reversed, START /
-        // FADE to 0, END to the loop's end (the two pushes leave the grab as
-        // it was)
-        ReelDevice* rl = tracks[track].reel;
-        if (d == rl && !focus_mod && cursor != ReelDevice::IN && cursor <= ReelDevice::MON) {
-          if (millis() - r_click_at < 350) {
-            int16_t& v = rl->val[cursor];
-            if (cursor == ReelDevice::MON) v = v ? 0 : 100;
-            else if (cursor == ReelDevice::SPEED) v = -v;
-            else if (cursor == ReelDevice::END) v = 10000;
-            else v = 0;
-            rl->Refresh(cursor);
-            Mirror(rl, cursor);
-            r_click_at = 0;
-          } else {
-            r_click_at = millis();
-          }
+        // R pushed twice quickly on a setting (the two pushes leave the grab
+        // as it was): back to its default, and twice more back to where it
+        // was. SPEED reverses (PLAYER: REV <-> FWD), SPOOL's MON 100 <-> 0,
+        // FADE to 0. Not the settings that pick the source or the file.
+        if (millis() - r_click_at < 350 && r_click_dev == d && r_click_p == cursor) {
+          DoubleClick(d, cursor);
+          r_click_at = 0;
+        } else {
+          r_click_at = millis();
+          r_click_dev = d;
+          r_click_p = cursor;
         }
       }
       break;
@@ -1857,6 +1858,34 @@ FLASHMEM bool AppLoom::Muted() const {
 
 // on an effect slot's page B (DOWN) bypasses the slot (ECHO's CLR stays
 // reachable through a trigger); on OUTPUT it bypasses the band stage
+FLASHMEM void AppLoom::DoubleClick(loom::Device* d, int p) {
+  using namespace loom;
+  if (!d || p < 0 || p >= d->num_params()) return;
+  Track& tr = tracks[track];
+  const bool src = !focus_mod && col == SOURCE;
+  if (src && d == tr.reel && p == ReelDevice::IN) return;   // the input
+  if (src && d != tr.reel && p == 0) return;                // INPUT's source, PLAYER's file
+  const ParamDef& pd = d->param(p);
+  int16_t& v = d->val[p];
+  if (src && d == tr.reel && p == ReelDevice::MON) {
+    v = v ? 0 : 100;
+  } else if (src && d == tr.reel && p == ReelDevice::SPEED) {
+    v = -v;
+  } else if (src && d == tr.player && p == PlayerDevice::SPEED) {
+    if (d->mode[p] < 2) d->mode[p] ^= 1;  // REV <-> FWD (SYNC stays)
+  } else {
+    const bool fade = src && ((d == tr.reel && p == ReelDevice::XFADE) || (d == tr.player && p == PlayerDevice::XFADE));
+    const int16_t target = fade ? 0 : pd.def;
+    if (v != target) { dc_dev = d; dc_p = p; dc_prev = v; v = target; }
+    else if (dc_dev == d && dc_p == p) v = dc_prev;  // back to where it was
+    else return;
+  }
+  if (src && d == tr.player && (p == PlayerDevice::START || p == PlayerDevice::END))
+    tr.player->ex_valid = false;  // the edges from the settings now
+  d->Refresh(p);
+  Mirror(d, p);
+}
+
 FLASHMEM bool AppLoom::BypassKey() const {
   using namespace loom;
   if (view != DEVICE || focus_mod || col <= SOURCE || col > MIX_COL) return false;
