@@ -223,6 +223,21 @@ public:
   // R held on the device page: back to the defaults (a device keeps what
   // is routing rather than sound: its file, input, the track's pan)
   virtual void Reset() { Defaults(); ApplyAll(); }
+  // what a reset changes, kept so L held can undo it
+  struct Saved {
+    int16_t val[MAX_PARAMS];
+    uint8_t mode[MAX_PARAMS];
+    int8_t mod_amt[MAX_PARAMS], mod_amt2[MAX_PARAMS];
+    HS::CVInputMap mod_in[MAX_PARAMS];
+    uint8_t mod_bus_sel[MAX_PARAMS], mod_bus2[MAX_PARAMS];
+    uint8_t mod_bi, mod_bi2;
+    uint32_t ex[2];  // PLAYER: its exact edges
+    bool ex_valid;
+  };
+  void Keep(Saved& k) const;
+  void Restore(const Saved& k);
+  virtual void KeepMore(Saved&) const {}
+  virtual void RestoreMore(const Saved&) {}
   void Nudge(int p, int dir);
   void NudgeMode(int p, int dir);
   bool Bipolar(int p) const { return mod_bi & (1 << p); }
@@ -333,6 +348,33 @@ FLASHMEM void Device::CopyFrom(const Device& d) {
   mod_bi2 = d.mod_bi2;
   memcpy(act_trig, d.act_trig, sizeof(act_trig));
   mod_bi = d.mod_bi;
+  ApplyAll();
+}
+
+FLASHMEM void Device::Keep(Saved& k) const {
+  memcpy(k.val, val, sizeof(val));
+  memcpy(k.mode, mode, sizeof(mode));
+  memcpy(k.mod_amt, mod_amt, sizeof(mod_amt));
+  memcpy(k.mod_amt2, mod_amt2, sizeof(mod_amt2));
+  for (int p = 0; p < MAX_PARAMS; p++) k.mod_in[p] = mod_in[p];
+  memcpy(k.mod_bus_sel, mod_bus_sel, sizeof(mod_bus_sel));
+  memcpy(k.mod_bus2, mod_bus2, sizeof(mod_bus2));
+  k.mod_bi = mod_bi;
+  k.mod_bi2 = mod_bi2;
+  KeepMore(k);
+}
+
+FLASHMEM void Device::Restore(const Saved& k) {
+  memcpy(val, k.val, sizeof(val));
+  memcpy(mode, k.mode, sizeof(mode));
+  memcpy(mod_amt, k.mod_amt, sizeof(mod_amt));
+  memcpy(mod_amt2, k.mod_amt2, sizeof(mod_amt2));
+  for (int p = 0; p < MAX_PARAMS; p++) mod_in[p] = k.mod_in[p];
+  memcpy(mod_bus_sel, k.mod_bus_sel, sizeof(mod_bus_sel));
+  memcpy(mod_bus2, k.mod_bus2, sizeof(mod_bus2));
+  mod_bi = k.mod_bi;
+  mod_bi2 = k.mod_bi2;
+  RestoreMore(k);
   ApplyAll();
 }
 
@@ -1574,10 +1616,11 @@ public:
     Defaults();
     val[FILE_] = cur[FILE_] = f;
     mode[FILE_] = m;
-    ex_valid = false;
-    sec_off = sec_len = 0;
+    ex_valid = false;  // the edges from START / END (the section in memory stays)
     ApplyAll();
   }
+  void KeepMore(Saved& k) const override { k.ex[0] = ex_pos[0]; k.ex[1] = ex_pos[1]; k.ex_valid = ex_valid; }
+  void RestoreMore(const Saved& k) override { ex_pos[0] = k.ex[0]; ex_pos[1] = k.ex[1]; ex_valid = k.ex_valid; }
   // the browser: folders and WAVs as a text list (R push on FILE)
   bool browsing = false;
   void OpenBrowser();

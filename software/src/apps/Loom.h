@@ -352,6 +352,12 @@ private:
   loom::Device* Twin(loom::Device* d) const;
   void ResetFocused();
   uint32_t reset_at = 0;  // when a device went back to its defaults (DEFAULTS shown)
+  // L held after a reset: the settings from before it (while still on that
+  // device's page)
+  loom::Device* undo_dev[2] = {};
+  loom::Device::Saved undo_state[2];
+  uint32_t undone_at = 0;  // UNDO shown
+  void UndoReset();
   bool reset_held = false;  // R held on a device page ...
   uint32_t reset_hold = 0;  // ... since then
   loom::PlayerDevice* meta_page = nullptr;  // the PLAYER whose page is open
@@ -630,10 +636,22 @@ FLASHMEM void AppLoom::ResetFocused() {
   Device* d = Focused();
   if (!d) return;
   Device* tw = Twin(d);
+  undo_dev[0] = d;
+  undo_dev[1] = tw;
+  d->Keep(undo_state[0]);
+  if (tw) tw->Keep(undo_state[1]);
   d->Reset();
   if (tw) tw->Reset();
   editing = false;
   reset_at = millis() | 1;
+}
+
+FLASHMEM void AppLoom::UndoReset() {
+  for (int i = 0; i < 2; i++) if (undo_dev[i]) undo_dev[i]->Restore(undo_state[i]);
+  undo_dev[0] = undo_dev[1] = nullptr;
+  editing = false;
+  reset_at = 0;
+  undone_at = millis() | 1;
 }
 
 // copy one parameter to the twin; input source and pan stay per track
@@ -1316,6 +1334,8 @@ FLASHMEM void AppLoom::MainLoop() {
     reset_held = false;
     ResetFocused();
   }
+  // the undo is there only while that device's page is open
+  if (undo_dev[0] && (view != DEVICE || Focused() != undo_dev[0])) undo_dev[0] = undo_dev[1] = nullptr;
   if (active && mod_timer >= 1000) { // follow the sources about once per ms
     mod_timer = 0;
     ModulateAll();
@@ -1397,6 +1417,12 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
   // another button while L is held: a combination, so letting go of L
   // does not open the triggers page as well
   if (l_held && event.control != OC::CONTROL_BUTTON_L && event.type == UI::EVENT_BUTTON_DOWN) l_used = true;
+  // the triggers page takes no other input (the knobs pick the sources);
+  // L push or Y closes it
+  if (view == DEVICE && trig_mode && event.control != OC::CONTROL_BUTTON_L) {
+    if (event.control == OC::CONTROL_BUTTON_Y && event.type == UI::EVENT_BUTTON_PRESS) trig_mode = false;
+    return;
+  }
   if (event.control == OC::CONTROL_BUTTON_Z) {
     // anywhere in the app: clock start / stop; held: the clock page, on
     // letting go (Z held + an encoder push is a shortcut, which swallows
@@ -1437,8 +1463,11 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
       l_used = false;
     } else if (event.type == UI::EVENT_BUTTON_LONG_RELEASE) {
       l_held = false;
-      // L held (and not used with R enc for a mode): the action triggers page
-      if (!l_used && view == DEVICE && !editing) {
+      // L held (and not used with R enc for a mode): right after a reset
+      // its undo, else the action triggers page
+      if (!l_used && view == DEVICE && !trig_mode && undo_dev[0] && Focused() == undo_dev[0]) {
+        UndoReset();
+      } else if (!l_used && view == DEVICE && !editing) {
         trig_mode = !trig_mode;
         mod_mode = false;
       }
@@ -2621,6 +2650,12 @@ FLASHMEM void AppLoom::View() const {
     gfxFrame(bx, 21, bw, 19);
     gfxFrame(bx + 2, 23, bw - 4, 15);
     gfxPrint(bx + 7, 27, txt);
+  }
+  if (undone_at && millis() - undone_at < 1200) {  // the reset undone (L held)
+    graphics.clearRect(40, 22, 48, 15);
+    gfxFrame(40, 22, 48, 15);
+    gfxPrint(52, 26, PSTR("UNDO"));
+    gfxInvert(41, 23, 46, 13);
   }
   // a device back to its defaults (R held)
   if (reset_at && millis() - reset_at < 1200) {
