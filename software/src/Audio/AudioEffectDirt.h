@@ -10,7 +10,8 @@
 //   TILT     two bands split at 80 Hz / 650 Hz / 2.5 kHz; + lifts the highs
 //            and drops the lows, - the other way round; the level is
 //            brought back so it sounds about as loud
-//   NOISE    white, pink or dust (random bursts), its level follows the input
+//   NOISE    white, pink or dust (sparse clicks, like a record), its level
+//            follows the input
 //            (N.DCY = how long it trails), band-passed (N.TON)
 //   FOLD     sine wavefolder, West-coast style, clean at 0
 //   DRIVE    soft saturation, clean at 0; made up so a usual level stays
@@ -124,8 +125,10 @@ private:
   uint32_t rng = 0x12345678;
   float tilt_z[2] = {}, env_in = 0.0f;
   float pink[2][3] = {}, svf_lo[2] = {}, svf_bp[2] = {};
-  int dust_left = 0, dust_len = 1;  // a burst: what is left of it, its length
+  float dust_z[2] = {};  // DUST: the click ringing down, per side
   static constexpr float NOISE_ATTACK = 0.0104f;  // ~2 ms: the noise comes in softly
+  static constexpr float DUST_THRESH = 1.0f - 2.0f * 30.0f / 48000.0f;  // Rand() above: ~30 clicks / s
+  static constexpr float DUST_GAIN = 6.0f;
   int hold_count = 0;
   float hold_val[2] = {};
   Viz viz = {};
@@ -177,10 +180,6 @@ FASTRUN void AudioEffectDirt::update() {
       if (--hold_count > 0) take = false;
       else hold_count = hold + int((Rand() + 1.0f) * 0.25f * hold); // jitter
     }
-    if (namt > 0.0f && nmode == NOISE_DUST) {
-      if (dust_left > 0) dust_left--;
-      else if (Rand() > 0.996f) dust_len = dust_left = 24 + int((Rand() + 1.0f) * 60.0f);
-    }
 
     for (int c = 0; c < 2; c++) {
       float v = x[c];
@@ -197,8 +196,15 @@ FASTRUN void AudioEffectDirt::update() {
           b[2] = 0.57000f * b[2] + nz * 1.0526913f;
           nz = (b[0] + b[1] + b[2] + nz * 0.1848f) * 0.25f;
         } else if (nmode == NOISE_DUST) {
-          // each burst in a Hann window: no hard edges
-          nz = dust_left ? nz * (0.5f - 0.5f * cosf(2.0f * float(M_PI) * dust_left / dust_len)) : 0.0f;
+          // about 30 clicks a second on each side, at random; most quiet,
+          // now and then a loud one (cubed), either sign; each dies away
+          // in ~0.3 ms
+          if (Rand() > DUST_THRESH) {
+            const float u = 0.5f * (Rand() + 1.0f);
+            dust_z[c] += (Rand() > 0.0f ? 1.0f : -1.0f) * u * u * u * DUST_GAIN;
+          }
+          nz = dust_z[c];
+          dust_z[c] *= 0.93f;
         }
         // N.TON: band-pass (state variable)
         const float hp = nz - svf_lo[c] - svf_bp[c];
