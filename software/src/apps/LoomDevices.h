@@ -1117,7 +1117,7 @@ FLASHMEM void InputDevice::DrawMini(int x, int y, int w, int h) {
 // through the track's input; IN is the input's source, so it is set here too.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef SPOOL_DEF = {
-  "SPOOL", "REL", 8, {"REC", "STP"},  // tag REL kept for saved files (was REEL)
+  "SPOOL", "REL", 8, {"REC", "PLAY"},  // tag REL kept for saved files (was REEL); A: REC / DUB, B: PLAY / STOP
   {
     {"IN", 0, 4, 1, UNI},  // like INPUT's SOURC
     {"SPEED", -200, 200, 100, BI},
@@ -1233,16 +1233,21 @@ FLASHMEM void ReelDevice::Format(int p, char* buf, size_t n) const {
 
 // A: REC -> PLAY -> DUB -> PLAY (stopped: play from the start); B: stop
 // (held for 3 s: clear, see the app)
+// A: REC when empty, then DUB (closing the loop), DUB <-> PLAY;
+// B: PLAY / STOP (while recording: closes the loop and plays)
 FLASHMEM void ReelDevice::Action(int a) {
+  const auto st = fx.state();
   if (a == 0) {
     // the first REC: as much memory as is free, up to MaxSecs
-    if (fx.state() == AudioEffectReel::EMPTY && !fx.Grow(MaxSecs())) {
+    if (st == AudioEffectReel::EMPTY && !fx.Grow(MaxSecs())) {
       no_mem_at = millis() | 1;
       return;
     }
-    fx.Press();
-  } else {
+    fx.Dub();
+  } else if (st == AudioEffectReel::PLAY || st == AudioEffectReel::DUB) {
     fx.Stop();
+  } else if (st != AudioEffectReel::EMPTY) {
+    fx.Press();  // REC: the loop closes and plays; STOPPED: from the start
   }
 }
 
@@ -1256,7 +1261,8 @@ FLASHMEM void ReelDevice::Idle() {
 
 FLASHMEM bool ReelDevice::ActionLit(int a) const {
   const auto st = fx.state();
-  return a == 0 && (st == AudioEffectReel::REC || st == AudioEffectReel::DUB);
+  if (a == 0) return st == AudioEffectReel::REC || st == AudioEffectReel::DUB;
+  return st == AudioEffectReel::PLAY || st == AudioEffectReel::DUB;
 }
 
 // the loop as a waveform, the looping part (START / LEN) bracketed, the
@@ -1307,8 +1313,19 @@ FLASHMEM void ReelDevice::DrawViz(int x, int y, int w, int h) {
   // scaled to the loop's loudest point, so a quiet loop still has a shape
   int top = 32;
   for (int k = 0; k < HIST; k++) top = std::max<int>(top, hist[k]);
+  // recording: the wave grows from the left on a steady scale (4 s across,
+  // doubling whenever the recording reaches the right edge) instead of
+  // squeezing into the whole width
+  int span_w = w;
+  if (st == AudioEffectReel::REC) {
+    const float got = fx.HeadFrame() / AUDIO_SAMPLE_RATE_EXACT;
+    float across = 4.0f;
+    while (across < got && across < MaxSecs()) across *= 2.0f;
+    span_w = std::max(1, std::min(w, int(w * got / across)));
+    gfxDottedLine(x + span_w, cy, x + w - 1, cy, 2);
+  }
   for (int k = 0; k < HIST; k++) {
-    const int cx = x + k * w / HIST;
+    const int cx = x + k * span_w / HIST;
     const int a = int(sqrtf(float(hist[k]) / top) * (h / 2 - 1));
     gfxLine(cx, cy - a, cx, cy + a);
   }
@@ -1323,7 +1340,8 @@ FLASHMEM void ReelDevice::DrawViz(int x, int y, int w, int h) {
     }
   }
   // the head: recording at the end of what is there, playing in the loop
-  const int hx = constrain(x + int(fx.HeadPos() * (w - 1)), x, x + w - 1);
+  const int hx = st == AudioEffectReel::REC ? x + span_w - 1
+      : constrain(x + int(fx.HeadPos() * (w - 1)), x, x + w - 1);
   const int cl = std::max(x, hx - 1), cr = std::min(x + w - 1, hx + 1);
   graphics.clearRect(cl, y + 1, cr - cl + 1, h - 2);
   gfxLine(hx, y + 1, hx, base - 1);

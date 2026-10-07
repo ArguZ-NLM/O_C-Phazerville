@@ -105,6 +105,9 @@ public:
 
   // --- UI thread; taken over at the next block ---
   void Press() { press = true; }
+  // SPOOL's A: REC (empty), then into DUB (closes the loop; stopped:
+  // overdubs from the start), DUB <-> PLAY
+  void Dub() { dub = true; }
   // a press n frames from now, counted in the audio (start on a beat);
   // -1: none waiting
   void PressIn(int32_t frames) { press_in = std::max<int32_t>(0, frames); }
@@ -239,6 +242,7 @@ private:
   float dub_g = 0.0f;  // overdub fading in / out (~10 ms), so it doesn't click
   float run_g = 0.0f;  // playback fading in / out (~5 ms) on start and stop
   volatile State st = EMPTY;
+  volatile bool dub = false;
   volatile bool press = false, clear = false, stop = false, retrig = false, loop_ = true;
   volatile int32_t press_in = -1;
   volatile int in_peak[2] = {};
@@ -309,7 +313,25 @@ FASTRUN void AudioEffectReel::update() {
     else press_in = left;
   }
   // button presses from the UI
-  if (clear) { clear = false; press = false; stop = false; Reset(); }
+  if (clear) { clear = false; press = false; stop = false; dub = false; Reset(); }
+  if (dub) {
+    dub = false;
+    switch (st) {
+      case EMPTY: wpos = 0; std::fill(hist, hist + HIST, 0); st = REC; break;
+      case REC:
+        len = std::max<size_t>(wpos, AUDIO_BLOCK_SAMPLES);
+        ws = 0; wl = len; off = 0.0f; xf = 0;
+        st = DUB;
+        break;
+      case PLAY: st = DUB; break;
+      case DUB:  st = PLAY; break;
+      case STOPPED:
+        off = speed < 0.0f ? wl - 1.0f : 0.0f;
+        xf = 0;
+        st = DUB;
+        break;
+    }
+  }
   if (stop) {
     stop = false;
     if (st == REC) { len = std::max<size_t>(wpos, AUDIO_BLOCK_SAMPLES); ws = 0; wl = len; }
