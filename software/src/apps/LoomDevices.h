@@ -1459,8 +1459,9 @@ struct WavWriter {
                      'f', 'm', 't', ' ', 16, 0, 0, 0, 1, 0, 2, 0};
     const uint32_t bytes = frames * 4;
     PutLE(h + 4, 36 + bytes, 4);
-    PutLE(h + 24, 44100, 4);
-    PutLE(h + 28, 44100 * 4, 4);
+    // the rate it was really recorded at (the module runs at 48 kHz)
+    PutLE(h + 24, uint32_t(AUDIO_SAMPLE_RATE_EXACT), 4);
+    PutLE(h + 28, uint32_t(AUDIO_SAMPLE_RATE_EXACT) * 4, 4);
     PutLE(h + 32, 4, 2);
     PutLE(h + 34, 16, 2);
     memcpy(h + 36, "data", 4);
@@ -1685,7 +1686,7 @@ private:
   int chans = 2, bytes = 2;  // per sample
   bool is_float = false;
   size_t frames = 0, got = 0;
-  float rate = 1.0f;  // file rate / 44.1 kHz
+  float rate = 1.0f;  // file rate / the module's rate (48 kHz)
   void Load(int i);
   void Window();
   size_t SnapQuiet(size_t at) const;
@@ -1970,7 +1971,7 @@ FLASHMEM void PlayerDevice::Load(int i) {
       if (!ok_bits || chans < 1) break;
       bytes = bits / 8;
       frames = sz / (bytes * chans);
-      rate = srate / 44100.0f;
+      rate = srate / AUDIO_SAMPLE_RATE_EXACT;  // the module runs at 48 kHz
       got = 0;
       // MEM on a long file: only the chosen section goes into memory
       const size_t max_frames = size_t(MaxSecs() * AUDIO_SAMPLE_RATE_EXACT);

@@ -31,7 +31,7 @@ struct Impl {
 
 FLASHMEM bool StretchVoice::Init(float seconds) {
   if (ready_) return true;
-  const int32_t frames = int32_t(seconds * 44117.647f);
+  const int32_t frames = int32_t(seconds * AUDIO_SAMPLE_RATE_EXACT);
   void* im = malloc(sizeof(Impl));
   buf_ = static_cast<int16_t*>(extmem_malloc(size_t(frames) * 2 * sizeof(int16_t)));
   if (!im || !buf_) {

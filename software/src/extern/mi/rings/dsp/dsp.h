@@ -36,7 +36,7 @@
 
 namespace rings {
   
-static const float kSampleRate = 44117.647f;  // Teensy audio rate (Rings ran at 48 kHz)
+static const float kSampleRate = 48000.0f;  // the module's audio rate (as Rings ran)
 const float a3 = 440.0f / kSampleRate;
 const size_t kMaxBlockSize = 24;
 
