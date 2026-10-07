@@ -68,7 +68,7 @@ public:
   bool Begin() { Release(); return Swap(PARK, true); }
   // main loop: empty again (cleared) -> back to the small buffer
   void Park() {
-    if (st == EMPTY && !press && cap > PARK) Swap(PARK, true);
+    if (st == EMPTY && !press && !dub && cap > PARK) Swap(PARK, true);  // not with a REC on its way
   }
   // main loop: after the first recording, keep just the loop
   void Shrink() {
