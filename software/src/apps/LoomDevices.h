@@ -1195,6 +1195,7 @@ private:
   AudioEffectReel fx;
   InputDevice* input;
   float view_range = 1024.0f;  // zoomed picture's auto range
+  int rec_top = 4096;          // recording picture: the loudest so far
   // a close view: span frames; centre -1 rides with the head
   void DrawZoom(int x, int y, int w, int h, long span, long centre, const char* label);
 };
@@ -1382,6 +1383,9 @@ FLASHMEM void ReelDevice::DrawViz(int x, int y, int w, int h) {
   // recording: the wave grows from the left on a steady scale (4 s across,
   // doubling whenever the recording reaches the right edge) instead of
   // squeezing into the whole width
+  // squeezing into the whole width. Each pixel is a fixed stretch of time,
+  // so what is drawn stays put as the recording grows; the height scale only
+  // grows (the loudest so far)
   int span_w = w;
   if (st == AudioEffectReel::REC) {
     const float got = fx.HeadFrame() / AUDIO_SAMPLE_RATE_EXACT;
@@ -1389,11 +1393,22 @@ FLASHMEM void ReelDevice::DrawViz(int x, int y, int w, int h) {
     while (across < got && across < MaxSecs()) across *= 2.0f;
     span_w = std::max(1, std::min(w, int(w * got / across)));
     gfxDottedLine(x + span_w, cy, x + w - 1, cy, 2);
-  }
-  for (int k = 0; k < HIST; k++) {
-    const int cx = x + k * span_w / HIST;
-    const int a = int(sqrtf(float(hist[k]) / top) * (h / 2 - 1));
-    gfxLine(cx, cy - a, cx, cy + a);
+    int16_t lo[128], hi[128];
+    const int cols = std::min(w, 128);
+    fx.ReadWave(0, long(across * AUDIO_SAMPLE_RATE_EXACT), cols, lo, hi);
+    for (int k = 0; k < cols && k < span_w; k++) rec_top = std::max({rec_top, abs(int(lo[k])), abs(int(hi[k]))});
+    for (int k = 0; k < cols && k < span_w; k++) {
+      const int pk = std::max(abs(int(lo[k])), abs(int(hi[k])));
+      const int a = int(sqrtf(float(pk) / rec_top) * (h / 2 - 1));
+      gfxLine(x + k, cy - a, x + k, cy + a);
+    }
+  } else {
+    rec_top = 4096;
+    for (int k = 0; k < HIST; k++) {
+      const int cx = x + k * span_w / HIST;
+      const int a = int(sqrtf(float(hist[k]) / top) * (h / 2 - 1));
+      gfxLine(cx, cy - a, cx, cy + a);
+    }
   }
   if (st != AudioEffectReel::REC) {
     float a, b;
