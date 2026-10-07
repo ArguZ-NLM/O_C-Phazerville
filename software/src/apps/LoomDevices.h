@@ -2939,7 +2939,7 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
     // sides, as tall as LEVEL and reaching towards the walls with ROOM,
     // falling off like a real tail (quickly first, then a long low end);
     // PRE leaves a gap in the middle. WALL fills it in: sparse when soft,
-    // solid when hard.
+    // solid when hard; and it makes the walls crisp (hard) or diffuse (soft).
     static const uint8_t bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
     const int cx = x + w / 2, hw = w / 2 - 1;
     const int wall = hw * (30 + 70 * cur[ROOM] / 100) / 100;
@@ -2956,8 +2956,23 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
         if (i && (edge || bayer[py & 3][(cx - i) & 3] < fill)) gfxPixel(cx - i, py);
       }
     }
-    gfxLine(cx - wall, y, cx - wall, base);
-    gfxLine(cx + wall, y, cx + wall, base);
+    // the walls: hard (WALL +50) a crisp line; softer, it spreads up to 4
+    // pixels each side, thinning out from the middle - a diffuse surface.
+    // A fixed threshold per screen place, so nothing flickers while WALL
+    // turns.
+    const float soft = (50 - cur[WALL]) * 0.01f;  // 0 hard .. 1 soft
+    const int spread = int(soft * 4.0f + 0.5f);
+    for (int wx : {cx - wall, cx + wall}) {
+      for (int d = -spread; d <= spread; d++) {
+        const int px = wx + d;
+        if (px < x || px >= x + w) continue;
+        const float weight = spread ? (1.0f - float(abs(d)) / (spread + 1)) * (1.0f - 0.35f * soft) : 1.0f;
+        for (int py = y; py <= base; py++) {
+          const float t = px * 0.7548777f + py * 0.5698403f;
+          if (t - floorf(t) < weight) gfxPixel(px, py);
+        }
+      }
+    }
   }
   if (echo.frozen()) {
     gfxPrint(x + w - 25, y + 1, PSTR("FRZ"));
