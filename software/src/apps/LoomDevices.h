@@ -3115,10 +3115,20 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
       auto px = [&](float sec) { return x + int(constrain(sec / MAX_SECS, 0.0f, 1.0f) * tw); };
       const float period = tap_secs[0][TAPS - 1], period_r = tap_secs[1][TAPS - 1];
       const float fb = std::min(1.0f, cur[FEEDBACK] * 0.01f);
+      // PING: the repeats bounce - each round mostly on one side, the
+      // other side down by SPRD (left on the even rounds, right on the odd)
+      const bool ping = mode[SPREAD] == PING && cur[SPREAD] > 0;
+      const float pv = ping ? cur[SPREAD] * 0.01f : 0.0f;
+      auto side_h = [&](int h0, int round, bool right) {
+        if (!ping) return h0;
+        const bool away = ((round & 1) != 0) != right;  // not this round's side
+        return away ? int(h0 * (1.0f - pv)) : h0;
+      };
       for (int t = 0; t < TAPS; t++) {
         const int lx = px(tap_secs[0][t]);
         gfxRect(lx, base - bh, 2, bh);
-        if (cur[SPREAD] > 0) gfxFrame(std::max(lx + 3, px(tap_secs[1][t])), base - bh, 2, bh);
+        const int hr = side_h(bh, 0, true);
+        if (cur[SPREAD] > 0 && hr > 0) gfxFrame(std::max(lx + 3, px(tap_secs[1][t])), base - hr, 2, hr);
       }
       // repeats: the whole pattern again after each period
       float g = fb;
@@ -3130,10 +3140,11 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
           const float sec = round * period + tap_secs[0][t];
           if (sec > MAX_SECS) break;
           const int lx = px(sec);
-          gfxLine(lx, base - rh + 1, lx, base);
-          if (cur[SPREAD] > 0) {
+          const int hl = side_h(rh, round, false), hr = side_h(rh, round, true);
+          if (hl > 0) gfxLine(lx, base - hl + 1, lx, base);
+          if (cur[SPREAD] > 0 && hr > 0) {
             const int rx = std::max(lx + 2, px(round * period_r + tap_secs[1][t]));
-            gfxDottedLine(rx, base - rh + 1, rx, base, 2);
+            gfxDottedLine(rx, base - hr + 1, rx, base, 2);
           }
           any = true;
         }
