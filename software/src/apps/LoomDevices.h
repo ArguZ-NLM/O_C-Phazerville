@@ -89,6 +89,10 @@ struct ModCtx {
 // --- tempo ---
 // set by the CLOCK device; synced times and rates follow it
 float tempo_bpm = 120.0f;
+// where the clock is in its beat (0..1) and when that was (micros), for
+// starting on the next beat
+float clock_beat_ph = 0.0f;
+uint32_t clock_beat_us = 0;
 // Z starts and stops the clock (so does MIDI start/stop when the clock
 // follows MIDI): synced modulators hold while stopped and begin again from
 // the top on start
@@ -1539,7 +1543,9 @@ public:
   void Format(int p, char* buf, size_t n) const override;
   void FormatMode(int p, char* buf, size_t n) const override;
   void Action(int a) override;
-  bool ActionLit(int a) const override { return a == 0 && Playing(); }
+  // lit while playing, or while a start waits for its beat
+  bool ActionLit(int a) const override { return a == 0 && (Playing() || stream.PlayWaiting() || fx.PressWaiting()); }
+  int32_t BeatWait() const;
   bool HeaderInfo(char* buf, size_t n) const override;
   static constexpr size_t MIN_SPAN = 16;  // deepest view: 16 samples across
   int Samples(size_t a, size_t count, int16_t* mono) const;  // picture: (L+R)/2
@@ -2016,6 +2022,8 @@ FLASHMEM void PlayerDevice::Deactivate() {
 // reads the WAV header, then Idle() fills the buffer
 FLASHMEM void PlayerDevice::Load(int i) {
   WriteMeta();  // what the last file had, before it goes
+  fx.CancelPress();  // a start waiting for its beat was for the old file
+  stream.CancelPlay();
   if (bpm_env) { free(bpm_env); bpm_env = nullptr; }
   bpm_got = -1;
   bpm = 0.0f;
@@ -2365,9 +2373,26 @@ FLASHMEM void PlayerDevice::FormatMode(int p, char* buf, size_t n) const {
 }
 
 // A: play / stop; B: back to the start
+// SYNC, the clock running and the file's tempo known: frames until the
+// clock's next beat (-1: start now)
+FLASHMEM int32_t PlayerDevice::BeatWait() const {
+  if (mode[SPEED] != DIR_SYNC || !clock_running || bpm <= 0.0f || tempo_bpm <= 0.0f) return -1;
+  float ph = clock_beat_ph + (micros() - clock_beat_us) * 1e-6f * tempo_bpm / 60.0f;
+  ph -= floorf(ph);
+  return int32_t((1.0f - ph) * 60.0f / tempo_bpm * AUDIO_SAMPLE_RATE_EXACT);
+}
+
 FLASHMEM void PlayerDevice::Action(int a) {
+  // A while a start waits for its beat: never mind
+  if (a == 0 && (stream.PlayWaiting() || fx.PressWaiting())) {
+    stream.CancelPlay();
+    fx.CancelPress();
+    return;
+  }
+  const int32_t wait = a == 0 ? BeatWait() : -1;  // SYNC: on the next beat
   if (streaming) {
     if (a == 0 && stream.Playing()) stream.Stop();
+    else if (a == 0 && wait >= 0) stream.PlayIn(wait);
     else if (a == 0) stream.Play();  // A: from the start of the loop
     else stream.Retrigger();         // B: back to it, without a click
     return;
@@ -2375,6 +2400,7 @@ FLASHMEM void PlayerDevice::Action(int a) {
   const auto st = fx.state();
   if (a == 0) {
     if (st == AudioEffectReel::PLAY) fx.Stop();
+    else if (st == AudioEffectReel::STOPPED && wait >= 0) fx.PressIn(wait);
     else if (st == AudioEffectReel::STOPPED) fx.Press();
   } else if (st == AudioEffectReel::PLAY || st == AudioEffectReel::STOPPED) {
     fx.Retrigger();

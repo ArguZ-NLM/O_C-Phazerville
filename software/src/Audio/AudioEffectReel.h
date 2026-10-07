@@ -105,6 +105,11 @@ public:
 
   // --- UI thread; taken over at the next block ---
   void Press() { press = true; }
+  // a press n frames from now, counted in the audio (start on a beat);
+  // -1: none waiting
+  void PressIn(int32_t frames) { press_in = std::max<int32_t>(0, frames); }
+  void CancelPress() { press_in = -1; }
+  bool PressWaiting() const { return press_in >= 0; }
   void Clear() { clear = true; }
   void Stop() { stop = true; }
   void Retrigger() { retrig = true; }  // back to the start, crossfaded
@@ -230,6 +235,7 @@ private:
   float run_g = 0.0f;  // playback fading in / out (~5 ms) on start and stop
   volatile State st = EMPTY;
   volatile bool press = false, clear = false, stop = false, retrig = false, loop_ = true;
+  volatile int32_t press_in = -1;
   volatile float speed = 1.0f, start_ = 0.0f, len_ = 1.0f, keep_ = 0.8f, mon = 1.0f, level = 1.0f;
   volatile float seam = 256.0f;
   volatile bool xfade_loop = false;
@@ -284,6 +290,12 @@ FASTRUN void AudioEffectReel::update() {
     return;
   }
 
+  // a press waiting for its moment (start on a beat): in this block
+  if (press_in >= 0) {
+    const int32_t left = press_in - AUDIO_BLOCK_SAMPLES;
+    if (left < 0) { press_in = -1; press = true; }
+    else press_in = left;
+  }
   // button presses from the UI
   if (clear) { clear = false; press = false; stop = false; Reset(); }
   if (stop) {

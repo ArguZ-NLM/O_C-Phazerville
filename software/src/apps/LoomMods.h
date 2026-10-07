@@ -584,6 +584,8 @@ FLASHMEM void ClockDevice::Tick(const ModCtx& ctx) {
   if (clock_running) beat_ph += ctx.dt * tempo_bpm / 60.0f;
   if (beat_ph >= 1.0f) { beat_ph -= floorf(beat_ph); beat = (beat + 1) % 4; flash = 0.08f; }
   out = beat_ph;
+  clock_beat_ph = beat_ph;  // for a PLAYER starting on the next beat
+  clock_beat_us = micros();
 }
 
 // TAP: tap the tempo on the UP button (internal clock)

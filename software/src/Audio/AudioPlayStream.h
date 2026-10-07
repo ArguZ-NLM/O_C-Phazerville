@@ -77,6 +77,11 @@ public:
     return std::min<size_t>({size_t(seam), (b - a) / 2, (tb - ta) / 2, cache_cap > 64 ? cache_cap - 64 : 0});
   }
   void Play() { pos = double(ws); playing = true; }
+  // Play() n frames from now, counted in the audio (start on a beat); -1:
+  // none waiting
+  void PlayIn(int32_t frames) { play_in = std::max<int32_t>(0, frames); }
+  void CancelPlay() { play_in = -1; }
+  bool PlayWaiting() const { return play_in >= 0; }
   void Retrigger() { if (playing) retrig = true; else Play(); }  // dips ~5 ms, no click
   void SetLoop(bool l) { loop_ = l; }
   void Stop() { playing = false; }  // fades out over ~5 ms
@@ -150,6 +155,7 @@ private:
   volatile size_t cs[2] = {}, cn[2] = {};  // caches: frames cs .. cs + cn
   volatile double pos = 0.0;
   volatile bool playing = false, underrun = false, retrig = false, loop_ = true;
+  volatile int32_t play_in = -1;
   float run_g = 0.0f;  // start / stop glide
   volatile float speed = 1.0f, level = 1.0f, seam = 256.0f;
   volatile bool xfade_loop = false;
@@ -171,6 +177,11 @@ private:
 };
 
 FASTRUN void AudioPlayStream::update() {
+  if (play_in >= 0 && ready()) {  // a start waiting for its moment (a beat)
+    const int32_t left = play_in - AUDIO_BLOCK_SAMPLES;
+    if (left < 0) { play_in = -1; pos = double(ws); playing = true; }
+    else play_in = left;
+  }
   if ((!playing && run_g <= 0.0f) || !ready()) return;
   audio_block_t* out[2] = {allocate(), allocate()};
   if (!out[0] || !out[1]) {
