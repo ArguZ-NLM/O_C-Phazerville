@@ -1987,10 +1987,10 @@ FLASHMEM void AppLoom::DrawDevice() const {
       char src[8], buf[24];
       FormatTrig(d->act_trig[a], src, sizeof(src));
       const char* act = d->def.actions[a][0] ? d->def.actions[a] : "-";
-      snprintf(buf, sizeof(buf), "%s %-5s <- %s", a ? "B" : "A", act, src);
+      snprintf(buf, sizeof(buf), "%-5s <- %s", act, src);
       gfxPrint(4, 13 + a * 10, buf);
     }
-    gfxPrint(4, 33, PSTR("L knob: A  R knob: B"));
+    gfxPrint(4, 33, PSTR("L: top   R: bottom"));
   }  // BYP shows only while the slot is bypassed
   const bool byp_on = BypassKey() && (tracks[track].bypass >> col & 1);
   const bool mute_turn = !mod_mode && Muted()
