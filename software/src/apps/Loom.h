@@ -2326,7 +2326,7 @@ namespace loom {
   // 5: OUTPUT page 2 LOW MID HIGH OTT (was BANDZ LOW MID HIGH)
   // 6: ECHO's reverb LEVEL PRE ROOM WALL (was LEVEL SIZE DECAY TONE)
   // 7: STRETCH POS turned round (0 = oldest, 100 = now, like SPRAY)
-  constexpr uint8_t SAVE_VERSION = 8;
+  constexpr uint8_t SAVE_VERSION = 9;
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -2391,6 +2391,9 @@ namespace loom {
     const bool skip_size = use && !memcmp(tag, "ECO", 4) && load_version < 6;
     // before v8 PLAYER's direction was FWD REV (now REV FWD)
     const bool flip_dir = use && !memcmp(tag, "PLY", 4) && load_version < 8;
+    // before v9 SPOOL's VIEW value was the zoom (now its mode; the value is
+    // where it looks: HEAD)
+    const bool view_mode = use && !memcmp(tag, "REL", 4) && load_version < 9;
     for (int p = 0; p < n; p++) {
       int16_t v; uint8_t md; int8_t amt; uint16_t src; uint8_t bus;
       if (f.read(&v, 2) != 2 || f.read(&md, 1) != 1 || f.read(&amt, 1) != 1
@@ -2420,6 +2423,7 @@ namespace loom {
         d->mod_amt2[p] = -d->mod_amt2[p];
       }
       if (flip_dir && p == PlayerDevice::SPEED) d->mode[p] = 1 - d->mode[p];
+      if (view_mode && p == ReelDevice::VIEW) { d->mode[p] = uint8_t(constrain(v, 0, 9)); d->val[p] = -1; }
       p = q;
     }
     uint8_t bi, bi2 = 0, trig[2];

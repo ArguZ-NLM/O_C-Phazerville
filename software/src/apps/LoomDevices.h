@@ -1126,7 +1126,10 @@ PROGMEM static const DeviceDef SPOOL_DEF = {
     {"DUB", 0, 100, 80, UNI},  // how much of the old loop stays when overdubbing
     {"MON", 0, 100, 100, UNI}, // the live input passed through
     {"LEVEL", 0, 100, 100, UNI},
-    {"VIEW", 0, 9, 0, UNI},  // the picture only: ALL, or a window round the play head (REEL_VIEW_MS)
+    // the picture only. Mode (L): ALL, or how much time a closer view shows
+    // (REEL_VIEW_MS); value (R): where it looks, HEAD (-1: follows the play
+    // head) or a place in the loop, 0..100 %
+    {"VIEW", -1, 100, -1, UNI, 0, 10, 0},
   },
   {"", ""},
 };
@@ -1222,12 +1225,9 @@ FLASHMEM void ReelDevice::Apply(int p) {
 FLASHMEM void ReelDevice::Format(int p, char* buf, size_t n) const {
   if (p == SPEED || p == START || p == LEN) snprintf(buf, n, "%d%%", val[p]);
   else if (p == IN) snprintf(buf, n, "%s", InputSourceName(val[p]));
-  else if (p == VIEW && val[p] <= 0) snprintf(buf, n, "ALL");
-  else if (p == VIEW) {
-    const int ms = REEL_VIEW_MS[constrain(val[p] - 1, 0, 8)];
-    if (ms >= 1000) snprintf(buf, n, "%ds", ms / 1000);
-    else snprintf(buf, n, "%dms", ms);
-  }
+  else if (p == VIEW && mode[p] == 0) snprintf(buf, n, "ALL");
+  else if (p == VIEW && val[p] < 0) snprintf(buf, n, "HEAD");
+  else if (p == VIEW) snprintf(buf, n, "%d%%", val[p]);
   else Device::Format(p, buf, n);
 }
 
@@ -1304,7 +1304,7 @@ FLASHMEM void ReelDevice::DrawViz(int x, int y, int w, int h) {
     gfxPrint(x + w / 2 - 21, cy - 12, PSTR("A: REC"));
     return;
   }
-  if (cur[VIEW] > 0) {
+  if (mode[VIEW] > 0) {
     DrawZoom(x, y, w, h);
   } else {
   constexpr int HIST = AudioEffectReel::HIST;
@@ -1388,10 +1388,24 @@ FLASHMEM void ReelDevice::DrawZoom(int x, int y, int w, int h) {
   const int cy = y + h / 2, base = y + h - 1, half = h / 2 - 1;
   const auto st = fx.state();
   const bool rec = st == AudioEffectReel::REC;
-  const long span = long(REEL_VIEW_MS[constrain(cur[VIEW] - 1, 0, 8)] * (AUDIO_SAMPLE_RATE_EXACT / 1000.0f));
+  const int ms = REEL_VIEW_MS[constrain(mode[VIEW] - 1, 0, 8)];
+  const long span = long(ms * (AUDIO_SAMPLE_RATE_EXACT / 1000.0f));
   const long head = long(fx.HeadFrame());
-  const int hx = rec ? x + w - 1 : x + w / 2;
-  const long from = head - span * (hx - x) / w;
+  // HEAD: the view rides with the play head (recording: at the right edge);
+  // a place: the view stands still, centred there, and the head passes by
+  const bool follow = cur[VIEW] < 0;
+  long from;
+  int hx;
+  if (follow) {
+    hx = rec ? x + w - 1 : x + w / 2;
+    from = head - span * (hx - x) / w;
+  } else {
+    const long n = long(rec ? fx.HeadFrame() : fx.Length());
+    from = n * cur[VIEW] / 100 - span / 2;
+    long rel = head - from;
+    if (!rec && n > 0) rel = ((rel % n) + n) % n;  // the loop wraps
+    hx = rel >= 0 && rel < span ? x + int(rel * w / span) : -1;
+  }
   int16_t lo[128], hi[128];
   const int cols = std::min(w, 128);
   fx.ReadWave(from, span, cols, lo, hi);
@@ -1420,8 +1434,17 @@ FLASHMEM void ReelDevice::DrawZoom(int x, int y, int w, int h) {
       }
     }
   }
-  graphics.clearRect(std::max(x, hx - 1), y + 1, std::min(3, x + w - std::max(x, hx - 1)), h - 2);
-  gfxLine(hx, y + 1, hx, base - 1);
+  if (hx >= x) {
+    graphics.clearRect(std::max(x, hx - 1), y + 1, std::min(3, x + w - std::max(x, hx - 1)), h - 2);
+    gfxLine(hx, y + 1, hx, base - 1);
+  }
+  // how much time the view shows, top right
+  char t[8];
+  if (ms >= 1000) snprintf(t, sizeof(t), "%ds", ms / 1000);
+  else snprintf(t, sizeof(t), "%dms", ms);
+  const int tw = 6 * int(strlen(t));
+  graphics.clearRect(x + w - tw - 1, y, tw + 1, 8);
+  gfxPrint(x + w - tw, y, t);
 }
 
 FLASHMEM void ReelDevice::DrawMini(int x, int y, int w, int h) {
