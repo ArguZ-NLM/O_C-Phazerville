@@ -434,6 +434,7 @@ FASTRUN void AudioEffectReel::update() {
   auto step = [&](float& o, size_t wn) {  // true when it went round
     o += sp;
     bool wrapped = false;
+    if (!wn) { o = 0.0f; return true; }  // no window (yet): never loop on nothing
     while (o >= wn) { o -= wn; wrapped = true; }
     while (o < 0.0f) { o += wn; wrapped = true; }
     return wrapped;
@@ -447,7 +448,8 @@ FASTRUN void AudioEffectReel::update() {
       buf[0][wpos] = xl;
       buf[1][wpos] = xr;
       Mark(wpos, xl, xr);
-      if (++wpos >= cap) { len = cap; off = 0.0f; st = PLAY; }
+      // memory full: the loop closes and plays, as B would
+      if (++wpos >= cap) { len = cap; ws = 0; wl = len; off = 0.0f; xf = 0; st = PLAY; }
     } else if ((st == PLAY || st == DUB || run_g > 0.0f) && len) {
       // start / stop glide instead of switching
       constexpr float run_step = 1.0f / (0.005f * AUDIO_SAMPLE_RATE_EXACT);
