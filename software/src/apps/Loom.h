@@ -357,6 +357,8 @@ private:
   loom::Device* undo_dev[2] = {};
   loom::Device::Saved undo_state[2];
   uint32_t undone_at = 0;  // UNDO shown
+  bool stop_held = false, stop_armed = false;  // A held to stop the PLAYER ...
+  uint32_t stop_hold = 0;                      // ... since then
   bool undo_held = false, undo_armed = false;  // L held for the undo ...
   uint32_t undo_hold = 0;                      // ... since then
   void UndoReset();
@@ -1337,6 +1339,13 @@ FLASHMEM void AppLoom::MainLoop() {
     reset_held = false;
     ResetFocused();
   }
+  if (stop_held && millis() - stop_hold >= HOLD_MS) {
+    stop_held = false;
+    for (int t = 0; t < loom::NUM_TRACKS; t++) {  // linked: both
+      loom::PlayerDevice* pl = loom::tracks[t].player;
+      if ((t == track || linked) && pl && loom::tracks[t].choice[loom::SOURCE] == 2 && pl->ActionLit(0)) pl->Action(0);
+    }
+  }
   if (undo_held && millis() - undo_hold >= HOLD_MS) {
     undo_held = false;
     if (undo_dev[0] && Focused() == undo_dev[0]) UndoReset();
@@ -1502,12 +1511,19 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
   // SPOOL: B held for 3 s clears the loop (see MainLoop); followed by the
   // button's own down / release events
   // SPOOL: A held for 2 s writes the loop to the SD card (see MainLoop)
+  // chain view, PLAYER playing: A held for 2 s stops it (a click does
+  // nothing there, so it is not stopped by accident; see MainLoop)
   if (event.control == OC::CONTROL_BUTTON_UP) {
     if (event.type == UI::EVENT_BUTTON_DOWN) {
       loop_save_held = view == DEVICE && !focus_mod && col == SOURCE && tracks[track].choice[SOURCE] == 1;
       loop_save_hold = millis();
+      const PlayerDevice* pl = tracks[track].player;
+      stop_armed = stop_held = view == CHAIN && col == SOURCE && tracks[track].choice[SOURCE] == 2
+          && pl && pl->ActionLit(0);
+      stop_hold = millis();
     } else if (event.type == UI::EVENT_BUTTON_PRESS || event.type == UI::EVENT_BUTTON_LONG_RELEASE) {
       loop_save_held = false;
+      stop_held = false;
     }
   }
   // chain view: Y held for 2 s saves the settings (see MainLoop)
@@ -1530,6 +1546,7 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
   if (event.control == OC::CONTROL_BUTTON_UP || event.control == OC::CONTROL_BUTTON_DOWN) {
     constexpr uint16_t both = OC::CONTROL_BUTTON_UP | OC::CONTROL_BUTTON_DOWN;
     if (event.type == UI::EVENT_BUTTON_DOWN && (event.mask & both) == both) {
+      stop_held = false;
       ToggleLink();
       chord_releases = 2; // neither release should fire an action
       return;
@@ -1666,6 +1683,7 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
         ToggleBypass(col);
       } else if (d) {
         const int a = event.control == OC::CONTROL_BUTTON_UP ? 0 : 1;
+        if (a == 0 && stop_armed) break;  // held to stop (see above)
         const bool was = d->ActionLit(a);
         d->Action(a);
         // linked: toggles end up in the same state, one-shots fire on both
@@ -2679,15 +2697,16 @@ FLASHMEM void AppLoom::View() const {
   }
   // saving: a bar fills while Y is held, then SAVED
   const uint32_t since = millis() - saved_at;
-  // R held: a bar fills until the reset; L held after it: until the undo
-  for (int k = 0; k < 2; k++) {
-    const bool held = k ? undo_held : reset_held;
-    const uint32_t ms = millis() - (k ? undo_hold : reset_hold);
+  // R held: a bar fills until the reset; L held after it: until the undo;
+  // A held on a playing PLAYER (chain view): until it stops
+  for (int k = 0; k < 3; k++) {
+    const bool held = k == 2 ? stop_held : k ? undo_held : reset_held;
+    const uint32_t ms = millis() - (k == 2 ? stop_hold : k ? undo_hold : reset_hold);
     if (!held || ms <= 250) continue;
     const int fill = std::min<int>(64, ms * 64 / HOLD_MS);
     graphics.clearRect(31, 22, 66, 15);
     gfxFrame(31, 22, 66, 15);
-    gfxPrint(k ? 43 : 40, 26, k ? PSTR("UNDO...") : PSTR("RESET..."));
+    gfxPrint(k == 2 ? 43 : k ? 43 : 40, 26, k == 2 ? PSTR("STOP...") : k ? PSTR("UNDO...") : PSTR("RESET..."));
     gfxInvert(32, 23, fill, 13);
   }
   if (saved_at && since < 1200) {
