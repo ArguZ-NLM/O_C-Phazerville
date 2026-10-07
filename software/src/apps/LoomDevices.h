@@ -2451,7 +2451,9 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
     const bool late = stream.Underran();
     if (!late || (millis() / 200) % 2) gfxPrint(x + w - 12, y, late ? PSTR("!!") : PSTR("SD"));
   }
-  if (!n) { gfxPrint(x + 28, cy - 4, PSTR("can't read")); return; }
+  // nothing yet: the file isn't read in until Idle() gets to it (start-up,
+  // a new FILE); "can't read" only once a load of this file has failed
+  if (!n) { gfxPrint(x + 28, cy - 4, loaded == fi ? PSTR("can't read") : PSTR("loading")); return; }
   // zoomed: the point being set stays in the middle (down to a sample per
   // pixel); otherwise the START..END section with a little room, or the whole
   // file. Past the file's ends there is a dotted line.
