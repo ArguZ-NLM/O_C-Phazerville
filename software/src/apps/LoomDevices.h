@@ -2985,6 +2985,13 @@ private:
   // the bit steps for the picture (levels per side, 0: none): the sound's
   // own, squeezed (2 x square root) so the early ones are too fine to see,
   // like they are to hear, and they get fewer all the way up
+  // REDUX's hold for the picture, in pixels (1: none): the sound's hold
+  // (1 .. 32 samples) as 1 .. 8 pixels
+  int PictureHold() const {
+    const float crs = cur[CRUSH] * 0.01f;
+    if (crs <= 0.0f || mode[CRUSH] == AudioEffectDirt::CRUSH_BIT) return 1;
+    return 1 + (AudioEffectDirt::ReduxHold(crs) - 1) * 7 / 31;
+  }
   float PictureLevels() const {
     const float crs = cur[CRUSH] * 0.01f;
     if (crs <= 0.0f || mode[CRUSH] == AudioEffectDirt::CRUSH_REDUX) return 0.0f;
@@ -3048,6 +3055,7 @@ FLASHMEM void DirtDevice::DrawViz(int x, int y, int w, int h) {
   if (sect == 0) gfxFrame(x, y, bs, h);
   const float drv = cur[DRIVE] * 0.01f, fld = cur[FOLD] * 0.01f;
   const float levels = PictureLevels();
+  const int hold = PictureHold();  // REDUX: the line stays flat for a step
   const float boost = 1.0f + 6.0f * fld * std::min(1.0f, fld * 4.0f);
   int py = -1;
   for (int i = 1; i < bs - 1; i++) {
@@ -3055,7 +3063,8 @@ FLASHMEM void DirtDevice::DrawViz(int x, int y, int w, int h) {
     const float in = sinf(ph);
     const int gy = int(in * boost * lim);
     if (abs(gy) < half && (i & 1)) gfxPixel(x + i, cyw - gy);
-    float yo = AudioEffectDirt::Shape(AudioEffectDirt::Fold(in, fld), drv);
+    const float held = sinf(2.0f * float(M_PI) * ((i - 1) / hold * hold) / (bs - 3));
+    float yo = AudioEffectDirt::Shape(AudioEffectDirt::Fold(held, fld), drv);
     if (levels > 0.0f) yo = roundf(constrain(yo, -1.0f, 1.0f) * levels) / levels;
     const int yy = cyw - int(constrain(yo, -1.0f, 1.0f) * lim);
     if (py >= 0) gfxLine(x + i - 1, py, x + i, yy);
@@ -3135,10 +3144,11 @@ FLASHMEM void DirtDevice::DrawMini(int x, int y, int w, int h) {
   Poll();
   const float drv = cur[DRIVE] * 0.01f, fld = cur[FOLD] * 0.01f;
   const float levels = PictureLevels();
+  const int hold = std::max(1, PictureHold() / 2);
   const int cy = y + h / 2, lim = h / 2;
   int py = -1;
   for (int i = 0; i < w; i++) {
-    const float in = sinf(2.0f * float(M_PI) * i / (w - 1));
+    const float in = sinf(2.0f * float(M_PI) * (i / hold * hold) / (w - 1));
     float yo = AudioEffectDirt::Shape(AudioEffectDirt::Fold(in, fld), drv);
     if (levels > 0.0f) yo = roundf(constrain(yo, -1.0f, 1.0f) * levels) / levels;
     const int yy = cy - int(constrain(yo, -1.0f, 1.0f) * lim);

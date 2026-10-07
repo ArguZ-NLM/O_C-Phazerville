@@ -37,7 +37,19 @@ public:
     drive_gain = DRIVE_REF / Shape(DRIVE_REF, drive_);
   }
   void crush(float c, uint8_t mode) { crush_ = constrain(c, 0.0f, 1.0f); crush_mode = mode; }
-  void fold(float f) { fold_ = constrain(f, 0.0f, 1.0f); }
+  void fold(float f) {
+    fold_ = constrain(f, 0.0f, 1.0f);
+    // FOLD lifts a quieter signal (up to 7x before it folds back): bring a
+    // sine at the usual level (DRIVE_REF) back to its own loudness (rms)
+    float in2 = 0.0f, out2 = 0.0f;
+    for (int i = 0; i < 64; i++) {
+      const float x = DRIVE_REF * sinf(2.0f * float(M_PI) * (i + 0.5f) / 64.0f);
+      const float y = Fold(x, fold_);
+      in2 += x * x;
+      out2 += y * y;
+    }
+    fold_gain = out2 > 0.0f ? sqrtf(in2 / out2) : 1.0f;
+  }
   void tilt(float t, uint8_t xover) {
     static const float hz[3] = {80.0f, 650.0f, 2500.0f};
     t = constrain(t, -1.0f, 1.0f);
@@ -53,6 +65,9 @@ public:
     static const float below[3] = {0.3f, 0.75f, 0.92f};
     const float wl = below[xover % 3];
     tilt_gain = 1.0f / sqrtf(wl * tilt_lo * tilt_lo + (1.0f - wl) * tilt_hi * tilt_hi);
+    // lifting the highs drops the lows too, which the ear misses more than
+    // the energy says: only half the correction (in dB) that way
+    if (t > 0.0f) tilt_gain = sqrtf(tilt_gain);
   }
   void noise(float amt, uint8_t mode) { noise_amt = constrain(amt, 0.0f, 1.0f); noise_mode = mode; }
   void noise_decay(float secs) { noise_rel = expf(-1.0f / (std::max(secs, 0.001f) * AUDIO_SAMPLE_RATE_EXACT)); }
@@ -99,7 +114,7 @@ private:
 
   volatile float drive_ = 0.0f, crush_ = 0.0f, wet_ = 1.0f;
   volatile uint8_t crush_mode = CRUSH_BIT, noise_mode = NOISE_PINK;
-  volatile float fold_ = 0.0f;
+  volatile float fold_ = 0.0f, fold_gain = 1.0f;
   volatile bool tilt_on = false;
   volatile float tilt_lo = 1.0f, tilt_hi = 1.0f, tilt_a = 0.1f, tilt_gain = 1.0f;
   volatile float drive_gain = 1.0f;
@@ -109,7 +124,8 @@ private:
   uint32_t rng = 0x12345678;
   float tilt_z[2] = {}, env_in = 0.0f;
   float pink[2][3] = {}, svf_lo[2] = {}, svf_bp[2] = {};
-  int dust_left = 0;
+  int dust_left = 0, dust_len = 1;  // a burst: what is left of it, its length
+  static constexpr float NOISE_ATTACK = 0.0104f;  // ~2 ms: the noise comes in softly
   int hold_count = 0;
   float hold_val[2] = {};
   Viz viz = {};
@@ -141,7 +157,7 @@ FASTRUN void AudioEffectDirt::update() {
   const int hold = ReduxHold(crs);
   const float tl = tilt_lo, th = tilt_hi, ta = tilt_a;
   const bool tilt = tilt_on;
-  const float nrel = noise_rel, sf = svf_f, fld = fold_;
+  const float nrel = noise_rel, sf = svf_f, fld = fold_, fold_gain_now = fold_gain;
 
   float peak_in = 0.0f, peak_out = 0.0f;
   constexpr float q = 1.0f / 32768.0f;
@@ -153,7 +169,7 @@ FASTRUN void AudioEffectDirt::update() {
     peak_in = std::max(peak_in, lvl);
 
     // noise level follows the input: instant rise, N.DCY fall
-    env_in = lvl > env_in ? lvl : env_in * nrel;
+    env_in = lvl > env_in ? env_in + NOISE_ATTACK * (lvl - env_in) : env_in * nrel;
 
     // the redux sample-and-hold runs for both channels together
     bool take = true;
@@ -163,7 +179,7 @@ FASTRUN void AudioEffectDirt::update() {
     }
     if (namt > 0.0f && nmode == NOISE_DUST) {
       if (dust_left > 0) dust_left--;
-      else if (Rand() > 0.996f) dust_left = 24 + int((Rand() + 1.0f) * 60.0f);
+      else if (Rand() > 0.996f) dust_len = dust_left = 24 + int((Rand() + 1.0f) * 60.0f);
     }
 
     for (int c = 0; c < 2; c++) {
@@ -181,7 +197,8 @@ FASTRUN void AudioEffectDirt::update() {
           b[2] = 0.57000f * b[2] + nz * 1.0526913f;
           nz = (b[0] + b[1] + b[2] + nz * 0.1848f) * 0.25f;
         } else if (nmode == NOISE_DUST) {
-          nz = dust_left ? nz : 0.0f;
+          // each burst in a Hann window: no hard edges
+          nz = dust_left ? nz * (0.5f - 0.5f * cosf(2.0f * float(M_PI) * dust_left / dust_len)) : 0.0f;
         }
         // N.TON: band-pass (state variable)
         const float hp = nz - svf_lo[c] - svf_bp[c];
@@ -189,7 +206,7 @@ FASTRUN void AudioEffectDirt::update() {
         svf_lo[c] += sf * svf_bp[c];
         v += svf_bp[c] * env_in * namt * 2.0f;
       }
-      v = Fold(v, fld);
+      v = Fold(v, fld) * fold_gain_now;
       v = Shape(v, drv) * dg;
       if (do_bits) v = roundf(constrain(v, -1.0f, 1.0f) * levels) * inv_levels;
       if (do_redux) {
