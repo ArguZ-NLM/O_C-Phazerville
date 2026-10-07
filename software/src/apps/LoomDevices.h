@@ -3472,7 +3472,7 @@ FLASHMEM void ResonatorDevice::DrawMini(int x, int y, int w, int h) {
 // slot's fade mixes them with the dry signal by LEVEL.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef SPRAY_DEF = {
-  "SPRAY", "SPR", 8, {"FRZ", "GRN"},  // B: one grain by hand (RATE 0: only these)
+  "SPRAY", "SPR", 8, {"FRZ", ""},
   {
     // left of the middle: P (periodic), right: R (random), middle: no grains
     {"RATE", -100, 100, 55, BI},
@@ -3589,8 +3589,6 @@ FLASHMEM void SprayDevice::Action(int a) {
   if (a == 0) {
     frozen = !frozen;
     fx.setFreeze(frozen);
-  } else {
-    fx.triggerGrain();
   }
 }
 

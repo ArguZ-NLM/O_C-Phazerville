@@ -83,8 +83,6 @@ public:
     // feedback ∈ [0, 1]: fraction of grain cloud fed back into record buffer
     void setFeedback(float f)        { feedback_ = f; }
     void setFreeze(bool f)           { freeze_   = f; }
-    // one grain now, whatever RATE does (B / a trigger plays them by hand)
-    void triggerGrain()              { if (burst_ < 8) burst_++; }
     // stereo only. Every grain reads one input: source ∈ [−1, +1] sets the odds,
     // −1 = always left, 0 = 50/50, +1 = always right. Placement comes from spread.
     void setGrainSource(float b)     { source_   = b; }
@@ -179,7 +177,6 @@ private:
 
     // Grain scheduling state (audio ISR only — not volatile).
     float spawn_phase_ = 0.0f;
-    volatile uint8_t burst_ = 0;  // grains asked for by hand, not started yet
 
     // Volatile params: written from Controller() ISR, read from audio interrupt.
     volatile float pos_      = 0.5f;
@@ -287,7 +284,6 @@ FASTRUN void AudioEffectClouds::update() {
 
     if (rest) {
         for (auto& g : grains) g.active = false;  // none left over on return
-        burst_ = 0;
         memset(feedback_buf_, 0, sizeof(feedback_buf_));
         release_blocks(in, out);
         return;
@@ -323,15 +319,6 @@ FASTRUN void AudioEffectClouds::update() {
             }
         }
     }
-
-    // grains by hand: at the start of this block
-    for (uint8_t b = burst_; b > 0; b--) {
-        const size_t head = (g_buffer[0].GetWriteIx() + buf_size
-            - (recorded ? AUDIO_BLOCK_SAMPLES : 0)) % buf_size;
-        spawnGrain(cur_pos, cur_size, cur_spray, cur_pitch,
-                   cur_psprd, cur_texture, buf_size, head, 0);
-    }
-    burst_ = 0;
 
     // ── Pass 2: grain processing (grain-outer, sample-inner) ───────────────
     //
