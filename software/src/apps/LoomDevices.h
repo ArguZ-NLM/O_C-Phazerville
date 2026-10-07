@@ -237,6 +237,8 @@ public:
   void Keep(Saved& k) const;
   void Restore(const Saved& k);
   virtual void KeepMore(Saved&) const {}
+  // a short note for the page's header bar (false: none)
+  virtual bool HeaderInfo(char*, size_t) const { return false; }
   virtual void RestoreMore(const Saved&) {}
   void Nudge(int p, int dir);
   void NudgeMode(int p, int dir);
@@ -1538,6 +1540,7 @@ public:
   void FormatMode(int p, char* buf, size_t n) const override;
   void Action(int a) override;
   bool ActionLit(int a) const override { return a == 0 && Playing(); }
+  bool HeaderInfo(char* buf, size_t n) const override;
   static constexpr size_t MIN_SPAN = 16;  // deepest view: 16 samples across
   int Samples(size_t a, size_t count, int16_t* mono) const;  // picture: (L+R)/2
   // zoom steps: how much time is across the picture, the same for short and
@@ -2402,14 +2405,6 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
       right -= 6 * int(strlen(zt)) + 2;
       gfxPrint(right + 2, y, zt);
     }
-    // the head's place in the whole file, m:ss.t
-    if (Frames() && !too_long) {
-      const uint32_t ds = uint32_t(HeadFrame() * 10.0f / FileRate());
-      char ct[12];
-      snprintf(ct, sizeof(ct), "%lu:%02lu.%lu", (unsigned long)(ds / 600), (unsigned long)(ds / 10 % 60), (unsigned long)(ds % 10));
-      right -= 6 * int(strlen(ct)) + 4;
-      gfxPrint(right + 2, y, ct);
-    }
     char nm[24];
     ShortName(names[fi], (right - x) / 6 - 1, nm, sizeof(nm));
     gfxPrint(x, y, nm);
@@ -2540,16 +2535,24 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
     const int hx = sx(size_t((streaming ? stream.HeadPos() : fx.HeadPos()) * n));
     if (hx >= x && hx < x + w) gfxInvert(hx, wy, 1, wh);
   }
-  // the tempo as heard (with SPEED), bottom right; ... while it is worked out
-  char bt[12];
-  if (bpm_got >= 0) snprintf(bt, sizeof(bt), "...BPM");
-  else if (bpm > 0.0f) {
+}
+
+// the header: playing, the head's place in the whole file (m:ss.t);
+// stopped, the tempo as heard (with SPEED; ... while it is worked out)
+FLASHMEM bool PlayerDevice::HeaderInfo(char* buf, size_t n) const {
+  if (!active || !Frames() || loading || analysing) return false;
+  if (Playing() && !too_long) {
+    const uint32_t ds = uint32_t(HeadFrame() * 10.0f / FileRate());
+    snprintf(buf, n, "%lu:%02lu.%lu", (unsigned long)(ds / 600), (unsigned long)(ds / 10 % 60), (unsigned long)(ds % 10));
+  } else if (bpm_got >= 0) {
+    snprintf(buf, n, "...BPM");
+  } else if (bpm > 0.0f) {
     const int tb = int(bpm * cur[SPEED] + 5.0f) / 10;  // tenths
-    snprintf(bt, sizeof(bt), "%d.%dBPM", tb / 10, tb % 10);
-  } else snprintf(bt, sizeof(bt), "-BPM");
-  const int bw = 6 * int(strlen(bt));
-  graphics.clearRect(x + w - bw - 1, base - 7, bw + 1, 8);
-  gfxPrint(x + w - bw, base - 7, bt);
+    snprintf(buf, n, "%d.%dBPM", tb / 10, tb % 10);
+  } else {
+    snprintf(buf, n, "-BPM");
+  }
+  return true;
 }
 
 // (L+R)/2 of a few frames, for the close-in picture: from memory, or from
