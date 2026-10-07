@@ -3035,12 +3035,12 @@ private:
   void Poll();
   // the bit steps for the picture (levels per side, 0: none): fewer all
   // the way up, and coarser than the sound's so they show at this size
-  // REDUX and BOTH: how much of the line's pixels stay (1 at 0 .. 5 % at
-  // 100)
+  // REDUX and BOTH: how much of the line's pixels stay (1 at 0 .. about
+  // half at 100, so the other settings still show)
   float RedPixels() const {
     const float crs = cur[CRUSH] * 0.01f;
     if (crs <= 0.0f || mode[CRUSH] == AudioEffectDirt::CRUSH_BIT) return 1.0f;
-    return 1.0f - 0.95f * crs;
+    return 1.0f - 0.475f * crs;
   }
   // a line through ys (one height per column from x0), every pixel of it
   // (steep parts too), keeping `keep` of them: each place on the screen has
