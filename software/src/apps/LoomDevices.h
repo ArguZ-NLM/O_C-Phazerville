@@ -3346,7 +3346,13 @@ FLASHMEM void ResonatorDevice::Format(int p, char* buf, size_t n) const {
     const int note = 24 + 2 * int(val[CUT] * 0.01f * (BANDS - 1) + 0.5f);
     snprintf(buf, n, "%s%d", names[note % 12], note / 12 - 1);
   } else if (p == DECAY) {
-    snprintf(buf, n, "Q%d", int(QOf(val[DECAY]) + 0.5f));
+    // how long the band at the CUT note rings (to about -60 dB): T60 =
+    // ln(1000) * Q / (pi * f), with PITCH
+    const int note = 24 + 2 * int(val[CUT] * 0.01f * (BANDS - 1) + 0.5f) + cur[PITCH];
+    const float hz = 440.0f * powf(2.0f, (note - 69) / 12.0f);
+    const float t = 6.9078f * QOf(val[DECAY]) / (float(M_PI) * hz);
+    if (t < 1.0f) snprintf(buf, n, "%dms", int(t * 1000.0f + 0.5f));
+    else snprintf(buf, n, "%d.%ds", int(t), int(t * 10.0f) % 10);
   } else {
     Device::Format(p, buf, n);
   }
