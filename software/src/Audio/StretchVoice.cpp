@@ -65,11 +65,16 @@ FLASHMEM void StretchVoice::Free() {
 void StretchVoice::Work(uint32_t budget_us) {
   if (!ready_) return;
   auto* p = static_cast<Impl*>(impl_);
+  // a few candidates at a time, looking at the clock in between (Clouds'
+  // EvaluateSomeCandidates does a quarter of a search in one go, which
+  // can take longer than the timer's turn); nothing when no search waits
+  // (the correlator's size is garbage before the first one)
   const uint32_t t0 = micros();
-  do {
+  while (micros() - t0 < budget_us) {
     p->player.LoadCorrelator(p->buffer);
-    p->correlator.EvaluateSomeCandidates();
-  } while (!p->correlator.done() && micros() - t0 < budget_us);
+    if (p->correlator.done()) break;
+    for (int k = 0; k < 16 && !p->correlator.done(); k++) p->correlator.EvaluateNextCandidate();
+  }
 }
 
 float StretchVoice::Rand() {
