@@ -24,12 +24,9 @@ public:
   // date when it comes back; Restart() then begins with fresh windows
   void Record(const float* in, size_t n);
   void Restart();
-  // the correlator's search (from the audio update, after the block): goes
-  // on until it is done or budget_us have passed
+  // the correlator's search (from the main loop): goes on until it is done
+  // or budget_us have passed
   void Work(uint32_t budget_us);
-  // the search from the audio only once Loom runs (switched on with it
-  // already there while starting up, the module hung)
-  static volatile bool audio_search;
 
   // position 0..1 (how far back, from now to the oldest), size 0..1 (window
   // length), pitch in semitones, speed (frozen: how fast it plays through

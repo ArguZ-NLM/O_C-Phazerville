@@ -3821,10 +3821,6 @@ FASTRUN void AudioStretch::update() {
         fi[2 * n + c] = x / (1.0f + fabsf(x) * 0.25f);
       }
     voice.Process(fi, fo, AUDIO_BLOCK_SAMPLES);
-    // the correlator's search, here after the block (up to 0.3 ms): the
-    // same on every page (from the main loop it got less time while the
-    // chain view drew, and sounded different)
-    if (StretchVoice::audio_search) voice.Work(300);
     const float la = lp_a, ha = hp_a;
     float pk = 0.0f;
     for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++)
@@ -3885,6 +3881,10 @@ public:
     AudioInterrupts();
     active = false;
   }
+  // the correlator's search, from the main loop: each time a whole search
+  // (~1 ms; a quarter at a time, as Clouds did, fell behind while the chain
+  // view drew, and sounded different). From the audio it hung the module.
+  void Idle() override { if (active && !fx.rest) fx.voice.Work(2000); }
   void Apply(int p) override;
   void Action(int a) override { if (a == 0) { frozen = !frozen; Apply(PITCH); } }
   bool ActionLit(int a) const override { return a == 0 && frozen; }

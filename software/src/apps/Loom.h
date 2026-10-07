@@ -352,6 +352,7 @@ private:
   loom::Device* Twin(loom::Device* d) const;
   void ResetFocused();
   uint32_t reset_at = 0;  // when a device went back to its defaults (DEFAULTS shown)
+  uint32_t loop_gap_max = 0;  // longest gap between main loops (USB stats)
   // L held after a reset: the settings from before it (while still on that
   // device's page)
   loom::Device* undo_dev[2] = {};
@@ -1278,8 +1279,12 @@ FLASHMEM void AppLoom::WriteOutputs() {
 }
 
 FLASHMEM void AppLoom::MainLoop() {
-  // Loom runs: STRETCH may search from the audio now
-  if (!StretchVoice::audio_search && millis() > 10000) StretchVoice::audio_search = true;
+  // the longest gap between two main loops (USB stats), so it shows when
+  // STRETCH's search (from Idle) may fall behind
+  static uint32_t loop_prev = 0;
+  const uint32_t loop_now = micros();
+  if (loop_prev && loop_now - loop_prev > loop_gap_max) loop_gap_max = loop_now - loop_prev;
+  loop_prev = loop_now;
   if (active) ReadMIDI();
   {
     using namespace loom;
@@ -1377,6 +1382,8 @@ FLASHMEM void AppLoom::MainLoop() {
   AudioProcessorUsageMaxReset();
   AudioMemoryUsageMaxReset();
   Serial.printf("  load:%s\n", loom::load_note);
+  Serial.printf("  main loop: longest gap %lu us\n", (unsigned long)loop_gap_max);
+  loop_gap_max = 0;
   for (int t = 0; t < loom::NUM_TRACKS; t++)  // SPOOL's memory: the loop, or the small buffer
     if (loom::tracks[t].reel && loom::tracks[t].choice[loom::SOURCE] == 1)
       Serial.printf("  SPOOL %c: %u frames held, loop %u\n", 'A' + t,
