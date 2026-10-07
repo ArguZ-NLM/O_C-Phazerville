@@ -118,6 +118,9 @@ FLASHMEM void AppCard::DrawMenu() const {
     gfxPrint(0, 25, "computer (Mac: in");
     gfxPrint(0, 34, "OpenMTP).");
 #ifdef LOOM_ONLY
+    // the version and build number (the boot picture shows only the version)
+    gfxPrint(0, 43, OC::Strings::VERSION);
+    gfxPrint(6 * int(strlen(OC::Strings::VERSION)), 43, OC::Strings::BUILD_TAG);
     gfxPrint(0, 52, "back: Z + R push");
 #else
     gfxPrint(0, 52, "back: app menu");

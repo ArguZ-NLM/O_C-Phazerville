@@ -510,10 +510,11 @@ FLASHMEM void setup() {
       loom::DrawWave();
       loom::DrawTitle();
       {
-        // how much PSRAM there is: Loom's loops, samples, grains and delays
-        // live in it (16 MB: everything on both tracks; 8 MB: 8 s loops)
+        // the version (the build number is on the CARD page); a module
+        // without PSRAM is told here, as Loom's loops, samples, grains and
+        // delays live in it
         char t[24];
-        if (external_psram_size) snprintf(t, sizeof(t), "PSRAM %dMB", external_psram_size);
+        if (external_psram_size) snprintf(t, sizeof(t), "ALPHA 1");
         else snprintf(t, sizeof(t), "NO PSRAM!");
         const int w = 6 * int(strlen(t));
         graphics.clearRect(64 - w / 2 - 3, 54, w + 6, 10);
