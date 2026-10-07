@@ -220,6 +220,9 @@ public:
 
   void Defaults();
   void ApplyAll();
+  // R held on the device page: back to the defaults (a device keeps what
+  // is routing rather than sound: its file, input, the track's pan)
+  virtual void Reset() { Defaults(); ApplyAll(); }
   void Nudge(int p, int dir);
   void NudgeMode(int p, int dir);
   bool Bipolar(int p) const { return mod_bi & (1 << p); }
@@ -597,6 +600,12 @@ public:
   enum { DRYWET, LEVEL, PAN, MUTE, B_LOW, B_MID, B_HIGH, BANDZ };
   LoomFade* out_fade = nullptr;  // source (dry) against the chain (wet), before the band stage
   explicit MixDevice(int t) : Device(MIX_DEF), track(t) {}
+  void Reset() override {
+    const int16_t pan = val[PAN];
+    Defaults();
+    val[PAN] = cur[PAN] = pan;
+    ApplyAll();
+  }
   AudioStream* in() override { return &bandz; }
   AudioStream* out() override { return &bandz; }
   void Apply(int p) override;
@@ -830,6 +839,12 @@ public:
   // inputs 0-1: the jacks; 2-3: track A's output (track B's INPUT only)
   enum Source { STEREO, IN1, IN2, OFF, OUT_A };
   InputDevice() : Device(INPUT_DEF), AudioStream(4, queue) {}
+  void Reset() override {
+    const int16_t src = val[0];
+    Defaults();
+    val[0] = cur[0] = src;
+    ApplyAll();
+  }
   bool chained = false;  // track B: may take OUT A
   int Step(int p, int v, int dir) const override {
     const int r = v + dir;
@@ -1076,6 +1091,12 @@ public:
   enum { IN, SPEED, START, LEN, DUB, MON, LEVEL, VIEW };
   static float MaxSecs() { return BigSecs(); }
   explicit ReelDevice(InputDevice* i) : Device(SPOOL_DEF), input(i) {}
+  void Reset() override {
+    const int16_t in = val[IN];
+    Defaults();
+    val[IN] = cur[IN] = in;
+    ApplyAll();
+  }
   int Step(int p, int v, int dir) const override {  // OUT A only on track B
     return p == IN && input ? input->Step(0, v, dir) : v + dir;
   }
@@ -1439,7 +1460,7 @@ PROGMEM static const DeviceDef PLAYER_DEF = {
     {"FILE", 0, MAX_FILES - 1, 0, UNI, 0, 2, 0, {}, {"STRM", "MEM"}},
     {"LOOP", 0, 1, 1, LIST, 2, 0, 0, {"OFF", "ON"}},
     {"LEVEL", 0, 100, 100, UNI},
-    {"SPEED", 0, 200, 100, UNI, 0, 2, 0, {}, {"FWD", "REV"}},  // mode: direction
+    {"SPEED", 0, 200, 100, UNI, 0, 2, 1, {}, {"REV", "FWD"}},  // mode: direction, REV left
     {"START", 0, 10000, 0, UNI, 0, 10, 0},      // mode: zoom, all .. 0.3 ms across
     {"END", 0, 10000, 10000, UNI, 0, 10, 0},
     {"FADE", 0, 100, 20, UNI, 0, 2, 0, {}, {"CROSS", "INOUT"}},  // the loop's seam
@@ -1451,6 +1472,7 @@ PROGMEM static const DeviceDef PLAYER_DEF = {
 class PlayerDevice : public Device {
 public:
   enum { FILE_, LOOP, LEVEL, SPEED, START, END, XFADE, SNAP };
+  enum { DIR_REV, DIR_FWD };  // SPEED's modes
   static float MaxSecs() { return BigSecs(); }
   static constexpr size_t MIN_BUF = 11025;  // 0.25 s: the buffer before a file
   // FILE mode MEM on a long file: the section in memory, in file frames
@@ -1542,6 +1564,20 @@ public:
     SetFile(a.Folder(), a.FileName());
   }
   const char* FileName() const { return nfiles ? names[std::min<int>(cur[FILE_], nfiles - 1)] : ""; }
+  // the settings that go with a file: <name>.loom next to the WAV, read
+  // when the file is picked (not when the saved settings bring it back),
+  // written when they changed (leaving the page, another file, a save)
+  void WriteMeta();
+  void Reset() override {
+    const int16_t f = val[FILE_];
+    const uint8_t m = mode[FILE_];
+    Defaults();
+    val[FILE_] = cur[FILE_] = f;
+    mode[FILE_] = m;
+    ex_valid = false;
+    sec_off = sec_len = 0;
+    ApplyAll();
+  }
   // the browser: folders and WAVs as a text list (R push on FILE)
   bool browsing = false;
   void OpenBrowser();
@@ -1576,6 +1612,20 @@ private:
   size_t ReadFrames(int16_t* l, int16_t* r, size_t n);  // from lf, converted
   int PeakAt(size_t a, size_t b) const;                 // picture: loudest in a..b
   int nfiles = 0, loaded = -1, loaded_mode = -1;
+  struct Meta {
+    int16_t val[MAX_PARAMS];
+    uint8_t mode[MAX_PARAMS];
+    uint32_t ex[2], sec_off, sec_len;
+    bool operator==(const Meta& o) const { return !memcmp(this, &o, sizeof(Meta)); }
+  };
+  char meta_path[200] = "";  // the .loom of the file loaded
+  Meta meta_was = {};        // what it holds (or held when read)
+  bool meta_known = false;   // meta_was is what is on the card
+  void TakeMeta(Meta& m) const;
+  bool ReadMeta();
+  // the file is in: what it has now is the start (only changes get written,
+  // so stepping through files leaves nothing behind)
+  void MetaBaseline() { if (!meta_known) { TakeMeta(meta_was); meta_known = true; } }
   // START / END settings from the exact edges, once the length is known
   void EdgesToSettings() {
     const size_t n = Frames();
@@ -1635,6 +1685,71 @@ FLASHMEM void PlayerDevice::SetFile(const char* folder, const char* name) {
     if (!strcmp(names[i], name)) { val[FILE_] = cur[FILE_] = i; break; }
   loaded = -1;
   if (active) Load(cur[FILE_]);
+}
+
+FLASHMEM void PlayerDevice::TakeMeta(Meta& m) const {
+  memset(&m, 0, sizeof(m));
+  for (int p = 0; p < num_params(); p++) { m.val[p] = val[p]; m.mode[p] = mode[p]; }
+  m.val[FILE_] = 0;  // the file is the one this is next to
+  m.ex[0] = uint32_t(EdgeAt(START));
+  m.ex[1] = uint32_t(EdgeAt(END));
+  m.sec_off = sec_off;
+  m.sec_len = sec_len;
+}
+
+// a text file, one setting per line: NAME value mode; EDGES start end (in
+// frames of what is loaded); SECTION offset length (MEM on a long file)
+FLASHMEM bool PlayerDevice::ReadMeta() {
+  if (!SDcard_Ready) return false;
+  File f = SD.open(meta_path, FILE_READ);
+  if (!f) return false;
+  char line[48];
+  bool edges = false;
+  while (f.available()) {
+    int n = 0;
+    while (f.available() && n < int(sizeof(line)) - 1) {
+      const char c = f.read();
+      if (c == '\n') break;
+      if (c != '\r') line[n++] = c;
+    }
+    line[n] = 0;
+    char name[8];
+    long a = 0, b = 0;
+    if (sscanf(line, "%7s %ld %ld", name, &a, &b) != 3) continue;
+    if (!strcmp(name, "EDGES")) {
+      ex_pos[0] = uint32_t(std::max(0L, a)); ex_pos[1] = uint32_t(std::max(0L, b));
+      edges = true;
+    } else if (!strcmp(name, "SECTION")) {
+      sec_off = uint32_t(std::max(0L, a)); sec_len = uint32_t(std::max(0L, b));
+    } else {
+      for (int p = 0; p < num_params(); p++) {
+        if (strcmp(name, param(p).name)) continue;
+        const ParamDef& pd = param(p);
+        if (p != FILE_) val[p] = int16_t(constrain(a, long(pd.min), long(pd.max)));
+        mode[p] = pd.nmodes ? uint8_t(constrain(b, 0L, long(pd.nmodes - 1))) : 0;
+      }
+    }
+  }
+  f.close();
+  ex_valid = edges;  // EdgesToSettings() turns them into START / END
+  return true;
+}
+
+FLASHMEM void PlayerDevice::WriteMeta() {
+  // only a file that is all there (its edges mean something)
+  if (!active || !meta_path[0] || loading || analysing || !Frames() || !SDcard_Ready) return;
+  Meta m;
+  TakeMeta(m);
+  if (!meta_known || m == meta_was) return;  // nothing changed since it came in
+  SD.remove(meta_path);
+  File f = SD.open(meta_path, FILE_WRITE);
+  if (!f) return;
+  for (int p = 0; p < num_params(); p++) f.printf("%s %d %d\n", param(p).name, m.val[p], m.mode[p]);
+  f.printf("EDGES %lu %lu\n", (unsigned long)m.ex[0], (unsigned long)m.ex[1]);
+  f.printf("SECTION %lu %lu\n", (unsigned long)m.sec_off, (unsigned long)m.sec_len);
+  f.close();
+  meta_was = m;
+  meta_known = true;
 }
 
 // --- the browser: sub-folders first (with a /), then WAVs; ".." goes up
@@ -1754,6 +1869,7 @@ FLASHMEM void PlayerDevice::Deactivate() {
 
 // reads the WAV header, then Idle() fills the buffer
 FLASHMEM void PlayerDevice::Load(int i) {
+  WriteMeta();  // what the last file had, before it goes
   if (loading || streaming || analysing) lf.close();
   loading = streaming = analysing = false;
   stream.Stop();
@@ -1763,11 +1879,26 @@ FLASHMEM void PlayerDevice::Load(int i) {
   loaded_mode = mode[FILE_];
   too_long = clipped = indexing = false;
   wv_any = false;  // the cached picture belongs to what was there
+  const bool restoring = keep_exact;  // the saved settings bring their own
   if (!keep_exact) ex_valid = false;  // a new file: from the settings
   keep_exact = false;
   if (i >= nfiles || !fx.ready()) return;
   char path[192];
   snprintf(path, sizeof(path), "%s/%s", strcmp(dir, "/") ? dir : "", names[i]);
+  char mp[200];
+  snprintf(mp, sizeof(mp), "%s", path);
+  if (char* dot = strrchr(mp, '.')) *dot = 0;
+  strlcat(mp, ".loom", sizeof(mp));
+  if (strcmp(mp, meta_path)) {  // another file (not just STRM / MEM)
+    snprintf(meta_path, sizeof(meta_path), "%s", mp);
+    meta_known = false;
+    if (!restoring && ReadMeta()) {
+      applied_file = cur[FILE_];  // not another file for Apply(FILE_): the
+      applied_mode = mode[FILE_]; // section and edges just read stay
+      ApplyAll();
+      loaded_mode = mode[FILE_];
+    }
+  }
   lf = SD.open(path, FILE_READ);
   if (!lf) return;
   uint8_t h[12];
@@ -1832,6 +1963,7 @@ FLASHMEM void PlayerDevice::Load(int i) {
       stream.Open(frames);
       EdgesToSettings();
       ApplyAll();
+      MetaBaseline();
       return;
     } else {
       lf.seek(lf.position() + sz + (sz & 1));
@@ -1886,6 +2018,7 @@ FLASHMEM void PlayerDevice::Idle() {
       fx.FinishLoad(got);
       EdgesToSettings();
       ApplyAll();
+      MetaBaseline();
     }
     return;
   }
@@ -1903,6 +2036,7 @@ FLASHMEM void PlayerDevice::Idle() {
       stream.Open(frames);
       EdgesToSettings();
       ApplyAll();
+      MetaBaseline();
     }
     return;
   }
@@ -1997,9 +2131,9 @@ FLASHMEM void PlayerDevice::Apply(int p) {
       applied_file = cur[FILE_];
       applied_mode = mode[FILE_];
     } break;
-    case SPEED: {  // mode REV plays backwards (streamed files: forward only)
+    case SPEED: {  // mode REV (0) plays backwards (streamed files: forward only)
       const float sp = cur[SPEED] * 0.01f * rate;
-      fx.SetSpeed(mode[SPEED] ? -sp : sp);
+      fx.SetSpeed(mode[SPEED] == DIR_REV ? -sp : sp);
       stream.SetSpeed(sp);
     } break;
     case LOOP: fx.SetLoop(cur[LOOP]); stream.SetLoop(cur[LOOP]); break;

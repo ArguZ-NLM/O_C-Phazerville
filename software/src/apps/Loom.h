@@ -350,6 +350,9 @@ private:
   void SwitchChoices(int t);
   void ToggleBypass(int s);
   loom::Device* Twin(loom::Device* d) const;
+  void ResetFocused();
+  uint32_t reset_at = 0;  // when a device went back to its defaults (DEFAULTS shown)
+  loom::PlayerDevice* meta_page = nullptr;  // the PLAYER whose page is open
   void Mirror(loom::Device* d, int p) const;
   void Repatch(int t);
   void ApplyBypass(int t);
@@ -616,6 +619,19 @@ FLASHMEM loom::Device* AppLoom::Twin(loom::Device* d) const {
   if (!linked || !d) return nullptr;
   Device* tw = FocusOn(1 - track);
   return (tw && tw != d && &tw->def == &d->def) ? tw : nullptr;  // shared: no twin
+}
+
+// R held on a device page: that device (and its twin, linked) back to its
+// defaults
+FLASHMEM void AppLoom::ResetFocused() {
+  using namespace loom;
+  Device* d = Focused();
+  if (!d) return;
+  Device* tw = Twin(d);
+  d->Reset();
+  if (tw) tw->Reset();
+  editing = false;
+  reset_at = millis() | 1;
 }
 
 // copy one parameter to the twin; input source and pan stay per track
@@ -1297,6 +1313,11 @@ FLASHMEM void AppLoom::MainLoop() {
   if (active && mod_timer >= 1000) { // follow the sources about once per ms
     mod_timer = 0;
     ModulateAll();
+    // leaving a PLAYER's page: its file's settings to the card (if changed)
+    loom::PlayerDevice* on = view == DEVICE && !focus_mod && col == loom::SOURCE
+        && loom::tracks[track].choice[loom::SOURCE] == 2 ? loom::tracks[track].player : nullptr;
+    if (meta_page && on != meta_page) meta_page->WriteMeta();
+    meta_page = on;
     for (int t = 0; t < loom::NUM_TRACKS; t++) {
       SwitchChoices(t);
       ApplyBypass(t);  // follows SPRAY LEVEL
@@ -1392,7 +1413,12 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
     if (event.type == UI::EVENT_BUTTON_PRESS || event.type == UI::EVENT_BUTTON_LONG_RELEASE) {
       r_held = false;
       if (r_moved) { r_moved = false; return; }  // it was a move, not a push
-      if (event.type == UI::EVENT_BUTTON_LONG_RELEASE) return;
+      if (event.type == UI::EVENT_BUTTON_LONG_RELEASE) {
+        // held on a device page: the device back to its defaults
+        const PlayerDevice* pl = tracks[track].player;
+        if (view == DEVICE && !(pl && pl->browsing && Focused() == pl)) ResetFocused();
+        return;
+      }
     }
   }
   if (event.control == OC::CONTROL_BUTTON_L) {
@@ -2210,7 +2236,7 @@ namespace loom {
   // 5: OUTPUT page 2 LOW MID HIGH OTT (was BANDZ LOW MID HIGH)
   // 6: ECHO's reverb LEVEL PRE ROOM WALL (was LEVEL SIZE DECAY TONE)
   // 7: STRETCH POS turned round (0 = oldest, 100 = now, like SPRAY)
-  constexpr uint8_t SAVE_VERSION = 7;
+  constexpr uint8_t SAVE_VERSION = 8;
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -2273,6 +2299,8 @@ namespace loom {
     // before v6 the reverb's 6th was SIZE (now PRE: left at its default);
     // DECAY's value becomes ROOM, TONE's WALL (same places)
     const bool skip_size = use && !memcmp(tag, "ECO", 4) && load_version < 6;
+    // before v8 PLAYER's direction was FWD REV (now REV FWD)
+    const bool flip_dir = use && !memcmp(tag, "PLY", 4) && load_version < 8;
     for (int p = 0; p < n; p++) {
       int16_t v; uint8_t md; int8_t amt; uint16_t src; uint8_t bus;
       if (f.read(&v, 2) != 2 || f.read(&md, 1) != 1 || f.read(&amt, 1) != 1
@@ -2301,6 +2329,7 @@ namespace loom {
         d->mod_amt[p] = -d->mod_amt[p];
         d->mod_amt2[p] = -d->mod_amt2[p];
       }
+      if (flip_dir && p == PlayerDevice::SPEED) d->mode[p] = 1 - d->mode[p];
       p = q;
     }
     uint8_t bi, bi2 = 0, trig[2];
@@ -2349,6 +2378,7 @@ FLASHMEM void AppLoom::ForEachDevice(F f) const {
 FLASHMEM void AppLoom::SaveFile() const {
   using namespace loom;
   auto& fs = PhzConfig::myfs;
+  for (auto& tr : tracks) if (tr.player) tr.player->WriteMeta();  // each file's own (SD card)
   File f = fs.open(SAVE_TMP, FILE_WRITE_BEGIN);
   if (!f) return;
   f.write("SCU", 3);  // the file's mark since it was Sculpt; kept so all files load
@@ -2578,6 +2608,13 @@ FLASHMEM void AppLoom::View() const {
     gfxFrame(bx, 21, bw, 19);
     gfxFrame(bx + 2, 23, bw - 4, 15);
     gfxPrint(bx + 7, 27, txt);
+  }
+  // a device back to its defaults (R held)
+  if (reset_at && millis() - reset_at < 1200) {
+    graphics.clearRect(31, 22, 66, 15);
+    gfxFrame(31, 22, 66, 15);
+    gfxPrint(40, 26, PSTR("DEFAULTS"));
+    gfxInvert(32, 23, 64, 13);
   }
   // saving: a bar fills while Y is held, then SAVED
   const uint32_t since = millis() - saved_at;
