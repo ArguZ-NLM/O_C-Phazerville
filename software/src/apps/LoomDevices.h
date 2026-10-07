@@ -3020,32 +3020,27 @@ private:
   void Poll();
   // the bit steps for the picture (levels per side, 0: none): fewer all
   // the way up, and coarser than the sound's so they show at this size
-  // REDUX alone: how much of the line's pixels stay (1 at 0 .. 5 % at 100)
+  // REDUX and BOTH: how much of the line's pixels stay (1 at 0 .. 5 % at
+  // 100)
   float RedPixels() const {
     const float crs = cur[CRUSH] * 0.01f;
-    if (crs <= 0.0f || mode[CRUSH] != AudioEffectDirt::CRUSH_REDUX) return 1.0f;
+    if (crs <= 0.0f || mode[CRUSH] == AudioEffectDirt::CRUSH_BIT) return 1.0f;
     return 1.0f - 0.95f * crs;
   }
-  // a line through ys (one height per column from x0), drawn pixel by
-  // pixel - every pixel of it, steep parts too - keeping only `keep` of
-  // them, spread evenly along it
+  // a line through ys (one height per column from x0), every pixel of it
+  // (steep parts too), keeping `keep` of them: each place on the screen has
+  // its own fixed threshold from an even 2D pattern, so turning CRUSH only
+  // takes pixels away (or brings the same ones back), none move
   static void ThinLine(int x0, const int* ys, int n, float keep) {
-    int k = 0;
     for (int i = 0; i < n; i++) {
       const int a = i ? ys[i - 1] : ys[0], b = ys[i];
       const int step = b > a ? 1 : -1;
       for (int yv = (i && a != b) ? a + step : b;; yv += step) {
-        if (int((k + 1) * keep) > int(k * keep)) gfxPixel(x0 + i, yv);
-        k++;
+        const float t = (x0 + i) * 0.7548777f + yv * 0.5698403f;
+        if (t - floorf(t) < keep) gfxPixel(x0 + i, yv);
         if (yv == b) break;
       }
     }
-  }
-  // REDUX's hold for the picture, in pixels (1: none), 1 .. 8 along CRUSH
-  int PictureHold() const {
-    const float crs = cur[CRUSH] * 0.01f;
-    if (crs <= 0.0f || mode[CRUSH] == AudioEffectDirt::CRUSH_BIT) return 1;
-    return 1 + int(crs * 7.0f + 0.5f);  // from early on, unlike the sound's (squared) hold
   }
   float PictureLevels() const {
     const float crs = cur[CRUSH] * 0.01f;
@@ -3112,10 +3107,9 @@ FLASHMEM void DirtDevice::DrawViz(int x, int y, int w, int h) {
   if (sect == 0) gfxFrame(x, y, bs, h);
   const float drv = cur[DRIVE] * 0.01f, fld = cur[FOLD] * 0.01f;
   const float levels = PictureLevels();
-  // REDUX alone: the whole line, losing pixels as CRUSH goes up; BOTH:
-  // the line stays flat for each held sample (stairs) with the bit steps
+  // BIT: the steps; REDUX: the whole line losing pixels as CRUSH goes up;
+  // BOTH: the steps losing pixels
   const float keep = RedPixels();
-  const int hold = keep < 1.0f ? 1 : PictureHold();
   const float boost = 1.0f + 6.0f * fld * std::min(1.0f, fld * 4.0f);
   int ys[128];
   const int nc = std::min(128, bs - 2);
@@ -3126,8 +3120,7 @@ FLASHMEM void DirtDevice::DrawViz(int x, int y, int w, int h) {
     // the dotted input (as FOLD boosts it) only while nothing is crushed:
     // then the steps / the thinned line are the picture
     if (cur[CRUSH] <= 0 && abs(gy) < half && (i & 1)) gfxPixel(x + i, cyw - gy);
-    const float held = sinf(2.0f * float(M_PI) * ((i - 1) / hold * hold) / (bs - 3));
-    float yo = AudioEffectDirt::Shape(AudioEffectDirt::Fold(held, fld), drv);
+    float yo = AudioEffectDirt::Shape(AudioEffectDirt::Fold(in, fld), drv);
     if (levels > 0.0f) yo = roundf(constrain(yo, -1.0f, 1.0f) * levels) / levels;
     ys[i - 1] = cyw - int(constrain(yo, -1.0f, 1.0f) * lim);
   }
@@ -3207,12 +3200,11 @@ FLASHMEM void DirtDevice::DrawMini(int x, int y, int w, int h) {
   const float drv = cur[DRIVE] * 0.01f, fld = cur[FOLD] * 0.01f;
   const float levels = PictureLevels();
   const float keep = RedPixels();
-  const int hold = keep < 1.0f ? 1 : std::max(1, PictureHold() / 2);
   const int cy = y + h / 2, lim = h / 2;
   int ys[128];
   const int nc = std::min(128, w);
   for (int i = 0; i < nc; i++) {
-    const float in = sinf(2.0f * float(M_PI) * (i / hold * hold) / (w - 1));
+    const float in = sinf(2.0f * float(M_PI) * i / (w - 1));
     float yo = AudioEffectDirt::Shape(AudioEffectDirt::Fold(in, fld), drv);
     if (levels > 0.0f) yo = roundf(constrain(yo, -1.0f, 1.0f) * levels) / levels;
     ys[i] = cy - int(constrain(yo, -1.0f, 1.0f) * lim);
