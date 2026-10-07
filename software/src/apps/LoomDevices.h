@@ -1296,6 +1296,12 @@ FLASHMEM void ReelDevice::Action(int a) {
       no_mem_at = millis() | 1;
       return;
     }
+    if (st == AudioEffectReel::EMPTY) {  // a new loop: the whole of it
+      val[START] = 0;
+      val[END] = 10000;
+      Refresh(START);
+      Refresh(END);
+    }
     fx.Dub();
   } else if (st == AudioEffectReel::PLAY || st == AudioEffectReel::DUB) {
     fx.Stop();
