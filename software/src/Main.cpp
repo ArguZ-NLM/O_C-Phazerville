@@ -245,9 +245,20 @@ static BufferPrint crash_capture;
 static uint32_t boot_srsr = 0;
 // how far the last run got: kept in RAM2, which a restart doesn't clear;
 // logged to BOOT.LOG on the next start with the reset reason
-DMAMEM static volatile uint32_t trace_magic, trace_stage, trace_ms;
-static uint32_t prev_stage = 0, prev_ms = 0;
-static void Trace(uint32_t stage) { trace_magic = 0xB007CAFE; trace_stage = stage; trace_ms = millis(); }
+// (RAM2 is behind the write-back cache: each mark is flushed out to it, or
+// a restart loses it in the cache and the log always read stage 0)
+struct TraceMark { uint32_t magic, stage, ms, app, app_ms; };
+DMAMEM static volatile TraceMark trace __attribute__((aligned(32)));
+static uint32_t prev_stage = 0, prev_ms = 0, prev_app = 0, prev_app_ms = 0;
+static void Trace(uint32_t stage) {
+  trace.magic = 0xB007CAFE; trace.stage = stage; trace.ms = millis();
+  arm_dcache_flush((void*)&trace, sizeof(trace));
+}
+// for the apps: a mark of their own, kept apart from the main loop's
+extern "C" void XenoTrace(uint32_t stage) {
+  trace.app = stage; trace.app_ms = millis();
+  arm_dcache_flush((void*)&trace, sizeof(trace));
+}
 
 static bool watchdog_armed = false;
 FLASHMEM static void watchdog_arm() {
@@ -278,7 +289,12 @@ FLASHMEM void setup() {
 #if defined(__IMXRT1062__)
   boot_srsr = SRC_SRSR;
   SRC_SRSR = boot_srsr;
-  if (trace_magic == 0xB007CAFE) { prev_stage = trace_stage; prev_ms = trace_ms; }
+  arm_dcache_delete((void*)&trace, sizeof(trace));  // what is really in RAM2
+  if (trace.magic == 0xB007CAFE) {
+    prev_stage = trace.stage; prev_ms = trace.ms;
+    prev_app = trace.app; prev_app_ms = trace.app_ms;
+  }
+  trace.app = 0;
   Trace(1);
 #endif
   Serial.begin(9600);
@@ -426,7 +442,8 @@ FLASHMEM void setup() {
     if (big) PhzConfig::myfs.remove("BOOT.LOG");
     bl = PhzConfig::myfs.open("BOOT.LOG", FILE_WRITE);
     if (bl) {
-      bl.printf("boot: SRSR %08lx; last run reached stage %lu at %lu ms\n", boot_srsr, prev_stage, prev_ms);
+      bl.printf("boot: SRSR %08lx; last run reached stage %lu at %lu ms, app mark %lu at %lu ms\n",
+                boot_srsr, prev_stage, prev_ms, prev_app, prev_app_ms);
       bl.close();
     }
   }

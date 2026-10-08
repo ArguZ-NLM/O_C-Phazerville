@@ -1765,6 +1765,7 @@ PROGMEM static const DeviceDef PLAYER_DEF = {
 // through, into the output past both tracks' effects. One for both tracks;
 // its memory only while it plays. A new file waits for the last one to fade
 // out (20 ms; cut off, it clicked).
+extern "C" void XenoTrace(uint32_t stage);  // (Main.cpp) a mark that survives a restart
 class LoomPreview {
 public:
   AudioPlayStream stream;
@@ -1792,6 +1793,7 @@ private:
 };
 
 FLASHMEM bool LoomPreview::Start(const char* folder, const char* name) {
+  XenoTrace(101);
   snprintf(next_dir, sizeof(next_dir), "%s", folder);
   snprintf(next_name, sizeof(next_name), "%s", name);
   want = true;
@@ -1824,7 +1826,7 @@ FLASHMEM void LoomPreview::Close() {
 // for it: the stream is silent by then and doesn't touch its buffers, and
 // holding up the audio while that much memory was freed clicked loudly.)
 FLASHMEM void LoomPreview::Idle(bool keep) {
-  if (on && stream.Playing()) { Fill(4); return; }
+  if (on && stream.Playing()) { XenoTrace(110); Fill(4); XenoTrace(111); return; }
   if (!stream.Silent()) return;  // fading out
   if (on) Close();
   if (want) {
@@ -1838,7 +1840,9 @@ FLASHMEM void LoomPreview::Idle(bool keep) {
 FLASHMEM bool LoomPreview::Begin() {
   char path[192];
   snprintf(path, sizeof(path), "%s/%s", strcmp(next_dir, "/") ? next_dir : "", next_name);
+  XenoTrace(102);
   f = SD.open(path, FILE_READ);
+  XenoTrace(103);
   if (!f) return false;
   uint8_t h[12];
   if (f.read(h, 12) != 12 || memcmp(h, "RIFF", 4) || memcmp(h + 8, "WAVE", 4)) { f.close(); return false; }
@@ -1873,7 +1877,9 @@ FLASHMEM bool LoomPreview::Begin() {
       f.seek(f.position() + sz + (sz & 1));
     }
   }
+  XenoTrace(104);
   if (!frames || (!stream.ready() && !stream.Acquire(2.0f, 0.25f))) { f.close(); return false; }
+  XenoTrace(105);
   stream.SetLoop(false);
   stream.SetCrossfade(false);
   stream.SetLevel(level);
@@ -1881,6 +1887,7 @@ FLASHMEM bool LoomPreview::Begin() {
   stream.Open(frames);
   stream.SetWindow(0, frames);
   Fill(8);  // a start buffered before it plays
+  XenoTrace(106);
   stream.Play();
   snprintf(dir_, sizeof(dir_), "%s", next_dir);
   snprintf(name_, sizeof(name_), "%s", next_name);

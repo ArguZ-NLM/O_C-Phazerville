@@ -139,10 +139,12 @@ FLASHMEM void AppCard::HandleAppEvent(OC::AppEvent event) {
 
 FLASHMEM void AppCard::Loop() {
   if (!serving) return;
+  loom::XenoTrace(130);
   MTP.loop();
+  loom::XenoTrace(131);
 #ifdef CARD_LISTEN
   if (autoplay && auto_due && millis() - auto_at >= 100) { auto_due = false; Listen(sel); }
-  if (preview) preview->Idle(true);
+  if (preview) { loom::XenoTrace(132); preview->Idle(true); loom::XenoTrace(133); }
 #endif
   if (del_held && millis() - del_since >= 2000) {
     del_held = false;
@@ -272,8 +274,10 @@ FLASHMEM void AppCard::HandleButtonEvent(const UI::Event& event) {
       auto_due = false;
       if (autoplay) Listen(sel); else if (preview) preview->Stop();
     } else if (event.type == UI::EVENT_BUTTON_PRESS && preview && sel < count && IsWav(sel)) {
+      loom::XenoTrace(120);
       if (preview->Is(dir, names[sel])) preview->Stop();
       else preview->Start(dir, names[sel]);
+      loom::XenoTrace(121);
     }
     return;
   }
