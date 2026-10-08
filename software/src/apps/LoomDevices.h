@@ -1322,11 +1322,14 @@ FLASHMEM void ReelDevice::Action(int a) {
       no_mem_at = millis() | 1;
       return;
     }
-    if (st == AudioEffectReel::EMPTY) {  // a new loop: the whole of it
-      val[START] = 0;
-      val[END] = 10000;
-      Refresh(START);
-      Refresh(END);
+    if (st == AudioEffectReel::EMPTY) {  // a new loop: every setting from
+      // its default (values and L modes), except IN, what is recorded
+      for (int p = 0; p < num_params(); p++) {
+        if (p == IN) continue;
+        val[p] = param(p).def;
+        mode[p] = param(p).defmode;
+        Refresh(p);
+      }
     }
     fx.Dub();
   } else if (st == AudioEffectReel::PLAY || st == AudioEffectReel::DUB) {
