@@ -163,10 +163,12 @@ namespace loom {
     LoomCord mix_out[NUM_TRACKS][2];
     // every track's output into both tracks' INPUT (OUT L / OUT R)
     AudioConnection chain_ab[2];  // track A's output into track B's INPUT (OUT A)
+    AudioConnection preview_out[2];  // the file list's quick listen into the mixer
   };
 
   Track tracks[NUM_TRACKS];
   LoomMixer* mixer = nullptr;
+  LoomPreview* preview = nullptr;  // PLAYER's file list: B listens
   ClockDevice* tempo_clock = nullptr;
   Patch* patch = nullptr;
   // MOD E-H: shared by both tracks (in the MOD view's second page)
@@ -474,6 +476,8 @@ FLASHMEM void AppLoom::Start() {
     tracks[t].mix = new MixDevice(t);
     tracks[t].mix->out_fade = tracks[t].out_fade;
   }
+  preview = new LoomPreview;
+  for (auto& tr : tracks) if (tr.player) tr.player->preview = preview;
   mixer = new LoomMixer;
   for (int t = 0; t < NUM_TRACKS; t++) {
     Track& tr = tracks[t];
@@ -1138,6 +1142,7 @@ FLASHMEM void AppLoom::Resume() {
   for (int t = 0; t < NUM_TRACKS; t++) ConnectTrack(t);
   AudioNoInterrupts();
   for (int c = 0; c < 2; c++) patch->chain_ab[c].connect(*tracks[0].mix->out(), c, *tracks[1].input, 2 + c);
+  for (int c = 0; c < 2; c++) patch->preview_out[c].connect(preview->stream, c, *mixer, 4 + c);
   AudioInterrupts();
   OC::AudioIO::ClaimOutput(*mixer);
   OC::AudioIO::ResyncInput();  // L and R in the same order on every start
@@ -1152,8 +1157,10 @@ FLASHMEM void AppLoom::Suspend() {
   using namespace loom;
   if (!active) return;
   OC::AudioIO::ReleaseOutput();
+  preview->Stop();
   AudioNoInterrupts();
   for (auto& c : patch->chain_ab) c.disconnect();
+  for (auto& c : patch->preview_out) c.disconnect();
   AudioInterrupts();
   for (int t = 0; t < NUM_TRACKS; t++) DisconnectTrack(t);
   active = false;
@@ -1327,6 +1334,11 @@ FLASHMEM void AppLoom::MainLoop() {
       for (int s = SOURCE + 1; s < SLOT_COUNT; s++)  // devices with main-loop work (STRETCH)
         if (Device* d = tr.current(s)) d->Idle();
     }
+    // the quick listen: fed while a file list is open, stopped once none is
+    bool listing = false;
+    for (auto& tr : tracks) listing |= tr.player && tr.choice[SOURCE] == 2 && tr.player->browsing;
+    if (!listing || view != DEVICE) preview->Stop();
+    preview->Idle();
     // the output is muted while a PLAYER reads a file in (the card reading
     // made a high whine on the output)
     bool busy = false;

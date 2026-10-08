@@ -469,7 +469,7 @@ FLASHMEM static void DrawHMeter(int x, int y, int w, int h, float lvl) {
 /////////////////////////////////////////////////////////////////
 class LoomMixer : public AudioStream {
 public:
-  LoomMixer() : AudioStream(4, queue) {}
+  LoomMixer() : AudioStream(6, queue) {}  // 4, 5: the file list's quick listen
   volatile float gain[2][2] = {{0.8f, 0.8f}, {0.8f, 0.8f}}; // [track][L/R]
   volatile float level[2] = {}; // last block's peak per track, for FOLLOW
   // STEREO link: a track's two channels summed into one side of the output
@@ -489,12 +489,12 @@ public:
     AudioInterrupts();
   }
 private:
-  audio_block_t* queue[4];
+  audio_block_t* queue[6];
 };
 
 FASTRUN void LoomMixer::update() {
-  audio_block_t* in[4];
-  for (int i = 0; i < 4; i++) in[i] = receiveReadOnly(i);
+  audio_block_t* in[6];
+  for (int i = 0; i < 6; i++) in[i] = receiveReadOnly(i);
   audio_block_t* out[2] = {allocate(), allocate()};
   if (out[0] && out[1]) {
     int32_t acc[2][AUDIO_BLOCK_SAMPLES] = {};
@@ -520,6 +520,10 @@ FASTRUN void LoomMixer::update() {
     }
     level[0] = blk[0];
     level[1] = blk[1];
+    // the quick listen: as it is, past the tracks (not in their levels)
+    for (int c = 0; c < 2; c++)
+      if (const audio_block_t* b = in[4 + c])
+        for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) acc[c][n] += (b->data[n] * 26214) >> 15;
     if (mute || mute_g < 1.0f) {  // fade the sum out / back in
       const float to = mute ? 0.0f : 1.0f, step = 1.0f / (0.015f * AUDIO_SAMPLE_RATE_EXACT);
       for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
@@ -1616,6 +1620,21 @@ constexpr char LOOP_DIR[] = "/LOOM";
 constexpr char REC_DIR[] = "/LOOM/RECORDINGS";  // SPOOL's saved loops
 constexpr int MAX_FILES = 48, NAME_LEN = 80;
 constexpr size_t IO_CHUNK = 2048;  // sample frames per step
+// one sample of any size / float as 16 bit
+FLASHMEM static int16_t WavSample(const uint8_t* p, int bytes, bool is_float) {
+  switch (bytes) {
+    case 1: return int16_t((p[0] - 128) << 8);  // 8-bit is unsigned
+    case 2: return int16_t(p[0] | p[1] << 8);
+    case 3: return int16_t(p[1] | p[2] << 8);
+    default:
+      if (is_float) {
+        float f;
+        memcpy(&f, p, 4);
+        return int16_t(constrain(f, -1.0f, 1.0f) * 32767.0f);
+      }
+      return int16_t(p[2] | p[3] << 8);
+  }
+}
 
 // a file name for the screen: without .wav, and when longer than `fit`
 // characters cut in the middle ("first..last"), so both ends stay readable
@@ -1709,6 +1728,129 @@ PROGMEM static const DeviceDef PLAYER_DEF = {
   },
   {"", ""},
 };
+
+// The file list's quick listen (B): a file straight from the card, once
+// through, into the output past both tracks' effects. One for both tracks;
+// its memory only while it plays.
+class LoomPreview {
+public:
+  AudioPlayStream stream;
+  bool Start(const char* folder, const char* name);
+  void Stop();
+  void Idle();
+  bool Playing() const { return on; }
+  bool Is(const char* folder, const char* name) const {
+    return on && !strcmp(dir_, folder) && !strcmp(name_, name);
+  }
+private:
+  File f;
+  bool on = false, is_float = false;
+  int chans = 0, bytes = 0;
+  size_t frames = 0, data_off = 0;
+  char dir_[96] = "", name_[NAME_LEN] = "";
+  size_t Fill(int chunks);
+  size_t ReadFrames(int16_t* l, int16_t* r, size_t n);
+};
+
+FLASHMEM bool LoomPreview::Start(const char* folder, const char* name) {
+  Stop();
+  char path[192];
+  snprintf(path, sizeof(path), "%s/%s", strcmp(folder, "/") ? folder : "", name);
+  f = SD.open(path, FILE_READ);
+  if (!f) return false;
+  uint8_t h[12];
+  if (f.read(h, 12) != 12 || memcmp(h, "RIFF", 4) || memcmp(h + 8, "WAVE", 4)) { f.close(); return false; }
+  int bits = 0;
+  uint32_t srate = 44100;
+  frames = 0;
+  while (f.available()) {  // walk the chunks to fmt and data (as PLAYER)
+    uint8_t c[8];
+    if (f.read(c, 8) != 8) break;
+    const uint32_t sz = c[4] | c[5] << 8 | c[6] << 16 | uint32_t(c[7]) << 24;
+    if (!memcmp(c, "fmt ", 4)) {
+      uint8_t fm[40] = {};
+      const uint32_t take = std::min<uint32_t>(sz, 40);
+      f.read(fm, take);
+      if (sz > take) f.seek(f.position() + sz - take);
+      chans = fm[2];
+      srate = fm[4] | fm[5] << 8 | fm[6] << 16 | uint32_t(fm[7]) << 24;
+      bits = fm[14];
+      int tag = fm[0] | fm[1] << 8;
+      if (tag == 0xFFFE && take >= 26) tag = fm[24] | fm[25] << 8;
+      is_float = tag == 3;
+      if (tag != 1 && tag != 3) bits = 0;
+    } else if (!memcmp(c, "data", 4)) {
+      const bool ok_bits = is_float ? bits == 32 : (bits == 8 || bits == 16 || bits == 24 || bits == 32);
+      if (ok_bits && chans >= 1) {
+        bytes = bits / 8;
+        frames = sz / (bytes * chans);
+        data_off = f.position();
+      }
+      break;
+    } else {
+      f.seek(f.position() + sz + (sz & 1));
+    }
+  }
+  if (!frames || (!stream.ready() && !stream.Acquire(2.0f, 0.25f))) { f.close(); return false; }
+  stream.SetLoop(false);
+  stream.SetCrossfade(false);
+  stream.SetLevel(1.0f);
+  stream.SetSpeed(srate / AUDIO_SAMPLE_RATE_EXACT);  // the module runs at 48 kHz
+  stream.Open(frames);
+  stream.SetWindow(0, frames);
+  Fill(8);  // a start buffered before it plays
+  stream.Play();
+  snprintf(dir_, sizeof(dir_), "%s", folder);
+  snprintf(name_, sizeof(name_), "%s", name);
+  on = true;
+  return true;
+}
+
+FLASHMEM void LoomPreview::Stop() {
+  if (f) f.close();
+  stream.Stop();
+  if (on) {
+    AudioNoInterrupts();  // (the stop's short fade is not worth the memory)
+    stream.Release();
+    AudioInterrupts();
+  }
+  on = false;
+}
+
+// main loop: the buffers topped up; done once it has played through
+FLASHMEM void LoomPreview::Idle() {
+  if (!on) return;
+  if (!stream.Playing()) { Stop(); return; }
+  Fill(4);
+}
+
+FLASHMEM size_t LoomPreview::Fill(int chunks) {
+  size_t all = 0;
+  for (int k = 0; k < chunks; k++) {
+    int16_t *l, *r;
+    size_t at, count;
+    if (!stream.Next(l, r, at, count, IO_CHUNK)) break;
+    f.seek(data_off + at * size_t(bytes) * chans);
+    const size_t rd = ReadFrames(l, r, count);
+    stream.Filled(rd);
+    all += rd;
+    if (rd < count) break;
+  }
+  return all;
+}
+
+FLASHMEM size_t LoomPreview::ReadFrames(int16_t* l, int16_t* r, size_t n) {
+  DMAMEM static uint8_t raw[IO_CHUNK * 8];  // (RAM2: RAM1 is short)
+  const size_t frame = size_t(bytes) * chans;
+  const size_t k = std::min(n, sizeof(raw) / frame);
+  const size_t rd = f.read(raw, k * frame) / frame;
+  for (size_t i = 0; i < rd; i++) {
+    const uint8_t* fp = raw + i * frame;
+    l[i] = WavSample(fp, bytes, is_float);
+    r[i] = WavSample(fp + (chans > 1 ? bytes : 0), bytes, is_float);
+  }
+  return rd;
+}
 
 class PlayerDevice : public Device {
 public:
@@ -1832,7 +1974,7 @@ public:
   void BrowseBack();
   void BrowsePlay();
   bool BrowsedIsCurrent() const;
-  bool audition = false;  // B in the list: play the file once it is ready
+  LoomPreview* preview = nullptr;  // B in the list (the app's, shared)
   void DrawBrowser(int x, int y, int w, int h) const;
 
 private:
@@ -2161,7 +2303,11 @@ FLASHMEM void PlayerDevice::OpenBrowser() {
 }
 
 FLASHMEM void PlayerDevice::BrowseBack() {
-  if (!strcmp(bdir, "/")) { browsing = false; return; }  // at the top: close
+  if (!strcmp(bdir, "/")) {  // at the top: close
+    browsing = false;
+    if (preview) preview->Stop();
+    return;
+  }
   char* slash = strrchr(bdir, '/');
   if (slash == bdir) bdir[1] = 0; else if (slash) *slash = 0;
   List();
@@ -2177,7 +2323,8 @@ FLASHMEM void PlayerDevice::BrowseEnter() {
     List();
     return;
   }
-  // a WAV: play from this folder (already there after B: keep it)
+  // a WAV: play from this folder (the quick listen ends)
+  if (preview) preview->Stop();
   if (!BrowsedIsCurrent()) SetFile(bdir, bn[bsel]);
   browsing = false;
 }
@@ -2187,21 +2334,13 @@ FLASHMEM bool PlayerDevice::BrowsedIsCurrent() const {
          !strcmp(names[std::min<int>(cur[FILE_], nfiles - 1)], bn[bsel]);
 }
 
-// B in the list: the file under the cursor plays straight away (it becomes
-// PLAYER's file); B again on it stops it
+// B in the list: a quick listen to the file under the cursor, straight
+// from the card and past the effects, once through (PLAYER's file stays);
+// B again stops it
 FLASHMEM void PlayerDevice::BrowsePlay() {
-  if (bsel >= bcount || bfolder[bsel]) return;
-  if (BrowsedIsCurrent() && loaded == cur[FILE_] && !loading && !analysing) {
-    audition = false;
-    if (Playing()) {
-      if (streaming) stream.Stop(); else fx.Stop();
-    } else {
-      if (streaming) stream.Play(); else fx.Press();
-    }
-    return;
-  }
-  if (!BrowsedIsCurrent()) SetFile(bdir, bn[bsel]);
-  audition = true;
+  if (bsel >= bcount || bfolder[bsel] || !preview) return;
+  if (preview->Is(bdir, bn[bsel])) preview->Stop();
+  else preview->Start(bdir, bn[bsel]);
 }
 
 FLASHMEM void PlayerDevice::DrawBrowser(int x, int y, int w, int h) const {
@@ -2226,9 +2365,8 @@ FLASHMEM void PlayerDevice::DrawBrowser(int x, int y, int w, int h) const {
     }
     const int ry = y + 13 + r * 8;
     gfxPrint(x + 2, ry, t);
-    // the file playing: a small arrow at the right
-    if (!bfolder[i] && nfiles && !strcmp(dir, bdir) && Playing() &&
-        !strcmp(names[std::min<int>(cur[FILE_], nfiles - 1)], bn[i])) {
+    // the quick listen playing: a small arrow at the right
+    if (!bfolder[i] && preview && preview->Is(bdir, bn[i])) {
       graphics.clearRect(x + w - 6, ry - 1, 6, 9);  // over a long name
       for (int k = 0; k < 3; k++) gfxLine(x + w - 5 + k, ry + k, x + w - 5 + k, ry + 6 - k);
     }
@@ -2373,21 +2511,7 @@ FLASHMEM void PlayerDevice::Load(int i) {
   lf.close();
 }
 
-// one sample of any size / float as 16 bit
-FLASHMEM int16_t PlayerDevice::Sample(const uint8_t* p) const {
-  switch (bytes) {
-    case 1: return int16_t((p[0] - 128) << 8);  // 8-bit is unsigned
-    case 2: return int16_t(p[0] | p[1] << 8);
-    case 3: return int16_t(p[1] | p[2] << 8);
-    default:
-      if (is_float) {
-        float f;
-        memcpy(&f, p, 4);
-        return int16_t(constrain(f, -1.0f, 1.0f) * 32767.0f);
-      }
-      return int16_t(p[2] | p[3] << 8);
-  }
-}
+FLASHMEM int16_t PlayerDevice::Sample(const uint8_t* p) const { return WavSample(p, bytes, is_float); }
 
 // up to n frames from the file's current position; the first two channels
 // (mono: both)
@@ -2411,10 +2535,6 @@ FLASHMEM void PlayerDevice::Idle() {
   if (mode[SPEED] == DIR_SYNC && (synced_at != tempo_bpm || synced_bpm != bpm)) Refresh(SPEED);
   if (!nfiles && millis() - scanned_at > 3000) Scan();  // card / files may come later
   if ((loaded != cur[FILE_] || loaded_mode != mode[FILE_]) && !loading && !analysing) Load(cur[FILE_]);
-  if (audition && loaded == cur[FILE_] && !loading && !analysing && Frames()) {
-    audition = false;
-    if (streaming) stream.Play(); else if (fx.state() == AudioEffectReel::STOPPED) fx.Press();
-  }
   static int16_t tl[IO_CHUNK], tr[IO_CHUNK];
   if (loading) {  // short file: all of it into fx
     const size_t rd = ReadFrames(fx.Data(0) + got, fx.Data(1) + got, std::min(IO_CHUNK, frames - got));
