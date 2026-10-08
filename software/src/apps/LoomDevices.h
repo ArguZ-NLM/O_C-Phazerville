@@ -4904,7 +4904,7 @@ PROGMEM static const DeviceDef CHIME_DEF = {
   "CHIME", "CHM", 8, {"STEP", ""},
   {
     {"NOTE", 24, 84, 48, UNI, 0, 18, 0},  // the first note, C1 .. C6; mode: KNOB, MIDI (any channel), CH1 .. CH16
-    {"SPRD", 1, 7, 2, UNI},      // scale steps between the six notes
+    {"SPRD", 1, 7, 2, UNI, 0, 13, 0},  // scale steps between the six notes; mode: MORPH, how slowly new notes take over
     {"DCAY", 0, 100, 55, UNI, 0, 11, 0},  // 0.1 .. 12 s to fade away; mode: variation per hit
     // what a hit does to the notes fed; mode: how many of the six (1 .. 6)
     {"ROT", 0, 3, 0, LIST, 4, 6, 5, {"OFF", "UP", "DOWN", "RAND"}},
@@ -4945,6 +4945,7 @@ private:
   uint32_t step_at = 0;
   uint32_t note_seen = 0;
   float Decay(int v) const { return 0.1f * powf(120.0f, v * 0.01f); }  // 0.1 .. 12 s
+  static float Morph(int m) { return m ? 0.05f * powf(2.0f, (m - 1) * 0.5f) : 0.003f; }  // 3 ms, 50 ms .. 2.3 s
   static int PitchX(float hz, int x, int w) {  // C1 .. C8 across w
     return x + constrain(int(log2f(std::max(hz, 1.0f) / 32.70f) / 7.0f * (w - 1) + 0.5f), 0, w - 1);
   }
@@ -4972,6 +4973,7 @@ FLASHMEM void ChimeDevice::Apply(int p) {
   a.tone_var = mode[TONE] * 5.0f;
   a.decay = Decay(cur[DECAY]);
   a.decay_var = mode[DECAY] * 0.1f;  // up to x2 / 2
+  a.morph = Morph(mode[SPRD]);
   a.wet = cur[WET] * 0.01f;
   fx.Set(a);
 }
@@ -5005,7 +5007,12 @@ FLASHMEM void ChimeDevice::Idle() {
 
 FLASHMEM void ChimeDevice::FormatMode(int p, char* buf, size_t n) const {
   if (p == ROT) snprintf(buf, n, "%d/6", mode[ROT] + 1);  // notes fed at once
-  else if (p == NOTE) {
+  else if (p == SPRD) {  // MORPH
+    const float t = Morph(mode[SPRD]);
+    if (!mode[SPRD]) snprintf(buf, n, "0ms");
+    else if (t < 1.0f) snprintf(buf, n, "%dms", int(t * 1000.0f + 0.5f));
+    else snprintf(buf, n, "%d.%ds", int(t), int(t * 10.0f) % 10);
+  } else if (p == NOTE) {
     if (mode[NOTE] == 0) snprintf(buf, n, "KNOB");
     else if (mode[NOTE] == 1) snprintf(buf, n, "MIDI");
     else snprintf(buf, n, "CH%d", mode[NOTE] - 1);

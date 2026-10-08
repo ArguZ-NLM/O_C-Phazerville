@@ -23,7 +23,8 @@
 // that stays keeps its own. PITCH's
 // variation moves every new note by up to +-n semitones (in the scale),
 // DCAY's makes it ring shorter or longer, TONE's gives every hit its own
-// tilt.
+// tilt. MORPH: how long the input takes to move from the old notes to the
+// new ones (a crossfade, the notes seem to slide apart).
 class AudioEffectChime : public AudioStream {
 public:
   static constexpr int PLACES = 6, VOICES = 24;
@@ -41,6 +42,7 @@ public:
     float tone_var = 0.0f;
     float decay = 2.0f;      // s to -60 dB
     float decay_var = 0.0f;  // every new note's decay times 2^(+-this), at random
+    float morph = 0.003f;    // s: the input handed from old notes to new ones
     float wet = 1.0f;
   };
 
@@ -160,10 +162,12 @@ FASTRUN void AudioEffectChime::Assign() {
       if (!keep[i] && vc[i].in_to > 0.0f && fabsf(vc[i].hz - hz) < hz * 0.001f) use = i;
     for (int i = 0; i < VOICES && use < 0; i++)  // still ringing on that note: on from there
       if (!keep[i] && vc[i].in_to == 0.0f && vc[i].env > 0.0f && fabsf(vc[i].hz - hz) < hz * 0.001f) use = i;
-    if (use < 0) {  // the quietest that isn't fed
+    if (use < 0) {  // the quietest that isn't fed (one still fading out last)
       float lo = 1e9f;
-      for (int i = 0; i < VOICES; i++)
-        if (!keep[i] && vc[i].in_to == 0.0f && vc[i].env < lo) { lo = vc[i].env; use = i; }
+      for (int i = 0; i < VOICES; i++) {
+        const float e = vc[i].env + (vc[i].in > 0.0f ? 10.0f : 0.0f);
+        if (!keep[i] && vc[i].in_to == 0.0f && e < lo) { lo = e; use = i; }
+      }
     }
     if (use < 0) continue;
     Voice& v = vc[use];
@@ -239,9 +243,10 @@ FASTRUN void AudioEffectChime::update() {
     Assign();
   }
 
-  // the resonators: the input faded in / out over ~3 ms
+  // the resonators: the input handed over from old notes to new ones over
+  // MORPH (3 ms .. a few s)
   memset(sum, 0, sizeof(sum));
-  const float fade = 1.0f / (0.003f * AUDIO_SAMPLE_RATE_EXACT);
+  const float fade = 1.0f / (std::max(0.003f, par.morph) * AUDIO_SAMPLE_RATE_EXACT);
   const float first = std::max(0.0f, par.tone + hit_tone) * 0.006f;  // TONE above 0: some of the first pass too
   for (int i = 0; i < VOICES; i++) {
     Voice& v = vc[i];
