@@ -43,6 +43,7 @@ public:
     float decay = 2.0f;      // s to -60 dB
     float decay_var = 0.0f;  // every new note's decay times 2^(+-this), at random
     float morph = 0.003f;    // s: the input handed from old notes to new ones
+    float blend = 0.0f;      // 0..1: the wide first pass heard too (DCAY low: a filter)
     float wet = 1.0f;
   };
 
@@ -247,7 +248,9 @@ FASTRUN void AudioEffectChime::update() {
   // MORPH (3 ms .. a few s)
   memset(sum, 0, sizeof(sum));
   const float fade = 1.0f / (std::max(0.003f, par.morph) * AUDIO_SAMPLE_RATE_EXACT);
-  const float first = std::max(0.0f, par.tone + hit_tone) * 0.006f;  // TONE above 0: some of the first pass too
+  // the first pass heard as it is: DCAY low (a filter bank), and TONE above
+  // 0 (breathier); at its own level, not the ring's make-up
+  const float first = par.blend + std::max(0.0f, par.tone + hit_tone) * 0.006f;
   for (int i = 0; i < VOICES; i++) {
     Voice& v = vc[i];
     if (v.hz <= 0.0f) continue;
@@ -263,7 +266,7 @@ FASTRUN void AudioEffectChime::update() {
       const float ya = ba * da;
       lb += f * bb;
       bb += f * (ya - lb - db * bb);
-      const float y = (bb * db + first * ya) * mk;
+      const float y = bb * db * mk + first * ya * v.gain;
       pk = std::max(pk, fabsf(y));
       sum[0][n] += y * v.pan_l;
       sum[1][n] += y * v.pan_r;
