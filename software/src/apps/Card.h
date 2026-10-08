@@ -5,10 +5,17 @@
 // buffers. On a Mac the card shows up in OpenMTP (macOS's photo import may
 // have to be kept out of the way: card-mode.sh). The screen lists the card's
 // folders and files, refreshed every 2 s, so copied files can be seen
-// arriving; R enc scrolls, R push opens a folder, B (or Y) goes up, X held
-// for 2 s deletes the selected file.
+// arriving; R enc scrolls, R push opens a folder, Y goes up, X held for 2 s
+// deletes the selected file. B listens to a WAV (as in PLAYER's file list:
+// once through, straight from the card), B held: AUTO, every file the
+// cursor rests on plays.
 
 #include <MTP_Teensy.h>
+
+// the quick listen is Loom's (Loom is paused while CARD is open)
+#if defined(ENABLE_APP_LOOM) && defined(ARDUINO_TEENSY41)
+#define CARD_LISTEN
+#endif
 
 OC_APP_CLASS(AppCard, TWOCCS("CR"), "Card", "SD card over USB") {
 public:
@@ -29,6 +36,23 @@ private:
   bool del_held = false;
   uint32_t del_since = 0, deleted_at = 0;
   void List();
+#ifdef CARD_LISTEN
+  loom::LoomPreview* preview = nullptr;  // made on first open
+  bool autoplay = false, auto_due = false;
+  uint32_t auto_at = 0;
+  bool IsWav(int i) const {
+    const size_t l = strlen(names[i]);
+    return i < count && !folder[i] && l > 4 && !strcasecmp(names[i] + l - 4, ".WAV");
+  }
+  void Listen(int i) {  // the file under the cursor, or quiet (a folder)
+    if (!preview) return;
+    if (i < count && IsWav(i)) { if (!preview->Is(dir, names[i])) preview->Start(dir, names[i]); }
+    else preview->Stop();
+  }
+  void Moved() { if (autoplay) { auto_due = true; auto_at = millis(); } }
+#else
+  void Moved() {}
+#endif
 };
 
 FLASHMEM void AppCard::Init() {}
@@ -78,6 +102,11 @@ FLASHMEM void AppCard::HandleAppEvent(OC::AppEvent event) {
     }
     serving = true;
     List();
+#ifdef CARD_LISTEN
+    if (!preview) preview = new loom::LoomPreview;
+    preview->level = 0.8f;  // as loud as in Loom
+    OC::AudioIO::ClaimOutput(preview->stream);
+#endif
     // The computer only asks for the card when the module turns up on USB,
     // while Loom was running and nobody answered. So: leave the bus for a
     // moment and come back, like pulling and putting back the cable.
@@ -86,12 +115,21 @@ FLASHMEM void AppCard::HandleAppEvent(OC::AppEvent event) {
     USB1_USBCMD |= USB_USBCMD_RS;
   } else if (event == OC::APP_EVENT_SUSPEND) {
     serving = false;
+#ifdef CARD_LISTEN
+    autoplay = false;
+    if (preview) preview->Halt();
+    OC::AudioIO::ReleaseOutput();
+#endif
   }
 }
 
 FLASHMEM void AppCard::Loop() {
   if (!serving) return;
   MTP.loop();
+#ifdef CARD_LISTEN
+  if (autoplay && auto_due && millis() - auto_at >= 100) { auto_due = false; Listen(sel); }
+  if (preview) preview->Idle(true);
+#endif
   if (del_held && millis() - del_since >= 2000) {
     del_held = false;
     char path[160];
@@ -130,8 +168,19 @@ FLASHMEM void AppCard::DrawMenu() const {
   // connected: the folder, then 5 entries around the selection
   char t[24];
   const size_t l = strlen(dir);
-  snprintf(t, sizeof(t), "%s", l > 21 ? dir + l - 21 : dir);
+#ifdef CARD_LISTEN
+  const size_t room = autoplay ? 16 : 21;  // AUTO takes the right end
+#else
+  const size_t room = 21;
+#endif
+  snprintf(t, sizeof(t), "%s", l > room ? dir + l - room : dir);
   gfxPrint(0, 13, t);
+#ifdef CARD_LISTEN
+  if (autoplay) {
+    gfxPrint(103, 13, "AUTO");
+    gfxInvert(102, 12, 26, 9);
+  }
+#endif
   if (!count) { gfxPrint(4, 30, "(empty)"); return; }
   constexpr int rows = 5;
   const int first = constrain(sel - rows / 2, 0, std::max(0, count - rows));
@@ -157,6 +206,13 @@ FLASHMEM void AppCard::DrawMenu() const {
       if (folder[i]) strncat(nm, "/", sizeof(nm) - strlen(nm) - 1);
     }
     gfxPrint(2, ry, nm);
+#ifdef CARD_LISTEN
+    if (!folder[i] && preview && preview->Is(dir, names[i])) {
+      // listening: a small arrow where the size is
+      graphics.clearRect(128 - 6 * int(strlen(sz)), ry - 1, 6 * int(strlen(sz)), 9);
+      for (int k = 0; k < 3; k++) gfxLine(123 + k, ry + k, 123 + k, ry + 6 - k);
+    } else
+#endif
     if (sz[0]) gfxPrint(128 - 6 * int(strlen(sz)), ry, sz);
     if (i == sel) gfxInvert(0, ry - 1, 128, 9);
   }
@@ -187,34 +243,58 @@ size_t AppCard::SaveAppData(util::StreamBufferWriter&) const { return 0; }
 size_t AppCard::RestoreAppData(util::StreamBufferReader&) { return 0; }
 
 FLASHMEM void AppCard::HandleEncoderEvent(const UI::Event& event) {
+  const int was = sel;
   sel = constrain(sel + event.value, 0, std::max(0, count - 1));
+  if (sel != was) Moved();
 }
 
-// R push: open the folder; B (or Y): up; X held: delete the file
+// R push: open the folder; Y: up; B: listen (held: AUTO); X held: delete
+// the file
 FLASHMEM void AppCard::HandleButtonEvent(const UI::Event& event) {
+#ifdef CARD_LISTEN
+  if (event.control == OC::CONTROL_BUTTON_B) {
+    if (event.type == UI::EVENT_BUTTON_LONG_PRESS) {
+      autoplay = !autoplay;
+      auto_due = false;
+      if (autoplay) Listen(sel); else if (preview) preview->Stop();
+    } else if (event.type == UI::EVENT_BUTTON_PRESS && preview && sel < count && IsWav(sel)) {
+      if (preview->Is(dir, names[sel])) preview->Stop();
+      else preview->Start(dir, names[sel]);
+    }
+    return;
+  }
+#endif
   if (event.control == OC::CONTROL_BUTTON_X) {
     if (event.type == UI::EVENT_BUTTON_DOWN) {
       del_held = sel < count && !folder[sel];
       del_since = millis();
+#ifdef CARD_LISTEN
+      // the file may be the one playing: it fades and is closed well
+      // before the 2 s are up
+      autoplay = false;
+      if (del_held && preview) preview->Stop();
+#endif
     } else if (event.type == UI::EVENT_BUTTON_PRESS || event.type == UI::EVENT_BUTTON_LONG_RELEASE) {
       del_held = false;  // let go early: nothing happens
     }
     return;
   }
   if (event.type != UI::EVENT_BUTTON_PRESS) return;
-  const bool up = event.control == OC::CONTROL_BUTTON_B || event.control == OC::CONTROL_BUTTON_Y ||
+  const bool up = event.control == OC::CONTROL_BUTTON_Y ||
                   (event.control == OC::CONTROL_BUTTON_R && sel < count && !strcmp(names[sel], ".."));
   if (up && strcmp(dir, "/")) {
     char* slash = strrchr(dir, '/');
     if (slash == dir) dir[1] = 0; else if (slash) *slash = 0;
     sel = 0;
     List();
+    Moved();
   } else if (event.control == OC::CONTROL_BUTTON_R && sel < count && folder[sel]) {
     const size_t l = strlen(dir);
     if (l + strlen(names[sel]) + 2 < sizeof(dir)) {
       snprintf(dir + l, sizeof(dir) - l, "%s%s", l > 1 ? "/" : "", names[sel]);
       sel = 0;
       List();
+      Moved();
     }
   }
 }

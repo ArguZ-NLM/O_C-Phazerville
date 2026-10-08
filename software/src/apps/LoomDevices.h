@@ -1741,6 +1741,7 @@ public:
   void Halt();  // at once (Loom suspended: no audio running)
   void Idle(bool keep);  // keep: the memory stays (the list is open)
   bool Playing() const { return want || (on && stream.Playing()); }
+  float level = 1.0f;
   bool Is(const char* folder, const char* name) const {
     if (want) return !strcmp(next_dir, folder) && !strcmp(next_name, name);
     return on && stream.Playing() && !strcmp(dir_, folder) && !strcmp(name_, name);
@@ -1843,7 +1844,7 @@ FLASHMEM bool LoomPreview::Begin() {
   if (!frames || (!stream.ready() && !stream.Acquire(2.0f, 0.25f))) { f.close(); return false; }
   stream.SetLoop(false);
   stream.SetCrossfade(false);
-  stream.SetLevel(1.0f);
+  stream.SetLevel(level);
   stream.SetSpeed(srate / AUDIO_SAMPLE_RATE_EXACT);  // the module runs at 48 kHz
   stream.Open(frames);
   stream.SetWindow(0, frames);
