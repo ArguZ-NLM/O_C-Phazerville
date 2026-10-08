@@ -1793,25 +1793,13 @@ FLASHMEM static int Session() {
   return g_session;
 }
 
-// a free name in dir. With the clock set (after a firmware update, until
-// the power goes; there is no battery): Spool_261008_1602.wav (year, month,
-// day _ hour, minute), _2, _3 .. within the same minute. Without (it starts
-// in 2019 at power-up): Spool_S014_01.wav, the session and the n-th save
+// a free name in dir: Spool_S014_01.wav, the session and the n-th save in
+// it (no dates: without a battery the module's clock starts in 2019 at
+// every power-up)
 FLASHMEM static void StampName(const char* dir, const char* prefix, char* name, size_t n, char* path, size_t pn) {
-  const time_t now = time_t(rtc_get());
-  struct tm tm;
-  gmtime_r(&now, &tm);
-  char base[24];
-  const bool clock = tm.tm_year + 1900 >= 2025;
-  if (clock)
-    snprintf(base, sizeof(base), "%s_%02d%02d%02d_%02d%02d", prefix, tm.tm_year % 100,
-             tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min);
-  else
-    snprintf(base, sizeof(base), "%s_S%03d", prefix, Session());
+  const int s = Session();
   for (int k = 1; k < 1000; k++) {
-    if (!clock) snprintf(name, n, "%s_%02d.wav", base, k);
-    else if (k == 1) snprintf(name, n, "%s.wav", base);
-    else snprintf(name, n, "%s_%d.wav", base, k);
+    snprintf(name, n, "%s_S%03d_%02d.wav", prefix, s, k);
     snprintf(path, pn, "%s/%s", dir, name);
     if (!SD.exists(path)) return;
   }
