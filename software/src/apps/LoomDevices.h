@@ -2437,6 +2437,12 @@ FLASHMEM void PlayerDevice::Load(int i) {
       applied_mode = mode[FILE_]; // section and edges just read stay
       ApplyAll();
       loaded_mode = mode[FILE_];
+    } else if (!restoring) {  // nothing saved for it: the whole file
+      val[START] = 0;
+      val[END] = 10000;
+      sec_off = sec_len = 0;  // (MEM on a long file: from its start)
+      Refresh(START);
+      Refresh(END);
     }
   }
   lf = SD.open(path, FILE_READ);
