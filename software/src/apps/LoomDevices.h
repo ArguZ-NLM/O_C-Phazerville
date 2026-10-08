@@ -1739,7 +1739,7 @@ public:
   bool Start(const char* folder, const char* name);
   void Stop();
   void Halt();  // at once (Loom suspended: no audio running)
-  void Idle();
+  void Idle(bool keep);  // keep: the memory stays (the list is open)
   bool Playing() const { return want || (on && stream.Playing()); }
   bool Is(const char* folder, const char* name) const {
     if (want) return !strcmp(next_dir, folder) && !strcmp(next_name, name);
@@ -1763,7 +1763,7 @@ FLASHMEM bool LoomPreview::Start(const char* folder, const char* name) {
   snprintf(next_name, sizeof(next_name), "%s", name);
   want = true;
   stream.Stop();  // the one playing fades out first (see Idle)
-  if (stream.Silent()) Idle();
+  if (stream.Silent()) Idle(true);
   return true;
 }
 
@@ -1786,9 +1786,11 @@ FLASHMEM void LoomPreview::Close() {
   on = false;
 }
 
-// main loop: the buffers topped up; once faded out, the next file or the
-// memory given back
-FLASHMEM void LoomPreview::Idle() {
+// main loop: the buffers topped up; once faded out, the next file; the
+// memory given back once the list is closed. (Not with the audio held up
+// for it: the stream is silent by then and doesn't touch its buffers, and
+// holding up the audio while that much memory was freed clicked loudly.)
+FLASHMEM void LoomPreview::Idle(bool keep) {
   if (on && stream.Playing()) { Fill(4); return; }
   if (!stream.Silent()) return;  // fading out
   if (on) Close();
@@ -1796,11 +1798,7 @@ FLASHMEM void LoomPreview::Idle() {
     want = false;
     if (Begin()) return;
   }
-  if (stream.ready()) {
-    AudioNoInterrupts();
-    stream.Release();
-    AudioInterrupts();
-  }
+  if (!keep && stream.ready()) stream.Release();
 }
 
 // opens next_name and starts it

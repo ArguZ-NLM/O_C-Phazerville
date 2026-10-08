@@ -238,7 +238,7 @@ FASTRUN void AudioPlayStream::update() {
   // start / stop: 20 ms, eased (5 ms straight clicked on low notes); the
   // dip of a retrigger stays short (5 ms)
   const float run_step = 1.0f / ((retrig ? 0.005f : 0.02f) * AUDIO_SAMPLE_RATE_EXACT);
-  const bool on = playing && !retrig;
+  bool on = playing && !retrig;
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
     run_g = on ? std::min(1.0f, run_g + run_step) : std::max(0.0f, run_g - run_step);
     win_g = win_change ? std::max(0.0f, win_g - win_step) : std::min(1.0f, win_g + win_step);
@@ -294,7 +294,7 @@ FASTRUN void AudioPlayStream::update() {
       ws = a = ta; we = b = tb;
       wrapped = true;
       wl = float(b - a); xs = double(b) - double(xl_);
-      if (!loop_) { playing = false; run_g = 0.0f; p = double(a); }  // once through
+      if (!loop_) { playing = on = false; run_g = 0.0f; p = double(a); }  // once through: silent from here
     }
     if (p < double(a)) p = double(a);
     if (retrig && run_g <= 0.0f) { retrig = false; p = double(a); }  // faded out: jump

@@ -1340,7 +1340,7 @@ FLASHMEM void AppLoom::MainLoop() {
     if (!listing || view != DEVICE) preview->Stop();
     if (listing && view == DEVICE)
       for (auto& tr : tracks) if (tr.player) tr.player->AutoplayIdle();
-    preview->Idle();
+    preview->Idle(listing && view == DEVICE);
     // the output is muted while a PLAYER reads a file in (the card reading
     // made a high whine on the output)
     bool busy = false;
