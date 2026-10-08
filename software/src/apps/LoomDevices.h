@@ -1442,22 +1442,29 @@ FLASHMEM void ReelDevice::DrawViz(int x, int y, int w, int h) {
       gfxLine(cx, cy - a, cx, cy + a);
     }
   }
+  // START and END: solid lines (as on PLAYER), joined along the top and
+  // bottom
   if (st != AudioEffectReel::REC) {
     float a, b;
     fx.Window(a, b);
     const int wl = x + int(a * (w - 1)), wr = x + int(std::min(b, 1.0f) * (w - 1));
     for (int px = wl; px <= wr; px++) { gfxPixel(px, y); gfxPixel(px, base); }
-    for (int k = 1; k < 5; k++) {
-      gfxPixel(wl, y + k); gfxPixel(wr, y + k);
-      gfxPixel(wl, base - k); gfxPixel(wr, base - k);
+    for (const int ex : {wl, wr}) {
+      const int cl = std::max(x, ex - 1), cr = std::min(x + w - 1, ex + 1);
+      graphics.clearRect(cl, y + 1, cr - cl + 1, h - 2);
+      gfxLine(ex, y, ex, base);
     }
   }
-  // the head: recording at the end of what is there, playing in the loop
-  const int hx = st == AudioEffectReel::REC ? x + span_w - 1
-      : constrain(x + int(fx.HeadPos() * (w - 1)), x, x + w - 1);
-  const int cl = std::max(x, hx - 1), cr = std::min(x + w - 1, hx + 1);
-  graphics.clearRect(cl, y + 1, cr - cl + 1, h - 2);
-  gfxLine(hx, y + 1, hx, base - 1);
+  // the head: recording, a solid line at the end of what is there; playing,
+  // a thin gap through the wave
+  if (st == AudioEffectReel::REC) {
+    const int hx = x + span_w - 1;
+    const int cl = std::max(x, hx - 1), cr = std::min(x + w - 1, hx + 1);
+    graphics.clearRect(cl, y + 1, cr - cl + 1, h - 2);
+    gfxLine(hx, y + 1, hx, base - 1);
+  } else {
+    gfxInvert(constrain(x + int(fx.HeadPos() * (w - 1)), x, x + w - 1), y + 1, 1, h - 2);
+  }
   }
   // saving: A held fills a bar, then the file is written, then its name
   if (save_hold > 0.0f || saving >= 0.0f || (saved_at && millis() - saved_at < 1500)) {
@@ -1541,13 +1548,21 @@ FLASHMEM void ReelDevice::DrawZoom(int x, int y, int w, int h, long span, long c
       for (long rep = -1; rep <= 1; rep++) {  // the view may wrap round the loop
         const long px = x + (e + rep * n - from) * w / span;
         if (px < x || px >= x + w) continue;
-        for (int k = 0; k < 5; k++) { gfxPixel(px, y + k); gfxPixel(px, base - k); }
+        // a solid line, as on PLAYER: the point being set stands out
+        graphics.clearRect(std::max(long(x), px - 1), y, std::min(3L, x + w - std::max(long(x), px - 1)), h);
+        gfxLine(px, y, px, base);
       }
     }
   }
+  // the head: playing, a thin gap through the wave (the edges are the solid
+  // lines); recording, the solid line where it records
   if (hx >= x) {
-    graphics.clearRect(std::max(x, hx - 1), y + 1, std::min(3, x + w - std::max(x, hx - 1)), h - 2);
-    gfxLine(hx, y + 1, hx, base - 1);
+    if (rec) {
+      graphics.clearRect(std::max(x, hx - 1), y + 1, std::min(3, x + w - std::max(x, hx - 1)), h - 2);
+      gfxLine(hx, y + 1, hx, base - 1);
+    } else {
+      gfxInvert(hx, y + 1, 1, h - 2);
+    }
   }
   // how much time the view shows, top right
   const int tw = 6 * int(strlen(label));
