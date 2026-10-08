@@ -1147,6 +1147,14 @@ static void FormatMs(int ms, char* buf, size_t n) {
   if (ms >= 1000) snprintf(buf, n, "%ds", ms / 1000);
   else snprintf(buf, n, "%dms", ms);
 }
+// START / END in seconds, at most four digits so the columns don't run
+// together: 5.04, 12.3, 125
+static void FormatSeconds(uint32_t ms, char* buf, size_t n) {
+  const unsigned long s = ms / 1000, r = ms % 1000;
+  if (ms < 10000) snprintf(buf, n, "%lu.%02lu", s, r / 10);
+  else if (ms < 100000) snprintf(buf, n, "%lu.%lu", s, r / 100);
+  else snprintf(buf, n, "%lu", s);
+}
 
 class ReelDevice : public Device {
 public:
@@ -1289,12 +1297,11 @@ FLASHMEM void ReelDevice::Apply(int p) {
 
 FLASHMEM void ReelDevice::Format(int p, char* buf, size_t n) const {
   if (p == SPEED) snprintf(buf, n, "%d%%", val[p]);
-  else if (p == START || p == END) {  // seconds into the loop, to the ms
+  else if (p == START || p == END) {  // seconds into the loop
     const size_t len = fx.Length();
     if (!len) { snprintf(buf, n, "%d%%", val[p] / 100); return; }
     const uint32_t ms = uint32_t(uint64_t(len) * val[p] / 10000 * 1000 / uint64_t(AUDIO_SAMPLE_RATE_EXACT));
-    if (ms < 10000) snprintf(buf, n, "%lu.%03lu", (unsigned long)(ms / 1000), (unsigned long)(ms % 1000));
-    else snprintf(buf, n, "%lu.%02lu", (unsigned long)(ms / 1000), (unsigned long)((ms % 1000) / 10));
+    FormatSeconds(ms, buf, n);
   }
   else if (p == IN) snprintf(buf, n, "%s", InputSourceName(val[p]));
   else if (p == VIEW && mode[p] == 0) snprintf(buf, n, "ALL");
@@ -2539,12 +2546,11 @@ FLASHMEM void PlayerDevice::Format(int p, char* buf, size_t n) const {
     // the name is in the picture; here how it plays: STRM / MEM
     if (!nfiles) snprintf(buf, n, "none");
     else snprintf(buf, n, "%s", mode[FILE_] ? "MEM" : "STRM");
-  } else if (p == START || p == END) {  // seconds into the file, to the ms
+  } else if (p == START || p == END) {  // seconds into the file
     const size_t fr = Frames();
     if (!fr) { snprintf(buf, n, "%d%%", val[p] / 100); return; }
     const uint32_t ms = uint32_t(uint64_t(EdgeAt(p)) * 1000 / uint64_t(AUDIO_SAMPLE_RATE_EXACT * rate));
-    if (ms < 10000) snprintf(buf, n, "%lu.%03lu", ms / 1000, ms % 1000);
-    else snprintf(buf, n, "%lu.%02lu", ms / 1000, (ms % 1000) / 10);
+    FormatSeconds(ms, buf, n);
   } else if (p == SPEED) {
     snprintf(buf, n, "%d%%", val[p]);
   } else {
