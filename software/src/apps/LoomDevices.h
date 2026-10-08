@@ -4047,8 +4047,10 @@ PROGMEM static const DeviceDef RESONATOR_DEF = {
     {"SLOPE", -50, 50, -50, BI},
     {"RESO", 0, 100, 20, UNI},
     {"DCAY", 0, 100, 50, UNI, 0, 2, 0, {}, {"SUST", "CHOKE"}},  // Q 4 .. 1000: from the middle up, the bands ring as pitches
-    {"PITCH", -24, 24, 0, BI},
-    {"TONE", -50, 50, 0, BI},
+    // modes: variation per hit (PITCH: the notes it rings move by up to
+    // +- n semitones, in the scale; TONE: its brightness by up to +- 5 n)
+    {"PITCH", -24, 24, 0, BI, 0, 25, 0},
+    {"TONE", -50, 50, 0, BI, 0, 11, 0},
     {"SCALE", 0, 3, 0, LIST, 4, 0, 0, {"CHROM", "MAJOR", "MINOR", "PENTA"}},
     {"WET", 0, 100, 100, UNI},
   }
@@ -4064,6 +4066,7 @@ public:
   bool Activate() override { fx.Reset(); active = true; return true; }
   void Apply(int p) override { Rebuild(); }
   void Format(int p, char* buf, size_t n) const override;
+  void FormatMode(int p, char* buf, size_t n) const override;
   void DrawViz(int x, int y, int w, int h) override;
   void DrawMini(int x, int y, int w, int h) override;
   void CpuMax(float parts[2]) override {
@@ -4073,6 +4076,7 @@ public:
   }
 private:
   AudioEffectResonator fx;
+  float CutBand() const { return cur[CUT] * 0.01f * (BANDS - 1); }
   float band_m[BANDS] = {};
   Meter out_m;
   void Rebuild();
@@ -4099,7 +4103,7 @@ FLASHMEM void ResonatorDevice::Rebuild() {
   // made up with sqrt(Q), so ringing bands are as loud as wide ones (the
   // engine limits the sum softly)
   const float level = 0.5f * sqrtf(q / 4.0f);
-  float f[BANDS], g[BANDS];
+  float f[BANDS];
   for (int k = 0; k < BANDS; k++) {
     int note = 24 + 2 * k + cur[PITCH];  // MIDI note, C1 = 24
     for (int d = 0; d < 6; d++) {        // nearest note in the scale
@@ -4108,29 +4112,29 @@ FLASHMEM void ResonatorDevice::Rebuild() {
     }
     const float hz = 440.0f * powf(2.0f, (note - 69) / 12.0f);
     f[k] = hz < 8000.0f ? 2.0f * sinf(float(M_PI) * hz / AUDIO_SAMPLE_RATE_EXACT) : 0.0f;
-
-    const float gk = Base(k) * (1.0f + cur[RESO] * 0.06f * Bump(k))
-        * powf(4.0f, cur[TONE] * 0.02f * (k - BANDS / 2) / float(BANDS / 2));  // +-12 dB at the ends
-    g[k] = gk * level;
   }
-  fx.SetBank(f, g, 1.0f / q, mode[DECAY] == 1, cur[WET] * 0.01f);
+  // the shape (gains) is worked out in the engine, as every hit may move it
+  const AudioEffectResonator::Shape sh = {CutBand(), cur[SLOPE] * 0.02f, float(cur[RESO]), float(cur[TONE]), level};
+  fx.SetBank(f, sh, mode[PITCH] * 0.5f, mode[TONE] * 5.0f, 1.0f / q, mode[DECAY] == 1, cur[WET] * 0.01f);
+}
+
+FLASHMEM void ResonatorDevice::FormatMode(int p, char* buf, size_t n) const {
+  if ((p == PITCH || p == TONE) && mode[p] == 0) snprintf(buf, n, "OFF");
+  else if (p == PITCH) snprintf(buf, n, "+-%d", mode[p]);
+  else if (p == TONE) snprintf(buf, n, "+-%d", mode[p] * 5);
+  else Device::FormatMode(p, buf, n);
 }
 
 // gain of a band (fractional k for the picture) from CUT / SLOPE (12 dB per
 // octave sides, 6 bands an octave), before RESO and TONE
+// (where the last hit put it, with PITCH's variation)
 FLASHMEM float ResonatorDevice::Base(float k) const {
-  const float d = k - cur[CUT] * 0.01f * (BANDS - 1);
-  const float slope = cur[SLOPE] * 0.02f;
-  const float g_lp = d <= 0.0f ? 1.0f : powf(10.0f, -2.0f * d / 20.0f);
-  const float g_hp = d >= 0.0f ? 1.0f : powf(10.0f, 2.0f * d / 20.0f);
-  const float g_bp = powf(10.0f, -2.0f * fabsf(d) / 20.0f);
-  return slope < 0.0f ? g_bp + (-slope) * (g_lp - g_bp) : g_bp + slope * (g_hp - g_bp);
+  return AudioEffectResonator::Base(k, CutBand() + fx.HitCut(), cur[SLOPE] * 0.02f);
 }
 
 // the RESO bump around the cutoff, 0..1
 FLASHMEM float ResonatorDevice::Bump(float k) const {
-  const float d = k - cur[CUT] * 0.01f * (BANDS - 1);
-  return expf(-(d * d) / 2.25f);
+  return AudioEffectResonator::Bump(k, CutBand() + fx.HitCut());
 }
 
 // height of the shape in the picture, 0..1: the pass band at the top, RESO
@@ -4189,7 +4193,7 @@ FLASHMEM void ResonatorDevice::DrawViz(int x, int y, int w, int h) {
   static const uint8_t bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
   const int tx = x + BANDS * 2 + 2, tw = mx - 7 - tx + 1;
   gfxFrame(tx, y, tw, h);
-  const int fill = (cur[TONE] + 50) * 16 / 100;  // 0..16
+  const int fill = constrain(int((cur[TONE] + fx.HitTone() + 50) * 16 / 100), 0, 16);  // 0..16, with this hit's variation
   for (int py = y + 1; py < y + h - 1; py++)
     for (int px = tx + 1; px < tx + tw - 1; px++)
       if (bayer[py & 3][px & 3] < fill) gfxPixel(px, py);
