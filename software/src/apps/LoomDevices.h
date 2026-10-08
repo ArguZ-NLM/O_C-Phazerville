@@ -1196,6 +1196,7 @@ public:
   Meter in_m[2];            // the input level, as on INPUT
   // saving the loop to the SD card (the app writes it, A held for 2 s)
   const int16_t* LoopData(int c) const { return fx.Data(c); }
+  void WriteMeta(const char* wav_name) const;  // the loop's settings for PLAYER
   size_t LoopLength() const {
     const auto st = fx.state();
     return st == AudioEffectReel::EMPTY || st == AudioEffectReel::REC ? 0 : fx.Length();
@@ -1659,6 +1660,30 @@ FLASHMEM static void PutLE(uint8_t* p, uint32_t v, int n) {
 }
 
 // writes a buffer pair as a stereo WAV, a step at a time
+// a saved loop's settings, next to it as PLAYER keeps them (name.loom), so
+// PLAYER opens it the way it was set up in SPOOL: START / END (to the
+// frame), FADE, LEVEL, SPEED (backwards: REV), looping
+FLASHMEM void ReelDevice::WriteMeta(const char* wav_name) const {
+  char path[64];
+  snprintf(path, sizeof(path), "%s/%s", REC_DIR, wav_name);
+  if (char* dot = strrchr(path, '.')) *dot = 0;
+  strlcat(path, ".loom", sizeof(path));
+  const uint64_t n = LoopLength();
+  SD.remove(path);
+  File f = SD.open(path, FILE_WRITE);
+  if (!f) return;
+  const int sp = val[SPEED];
+  f.printf("LOOP 1 0\n");
+  f.printf("LEVEL %d 0\n", int(val[LEVEL]));
+  f.printf("SPEED %d %d\n", std::min(200, abs(sp)), sp < 0 ? 0 : 1);  // REV / FWD
+  f.printf("START %d 0\n", int(val[START]));
+  f.printf("END %d 0\n", int(val[END]));
+  f.printf("FADE %d %d\n", int(val[XFADE]), int(mode[XFADE]));
+  f.printf("SNAP 0 0\n");
+  f.printf("EDGES %lu %lu\n", (unsigned long)(n * val[START] / 10000), (unsigned long)(n * val[END] / 10000));
+  f.close();
+}
+
 struct WavWriter {
   File f;
   const int16_t* src[2] = {};
