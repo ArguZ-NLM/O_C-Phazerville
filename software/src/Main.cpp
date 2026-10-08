@@ -716,6 +716,11 @@ void FASTRUN loop() {
           case 'V':  // the version only (answered by the boot picture too, without ending it)
             Serial.printf("Version (build %s%s)\n", OC::Strings::VERSION, OC::Strings::BUILD_TAG);
             break;
+#ifdef LOOM_ONLY
+          case 'C':  // Loom <-> CARD, as Z held + R push
+            OC::SwitchToNextApp();
+            break;
+#endif
           case 'K':  // the crash log the firmware keeps after a crash
             for (const char* fn : {"BOOT.LOG", "CRASH.LOG"}) {
               File cl = PhzConfig::myfs.open(fn, FILE_READ);

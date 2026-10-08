@@ -80,7 +80,11 @@ FLASHMEM void AppCard::List() {
       if (!e) break;
       const char* nm = e.name();
       const bool isdir = e.isDirectory();
-      if (nm[0] != '.' && strlen(nm) < NAME - 1 && isdir == (pass == 0)) {
+      // (a .loom is the settings of the WAV next to it: not listed, it goes
+      // with the WAV)
+      const size_t nl = strlen(nm);
+      const bool meta = !isdir && nl > 5 && !strcasecmp(nm + nl - 5, ".loom");
+      if (nm[0] != '.' && !meta && nl < NAME - 1 && isdir == (pass == 0)) {
         snprintf(names[count], NAME, "%s", nm);
         folder[count] = isdir;
         sizes[count++] = isdir ? 0 : uint32_t(e.size());
@@ -150,7 +154,15 @@ FLASHMEM void AppCard::Loop() {
     del_held = false;
     char path[160];
     snprintf(path, sizeof(path), "%s/%s", strcmp(dir, "/") ? dir : "", names[sel]);
-    if (SD.remove(path)) deleted_at = millis() | 1;  // the computer sees it on its next refresh
+    if (SD.remove(path)) {
+      deleted_at = millis() | 1;  // the computer sees it on its next refresh
+      // a WAV's settings (name.loom) go with it
+      char* dot = strrchr(path, '.');
+      if (dot && !strcasecmp(dot, ".wav")) {
+        strcpy(dot, ".loom");
+        SD.remove(path);
+      }
+    }
     List();
   }
   if (millis() - listed_at > 2000) List();  // new files show up by themselves
