@@ -1996,7 +1996,10 @@ public:
   // the WAVs in the current folder, sorted; Select picks one in /LOOM by
   // name (after a save), SetFile any folder + name (from the settings)
   void Scan();
-  void Select(const char* name) { SetFile(REC_DIR, name); }  // a loop SPOOL just saved
+  // a loop SPOOL just saved: PLAYER's file stays, but the file list opens
+  // next time in SPOOLS on it (once)
+  void Select(const char* name) { snprintf(fresh, sizeof(fresh), "%s", name); }
+  char fresh[NAME_LEN] = "";
   void SetFile(const char* folder, const char* name);
   const char* Folder() const { return dir; }
   void SetPick(uint8_t p) { fx.pick = p; }
@@ -2373,11 +2376,15 @@ FLASHMEM void PlayerDevice::List() {
 
 FLASHMEM void PlayerDevice::OpenBrowser() {
   if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
-  snprintf(bdir, sizeof(bdir), "%s", dir);
+  // just after SPOOL saved a loop: on that one, in SPOOLS; else on the file
+  // that is playing
+  const bool on_fresh = fresh[0] != 0;
+  snprintf(bdir, sizeof(bdir), "%s", on_fresh ? REC_DIR : dir);
   List();
-  // start on the file that is playing
+  const char* want = on_fresh ? fresh : FileName();
   for (int i = 0; i < bcount; i++)
-    if (!bfolder[i] && !strcmp(bn[i], FileName())) { bsel = i; break; }
+    if (!bfolder[i] && !strcmp(bn[i], want)) { bsel = i; break; }
+  fresh[0] = 0;
   browsing = true;
 }
 

@@ -1327,7 +1327,7 @@ FLASHMEM void AppLoom::MainLoop() {
           snprintf(tr.reel->saved_name, sizeof(tr.reel->saved_name), "%s", tr.writer.name);
           tr.reel->saved_at = millis() | 1;
           tr.reel->WriteMeta(tr.writer.name);  // its settings, for PLAYER
-          if (tr.player) tr.player->Select(tr.writer.name);  // ready in PLAYER
+          if (tr.player) tr.player->Select(tr.writer.name);  // first in PLAYER's list
         }
       }
       if (tr.player && tr.choice[SOURCE] == 2) tr.player->Idle();
