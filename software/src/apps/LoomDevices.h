@@ -1801,6 +1801,9 @@ public:
   void BrowseMove(int d) { bsel = constrain(bsel + d, 0, std::max(0, bcount - 1)); }
   void BrowseEnter();
   void BrowseBack();
+  void BrowsePlay();
+  bool BrowsedIsCurrent() const;
+  bool audition = false;  // B in the list: play the file once it is ready
   void DrawBrowser(int x, int y, int w, int h) const;
 
 private:
@@ -2145,8 +2148,31 @@ FLASHMEM void PlayerDevice::BrowseEnter() {
     List();
     return;
   }
-  SetFile(bdir, bn[bsel]);  // a WAV: play from this folder
+  // a WAV: play from this folder (already there after B: keep it)
+  if (!BrowsedIsCurrent()) SetFile(bdir, bn[bsel]);
   browsing = false;
+}
+
+FLASHMEM bool PlayerDevice::BrowsedIsCurrent() const {
+  return bsel < bcount && !bfolder[bsel] && nfiles && !strcmp(dir, bdir) &&
+         !strcmp(names[std::min<int>(cur[FILE_], nfiles - 1)], bn[bsel]);
+}
+
+// B in the list: the file under the cursor plays straight away (it becomes
+// PLAYER's file); B again on it stops it
+FLASHMEM void PlayerDevice::BrowsePlay() {
+  if (bsel >= bcount || bfolder[bsel]) return;
+  if (BrowsedIsCurrent() && loaded == cur[FILE_] && !loading && !analysing) {
+    audition = false;
+    if (Playing()) {
+      if (streaming) stream.Stop(); else fx.Stop();
+    } else {
+      if (streaming) stream.Play(); else fx.Press();
+    }
+    return;
+  }
+  if (!BrowsedIsCurrent()) SetFile(bdir, bn[bsel]);
+  audition = true;
 }
 
 FLASHMEM void PlayerDevice::DrawBrowser(int x, int y, int w, int h) const {
@@ -2171,6 +2197,12 @@ FLASHMEM void PlayerDevice::DrawBrowser(int x, int y, int w, int h) const {
     }
     const int ry = y + 13 + r * 8;
     gfxPrint(x + 2, ry, t);
+    // the file playing: a small arrow at the right
+    if (!bfolder[i] && nfiles && !strcmp(dir, bdir) && Playing() &&
+        !strcmp(names[std::min<int>(cur[FILE_], nfiles - 1)], bn[i])) {
+      graphics.clearRect(x + w - 6, ry - 1, 6, 9);  // over a long name
+      for (int k = 0; k < 3; k++) gfxLine(x + w - 5 + k, ry + k, x + w - 5 + k, ry + 6 - k);
+    }
     if (i == bsel) gfxInvert(x, ry - 1, w, 9);
   }
 }
@@ -2350,6 +2382,10 @@ FLASHMEM void PlayerDevice::Idle() {
   if (mode[SPEED] == DIR_SYNC && (synced_at != tempo_bpm || synced_bpm != bpm)) Refresh(SPEED);
   if (!nfiles && millis() - scanned_at > 3000) Scan();  // card / files may come later
   if ((loaded != cur[FILE_] || loaded_mode != mode[FILE_]) && !loading && !analysing) Load(cur[FILE_]);
+  if (audition && loaded == cur[FILE_] && !loading && !analysing && Frames()) {
+    audition = false;
+    if (streaming) stream.Play(); else if (fx.state() == AudioEffectReel::STOPPED) fx.Press();
+  }
   static int16_t tl[IO_CHUNK], tr[IO_CHUNK];
   if (loading) {  // short file: all of it into fx
     const size_t rd = ReadFrames(fx.Data(0) + got, fx.Data(1) + got, std::min(IO_CHUNK, frames - got));
