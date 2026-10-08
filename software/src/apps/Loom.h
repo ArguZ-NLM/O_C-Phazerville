@@ -1600,12 +1600,13 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
   else if (view == CHAIN) focus_mod = false;
   Device* d = Focused();
   // PLAYER: R push on FILE opens the browser; in it R enters / picks, Y
-  // goes up (closes at the top), B plays the file under the cursor
+  // closes it, as on every page (".." goes up), B listens to the file under
+  // the cursor
   if (view == DEVICE && !focus_mod && col == SOURCE && d && d == tracks[track].player) {
     PlayerDevice* pl = tracks[track].player;
     if (pl->browsing) {
       if (event.control == OC::CONTROL_BUTTON_R) pl->BrowseEnter();
-      else if (event.control == OC::CONTROL_BUTTON_Y) pl->BrowseBack();
+      else if (event.control == OC::CONTROL_BUTTON_Y) pl->CloseBrowser();
       else if (event.control == OC::CONTROL_BUTTON_DOWN) pl->BrowsePlay();
       return;
     }

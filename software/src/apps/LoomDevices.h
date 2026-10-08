@@ -1973,6 +1973,7 @@ public:
   void BrowseEnter();
   void BrowseBack();
   void BrowsePlay();
+  void CloseBrowser() { browsing = false; if (preview) preview->Stop(); }
   bool BrowsedIsCurrent() const;
   LoomPreview* preview = nullptr;  // B in the list (the app's, shared)
   void DrawBrowser(int x, int y, int w, int h) const;

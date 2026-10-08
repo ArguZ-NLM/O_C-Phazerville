@@ -271,6 +271,11 @@ FASTRUN void AudioPlayStream::update() {
     if (got_frame) { ur_g = std::min(1.0f, ur_g + 1.0f / (0.003f * AUDIO_SAMPLE_RATE_EXACT)); last_l = yl; last_r = yr; }
     else { ur_g = std::max(0.0f, ur_g - 1.0f / (0.002f * AUDIO_SAMPLE_RATE_EXACT)); yl = last_l; yr = last_r; }
     yl *= ur_g; yr *= ur_g;
+    if (!loop_) {  // once through: the file's end eased out over ~20 ms
+      const float left = std::min(1.0f, float(double(b) - p) * (1.0f / (0.02f * AUDIO_SAMPLE_RATE_EXACT)));
+      const float ge = left > 0.0f ? left * left * (3.0f - 2.0f * left) : 0.0f;
+      yl *= ge; yr *= ge;
+    }
     out[0]->data[n] = __SSAT(int32_t(yl * run_g * win_g * 32767.0f), 16);
     out[1]->data[n] = __SSAT(int32_t(yr * run_g * win_g * 32767.0f), 16);
     p += sp;
