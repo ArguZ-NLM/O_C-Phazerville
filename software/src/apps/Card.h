@@ -57,6 +57,13 @@ private:
 
 FLASHMEM void AppCard::Init() {}
 
+// alphabetical, but SPOOLS (Loom's saved loops) always first
+static int Order(const char* a, const char* b) {
+  const bool sa = !strcasecmp(a, "SPOOLS"), sb = !strcasecmp(b, "SPOOLS");
+  if (sa != sb) return sa ? -1 : 1;
+  return strcasecmp(a, b);
+}
+
 // folders first (sorted), then files (sorted), with their sizes
 FLASHMEM void AppCard::List() {
   listed_at = millis();
@@ -81,7 +88,7 @@ FLASHMEM void AppCard::List() {
       e.close();
     }
     for (int i = first + 1; i < count; i++)
-      for (int j = i; j > first && strcasecmp(names[j - 1], names[j]) > 0; j--) {
+      for (int j = i; j > first && Order(names[j - 1], names[j]) > 0; j--) {
         char t[NAME];
         memcpy(t, names[j], NAME); memcpy(names[j], names[j - 1], NAME); memcpy(names[j - 1], t, NAME);
         std::swap(sizes[j], sizes[j - 1]);
@@ -104,6 +111,9 @@ FLASHMEM void AppCard::HandleAppEvent(OC::AppEvent event) {
     // every time it opens: in the LOOM folder, where the sound files and
     // the recordings are (".." goes up)
     snprintf(dir, sizeof(dir), "%s", SDcard_Ready && SD.exists("/LOOM") ? "/LOOM" : "/");
+    // SPOOL's loops were in RECORDINGS: now SPOOLS
+    if (SDcard_Ready && !SD.exists("/LOOM/SPOOLS") && SD.exists("/LOOM/RECORDINGS"))
+      SD.rename("/LOOM/RECORDINGS", "/LOOM/SPOOLS");
     sel = 0;
     List();
 #ifdef CARD_LISTEN

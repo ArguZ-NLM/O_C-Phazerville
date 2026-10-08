@@ -1617,7 +1617,14 @@ FLASHMEM void ReelDevice::DrawMini(int x, int y, int w, int h) {
 // screen keeps going and the audio interrupt is never held up.
 /////////////////////////////////////////////////////////////////
 constexpr char LOOP_DIR[] = "/LOOM";
-constexpr char REC_DIR[] = "/LOOM/RECORDINGS";  // SPOOL's saved loops
+constexpr char REC_DIR[] = "/LOOM/SPOOLS";  // SPOOL's saved loops
+constexpr char OLD_REC_DIR[] = "/LOOM/RECORDINGS";  // ... called so until 2026-10
+// file lists: alphabetical, but SPOOLS (the saved loops) always first
+FLASHMEM static int ListOrder(const char* a, const char* b) {
+  const bool sa = !strcasecmp(a, "SPOOLS"), sb = !strcasecmp(b, "SPOOLS");
+  if (sa != sb) return sa ? -1 : 1;
+  return strcasecmp(a, b);
+}
 constexpr int MAX_FILES = 48, NAME_LEN = 80;
 constexpr size_t IO_CHUNK = 2048;  // sample frames per step
 // one sample of any size / float as 16 bit
@@ -2119,6 +2126,10 @@ FLASHMEM void PlayerDevice::Scan() {
   if (!SDcard_Ready) return;
   // the folder was /SCULPT before the app became Loom: move it over once
   if (!SD.exists(LOOP_DIR) && SD.exists("/SCULPT")) SD.rename("/SCULPT", LOOP_DIR);
+  // and SPOOL's loops were in RECORDINGS: now SPOOLS (a file playing from
+  // there goes along)
+  if (!SD.exists(REC_DIR) && SD.exists(OLD_REC_DIR)) SD.rename(OLD_REC_DIR, REC_DIR);
+  if (!strcasecmp(dir, OLD_REC_DIR)) snprintf(dir, sizeof(dir), "%s", REC_DIR);
   File d = SD.open(dir);
   if (!d) { snprintf(dir, sizeof(dir), "/"); d = SD.open(dir); }
   if (!d) return;
@@ -2326,7 +2337,7 @@ FLASHMEM void PlayerDevice::List() {
       e.close();
     }
     for (int i = first + 1; i < bcount; i++)
-      for (int j = i; j > first && strcasecmp(bn[j - 1], bn[j]) > 0; j--) {
+      for (int j = i; j > first && ListOrder(bn[j - 1], bn[j]) > 0; j--) {
         char t[NAME_LEN];
         memcpy(t, bn[j], NAME_LEN); memcpy(bn[j], bn[j - 1], NAME_LEN); memcpy(bn[j - 1], t, NAME_LEN);
         std::swap(bfolder[j], bfolder[j - 1]);
