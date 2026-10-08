@@ -476,7 +476,7 @@ FLASHMEM void AppLoom::Start() {
     tracks[t].mix = new MixDevice(t);
     tracks[t].mix->out_fade = tracks[t].out_fade;
   }
-  preview = new LoomPreview;
+  preview = g_preview = new LoomPreview;
   for (auto& tr : tracks) if (tr.player) tr.player->preview = preview;
   mixer = new LoomMixer;
   for (int t = 0; t < NUM_TRACKS; t++) {

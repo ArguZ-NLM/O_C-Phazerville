@@ -242,21 +242,16 @@ public:
 };
 static BufferPrint crash_capture;
 
-static uint32_t boot_srsr = 0;
+static uint32_t boot_srsr = 0, boot_gpr5 = 0;
 // how far the last run got: kept in RAM2, which a restart doesn't clear;
 // logged to BOOT.LOG on the next start with the reset reason
 // (RAM2 is behind the write-back cache: each mark is flushed out to it, or
 // a restart loses it in the cache and the log always read stage 0)
-struct TraceMark { uint32_t magic, stage, ms, app, app_ms; };
+struct TraceMark { uint32_t magic, stage, ms; };
 DMAMEM static volatile TraceMark trace __attribute__((aligned(32)));
-static uint32_t prev_stage = 0, prev_ms = 0, prev_app = 0, prev_app_ms = 0;
+static uint32_t prev_stage = 0, prev_ms = 0;
 static void Trace(uint32_t stage) {
   trace.magic = 0xB007CAFE; trace.stage = stage; trace.ms = millis();
-  arm_dcache_flush((void*)&trace, sizeof(trace));
-}
-// for the apps: a mark of their own, kept apart from the main loop's
-extern "C" void XenoTrace(uint32_t stage) {
-  trace.app = stage; trace.app_ms = millis();
   arm_dcache_flush((void*)&trace, sizeof(trace));
 }
 
@@ -284,20 +279,54 @@ FLASHMEM static void watchdog_feed_during(void (*op)()) {
 }
 #endif
 
+// A crash: for ~8 s (as the core's own handler) the module keeps sending
+// where it happened over USB ("FAULT pc ... lr ..."; ocsend reads it), then
+// restarts. The core's CrashReport doesn't make it through the restart on
+// this firmware, so this is the way to find out.
+extern "C" void usb_isr(void);
+extern "C" int usb_seremu_write_buffer_free(void);
+extern "C" int usb_seremu_write(const void* buffer, uint32_t size);
+extern "C" void (* volatile _VectorsRam[])(void);
+static void xf_hex(char*& o, const char* tag, uint32_t v) {
+  while (*tag) *o++ = *tag++;
+  for (int k = 7; k >= 0; k--) { const uint32_t d = (v >> (4 * k)) & 15; *o++ = char(d < 10 ? '0' + d : 'a' + d - 10); }
+  *o++ = ' ';
+}
+extern "C" __attribute__((used)) void xeno_fault_c(uint32_t* st) {
+  __disable_irq();
+  uint32_t ipsr;
+  asm volatile("mrs %0, ipsr\n" : "=r"(ipsr));
+  char b[128];
+  for (auto& c : b) c = ' ';
+  char* o = b;
+  xf_hex(o, "FAULT pc ", st[6]); xf_hex(o, "lr ", st[5]); xf_hex(o, "cfsr ", SCB_CFSR);
+  xf_hex(o, "bfar ", SCB_BFAR); xf_hex(o, "mmfar ", SCB_MMFAR); xf_hex(o, "ipsr ", ipsr);
+  xf_hex(o, "sp ", uint32_t(st));
+  b[126] = '\n'; b[127] = '\n';
+  for (uint32_t n = 0; n < 60000000u; n++) {
+    usb_isr();
+    if ((n & 0x3FFFF) == 0 && usb_seremu_write_buffer_free() >= 128) usb_seremu_write(b, 128);
+  }
+  SRC_GPR5 = 0x0BAD00F1;
+  SCB_AIRCR = 0x05FA0004;
+  while (1) {}
+}
+extern "C" __attribute__((naked)) void xeno_fault(void) {
+  asm volatile("tst lr, #4\n ite eq\n mrseq r0, msp\n mrsne r0, psp\n b xeno_fault_c\n");
+}
+
 FLASHMEM void setup() {
   delay(50);
 #if defined(__IMXRT1062__)
   boot_srsr = SRC_SRSR;
+  boot_gpr5 = SRC_GPR5;  // 0x0BAD00F1: the fault handler ran (else lockup / software reset)
   SRC_SRSR = boot_srsr;
   arm_dcache_delete((void*)&trace, sizeof(trace));  // what is really in RAM2
-  if (trace.magic == 0xB007CAFE) {
-    prev_stage = trace.stage; prev_ms = trace.ms;
-    prev_app = trace.app; prev_app_ms = trace.app_ms;
-  }
-  trace.app = 0;
+  if (trace.magic == 0xB007CAFE) { prev_stage = trace.stage; prev_ms = trace.ms; }
   Trace(1);
 #endif
   Serial.begin(9600);
+  for (int v = 3; v <= 6; v++) _VectorsRam[v] = xeno_fault;  // hard, memory, bus, usage faults
 
   if (CrashReport) {
     while (!Serial && millis() < 3000) ; // wait
@@ -442,8 +471,8 @@ FLASHMEM void setup() {
     if (big) PhzConfig::myfs.remove("BOOT.LOG");
     bl = PhzConfig::myfs.open("BOOT.LOG", FILE_WRITE);
     if (bl) {
-      bl.printf("boot: SRSR %08lx; last run reached stage %lu at %lu ms, app mark %lu at %lu ms\n",
-                boot_srsr, prev_stage, prev_ms, prev_app, prev_app_ms);
+      bl.printf("boot: SRSR %08lx GPR5 %08lx; last run reached stage %lu at %lu ms\n",
+                boot_srsr, boot_gpr5, prev_stage, prev_ms);
       bl.close();
     }
   }

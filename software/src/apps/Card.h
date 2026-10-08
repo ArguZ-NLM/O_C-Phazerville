@@ -37,7 +37,7 @@ private:
   uint32_t del_since = 0, deleted_at = 0;
   void List();
 #ifdef CARD_LISTEN
-  loom::LoomPreview* preview = nullptr;  // made on first open
+  loom::LoomPreview* preview = nullptr;  // Loom's, while open
   bool autoplay = false, auto_due = false;
   uint32_t auto_at = 0;
   bool IsWav(int i) const {
@@ -121,9 +121,11 @@ FLASHMEM void AppCard::HandleAppEvent(OC::AppEvent event) {
     sel = 0;
     List();
 #ifdef CARD_LISTEN
-    if (!preview) preview = new loom::LoomPreview;
-    preview->level = 0.8f;  // as loud as in Loom
-    OC::AudioIO::ClaimOutput(preview->stream);
+    preview = loom::g_preview;  // Loom's (made at start-up)
+    if (preview) {
+      preview->level = 0.8f;  // as loud as in Loom (there its mixer has the 0.8)
+      OC::AudioIO::ClaimOutput(preview->stream);
+    }
 #endif
     // The computer only asks for the card when the module turns up on USB,
     // while Loom was running and nobody answered. So: leave the bus for a
@@ -135,7 +137,7 @@ FLASHMEM void AppCard::HandleAppEvent(OC::AppEvent event) {
     serving = false;
 #ifdef CARD_LISTEN
     autoplay = false;
-    if (preview) preview->Halt();
+    if (preview) { preview->Halt(); preview->level = 1.0f; }
     OC::AudioIO::ReleaseOutput();
 #endif
   }
@@ -143,12 +145,10 @@ FLASHMEM void AppCard::HandleAppEvent(OC::AppEvent event) {
 
 FLASHMEM void AppCard::Loop() {
   if (!serving) return;
-  loom::XenoTrace(130);
   MTP.loop();
-  loom::XenoTrace(131);
 #ifdef CARD_LISTEN
   if (autoplay && auto_due && millis() - auto_at >= 100) { auto_due = false; Listen(sel); }
-  if (preview) { loom::XenoTrace(132); preview->Idle(true); loom::XenoTrace(133); }
+  if (preview) preview->Idle(true);
 #endif
   if (del_held && millis() - del_since >= 2000) {
     del_held = false;
@@ -286,10 +286,8 @@ FLASHMEM void AppCard::HandleButtonEvent(const UI::Event& event) {
       auto_due = false;
       if (autoplay) Listen(sel); else if (preview) preview->Stop();
     } else if (event.type == UI::EVENT_BUTTON_PRESS && preview && sel < count && IsWav(sel)) {
-      loom::XenoTrace(120);
       if (preview->Is(dir, names[sel])) preview->Stop();
       else preview->Start(dir, names[sel]);
-      loom::XenoTrace(121);
     }
     return;
   }

@@ -1765,7 +1765,6 @@ PROGMEM static const DeviceDef PLAYER_DEF = {
 // through, into the output past both tracks' effects. One for both tracks;
 // its memory only while it plays. A new file waits for the last one to fade
 // out (20 ms; cut off, it clicked).
-extern "C" void XenoTrace(uint32_t stage);  // (Main.cpp) a mark that survives a restart
 class LoomPreview {
 public:
   AudioPlayStream stream;
@@ -1786,14 +1785,23 @@ private:
   size_t frames = 0, data_off = 0;
   char dir_[96] = "", name_[NAME_LEN] = "";
   char next_dir[96] = "", next_name[NAME_LEN] = "";  // waiting for the fade
+  char path_[192] = "";  // of the file playing, to open it again
+  bool Reopen() {
+    if (f) f.close();
+    f = SD.open(path_, FILE_READ);
+    return bool(f);
+  }
   bool Begin();
   void Close();
   size_t Fill(int chunks);
   size_t ReadFrames(int16_t* l, int16_t* r, size_t n);
 };
 
+// the one quick listen (made with Loom, before the audio output; CARD
+// borrows it while Loom is paused)
+inline LoomPreview* g_preview = nullptr;
+
 FLASHMEM bool LoomPreview::Start(const char* folder, const char* name) {
-  XenoTrace(101);
   snprintf(next_dir, sizeof(next_dir), "%s", folder);
   snprintf(next_name, sizeof(next_name), "%s", name);
   want = true;
@@ -1826,7 +1834,7 @@ FLASHMEM void LoomPreview::Close() {
 // for it: the stream is silent by then and doesn't touch its buffers, and
 // holding up the audio while that much memory was freed clicked loudly.)
 FLASHMEM void LoomPreview::Idle(bool keep) {
-  if (on && stream.Playing()) { XenoTrace(110); Fill(4); XenoTrace(111); return; }
+  if (on && stream.Playing()) { Fill(4); return; }
   if (!stream.Silent()) return;  // fading out
   if (on) Close();
   if (want) {
@@ -1840,9 +1848,8 @@ FLASHMEM void LoomPreview::Idle(bool keep) {
 FLASHMEM bool LoomPreview::Begin() {
   char path[192];
   snprintf(path, sizeof(path), "%s/%s", strcmp(next_dir, "/") ? next_dir : "", next_name);
-  XenoTrace(102);
+  snprintf(path_, sizeof(path_), "%s", path);
   f = SD.open(path, FILE_READ);
-  XenoTrace(103);
   if (!f) return false;
   uint8_t h[12];
   if (f.read(h, 12) != 12 || memcmp(h, "RIFF", 4) || memcmp(h + 8, "WAVE", 4)) { f.close(); return false; }
@@ -1877,9 +1884,7 @@ FLASHMEM bool LoomPreview::Begin() {
       f.seek(f.position() + sz + (sz & 1));
     }
   }
-  XenoTrace(104);
   if (!frames || (!stream.ready() && !stream.Acquire(2.0f, 0.25f))) { f.close(); return false; }
-  XenoTrace(105);
   stream.SetLoop(false);
   stream.SetCrossfade(false);
   stream.SetLevel(level);
@@ -1887,7 +1892,6 @@ FLASHMEM bool LoomPreview::Begin() {
   stream.Open(frames);
   stream.SetWindow(0, frames);
   Fill(8);  // a start buffered before it plays
-  XenoTrace(106);
   stream.Play();
   snprintf(dir_, sizeof(dir_), "%s", next_dir);
   snprintf(name_, sizeof(name_), "%s", next_name);
@@ -1902,7 +1906,11 @@ FLASHMEM size_t LoomPreview::Fill(int chunks) {
     size_t at, count;
     if (!stream.Next(l, r, at, count, IO_CHUNK)) break;
     f.seek(data_off + at * size_t(bytes) * chans);
-    const size_t rd = ReadFrames(l, r, count);
+    size_t rd = ReadFrames(l, r, count);
+    if (!rd && Reopen()) {  // the file handle went stale (card mode: the
+      f.seek(data_off + at * size_t(bytes) * chans);  // computer's side
+      rd = ReadFrames(l, r, count);                   // re-opens the card)
+    }
     stream.Filled(rd);
     all += rd;
     if (rd < count) break;
@@ -1914,7 +1922,11 @@ FLASHMEM size_t LoomPreview::ReadFrames(int16_t* l, int16_t* r, size_t n) {
   DMAMEM static uint8_t raw[IO_CHUNK * 8];  // (RAM2: RAM1 is short)
   const size_t frame = size_t(bytes) * chans;
   const size_t k = std::min(n, sizeof(raw) / frame);
-  const size_t rd = f.read(raw, k * frame) / frame;
+  // (a failed read gives -1: as a size that ran the loop off the end of
+  // memory and crashed the module)
+  const int got = f.read(raw, k * frame);
+  if (got <= 0) return 0;
+  const size_t rd = size_t(got) / frame;
   for (size_t i = 0; i < rd; i++) {
     const uint8_t* fp = raw + i * frame;
     l[i] = WavSample(fp, bytes, is_float);
@@ -2642,7 +2654,9 @@ FLASHMEM size_t PlayerDevice::ReadFrames(int16_t* l, int16_t* r, size_t n) {
   static uint8_t raw[IO_CHUNK * 8];
   const size_t frame = size_t(bytes) * chans;
   const size_t k = std::min(n, sizeof(raw) / frame);
-  const size_t rd = lf.read(raw, k * frame) / frame;
+  const int got = lf.read(raw, k * frame);  // -1 on an error: nothing
+  if (got <= 0) return 0;
+  const size_t rd = size_t(got) / frame;
   for (size_t i = 0; i < rd; i++) {
     const uint8_t* fp = raw + i * frame;
     l[i] = Sample(fp);
