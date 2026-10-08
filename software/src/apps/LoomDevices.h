@@ -1709,8 +1709,9 @@ constexpr char REC_DIR[] = "/LOOM/SPOOLS";  // SPOOL's saved loops
 constexpr char OLD_REC_DIR[] = "/LOOM/RECORDINGS";  // ... called so until 2026-10
 // file lists: alphabetical, but SPOOLS (the saved loops) always first
 FLASHMEM static int ListOrder(const char* a, const char* b) {
-  const bool sa = !strcasecmp(a, "SPOOLS"), sb = !strcasecmp(b, "SPOOLS");
-  if (sa != sb) return sa ? -1 : 1;
+  // SPOOLS first, TAPES second, then the rest by name
+  auto rank = [](const char* n) { return !strcasecmp(n, "SPOOLS") ? 0 : !strcasecmp(n, "TAPES") ? 1 : 2; };
+  if (rank(a) != rank(b)) return rank(a) - rank(b);
   return strcasecmp(a, b);
 }
 constexpr int MAX_FILES = 48, NAME_LEN = 80;
