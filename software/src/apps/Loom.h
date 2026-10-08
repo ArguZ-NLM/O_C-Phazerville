@@ -1338,6 +1338,8 @@ FLASHMEM void AppLoom::MainLoop() {
     bool listing = false;
     for (auto& tr : tracks) listing |= tr.player && tr.choice[SOURCE] == 2 && tr.player->browsing;
     if (!listing || view != DEVICE) preview->Stop();
+    if (listing && view == DEVICE)
+      for (auto& tr : tracks) if (tr.player) tr.player->AutoplayIdle();
     preview->Idle();
     // the output is muted while a PLAYER reads a file in (the card reading
     // made a high whine on the output)
@@ -1593,6 +1595,13 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
   if (event.control == OC::CONTROL_BUTTON_X && view == DEVICE && mod_mode) {
     if (event.type == UI::EVENT_BUTTON_LONG_PRESS && !mod_slot && Focused()) MidiLearn(Focused());
     if (event.type != UI::EVENT_BUTTON_PRESS) return;
+  }
+  // PLAYER's file list: B held turns AUTO on / off
+  if (event.type == UI::EVENT_BUTTON_LONG_PRESS && event.control == OC::CONTROL_BUTTON_DOWN &&
+      view == DEVICE && !focus_mod && col == SOURCE && tracks[track].player &&
+      tracks[track].player->browsing && Focused() == tracks[track].player) {
+    tracks[track].player->ToggleAutoplay();
+    return;
   }
   if (event.type != UI::EVENT_BUTTON_PRESS) return;
 

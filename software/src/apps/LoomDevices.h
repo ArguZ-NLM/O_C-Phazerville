@@ -1969,11 +1969,21 @@ public:
   // the browser: folders and WAVs as a text list (R push on FILE)
   bool browsing = false;
   void OpenBrowser();
-  void BrowseMove(int d) { bsel = constrain(bsel + d, 0, std::max(0, bcount - 1)); }
+  void BrowseMove(int d) {
+    const int was = bsel;
+    bsel = constrain(bsel + d, 0, std::max(0, bcount - 1));
+    if (autoplay && bsel != was) { auto_due = true; auto_at = millis(); }
+  }
+  // B held in the list: AUTO, every file the cursor rests on plays (the
+  // quick listen); held again or the list closed: off
+  bool autoplay = false, auto_due = false;
+  uint32_t auto_at = 0;
+  void ToggleAutoplay();
+  void AutoplayIdle();
   void BrowseEnter();
   void BrowseBack();
   void BrowsePlay();
-  void CloseBrowser() { browsing = false; if (preview) preview->Stop(); }
+  void CloseBrowser() { browsing = autoplay = false; if (preview) preview->Stop(); }
   bool BrowsedIsCurrent() const;
   LoomPreview* preview = nullptr;  // B in the list (the app's, shared)
   void DrawBrowser(int x, int y, int w, int h) const;
@@ -2305,7 +2315,7 @@ FLASHMEM void PlayerDevice::OpenBrowser() {
 
 FLASHMEM void PlayerDevice::BrowseBack() {
   if (!strcmp(bdir, "/")) {  // at the top: close
-    browsing = false;
+    browsing = autoplay = false;
     if (preview) preview->Stop();
     return;
   }
@@ -2322,12 +2332,13 @@ FLASHMEM void PlayerDevice::BrowseEnter() {
     if (l + strlen(bn[bsel]) + 2 < sizeof(bdir))
       snprintf(bdir + l, sizeof(bdir) - l, "%s%s", l > 1 ? "/" : "", bn[bsel]);
     List();
+    if (autoplay) { auto_due = true; auto_at = millis(); }
     return;
   }
   // a WAV: play from this folder (the quick listen ends)
   if (preview) preview->Stop();
   if (!BrowsedIsCurrent()) SetFile(bdir, bn[bsel]);
-  browsing = false;
+  browsing = autoplay = false;
 }
 
 FLASHMEM bool PlayerDevice::BrowsedIsCurrent() const {
@@ -2344,12 +2355,35 @@ FLASHMEM void PlayerDevice::BrowsePlay() {
   else preview->Start(bdir, bn[bsel]);
 }
 
+FLASHMEM void PlayerDevice::ToggleAutoplay() {
+  autoplay = !autoplay;
+  auto_due = false;
+  if (!preview) return;
+  if (!autoplay) { preview->Stop(); return; }
+  if (bsel < bcount && !bfolder[bsel] && !preview->Is(bdir, bn[bsel])) preview->Start(bdir, bn[bsel]);
+}
+
+// AUTO: once the cursor has rested on a file for a moment, it plays (a
+// folder: quiet), so scrolling fast doesn't start every file on the way
+FLASHMEM void PlayerDevice::AutoplayIdle() {
+  if (!browsing) autoplay = false;
+  if (!autoplay || !auto_due || !preview || millis() - auto_at < 250) return;
+  auto_due = false;
+  if (bsel >= bcount || bfolder[bsel]) preview->Stop();
+  else if (!preview->Is(bdir, bn[bsel])) preview->Start(bdir, bn[bsel]);
+}
+
 FLASHMEM void PlayerDevice::DrawBrowser(int x, int y, int w, int h) const {
   // the folder on top, then 5 entries around the selection
   char t[24];
   const size_t l = strlen(bdir);
-  snprintf(t, sizeof(t), "%s", l > 21 ? bdir + l - 21 : bdir);
+  const size_t room = autoplay ? 16 : 21;  // AUTO takes the right end
+  snprintf(t, sizeof(t), "%s", l > room ? bdir + l - room : bdir);
   gfxPrint(x, y + 1, t);
+  if (autoplay) {
+    gfxPrint(x + w - 25, y + 1, "AUTO");
+    gfxInvert(x + w - 26, y, 26, 9);
+  }
   gfxLine(x, y + 10, x + w - 1, y + 10);
   if (!bcount) { gfxPrint(x + 4, y + 16, PSTR("(empty)")); return; }
   constexpr int rows = 5;
