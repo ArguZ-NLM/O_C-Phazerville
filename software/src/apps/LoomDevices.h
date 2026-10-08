@@ -1772,10 +1772,31 @@ FLASHMEM void ReelDevice::WriteMeta(const char* wav_name) const {
   f.close();
 }
 
-// a free name in dir from the module's clock: Spool_261008_1602.wav
-// (year, month, day _ hour, minute), _2, _3 .. within the same minute;
-// numbered (Spool_001.wav) while the clock was never set (it starts in
-// 2019 after a power-up without its battery)
+// the session: counted on the card (/LOOM/SESSION.TXT), one up the first
+// time something is saved after a power-up; 0 until then
+inline int g_session = 0;
+FLASHMEM static int Session() {
+  if (g_session) return g_session;
+  int n = 0;
+  if (File f = SD.open("/LOOM/SESSION.TXT", FILE_READ)) {
+    char b[12] = {};
+    f.read(b, sizeof(b) - 1);
+    f.close();
+    n = atoi(b);
+  }
+  g_session = constrain(n + 1, 1, 999);
+  SD.remove("/LOOM/SESSION.TXT");
+  if (File f = SD.open("/LOOM/SESSION.TXT", FILE_WRITE)) {
+    f.printf("%d\n", g_session);
+    f.close();
+  }
+  return g_session;
+}
+
+// a free name in dir. With the clock set (after a firmware update, until
+// the power goes; there is no battery): Spool_261008_1602.wav (year, month,
+// day _ hour, minute), _2, _3 .. within the same minute. Without (it starts
+// in 2019 at power-up): Spool_S014_01.wav, the session and the n-th save
 FLASHMEM static void StampName(const char* dir, const char* prefix, char* name, size_t n, char* path, size_t pn) {
   const time_t now = time_t(rtc_get());
   struct tm tm;
@@ -1785,8 +1806,10 @@ FLASHMEM static void StampName(const char* dir, const char* prefix, char* name, 
   if (clock)
     snprintf(base, sizeof(base), "%s_%02d%02d%02d_%02d%02d", prefix, tm.tm_year % 100,
              tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min);
+  else
+    snprintf(base, sizeof(base), "%s_S%03d", prefix, Session());
   for (int k = 1; k < 1000; k++) {
-    if (!clock) snprintf(name, n, "%s_%03d.wav", prefix, k);
+    if (!clock) snprintf(name, n, "%s_%02d.wav", base, k);
     else if (k == 1) snprintf(name, n, "%s.wav", base);
     else snprintf(name, n, "%s_%d.wav", base, k);
     snprintf(path, pn, "%s/%s", dir, name);

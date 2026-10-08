@@ -82,9 +82,9 @@ FLASHMEM void AppCard::List() {
       const char* nm = e.name();
       const bool isdir = e.isDirectory();
       // (a .loom is the settings of the WAV next to it: not listed, it goes
-      // with the WAV)
+      // with the WAV; nor Loom's session count, SESSION.TXT)
       const size_t nl = strlen(nm);
-      const bool meta = !isdir && nl > 5 && !strcasecmp(nm + nl - 5, ".loom");
+      const bool meta = !isdir && ((nl > 5 && !strcasecmp(nm + nl - 5, ".loom")) || !strcasecmp(nm, "SESSION.TXT"));
       if (nm[0] != '.' && !meta && nl < NAME - 1 && isdir == (pass == 0)) {
         snprintf(names[count], NAME, "%s", nm);
         folder[count] = isdir;
