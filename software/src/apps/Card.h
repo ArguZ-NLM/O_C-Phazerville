@@ -101,6 +101,10 @@ FLASHMEM void AppCard::HandleAppEvent(OC::AppEvent event) {
       started = true;
     }
     serving = true;
+    // every time it opens: in the LOOM folder, where the sound files and
+    // the recordings are (".." goes up)
+    snprintf(dir, sizeof(dir), "%s", SDcard_Ready && SD.exists("/LOOM") ? "/LOOM" : "/");
+    sel = 0;
     List();
 #ifdef CARD_LISTEN
     if (!preview) preview = new loom::LoomPreview;
