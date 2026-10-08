@@ -4908,10 +4908,12 @@ PROGMEM static const DeviceDef CHIME_DEF = {
     {"DCAY", 0, 100, 66, UNI, 0, 11, 0},  // 20 ms .. 12 s to fade away (low: the wide pass blended in, a filter); mode: variation per hit
     // what a hit does to the notes fed; mode: how many of the six (1 .. 6)
     {"ROT", 0, 3, 0, LIST, 4, 6, 5, {"OFF", "UP", "DOWN", "RAND"}},
-    // modes: variation per hit (PITCH +- n semitones in the scale, TONE +- 5 n)
-    {"PITCH", -24, 24, 0, BI, 0, 25, 0},
+    // how the 12-note scales are tuned (the microtonal ones bring their
+    // own); mode: variation per hit, +- n steps of the scale
+    {"TUNE", 0, 3, 0, LIST, 4, 13, 0, {"EQUAL", "JUST", "PYTH", "MEANT"}},
+    // mode: variation per hit, +- 5 n
     {"TONE", -50, 50, 0, BI, 0, 11, 0},
-    {"SCALE", 0, 6, 3, UNI},     // CHROM MAJOR MINOR PENTA mPENT FIFTH WHOLE
+    {"SCALE", 0, 14, 3, UNI},    // 7 of 12 notes, then 8 microtonal (see Apply)
     {"WET", 0, 100, 100, UNI},
   },
   {"", ""},
@@ -4919,8 +4921,8 @@ PROGMEM static const DeviceDef CHIME_DEF = {
 
 class ChimeDevice : public Device {
 public:
-  enum { NOTE, SPRD, DECAY, ROT, PITCH, TONE, SCALE, WET };
-  static constexpr int SCALES = 7;
+  enum { NOTE, SPRD, DECAY, ROT, TUNE, TONE, SCALE, WET };
+  static constexpr int SCALES = 15, SCALES12 = 7;  // the first 7 on the 12 notes (TUNE)
   ChimeDevice() : Device(CHIME_DEF) {}
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
@@ -4952,8 +4954,10 @@ private:
   }
 };
 
+// the scale as steps in cents: the first seven pick from the 12 notes,
+// tuned by TUNE; the rest are microtonal with their own steps
 FLASHMEM void ChimeDevice::Apply(int p) {
-  static const uint16_t masks[SCALES] = {
+  static const uint16_t masks[SCALES12] = {
     0xFFF,                                                                   // CHROM
     (1 << 0) | (1 << 2) | (1 << 4) | (1 << 5) | (1 << 7) | (1 << 9) | (1 << 11),  // MAJOR
     (1 << 0) | (1 << 2) | (1 << 3) | (1 << 5) | (1 << 7) | (1 << 8) | (1 << 10),  // MINOR
@@ -4962,14 +4966,51 @@ FLASHMEM void ChimeDevice::Apply(int p) {
     (1 << 0) | (1 << 7),                                                     // FIFTH: root and fifth
     (1 << 0) | (1 << 2) | (1 << 4) | (1 << 6) | (1 << 8) | (1 << 10),        // WHOLE tones
   };
+  // the 12 notes in cents: equal, just (5-limit), Pythagorean, 1/4-comma meantone
+  static const float tunings[4][12] = {
+    {0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100},
+    {0, 111.73f, 203.91f, 315.64f, 386.31f, 498.04f, 590.22f, 701.96f, 813.69f, 884.36f, 1017.60f, 1088.27f},
+    {0, 90.22f, 203.91f, 294.13f, 407.82f, 498.04f, 611.73f, 701.96f, 792.18f, 905.87f, 996.09f, 1109.78f},
+    {0, 76.05f, 193.16f, 310.26f, 386.31f, 503.42f, 579.47f, 696.58f, 772.63f, 889.74f, 1006.84f, 1082.89f},
+  };
+  // slendro, pelog (approximate: every gamelan is tuned its own way), the
+  // 22 shrutis, the harmonic series 8 .. 15
+  static const float slendro[5] = {0, 240, 480, 720, 960};
+  static const float pelog[7] = {0, 120, 270, 540, 670, 785, 950};
+  static const float shruti[22] = {0, 90.2f, 111.7f, 182.4f, 203.9f, 294.1f, 315.6f, 386.3f, 407.8f, 498.0f, 519.6f,
+                                   590.2f, 611.7f, 702.0f, 792.2f, 813.7f, 884.4f, 905.9f, 996.1f, 1017.6f, 1088.3f, 1109.8f};
+  static const float harmonic[8] = {0, 203.91f, 386.31f, 551.32f, 701.96f, 840.53f, 968.83f, 1088.27f};
   AudioEffectChime::Params a;
   a.root = cur[NOTE];
-  a.mask = masks[constrain(int(cur[SCALE]), 0, SCALES - 1)];
+  const int sc = constrain(int(cur[SCALE]), 0, SCALES - 1);
+  a.steps = 0;
+  a.period = 1200.0f;
+  auto equal = [&](int n, float period) {
+    for (int k = 0; k < n; k++) a.step[k] = period * k / n;
+    a.steps = n;
+    a.period = period;
+  };
+  auto table = [&](const float* t, int n) {
+    for (int k = 0; k < n; k++) a.step[k] = t[k];
+    a.steps = n;
+  };
+  if (sc < SCALES12) {
+    const float* tn = tunings[constrain(int(cur[TUNE]), 0, 3)];
+    for (int s = 0; s < 12; s++) if (masks[sc] >> s & 1) a.step[a.steps++] = tn[s];
+  } else switch (sc) {
+    case 7: equal(24, 1200.0f); break;          // QUART: quarter tones
+    case 8: equal(17, 1200.0f); break;          // 17ET
+    case 9: equal(19, 1200.0f); break;          // 19ET
+    case 10: table(slendro, 5); break;          // SLEND
+    case 11: table(pelog, 7); break;            // PELOG
+    case 12: equal(13, 1901.955f); break;       // BOHLN: Bohlen-Pierce, 13 steps of the twelfth (3:1)
+    case 13: table(shruti, 22); break;          // SHRUT
+    default: table(harmonic, 8); break;         // HARMO
+  }
   a.spread = cur[SPRD];
   a.notes = mode[ROT] + 1;
   a.rotate = uint8_t(cur[ROT]);
-  a.pitch = cur[PITCH];
-  a.pitch_var = mode[PITCH];
+  a.step_var = mode[TUNE];
   a.tone = cur[TONE];
   a.tone_var = mode[TONE] * 5.0f;
   a.decay = Decay(cur[DECAY]);
@@ -4982,7 +5023,8 @@ FLASHMEM void ChimeDevice::Apply(int p) {
 
 FLASHMEM void ChimeDevice::Format(int p, char* buf, size_t n) const {
   static const char* const names[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
-  static const char* const scales[SCALES] = {"CHROM", "MAJOR", "MINOR", "PENTA", "mPENT", "FIFTH", "WHOLE"};
+  static const char* const scales[SCALES] = {"CHROM", "MAJOR", "MINOR", "PENTA", "mPENT", "FIFTH", "WHOLE",
+                                             "QUART", "17ET", "19ET", "SLEND", "PELOG", "BOHLN", "SHRUT", "HARMO"};
   if (p == NOTE) snprintf(buf, n, "%s%d", names[val[NOTE] % 12], val[NOTE] / 12 - 1);
   else if (p == SCALE) snprintf(buf, n, "%s", scales[constrain(int(val[SCALE]), 0, SCALES - 1)]);
   else if (p == DECAY) {
@@ -5022,8 +5064,8 @@ FLASHMEM void ChimeDevice::FormatMode(int p, char* buf, size_t n) const {
     if (mode[DECAY] == 0) snprintf(buf, n, "OFF");
     else snprintf(buf, n, "+-%d%%", int((powf(2.0f, mode[DECAY] * 0.1f) - 1.0f) * 100.0f + 0.5f));
   }
-  else if ((p == PITCH || p == TONE) && mode[p] == 0) snprintf(buf, n, "OFF");
-  else if (p == PITCH) snprintf(buf, n, "+-%d", mode[p]);
+  else if ((p == TUNE || p == TONE) && mode[p] == 0) snprintf(buf, n, "OFF");
+  else if (p == TUNE) snprintf(buf, n, "+-%d", mode[p]);
   else if (p == TONE) snprintf(buf, n, "+-%d", mode[p] * 5);
   else Device::FormatMode(p, buf, n);
 }

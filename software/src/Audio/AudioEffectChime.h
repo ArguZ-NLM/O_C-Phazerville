@@ -7,7 +7,9 @@
 // Tuned resonators for the Loom CHIME device.
 //
 // Six note places, the notes of a scale SPREAD steps apart from NOTE, even
-// places on the left, odd on the right. The input (L + R) goes into the
+// places on the left, odd on the right. A scale is any set of steps in
+// cents (12-note scales in several tunings, or microtonal ones with their
+// own steps and period). The input (L + R) goes into the
 // resonators of the places that are ON: NOTES of them in a row, starting at
 // the rotation. Every resonator is two band-passes in a row on the same
 // note (the second one sets the ring; the first keeps what is far from the
@@ -20,8 +22,8 @@
 // own pitch. So there are four times as many resonators as places (a
 // change of all six notes leaves six ringing out): a new note takes one
 // still ringing on it if there is one, else the quietest free one; a note
-// that stays keeps its own. PITCH's
-// variation moves every new note by up to +-n semitones (in the scale),
+// that stays keeps its own. TUNE's
+// variation moves every new note by up to +-n steps of the scale,
 // DCAY's makes it ring shorter or longer, TONE's gives every hit its own
 // tilt. MORPH: how long the input takes to move from the old notes to the
 // new ones (a crossfade, the notes seem to slide apart).
@@ -32,12 +34,15 @@ public:
 
   struct Params {
     int root = 48;           // MIDI note of the first place
-    uint16_t mask = 0xFFF;   // the scale: bit n = n semitones over the root
+    // the scale: its steps in cents over the root, repeating every period
+    // (1200: the octave; Bohlen-Pierce: 1902, the twelfth)
+    float step[24] = {0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100};
+    int steps = 12;
+    float period = 1200.0f;
     int spread = 2;          // scale steps between places
     int notes = 6;           // places on at once
     uint8_t rotate = ROT_OFF;
-    int pitch = 0;           // semitones, all notes
-    int pitch_var = 0;       // semitones, every new note at random (in the scale)
+    int step_var = 0;        // scale steps, every new note at random
     float tone = 0.0f;       // -50..50: tilt low <-> high places, and above 0 some of the first pass
     float tone_var = 0.0f;
     float decay = 2.0f;      // s to -60 dB
@@ -109,25 +114,15 @@ private:
     rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
     return int32_t(rng) * (1.0f / 2147483648.0f);
   }
-  // the scale step k (any integer) from the root, as a MIDI note
-  int Degree(int k) const {
-    int deg[12], n = 0;
-    for (int s = 0; s < 12; s++) if (par.mask >> s & 1) deg[n++] = s;
-    if (!n) { deg[0] = 0; n = 1; }
-    const int oct = k >= 0 ? k / n : -((-k + n - 1) / n);
-    return par.root + 12 * oct + deg[k - oct * n];
-  }
-  // a note moved onto the scale (the nearest in it)
-  int Snap(int note) const {
-    for (int d = 0; d < 6; d++) {
-      if (par.mask >> (((note - par.root - d) % 12 + 12) % 12) & 1) return note - d;
-      if (par.mask >> (((note - par.root + d) % 12 + 12) % 12) & 1) return note + d;
-    }
-    return note;
+  // scale step k (any integer) from the root, in Hz
+  float Degree(int k) const {
+    const int n = std::max(1, std::min(24, par.steps));
+    const int per = k >= 0 ? k / n : -((-k + n - 1) / n);
+    const float cents = per * par.period + par.step[k - per * n];
+    return 440.0f * powf(2.0f, (par.root - 69) / 12.0f + cents / 1200.0f);
   }
   float PlaceHz(int p) const {
-    const int note = Snap(Degree(p * par.spread) + place_var[p]) + par.pitch;
-    return std::min(7000.0f, 440.0f * powf(2.0f, (note - 69) / 12.0f));
+    return std::min(7000.0f, Degree(p * par.spread + place_var[p]));
   }
   void Tune(Voice& v, float hz, float dec) {
     v.hz = hz;
@@ -232,7 +227,7 @@ FASTRUN void AudioEffectChime::update() {
   }
   if (hit || step) {
     for (int p = 0; p < PLACES; p++) {
-      place_var[p] = par.pitch_var ? int(roundf(Rand() * par.pitch_var)) : 0;
+      place_var[p] = par.step_var ? int(roundf(Rand() * par.step_var)) : 0;
       place_dec[p] = par.decay_var > 0.0f ? powf(2.0f, Rand() * par.decay_var) : 1.0f;
     }
     hit_tone = Rand() * par.tone_var;
@@ -240,7 +235,7 @@ FASTRUN void AudioEffectChime::update() {
   }
   if (retune) {
     retune = false;
-    if (!par.pitch_var) for (auto& v : place_var) v = 0;
+    if (!par.step_var) for (auto& v : place_var) v = 0;
     if (par.decay_var <= 0.0f) for (auto& d : place_dec) d = 1.0f;
     if (par.tone_var <= 0.0f) hit_tone = 0.0f;
     Assign();
