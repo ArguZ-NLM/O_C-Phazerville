@@ -99,6 +99,8 @@ private:
   float place_dec[PLACES] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};  // and DCAY's
   float slow = 0.0f;
   int holdoff = 0;
+  // the level control: the wet sum's peak level, and the gain it sets
+  float agc_env = 0.0f, agc_g = 1.0f;
   uint32_t rng = 0x2545F491u;
   Viz viz = {};
   float x[AUDIO_BLOCK_SAMPLES], sum[2][AUDIO_BLOCK_SAMPLES];
@@ -278,14 +280,24 @@ FASTRUN void AudioEffectChime::update() {
     viz.fed[i] = v.in_to > 0.0f;
   }
 
-  // a soft limit (unity when quiet), then dry / wet
+  // the level control: a held input builds the rings up far past a pluck
+  // (the make-up is for plucks), so the sum is turned down smoothly when
+  // its peaks go over ~-6 dB (down within ~1 ms, back up over ~0.3 s);
+  // then a soft limit for what gets past, then dry / wet
+  constexpr float AGC_TARGET = 0.5f;
+  const float env_fall = 0.9995f, g_down = 0.02f, g_up = 0.00007f;
   const float wet = par.wet;
   float peak_out = 0.0f;
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
     const float dl = in[0] ? in[0]->data[n] * q15 : 0.0f;
     const float dr = in[1] ? in[1]->data[n] * q15 : 0.0f;
-    const float sl = sum[0][n] / sqrtf(1.0f + sum[0][n] * sum[0][n]);
-    const float sr = sum[1][n] / sqrtf(1.0f + sum[1][n] * sum[1][n]);
+    const float a = std::max(fabsf(sum[0][n]), fabsf(sum[1][n]));
+    agc_env = a > agc_env ? a : agc_env * env_fall;
+    const float want = agc_env > AGC_TARGET ? AGC_TARGET / agc_env : 1.0f;
+    agc_g += (want < agc_g ? g_down : g_up) * (want - agc_g);
+    const float xl = sum[0][n] * agc_g, xr = sum[1][n] * agc_g;
+    const float sl = xl / sqrtf(1.0f + xl * xl);
+    const float sr = xr / sqrtf(1.0f + xr * xr);
     const float ol = dl + wet * (sl - dl), orr = dr + wet * (sr - dr);
     peak_out = std::max(peak_out, std::max(fabsf(ol), fabsf(orr)));
     out[0]->data[n] = __SSAT(int32_t(ol * 32767.0f), 16);
