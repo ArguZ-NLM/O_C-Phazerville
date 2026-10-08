@@ -587,7 +587,7 @@ FLASHMEM void setup() {
           display::frame_buffer.capture_request();
           cap_idx = 0;
         } else if (c == 'V') {
-          Serial.printf("Version (build %s%s)\n", OC::Strings::VERSION, OC::Strings::BUILD_TAG);
+          Serial.printf("Version (build %s%s) clock %lu\n", OC::Strings::VERSION, OC::Strings::BUILD_TAG, (unsigned long)rtc_get());
         }
       }
       const uint8_t* cap = display::frame_buffer.captured();

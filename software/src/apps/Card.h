@@ -228,10 +228,10 @@ FLASHMEM void AppCard::DrawMenu() const {
     if (!strcmp(names[i], "..")) {
       snprintf(nm, sizeof(nm), "..");
     } else {
-      // shortened in the middle like in PLAYER (but with its extension)
-      const int nl = int(strlen(names[i]));
-      if (nl <= fit) snprintf(nm, sizeof(nm), "%s", names[i]);
-      else snprintf(nm, sizeof(nm), "%.*s..%s", (fit - 2 + 1) / 2, names[i], names[i] + nl - (fit - 2) / 2);
+      // shortened in the middle like in PLAYER; sound files without .wav
+      const int nl = int(strlen(names[i])) - (IsWav(i) ? 4 : 0);
+      if (nl <= fit) snprintf(nm, sizeof(nm), "%.*s", nl, names[i]);
+      else snprintf(nm, sizeof(nm), "%.*s..%.*s", (fit - 2 + 1) / 2, names[i], (fit - 2) / 2, names[i] + nl - (fit - 2) / 2);
       if (folder[i]) strncat(nm, "/", sizeof(nm) - strlen(nm) - 1);
     }
     gfxPrint(2, ry, nm);
@@ -251,9 +251,9 @@ FLASHMEM void AppCard::DrawMenu() const {
     gfxFrame(8, 26, 112, 24);
     if (del_held) {
       char nm[20];
-      const int nl = int(strlen(names[sel]));
-      if (nl <= 17) snprintf(nm, sizeof(nm), "%s", names[sel]);
-      else snprintf(nm, sizeof(nm), "%.8s..%s", names[sel], names[sel] + nl - 7);
+      const int nl = int(strlen(names[sel])) - (IsWav(sel) ? 4 : 0);
+      if (nl <= 17) snprintf(nm, sizeof(nm), "%.*s", nl, names[sel]);
+      else snprintf(nm, sizeof(nm), "%.8s..%.7s", names[sel], names[sel] + nl - 7);
       gfxPrint(12, 29, "DELETE");
       gfxPrint(12, 38, nm);
       const int fill = std::min<int>(106, (millis() - del_since) * 106 / 2000);
