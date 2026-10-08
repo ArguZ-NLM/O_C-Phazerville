@@ -1731,31 +1731,82 @@ PROGMEM static const DeviceDef PLAYER_DEF = {
 
 // The file list's quick listen (B): a file straight from the card, once
 // through, into the output past both tracks' effects. One for both tracks;
-// its memory only while it plays.
+// its memory only while it plays. A new file waits for the last one to fade
+// out (20 ms; cut off, it clicked).
 class LoomPreview {
 public:
   AudioPlayStream stream;
   bool Start(const char* folder, const char* name);
   void Stop();
+  void Halt();  // at once (Loom suspended: no audio running)
   void Idle();
-  bool Playing() const { return on; }
+  bool Playing() const { return want || (on && stream.Playing()); }
   bool Is(const char* folder, const char* name) const {
-    return on && !strcmp(dir_, folder) && !strcmp(name_, name);
+    if (want) return !strcmp(next_dir, folder) && !strcmp(next_name, name);
+    return on && stream.Playing() && !strcmp(dir_, folder) && !strcmp(name_, name);
   }
 private:
   File f;
-  bool on = false, is_float = false;
+  bool on = false, want = false, is_float = false;
   int chans = 0, bytes = 0;
   size_t frames = 0, data_off = 0;
   char dir_[96] = "", name_[NAME_LEN] = "";
+  char next_dir[96] = "", next_name[NAME_LEN] = "";  // waiting for the fade
+  bool Begin();
+  void Close();
   size_t Fill(int chunks);
   size_t ReadFrames(int16_t* l, int16_t* r, size_t n);
 };
 
 FLASHMEM bool LoomPreview::Start(const char* folder, const char* name) {
-  Stop();
+  snprintf(next_dir, sizeof(next_dir), "%s", folder);
+  snprintf(next_name, sizeof(next_name), "%s", name);
+  want = true;
+  stream.Stop();  // the one playing fades out first (see Idle)
+  if (stream.Silent()) Idle();
+  return true;
+}
+
+FLASHMEM void LoomPreview::Stop() {
+  want = false;
+  stream.Stop();  // fades out; the memory goes once it has (Idle)
+}
+
+FLASHMEM void LoomPreview::Halt() {
+  want = false;
+  stream.Stop();
+  Close();
+  AudioNoInterrupts();
+  stream.Release();
+  AudioInterrupts();
+}
+
+FLASHMEM void LoomPreview::Close() {
+  if (f) f.close();
+  on = false;
+}
+
+// main loop: the buffers topped up; once faded out, the next file or the
+// memory given back
+FLASHMEM void LoomPreview::Idle() {
+  if (on && stream.Playing()) { Fill(4); return; }
+  if (!stream.Silent()) return;  // fading out
+  if (on) Close();
+  if (want) {
+    want = false;
+    if (Begin()) return;
+  }
+  if (stream.ready()) {
+    AudioNoInterrupts();
+    stream.Release();
+    AudioInterrupts();
+  }
+}
+
+// opens next_name and starts it
+FLASHMEM bool LoomPreview::Begin() {
   char path[192];
-  snprintf(path, sizeof(path), "%s/%s", strcmp(folder, "/") ? folder : "", name);
+  snprintf(path, sizeof(path), "%s/%s", strcmp(next_dir, "/") ? next_dir : "", next_name);
   f = SD.open(path, FILE_READ);
   if (!f) return false;
   uint8_t h[12];
@@ -1800,28 +1851,10 @@ FLASHMEM bool LoomPreview::Start(const char* folder, const char* name) {
   stream.SetWindow(0, frames);
   Fill(8);  // a start buffered before it plays
   stream.Play();
-  snprintf(dir_, sizeof(dir_), "%s", folder);
-  snprintf(name_, sizeof(name_), "%s", name);
+  snprintf(dir_, sizeof(dir_), "%s", next_dir);
+  snprintf(name_, sizeof(name_), "%s", next_name);
   on = true;
   return true;
-}
-
-FLASHMEM void LoomPreview::Stop() {
-  if (f) f.close();
-  stream.Stop();
-  if (on) {
-    AudioNoInterrupts();  // (the stop's short fade is not worth the memory)
-    stream.Release();
-    AudioInterrupts();
-  }
-  on = false;
-}
-
-// main loop: the buffers topped up; done once it has played through
-FLASHMEM void LoomPreview::Idle() {
-  if (!on) return;
-  if (!stream.Playing()) { Stop(); return; }
-  Fill(4);
 }
 
 FLASHMEM size_t LoomPreview::Fill(int chunks) {
@@ -2367,7 +2400,7 @@ FLASHMEM void PlayerDevice::ToggleAutoplay() {
 // folder: quiet), so scrolling fast doesn't start every file on the way
 FLASHMEM void PlayerDevice::AutoplayIdle() {
   if (!browsing) autoplay = false;
-  if (!autoplay || !auto_due || !preview || millis() - auto_at < 250) return;
+  if (!autoplay || !auto_due || !preview || millis() - auto_at < 100) return;
   auto_due = false;
   if (bsel >= bcount || bfolder[bsel]) preview->Stop();
   else if (!preview->Is(bdir, bn[bsel])) preview->Start(bdir, bn[bsel]);

@@ -86,6 +86,7 @@ public:
   void SetLoop(bool l) { loop_ = l; }
   void Stop() { playing = false; }  // fades out over ~5 ms
   bool Playing() const { return playing; }
+  bool Silent() const { return !playing && run_g <= 0.0f; }  // faded right out
   float HeadPos() const { return frames ? float(pos / frames) : 0.0f; }
   bool Underran() { const bool u = underrun; underrun = false; return u; }
   void Debug(char* buf, size_t n) const {
@@ -234,7 +235,9 @@ FASTRUN void AudioPlayStream::update() {
   const size_t xl_ = xh ? 0 : XfLen(a, b, ta, tb); // else: the loop's own start
   double xs = double(b) - double(xh ? xh : xl_);
   double p = pos;
-  constexpr float run_step = 1.0f / (0.005f * AUDIO_SAMPLE_RATE_EXACT);
+  // start / stop: 20 ms, eased (5 ms straight clicked on low notes); the
+  // dip of a retrigger stays short (5 ms)
+  const float run_step = 1.0f / ((retrig ? 0.005f : 0.02f) * AUDIO_SAMPLE_RATE_EXACT);
   const bool on = playing && !retrig;
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
     run_g = on ? std::min(1.0f, run_g + run_step) : std::max(0.0f, run_g - run_step);
@@ -276,8 +279,9 @@ FASTRUN void AudioPlayStream::update() {
       const float ge = left > 0.0f ? left * left * (3.0f - 2.0f * left) : 0.0f;
       yl *= ge; yr *= ge;
     }
-    out[0]->data[n] = __SSAT(int32_t(yl * run_g * win_g * 32767.0f), 16);
-    out[1]->data[n] = __SSAT(int32_t(yr * run_g * win_g * 32767.0f), 16);
+    const float rg = run_g * run_g * (3.0f - 2.0f * run_g);
+    out[0]->data[n] = __SSAT(int32_t(yl * rg * win_g * 32767.0f), 16);
+    out[1]->data[n] = __SSAT(int32_t(yr * rg * win_g * 32767.0f), 16);
     p += sp;
     if (xh && p >= double(b + xh)) {
       // centred crossfade: on from after it, in the window crossed into

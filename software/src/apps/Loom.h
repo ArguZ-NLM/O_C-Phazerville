@@ -1157,7 +1157,7 @@ FLASHMEM void AppLoom::Suspend() {
   using namespace loom;
   if (!active) return;
   OC::AudioIO::ReleaseOutput();
-  preview->Stop();
+  preview->Halt();
   AudioNoInterrupts();
   for (auto& c : patch->chain_ab) c.disconnect();
   for (auto& c : patch->preview_out) c.disconnect();
