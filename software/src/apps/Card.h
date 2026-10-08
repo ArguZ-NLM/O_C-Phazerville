@@ -36,14 +36,14 @@ private:
   bool del_held = false;
   uint32_t del_since = 0, deleted_at = 0;
   void List();
-#ifdef CARD_LISTEN
-  loom::LoomPreview* preview = nullptr;  // Loom's, while open
-  bool autoplay = false, auto_due = false;
-  uint32_t auto_at = 0;
   bool IsWav(int i) const {
     const size_t l = strlen(names[i]);
     return i < count && !folder[i] && l > 4 && !strcasecmp(names[i] + l - 4, ".WAV");
   }
+#ifdef CARD_LISTEN
+  loom::LoomPreview* preview = nullptr;  // Loom's, while open
+  bool autoplay = false, auto_due = false;
+  uint32_t auto_at = 0;
   void Listen(int i) {  // the file under the cursor, or quiet (a folder)
     if (!preview) return;
     if (i < count && IsWav(i)) { if (!preview->Is(dir, names[i])) preview->Start(dir, names[i]); }
