@@ -743,7 +743,7 @@ void FASTRUN loop() {
         switch (cmd) {
 #if defined(__IMXRT1062__)
           case 'V':  // the version only (answered by the boot picture too, without ending it)
-            Serial.printf("Version (build %s%s)\n", OC::Strings::VERSION, OC::Strings::BUILD_TAG);
+            Serial.printf("Version (build %s%s) clock %lu\n", OC::Strings::VERSION, OC::Strings::BUILD_TAG, (unsigned long)rtc_get());
             break;
 #ifdef LOOM_ONLY
           case 'C':  // Loom <-> CARD, as Z held + R push

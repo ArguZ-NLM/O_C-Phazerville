@@ -11,8 +11,10 @@
 //            and drops the lows, - the other way round; the level is
 //            brought back so it sounds about as loud
 //   NOISE    white, pink or dust (sparse clicks, like a record), its level
-//            follows the input
-//            (N.DCY = how long it trails), band-passed (N.TON)
+//            follows the input above a threshold that NOISE sets too: a
+//            little NOISE only answers the loudest hits, more answers
+//            quieter playing as well, and louder (N.DCY = how long it
+//            trails), band-passed (N.TON)
 //   FOLD     sine wavefolder, West-coast style, clean at 0
 //   DRIVE    soft saturation, clean at 0; made up so a usual level stays
 //            about as loud
@@ -125,9 +127,12 @@ private:
   // state
   uint32_t rng = 0x12345678;
   float tilt_z[2] = {}, env_in = 0.0f;
+  float det = 0.0f;  // the input's level (peaks, ~30 ms fall) for the noise threshold
   float pink[2][3] = {}, svf_lo[2] = {}, svf_bp[2] = {};
   float dust_z[2] = {};  // DUST: the click ringing down, per side
   static constexpr float NOISE_ATTACK = 0.0104f;  // ~2 ms: the noise comes in softly
+  static constexpr float DET_FALL = 0.99931f;     // ~30 ms
+  static constexpr float GATE_KNEE = 1.8f;        // fully open ~9 dB over the threshold
   static constexpr float DUST_THRESH = 1.0f - 2.0f * 30.0f / 48000.0f;  // Rand() above: ~30 clicks / s
   static constexpr float DUST_GAIN = 6.0f;
   int hold_count = 0;
@@ -162,6 +167,9 @@ FASTRUN void AudioEffectDirt::update() {
   const float tl = tilt_lo, th = tilt_hi, ta = tilt_a;
   const bool tilt = tilt_on;
   const float nrel = noise_rel, sf = svf_f, fld = fold_, fold_gain_now = fold_gain;
+  // the noise threshold: -12 dB at the bottom of NOISE, down to -50 dB at
+  // the top (as 1 / threshold)
+  const float inv_thr = 1.0f / (0.25f * expf(-38.0f * 0.11512925f * namt));
 
   float peak_in = 0.0f, peak_out = 0.0f;
   constexpr float q = 1.0f / 32768.0f;
@@ -172,8 +180,12 @@ FASTRUN void AudioEffectDirt::update() {
     const float lvl = std::max(fabsf(x[0]), fabsf(x[1]));
     peak_in = std::max(peak_in, lvl);
 
-    // noise level follows the input: instant rise, N.DCY fall
-    env_in = lvl > env_in ? env_in + NOISE_ATTACK * (lvl - env_in) : env_in * nrel;
+    // noise level follows the input over the threshold, faded in across
+    // the knee (no chatter at the edge): ~2 ms rise, N.DCY fall
+    det = lvl > det ? lvl : det * DET_FALL;
+    const float open = std::min(1.0f, std::max(0.0f, (det * inv_thr - 1.0f) * (1.0f / (GATE_KNEE - 1.0f))));
+    const float want = det * open;
+    env_in = want > env_in ? env_in + NOISE_ATTACK * (want - env_in) : env_in * nrel;
 
     // the redux sample-and-hold runs for both channels together
     bool take = true;

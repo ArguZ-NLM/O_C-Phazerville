@@ -466,7 +466,7 @@ FLASHMEM static void DrawHMeter(int x, int y, int w, int h, float lvl) {
 
 /////////////////////////////////////////////////////////////////
 // TAPE: the whole output (both tracks after OUTPUT, not the file list's
-// quick listen) recorded to the card as /LOOM/TAPES/Take_nnn.wav, for as
+// quick listen) recorded to the card as /LOOM/TAPES/Take_261008_1602.wav, for as
 // long as it runs. The mixer hands every block over in the audio interrupt
 // into a ring in PSRAM; the main loop writes the ring to the card, so the
 // card's pauses (up to a second or so) don't lose anything. The header is
@@ -492,7 +492,7 @@ public:
   bool slow = false;      // the card fell behind: audio was lost
   Fault fault = OK;       // the last start that failed
   uint32_t fault_at = 0;
-  char name[16] = "";
+  char name[32] = "";
   // audio interrupt: one block of the output, before it is clipped
   void Push(const int32_t* l, const int32_t* r) {
     if (!on) return;
@@ -1772,6 +1772,28 @@ FLASHMEM void ReelDevice::WriteMeta(const char* wav_name) const {
   f.close();
 }
 
+// a free name in dir from the module's clock: Spool_261008_1602.wav
+// (year, month, day _ hour, minute), _2, _3 .. within the same minute;
+// numbered (Spool_001.wav) while the clock was never set (it starts in
+// 2019 after a power-up without its battery)
+FLASHMEM static void StampName(const char* dir, const char* prefix, char* name, size_t n, char* path, size_t pn) {
+  const time_t now = time_t(rtc_get());
+  struct tm tm;
+  gmtime_r(&now, &tm);
+  char base[24];
+  const bool clock = tm.tm_year + 1900 >= 2025;
+  if (clock)
+    snprintf(base, sizeof(base), "%s_%02d%02d%02d_%02d%02d", prefix, tm.tm_year % 100,
+             tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min);
+  for (int k = 1; k < 1000; k++) {
+    if (!clock) snprintf(name, n, "%s_%03d.wav", prefix, k);
+    else if (k == 1) snprintf(name, n, "%s.wav", base);
+    else snprintf(name, n, "%s_%d.wav", base, k);
+    snprintf(path, pn, "%s/%s", dir, name);
+    if (!SD.exists(path)) return;
+  }
+}
+
 struct WavWriter {
   File f;
   const int16_t* src[2] = {};
@@ -1783,12 +1805,8 @@ struct WavWriter {
     if (!SDcard_Ready || !frames) return false;
     if (!SD.exists(LOOP_DIR)) SD.mkdir(LOOP_DIR);
     if (!SD.exists(REC_DIR)) SD.mkdir(REC_DIR);
-    char path[48];
-    for (int k = 1; k < 1000; k++) {  // the next free Spool_nnn.wav
-      snprintf(name, sizeof(name), "Spool_%03d.wav", k);
-      snprintf(path, sizeof(path), "%s/%s", REC_DIR, name);
-      if (!SD.exists(path)) break;
-    }
+    char path[64];
+    StampName(REC_DIR, "Spool", name, sizeof(name), path, sizeof(path));
     f = SD.open(path, FILE_WRITE);
     if (!f) return false;
     uint8_t h[44] = {'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'A', 'V', 'E',
@@ -1837,12 +1855,8 @@ FLASHMEM bool TapeRecorder::Begin() {
   if (!ring) { fault = NO_MEM; return false; }
   if (!SD.exists(LOOP_DIR)) SD.mkdir(LOOP_DIR);
   if (!SD.exists(DIR)) SD.mkdir(DIR);
-  char path[48];
-  for (int k = 1; k < 1000; k++) {  // the next free Take_nnn.wav
-    snprintf(name, sizeof(name), "Take_%03d.wav", k);
-    snprintf(path, sizeof(path), "%s/%s", DIR, name);
-    if (!SD.exists(path)) break;
-  }
+  char path[64];
+  StampName(DIR, "Take", name, sizeof(name), path, sizeof(path));
   f = SD.open(path, FILE_WRITE);
   if (!f) { fault = NO_CARD; extmem_free(ring); ring = nullptr; return false; }
   written = 0;
