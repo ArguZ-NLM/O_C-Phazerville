@@ -1189,6 +1189,7 @@ FLASHMEM static void LoomReadMIDI(T& device) {
     };
     if (msg.message == midi::SystemExclusive || msg.message == midi::ProgramChange) continue;
     if (msg.message == midi::Clock) loom::midi_clocks++;
+    if (msg.message == midi::NoteOn && msg.data2 > 0) loom::NoteIn(msg.channel, msg.data1);
     if (loom::tempo_clock && loom::tempo_clock->midi()) {
       if (msg.message == midi::Start) loom::ClockStart();
       else if (msg.message == midi::Continue) loom::clock_running = true;

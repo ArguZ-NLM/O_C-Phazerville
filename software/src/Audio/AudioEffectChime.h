@@ -22,7 +22,8 @@
 // still ringing on it if there is one, else the quietest free one; a note
 // that stays keeps its own. PITCH's
 // variation moves every new note by up to +-n semitones (in the scale),
-// TONE's variation gives every hit its own tilt.
+// DCAY's makes it ring shorter or longer, TONE's gives every hit its own
+// tilt.
 class AudioEffectChime : public AudioStream {
 public:
   static constexpr int PLACES = 6, VOICES = 24;
@@ -39,6 +40,7 @@ public:
     float tone = 0.0f;       // -50..50: tilt low <-> high places, and above 0 some of the first pass
     float tone_var = 0.0f;
     float decay = 2.0f;      // s to -60 dB
+    float decay_var = 0.0f;  // every new note's decay times 2^(+-this), at random
     float wet = 1.0f;
   };
 
@@ -91,6 +93,7 @@ private:
   int rot = 0;
   float hit_tone = 0.0f;
   int place_var[PLACES] = {};  // this hit's PITCH variation per place
+  float place_dec[PLACES] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};  // and DCAY's
   float slow = 0.0f;
   int holdoff = 0;
   uint32_t rng = 0x2545F491u;
@@ -121,12 +124,12 @@ private:
     const int note = Snap(Degree(p * par.spread) + place_var[p]) + par.pitch;
     return std::min(7000.0f, 440.0f * powf(2.0f, (note - 69) / 12.0f));
   }
-  void Tune(Voice& v, float hz) {
+  void Tune(Voice& v, float hz, float dec) {
     v.hz = hz;
     v.f = 2.0f * sinf(float(M_PI) * hz / AUDIO_SAMPLE_RATE_EXACT);
     // the second pass rings DECAY long (T60 = 6.9 Q / (pi f)); the first
     // is wide (Q at most 20) and only cleans up
-    const float q = std::max(2.0f, par.decay * float(M_PI) * hz / 6.9078f);
+    const float q = std::max(2.0f, par.decay * dec * float(M_PI) * hz / 6.9078f);
     v.db = 1.0f / q;
     v.da = 1.0f / std::min(q, 20.0f);
     // a hit's share of a narrow band shrinks with Q: made up (measured on
@@ -167,9 +170,9 @@ FASTRUN void AudioEffectChime::Assign() {
     if (fabsf(v.hz - hz) >= hz * 0.001f) {  // a new note: from silence
       v.la = v.ba = v.lb = v.bb = 0.0f;
       v.env = 0.0f;
-      Tune(v, hz);
+      Tune(v, hz, place_dec[p]);
     } else {
-      Tune(v, hz);  // DECAY may have changed
+      Tune(v, hz, place_dec[p]);  // DECAY may have changed
     }
     v.place = p;
     v.pan_l = (p & 1) ? 0.35f : 1.0f;
@@ -221,14 +224,17 @@ FASTRUN void AudioEffectChime::update() {
     rot = (rot % PLACES + PLACES) % PLACES;
   }
   if (hit || step) {
-    for (int p = 0; p < PLACES; p++)
+    for (int p = 0; p < PLACES; p++) {
       place_var[p] = par.pitch_var ? int(roundf(Rand() * par.pitch_var)) : 0;
+      place_dec[p] = par.decay_var > 0.0f ? powf(2.0f, Rand() * par.decay_var) : 1.0f;
+    }
     hit_tone = Rand() * par.tone_var;
     retune = true;
   }
   if (retune) {
     retune = false;
     if (!par.pitch_var) for (auto& v : place_var) v = 0;
+    if (par.decay_var <= 0.0f) for (auto& d : place_dec) d = 1.0f;
     if (par.tone_var <= 0.0f) hit_tone = 0.0f;
     Assign();
   }

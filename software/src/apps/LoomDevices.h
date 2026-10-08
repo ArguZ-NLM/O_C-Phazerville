@@ -80,6 +80,17 @@ constexpr int MOD_BUSES = 8;
 // bits 4-11 CV inputs as gates. Set in the ISR, taken in the main loop.
 volatile uint16_t trig_latch = 0;
 
+// MIDI notes in (from any MIDI input): the last note on per channel (index
+// 0: any channel) and a count that moves on with every one, for devices
+// that take a note (CHIME's NOTE)
+inline uint8_t midi_note[17] = {};
+inline uint32_t midi_note_seq[17] = {};
+inline void NoteIn(int ch, int note) {
+  midi_note[0] = uint8_t(note);
+  midi_note_seq[0]++;
+  if (ch >= 1 && ch <= 16) { midi_note[ch] = uint8_t(note); midi_note_seq[ch]++; }
+}
+
 struct ModCtx {
   float dt;           // seconds since the last tick
   uint16_t edges;     // latched rising edges, see trig_latch
@@ -4892,9 +4903,9 @@ FLASHMEM void StretchDevice::DrawMini(int x, int y, int w, int h) {
 PROGMEM static const DeviceDef CHIME_DEF = {
   "CHIME", "CHM", 8, {"STEP", ""},
   {
-    {"NOTE", 24, 84, 48, UNI},   // the first note, C1 .. C6
+    {"NOTE", 24, 84, 48, UNI, 0, 18, 0},  // the first note, C1 .. C6; mode: KNOB, MIDI (any channel), CH1 .. CH16
     {"SPRD", 1, 7, 2, UNI},      // scale steps between the six notes
-    {"DCAY", 0, 100, 55, UNI},   // 0.1 .. 12 s to fade away
+    {"DCAY", 0, 100, 55, UNI, 0, 11, 0},  // 0.1 .. 12 s to fade away; mode: variation per hit
     // what a hit does to the notes fed; mode: how many of the six (1 .. 6)
     {"ROT", 0, 3, 0, LIST, 4, 6, 5, {"OFF", "UP", "DOWN", "RAND"}},
     // modes: variation per hit (PITCH +- n semitones in the scale, TONE +- 5 n)
@@ -4916,6 +4927,7 @@ public:
   bool Activate() override { fx.Reset(); active = true; ApplyAll(); return true; }
   void Apply(int p) override;
   void Action(int a) override { if (a == 0) { fx.Step(); step_at = millis() | 1; } }
+  void Idle() override;
   void Format(int p, char* buf, size_t n) const override;
   void FormatMode(int p, char* buf, size_t n) const override;
   void DrawViz(int x, int y, int w, int h) override;
@@ -4931,6 +4943,7 @@ private:
   float lvl_m[AudioEffectChime::VOICES] = {};
   Meter out_m;
   uint32_t step_at = 0;
+  uint32_t note_seen = 0;
   float Decay(int v) const { return 0.1f * powf(120.0f, v * 0.01f); }  // 0.1 .. 12 s
   static int PitchX(float hz, int x, int w) {  // C1 .. C8 across w
     return x + constrain(int(log2f(std::max(hz, 1.0f) / 32.70f) / 7.0f * (w - 1) + 0.5f), 0, w - 1);
@@ -4958,6 +4971,7 @@ FLASHMEM void ChimeDevice::Apply(int p) {
   a.tone = cur[TONE];
   a.tone_var = mode[TONE] * 5.0f;
   a.decay = Decay(cur[DECAY]);
+  a.decay_var = mode[DECAY] * 0.1f;  // up to x2 / 2
   a.wet = cur[WET] * 0.01f;
   fx.Set(a);
 }
@@ -4974,8 +4988,31 @@ FLASHMEM void ChimeDevice::Format(int p, char* buf, size_t n) const {
   } else Device::Format(p, buf, n);
 }
 
+// NOTE on MIDI: a note played (on the channel set) becomes NOTE, moved by
+// octaves into C1 .. C6
+FLASHMEM void ChimeDevice::Idle() {
+  if (!mode[NOTE]) return;
+  const int ch = mode[NOTE] - 1;  // 0: any
+  if (midi_note_seq[ch] == note_seen) return;
+  note_seen = midi_note_seq[ch];
+  int nt = midi_note[ch];
+  while (nt < 24) nt += 12;
+  while (nt > 84) nt -= 12;
+  if (nt == val[NOTE]) return;
+  val[NOTE] = int16_t(nt);
+  Refresh(NOTE);
+}
+
 FLASHMEM void ChimeDevice::FormatMode(int p, char* buf, size_t n) const {
   if (p == ROT) snprintf(buf, n, "%d/6", mode[ROT] + 1);  // notes fed at once
+  else if (p == NOTE) {
+    if (mode[NOTE] == 0) snprintf(buf, n, "KNOB");
+    else if (mode[NOTE] == 1) snprintf(buf, n, "MIDI");
+    else snprintf(buf, n, "CH%d", mode[NOTE] - 1);
+  } else if (p == DECAY) {
+    if (mode[DECAY] == 0) snprintf(buf, n, "OFF");
+    else snprintf(buf, n, "+-%d%%", int((powf(2.0f, mode[DECAY] * 0.1f) - 1.0f) * 100.0f + 0.5f));
+  }
   else if ((p == PITCH || p == TONE) && mode[p] == 0) snprintf(buf, n, "OFF");
   else if (p == PITCH) snprintf(buf, n, "+-%d", mode[p]);
   else if (p == TONE) snprintf(buf, n, "+-%d", mode[p] * 5);
