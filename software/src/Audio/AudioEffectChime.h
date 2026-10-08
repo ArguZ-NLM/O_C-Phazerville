@@ -17,13 +17,15 @@
 // A hit (a jump in the input level) or STEP (A) moves the rotation (UP,
 // DOWN or at random): the input goes to the new places' notes, faded over a
 // few ms, and the notes it leaves ring out in their own resonators at their
-// own pitch. So there are twice as many resonators as places: a new note
-// takes the quietest free one, a note that stays keeps its own. PITCH's
+// own pitch. So there are four times as many resonators as places (a
+// change of all six notes leaves six ringing out): a new note takes one
+// still ringing on it if there is one, else the quietest free one; a note
+// that stays keeps its own. PITCH's
 // variation moves every new note by up to +-n semitones (in the scale),
 // TONE's variation gives every hit its own tilt.
 class AudioEffectChime : public AudioStream {
 public:
-  static constexpr int PLACES = 6, VOICES = 12;
+  static constexpr int PLACES = 6, VOICES = 24;
   enum Rotate : uint8_t { ROT_OFF, ROT_UP, ROT_DOWN, ROT_RAND };
 
   struct Params {
@@ -153,6 +155,8 @@ FASTRUN void AudioEffectChime::Assign() {
     int use = -1;
     for (int i = 0; i < VOICES && use < 0; i++)  // already on that note
       if (!keep[i] && vc[i].in_to > 0.0f && fabsf(vc[i].hz - hz) < hz * 0.001f) use = i;
+    for (int i = 0; i < VOICES && use < 0; i++)  // still ringing on that note: on from there
+      if (!keep[i] && vc[i].in_to == 0.0f && vc[i].env > 0.0f && fabsf(vc[i].hz - hz) < hz * 0.001f) use = i;
     if (use < 0) {  // the quietest that isn't fed
       float lo = 1e9f;
       for (int i = 0; i < VOICES; i++)
