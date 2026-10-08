@@ -477,6 +477,7 @@ FLASHMEM void AppLoom::Start() {
     tracks[t].mix->out_fade = tracks[t].out_fade;
   }
   preview = g_preview = new LoomPreview;
+  g_tape = new TapeRecorder;
   for (auto& tr : tracks) if (tr.player) tr.player->preview = preview;
   mixer = new LoomMixer;
   for (int t = 0; t < NUM_TRACKS; t++) {
@@ -1158,6 +1159,7 @@ FLASHMEM void AppLoom::Suspend() {
   if (!active) return;
   OC::AudioIO::ReleaseOutput();
   preview->Halt();
+  g_tape->Finish();  // a running TAPE ends here, written out
   AudioNoInterrupts();
   for (auto& c : patch->chain_ab) c.disconnect();
   for (auto& c : patch->preview_out) c.disconnect();
@@ -1342,6 +1344,7 @@ FLASHMEM void AppLoom::MainLoop() {
     if (listing && view == DEVICE)
       for (auto& tr : tracks) if (tr.player) tr.player->AutoplayIdle();
     preview->Idle(listing && view == DEVICE);
+    g_tape->Idle();
     // the output is muted while a PLAYER reads a file in (the card reading
     // made a high whine on the output)
     bool busy = false;
@@ -1988,9 +1991,19 @@ FLASHMEM void AppLoom::DrawChain() const {
   const Track& tr = tracks[track];
   Device* d = tr.at(col);
   if (!linked) gfxPrint(0, 56, track ? PSTR("B") : PSTR("A"));
-  // the slot name; SOURCE names its source (INPUT, SPOOL or PLAYER)
-  gfxPrint(8, 56, col == MIX_COL ? PSTR("OUTPUT")
-                  : (col == SOURCE || col == RESONATOR || col == SPRAY) && d ? d->def.name : SLOT_DEFS[col].name);
+  if (g_tape->Recording()) {
+    // TAPE running: a blinking dot and its time where the slot's name goes
+    // (SLOW blinking in when the card fell behind)
+    if ((millis() / 500) % 2) gfxRect(9, 57, 5, 5);
+    char t[12];
+    if (g_tape->slow && (millis() / 500) % 2) snprintf(t, sizeof(t), "SLOW");
+    else FormatTapeTime(g_tape->Seconds(), t, sizeof(t));
+    gfxPrint(17, 56, t);
+  } else {
+    // the slot name; SOURCE names its source (INPUT, SPOOL or PLAYER)
+    gfxPrint(8, 56, col == MIX_COL ? PSTR("OUTPUT")
+                    : (col == SOURCE || col == RESONATOR || col == SPRAY) && d ? d->def.name : SLOT_DEFS[col].name);
+  }
   // bypass (when on) at the right end; the CPU load always left of its place
   const bool bp = !d || tr.shown_bypassed(col);
   const int right = 128 - 6 * 6 - 6;

@@ -465,6 +465,67 @@ FLASHMEM static void DrawHMeter(int x, int y, int w, int h, float lvl) {
 }
 
 /////////////////////////////////////////////////////////////////
+// TAPE: the whole output (both tracks after OUTPUT, not the file list's
+// quick listen) recorded to the card as /LOOM/TAPES/Take_nnn.wav, for as
+// long as it runs. The mixer hands every block over in the audio interrupt
+// into a ring in PSRAM; the main loop writes the ring to the card, so the
+// card's pauses (up to a second or so) don't lose anything. The header is
+// brought up to date every few seconds, so a file cut off by the power
+// still plays up to there. Started / stopped with A on OUTPUT.
+/////////////////////////////////////////////////////////////////
+class TapeRecorder {
+public:
+  static constexpr char DIR[] = "/LOOM/TAPES";
+  enum Fault : uint8_t { OK, NO_CARD, NO_MEM };
+  // A on OUTPUT (or its gate / MIDI): start or stop, done in Idle; both
+  // tracks' OUTPUT may fire on the same trigger: that is one press
+  void Toggle() {
+    if (millis() - toggled < 100) return;
+    toggled = millis();
+    want = !want;
+  }
+  bool Wanted() const { return want; }
+  bool Recording() const { return file_open; }
+  void Idle();    // main loop: starts, stops, writes the ring out
+  void Finish();  // at once, everything written (Loom pausing)
+  uint32_t Seconds() const { return uint32_t(written / uint64_t(AUDIO_SAMPLE_RATE_EXACT)); }
+  bool slow = false;      // the card fell behind: audio was lost
+  Fault fault = OK;       // the last start that failed
+  uint32_t fault_at = 0;
+  char name[16] = "";
+  // audio interrupt: one block of the output, before it is clipped
+  void Push(const int32_t* l, const int32_t* r) {
+    if (!on) return;
+    if (cap - (wr - rd) < AUDIO_BLOCK_SAMPLES) { slow = true; return; }
+    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+      int16_t* p = ring + 2 * ((wr + n) & (cap - 1));
+      p[0] = __SSAT(l[n], 16);
+      p[1] = __SSAT(r[n], 16);
+    }
+    wr += AUDIO_BLOCK_SAMPLES;
+  }
+private:
+  int16_t* ring = nullptr;  // stereo frames, interleaved as in the file
+  uint32_t cap = 0;         // frames, a power of two
+  volatile uint32_t wr = 0, rd = 0;  // frames, running on (the ring wraps)
+  volatile bool on = false;
+  bool want = false, file_open = false;
+  uint32_t toggled = 0, header_at = 0;
+  uint64_t written = 0;  // frames
+  File f;
+  bool Begin();
+  size_t Drain(size_t most);  // frames written
+  void Header();
+  void Close();
+};
+inline TapeRecorder* g_tape = nullptr;
+// 12:34, or 1:02:03 past an hour
+inline void FormatTapeTime(uint32_t s, char* buf, size_t n) {
+  if (s >= 3600) snprintf(buf, n, "%lu:%02lu:%02lu", s / 3600, s / 60 % 60, s % 60);
+  else snprintf(buf, n, "%lu:%02lu", s / 60, s % 60);
+}
+
+/////////////////////////////////////////////////////////////////
 // Track mixer: both tracks -> stereo out
 /////////////////////////////////////////////////////////////////
 class LoomMixer : public AudioStream {
@@ -520,18 +581,23 @@ FASTRUN void LoomMixer::update() {
     }
     level[0] = blk[0];
     level[1] = blk[1];
-    // the quick listen: as it is, past the tracks (not in their levels)
-    for (int c = 0; c < 2; c++)
-      if (const audio_block_t* b = in[4 + c])
-        for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) acc[c][n] += (b->data[n] * 26214) >> 15;
+    float g[AUDIO_BLOCK_SAMPLES];  // the mute fade, for the quick listen too
     if (mute || mute_g < 1.0f) {  // fade the sum out / back in
       const float to = mute ? 0.0f : 1.0f, step = 1.0f / (0.015f * AUDIO_SAMPLE_RATE_EXACT);
       for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
         mute_g = to > mute_g ? std::min(to, mute_g + step) : std::max(to, mute_g - step);
+        g[n] = mute_g;
         acc[0][n] = int32_t(acc[0][n] * mute_g);
         acc[1][n] = int32_t(acc[1][n] * mute_g);
       }
+    } else {
+      for (auto& v : g) v = 1.0f;
     }
+    if (g_tape) g_tape->Push(acc[0], acc[1]);  // the tracks only
+    // the quick listen: as it is, past the tracks (not in their levels)
+    for (int c = 0; c < 2; c++)
+      if (const audio_block_t* b = in[4 + c])
+        for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) acc[c][n] += int32_t(((b->data[n] * 26214) >> 15) * g[n]);
     for (int c = 0; c < 2; c++)
       for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) out[c]->data[n] = __SSAT(acc[c][n], 16);
     transmit(out[0], 0);
@@ -631,7 +697,7 @@ FASTRUN void LoomGate::update() {
 // MIX: level / pan / mute per track (not an audio stage itself)
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef MIX_DEF = {
-  "OUTPUT", "MIX", 8, {"", ""},  // the tag stays MIX: saved files use it
+  "OUTPUT", "MIX", 8, {"REC", ""},  // the tag stays MIX: saved files use it; REC: TAPE
   {
     // the chain against the track's source as it came in (0 = only the
     // source, 100 = only the chain): all the effects dialled back at once
@@ -665,6 +731,10 @@ public:
   void Format(int p, char* buf, size_t n) const override;
   void DrawViz(int x, int y, int w, int h) override;
   bool Muted() const { return cur[MUTE]; }
+  // A: TAPE, the whole output to the card (the same on both tracks)
+  void Action(int a) override { if (a == 0 && g_tape) g_tape->Toggle(); }
+  bool ActionLit(int a) const override { return a == 0 && g_tape && g_tape->Wanted(); }
+  bool HeaderInfo(char* buf, size_t n) const override;
   void SetBypass(bool b) { bandz.set_bypass(b); }  // tone + dynamics stage
   void DrawMini(int x, int y, int w, int h) override;
   void CpuMax(float parts[2]) override {
@@ -852,6 +922,23 @@ FLASHMEM void MixDevice::DrawSpectrum(int x, int y, int w, int h) {
     const int sx = x + int(log10f(hz / f0) / log10f(f1 / f0) * SPEC_BARS * bw);
     gfxDottedLine(sx, y, sx, y + h - 1, 3);
   }
+}
+
+// TAPE in the header: its time while it runs (SLOW blinking in when the
+// card fell behind), or for 3 s why it could not start
+FLASHMEM bool MixDevice::HeaderInfo(char* buf, size_t n) const {
+  const TapeRecorder* t = g_tape;
+  if (!t) return false;
+  if (t->Recording()) {
+    if (t->slow && (millis() / 500) % 2) { snprintf(buf, n, "SLOW"); return true; }
+    FormatTapeTime(t->Seconds(), buf, n);
+    return true;
+  }
+  if (t->fault && t->fault_at && millis() - t->fault_at < 3000) {
+    snprintf(buf, n, t->fault == TapeRecorder::NO_MEM ? "NO MEM" : "NO CARD");
+    return true;
+  }
+  return false;
 }
 
 FLASHMEM void MixDevice::DrawMini(int x, int y, int w, int h) {
@@ -1734,6 +1821,112 @@ struct WavWriter {
   }
   float Progress() const { return n ? float(done) / n : 1.0f; }
 };
+
+constexpr char TapeRecorder::DIR[];
+
+FLASHMEM bool TapeRecorder::Begin() {
+  fault_at = millis() | 1;
+  if (!SDcard_Ready) { fault = NO_CARD; return false; }
+  // the ring: 5.5 s, less when memory is short (SPOOL holds what it records)
+  for (const uint32_t frames : {262144u, 131072u, 65536u}) {
+    if (ring) break;
+    ring = static_cast<int16_t*>(extmem_malloc(frames * 4));
+    cap = ring ? frames : 0;
+  }
+  if (!ring) { fault = NO_MEM; return false; }
+  if (!SD.exists(LOOP_DIR)) SD.mkdir(LOOP_DIR);
+  if (!SD.exists(DIR)) SD.mkdir(DIR);
+  char path[48];
+  for (int k = 1; k < 1000; k++) {  // the next free Take_nnn.wav
+    snprintf(name, sizeof(name), "Take_%03d.wav", k);
+    snprintf(path, sizeof(path), "%s/%s", DIR, name);
+    if (!SD.exists(path)) break;
+  }
+  f = SD.open(path, FILE_WRITE);
+  if (!f) { fault = NO_CARD; extmem_free(ring); ring = nullptr; return false; }
+  written = 0;
+  slow = false;
+  fault = OK;
+  fault_at = 0;
+  Header();
+  header_at = millis();
+  file_open = true;
+  __disable_irq();
+  wr = rd = 0;
+  on = true;
+  __enable_irq();
+  return true;
+}
+
+// the sizes in the header as far as written; the file is then flushed, so
+// the card's directory has its length too
+FLASHMEM void TapeRecorder::Header() {
+  const uint32_t bytes = uint32_t(std::min<uint64_t>(written * 4, 0xFFFFFFFFu - 36));
+  uint8_t h[44] = {'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'A', 'V', 'E',
+                   'f', 'm', 't', ' ', 16, 0, 0, 0, 1, 0, 2, 0};
+  PutLE(h + 4, 36 + bytes, 4);
+  PutLE(h + 24, uint32_t(AUDIO_SAMPLE_RATE_EXACT), 4);
+  PutLE(h + 28, uint32_t(AUDIO_SAMPLE_RATE_EXACT) * 4, 4);
+  PutLE(h + 32, 4, 2);
+  PutLE(h + 34, 16, 2);
+  memcpy(h + 36, "data", 4);
+  PutLE(h + 40, bytes, 4);
+  const uint64_t end = f.position();
+  f.seek(0);
+  f.write(h, 44);
+  if (end > 44) f.seek(end);
+  f.flush();
+}
+
+// the ring to the card in 16 KB writes (all of it: also the last bit)
+FLASHMEM size_t TapeRecorder::Drain(size_t most) {
+  constexpr uint32_t CHUNK = 4096;  // frames
+  DMAMEM static uint32_t buf[CHUNK];  // (RAM2: RAM1 is short)
+  const uint32_t* src = reinterpret_cast<const uint32_t*>(ring);
+  size_t done = 0;
+  while (done < most) {
+    const uint32_t avail = wr - rd;
+    const uint32_t k = std::min<uint32_t>({avail, CHUNK, uint32_t(most - done)});
+    if (!k || (k < CHUNK && on)) break;  // only whole chunks while it runs
+    for (uint32_t i = 0; i < k; i++) buf[i] = src[(rd + i) & (cap - 1)];
+    if (f.write(reinterpret_cast<uint8_t*>(buf), k * 4) != k * 4) {  // card full / gone
+      fault = NO_CARD;
+      fault_at = millis() | 1;
+      want = false;
+      break;
+    }
+    rd += k;
+    written += k;
+    done += k;
+  }
+  return done;
+}
+
+FLASHMEM void TapeRecorder::Close() {
+  on = false;
+  if (fault == OK) Drain(SIZE_MAX);
+  Header();
+  f.close();
+  file_open = false;
+  extmem_free(ring);  // the memory back to SPOOL / PLAYER
+  ring = nullptr;
+  cap = 0;
+}
+
+FLASHMEM void TapeRecorder::Idle() {
+  if (want && !file_open && !Begin()) want = false;
+  if (!file_open) return;
+  Drain(8 * 4096);
+  // a WAV holds at most 4 GB (about 6 hours): the take ends there
+  if (written * 4 > 4000000000ull) want = false;
+  if (!want) Close();
+  else if (millis() - header_at > 5000) { Header(); header_at = millis(); }
+}
+
+FLASHMEM void TapeRecorder::Finish() {
+  want = false;
+  if (file_open) Close();
+}
 
 /////////////////////////////////////////////////////////////////
 // PLAYER (Source): plays a WAV from the SD card. The file is loaded into
