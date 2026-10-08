@@ -33,6 +33,7 @@
 #include "../Audio/AudioEffectDirt.h"
 #include "../Audio/AudioEffectBandz.h"
 #include "../Audio/AudioEffectResonator.h"
+#include "../Audio/AudioEffectChime.h"
 #include "../Audio/RingsVoice.h"
 #include "../Audio/StretchVoice.h"
 #include "../Audio/AudioEffectClouds.h"
@@ -4447,7 +4448,7 @@ FLASHMEM void SprayDevice::DrawMini(int x, int y, int w, int h) {
 // Slot catalogue, in chain order. Option 0 of the effect slots is BYPASS.
 /////////////////////////////////////////////////////////////////
 enum Slot : uint8_t { SOURCE, SPRAY, RESONATOR, TEXTURE, ECHO, SLOT_COUNT };
-constexpr int MAX_OPTIONS = 3;
+constexpr int MAX_OPTIONS = 4;  // (settings files before version 12 kept 3)
 
 /////////////////////////////////////////////////////////////////
 // MODAL (Resonator slot, 2nd choice): Mutable Instruments Rings (its DSP,
@@ -4882,6 +4883,144 @@ FLASHMEM void StretchDevice::DrawMini(int x, int y, int w, int h) {
   gfxFrame(constrain(px - 2, x, x + w - 5), py - 2, 5, 5);
 }
 
+/////////////////////////////////////////////////////////////////
+// CHIME (RESONATOR slot): six tuned resonators on notes of a scale, each
+// two band-passes in a row, so only the notes ring, clean. Hits (or STEP)
+// turn the notes that are fed along the six (ROT); the notes left behind
+// ring out at their own pitch: chords, or arpeggios with ROT's mode at 1/6.
+/////////////////////////////////////////////////////////////////
+PROGMEM static const DeviceDef CHIME_DEF = {
+  "CHIME", "CHM", 8, {"STEP", ""},
+  {
+    {"NOTE", 24, 84, 48, UNI},   // the first note, C1 .. C6
+    {"SPRD", 1, 7, 2, UNI},      // scale steps between the six notes
+    {"DCAY", 0, 100, 55, UNI},   // 0.1 .. 12 s to fade away
+    // what a hit does to the notes fed; mode: how many of the six (1 .. 6)
+    {"ROT", 0, 3, 0, LIST, 4, 6, 5, {"OFF", "UP", "DOWN", "RAND"}},
+    // modes: variation per hit (PITCH +- n semitones in the scale, TONE +- 5 n)
+    {"PITCH", -24, 24, 0, BI, 0, 25, 0},
+    {"TONE", -50, 50, 0, BI, 0, 11, 0},
+    {"SCALE", 0, 6, 3, UNI},     // CHROM MAJOR MINOR PENTA mPENT FIFTH WHOLE
+    {"WET", 0, 100, 100, UNI},
+  },
+  {"", ""},
+};
+
+class ChimeDevice : public Device {
+public:
+  enum { NOTE, SPRD, DECAY, ROT, PITCH, TONE, SCALE, WET };
+  static constexpr int SCALES = 7;
+  ChimeDevice() : Device(CHIME_DEF) {}
+  AudioStream* in() override { return &fx; }
+  AudioStream* out() override { return &fx; }
+  bool Activate() override { fx.Reset(); active = true; ApplyAll(); return true; }
+  void Apply(int p) override;
+  void Action(int a) override { if (a == 0) { fx.Step(); step_at = millis() | 1; } }
+  void Format(int p, char* buf, size_t n) const override;
+  void FormatMode(int p, char* buf, size_t n) const override;
+  void DrawViz(int x, int y, int w, int h) override;
+  void DrawMini(int x, int y, int w, int h) override;
+  void CpuMax(float parts[2]) override {
+    parts[0] = fx.processorUsageMax();
+    parts[1] = 0.0f;
+    fx.processorUsageMaxReset();
+  }
+private:
+  AudioEffectChime fx;
+  AudioEffectChime::Viz viz = {};
+  float lvl_m[AudioEffectChime::VOICES] = {};
+  Meter out_m;
+  uint32_t step_at = 0;
+  float Decay(int v) const { return 0.1f * powf(120.0f, v * 0.01f); }  // 0.1 .. 12 s
+  static int PitchX(float hz, int x, int w) {  // C1 .. C8 across w
+    return x + constrain(int(log2f(std::max(hz, 1.0f) / 32.70f) / 7.0f * (w - 1) + 0.5f), 0, w - 1);
+  }
+};
+
+FLASHMEM void ChimeDevice::Apply(int p) {
+  static const uint16_t masks[SCALES] = {
+    0xFFF,                                                                   // CHROM
+    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 5) | (1 << 7) | (1 << 9) | (1 << 11),  // MAJOR
+    (1 << 0) | (1 << 2) | (1 << 3) | (1 << 5) | (1 << 7) | (1 << 8) | (1 << 10),  // MINOR
+    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 7) | (1 << 9),                    // PENTA
+    (1 << 0) | (1 << 3) | (1 << 5) | (1 << 7) | (1 << 10),                   // minor pentatonic
+    (1 << 0) | (1 << 7),                                                     // FIFTH: root and fifth
+    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 6) | (1 << 8) | (1 << 10),        // WHOLE tones
+  };
+  AudioEffectChime::Params a;
+  a.root = cur[NOTE];
+  a.mask = masks[constrain(int(cur[SCALE]), 0, SCALES - 1)];
+  a.spread = cur[SPRD];
+  a.notes = mode[ROT] + 1;
+  a.rotate = uint8_t(cur[ROT]);
+  a.pitch = cur[PITCH];
+  a.pitch_var = mode[PITCH];
+  a.tone = cur[TONE];
+  a.tone_var = mode[TONE] * 5.0f;
+  a.decay = Decay(cur[DECAY]);
+  a.wet = cur[WET] * 0.01f;
+  fx.Set(a);
+}
+
+FLASHMEM void ChimeDevice::Format(int p, char* buf, size_t n) const {
+  static const char* const names[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+  static const char* const scales[SCALES] = {"CHROM", "MAJOR", "MINOR", "PENTA", "mPENT", "FIFTH", "WHOLE"};
+  if (p == NOTE) snprintf(buf, n, "%s%d", names[val[NOTE] % 12], val[NOTE] / 12 - 1);
+  else if (p == SCALE) snprintf(buf, n, "%s", scales[constrain(int(val[SCALE]), 0, SCALES - 1)]);
+  else if (p == DECAY) {
+    const float t = Decay(val[DECAY]);
+    if (t < 1.0f) snprintf(buf, n, "%dms", int(t * 1000.0f + 0.5f));
+    else snprintf(buf, n, "%d.%ds", int(t), int(t * 10.0f) % 10);
+  } else Device::Format(p, buf, n);
+}
+
+FLASHMEM void ChimeDevice::FormatMode(int p, char* buf, size_t n) const {
+  if (p == ROT) snprintf(buf, n, "%d/6", mode[ROT] + 1);  // notes fed at once
+  else if ((p == PITCH || p == TONE) && mode[p] == 0) snprintf(buf, n, "OFF");
+  else if (p == PITCH) snprintf(buf, n, "+-%d", mode[p]);
+  else if (p == TONE) snprintf(buf, n, "+-%d", mode[p] * 5);
+  else Device::FormatMode(p, buf, n);
+}
+
+// every resonator as a line at its note (low left, high right, C1 .. C8),
+// as tall as it rings; the six notes as small boxes underneath, filled
+// where the input goes now. The output level on the right.
+FLASHMEM void ChimeDevice::DrawViz(int x, int y, int w, int h) {
+  fx.ReadViz(viz);
+  out_m.Hit(viz.out);
+  const int bw = w - 16, base = y + h - 6;
+  for (int i = 0; i < AudioEffectChime::VOICES; i++) {
+    lvl_m[i] = std::max(sqrtf(std::min(1.0f, viz.level[i] * 2.0f)), lvl_m[i] * 0.92f);
+    if (viz.hz[i] <= 0.0f) continue;
+    const int px = PitchX(viz.hz[i], x, bw);
+    const int lh = int(lvl_m[i] * (h - 8));
+    if (lh > 0) gfxLine(px, base - 1, px, base - 1 - lh);
+    if (viz.fed[i] && lh > 0) gfxLine(px + 1, base - 1, px + 1, base - 1 - lh);  // fed: bold
+  }
+  gfxDottedLine(x, base, x + bw - 1, base, 2);
+  for (int p = 0; p < AudioEffectChime::PLACES; p++) {
+    if (viz.place_hz[p] <= 0.0f) continue;
+    const int px = PitchX(viz.place_hz[p], x, bw);
+    if (viz.on >> p & 1) gfxRect(px - 1, base + 2, 3, 3);
+    else gfxFrame(px - 1, base + 2, 3, 3);
+  }
+  if (step_at && millis() - step_at < 150) gfxInvert(x, y, bw, h);  // STEP pressed
+  const int mx = x + w - 14;
+  gfxFrame(mx, y, 12, h);
+  DrawVMeter(mx + 1, y + 1, 10, h - 2, out_m.v);
+}
+
+FLASHMEM void ChimeDevice::DrawMini(int x, int y, int w, int h) {
+  fx.ReadViz(viz);
+  out_m.Hit(viz.out);
+  for (int i = 0; i < AudioEffectChime::VOICES; i++) {
+    lvl_m[i] = std::max(sqrtf(std::min(1.0f, viz.level[i] * 4.0f)), lvl_m[i] * 0.9f);
+    if (viz.hz[i] <= 0.0f) continue;
+    const int bh = int(lvl_m[i] * h);
+    if (bh > 0) { const int px = PitchX(viz.hz[i], x, w); gfxLine(px, y + h, px, y + h - bh); }
+  }
+}
+
 struct SlotDef {
   char name[10];
   char tag[5];       // chain box label, 3 letters (4 drawn tighter)
@@ -4892,7 +5031,7 @@ struct SlotDef {
 PROGMEM static const SlotDef SLOT_DEFS[SLOT_COUNT] = {
   {"SOURCE",   "SRC", 3, 3},  // INPUT, SPOOL, PLAYER (owned by the track, not made here)
   {"SPRAY",    "SPR", 3, 1},  // BYPASS, SPRAY (grains), STRETCH (Clouds pitch / time)
-  {"RESONATOR", "RES", 3, 1},  // BYPASS, RESONATOR (filter bank), MODAL (struck object)
+  {"RESONATOR", "RES", 4, 1},  // BYPASS, RESONATOR (filter bank), MODAL (struck object), CHIME (tuned resonators)
   {"TEXTURE",  "TEX", 2, 1},  // BYPASS, TEXTURE
   {"ECHO",     "ECO", 2, 1},  // BYPASS, ECHO
 };
@@ -4903,6 +5042,7 @@ FLASHMEM static Device* MakeDevice(int slot, int option) {
   if (slot == SPRAY && option == 2) return new StretchDevice;
   if (slot == RESONATOR && option == 1) return new ResonatorDevice;
   if (slot == RESONATOR && option == 2) return new ModalDevice;
+  if (slot == RESONATOR && option == 3) return new ChimeDevice;
   if (slot == TEXTURE && option == 1) return new DirtDevice;
   if (slot == ECHO && option == 1) return new EchoDevice;
   return nullptr;

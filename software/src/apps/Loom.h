@@ -1962,6 +1962,7 @@ FLASHMEM void AppLoom::DrawChain() const {
                       : c == SOURCE ? (tr.choice[SOURCE] == 1 ? PSTR("SPL")
                                        : tr.choice[SOURCE] == 2 ? PSTR("PLY") : PSTR("IN"))
                       : c == RESONATOR && tr.choice[c] == 2 ? PSTR("MOD")  // MODAL
+                      : c == RESONATOR && tr.choice[c] == 3 ? PSTR("CHM")  // CHIME
                       : c == SPRAY && tr.choice[c] == 2 ? PSTR("STR")      // STRETCH
                       : SLOT_DEFS[c].tag;
       if (strlen(tag) <= 3) {
@@ -2430,7 +2431,7 @@ namespace loom {
   // 5: OUTPUT page 2 LOW MID HIGH OTT (was BANDZ LOW MID HIGH)
   // 6: ECHO's reverb LEVEL PRE ROOM WALL (was LEVEL SIZE DECAY TONE)
   // 7: STRETCH POS turned round (0 = oldest, 100 = now, like SPRAY)
-  constexpr uint8_t SAVE_VERSION = 11;
+  constexpr uint8_t SAVE_VERSION = 12;
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -2697,7 +2698,7 @@ FLASHMEM void AppLoom::LoadFile() {
       tr.last_choice[s] = last[s] < SLOT_DEFS[s].noptions ? last[s] : 0;
     }
     ok = ReadDevice(f, tr.input) && ReadDevice(f, tr.mix);
-    const int opts = version >= 4 ? MAX_OPTIONS : 2;  // older files: two per slot
+    const int opts = version >= 12 ? MAX_OPTIONS : version >= 4 ? 3 : 2;  // older files: three / two per slot
     for (int s = SOURCE + 1; s < SLOT_COUNT && ok; s++)
       for (int o = 0; o < opts && ok; o++) ok = ReadDevice(f, tr.inst[s][o]);
     stage = 10 * t + 1;
