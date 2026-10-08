@@ -11,10 +11,11 @@
 // The owner sets each band's frequency coefficient, the bank's shape (where
 // it peaks, its slope, the peak's height, the tilt) and the damping. A
 // band's gain is applied to what goes in, so a band keeps ringing at its
-// level when the shape moves on: with VARIATION, every hit (a jump in the
-// input's level) moves the peak by some bands and the tilt by some amount
-// at random, so a new hit rings other notes of the scale while the last
-// ones ring out (arpeggios). Bands with no gain and nothing ringing are
+// level when the shape moves on. With note VARIATION, every hit (a jump in
+// the input's level) is sent mostly into one band (its two neighbours a
+// little), picked at random up to some bands either side of the peak: a
+// new hit rings another note of the scale while the last ones ring out
+// (arpeggios). Tilt VARIATION gives every hit its own tilt. Bands with no gain and nothing ringing are
 // skipped. CHOKE: the damping rises when the input goes quiet, so the bank
 // stops ringing with the input instead of sustaining.
 class AudioEffectResonator : public AudioStream {
@@ -64,7 +65,7 @@ public:
     reshape = true;
     AudioInterrupts();
   }
-  // where the last hit put the peak (bands) and the tilt, for the picture
+  // the band the last hit went to (from the peak) and its tilt, for the picture
   float HitCut() const { return hit_cut; }
   float HitTone() const { return hit_tone; }
 
@@ -101,10 +102,20 @@ private:
   }
   void Gains() {
     const Shape& s = shape;
-    const float cut = s.cut + hit_cut, tone = s.tone + hit_tone;
-    for (int k = 0; k < BANDS; k++)
-      target_gain[k] = Base(k, cut, s.slope) * (1.0f + s.reso * 0.06f * Bump(k, cut))
+    const float cut = s.cut, tone = s.tone + hit_tone;
+    // note variation: the hit goes into its band (neighbours at 1/2, the
+    // next at 1/30), the rest of the bank at -26 dB
+    const bool focus = cut_var_ > 0.0f;
+    const float note = roundf(cut) + hit_cut;
+    for (int k = 0; k < BANDS; k++) {
+      float g = Base(k, cut, s.slope) * (1.0f + s.reso * 0.06f * Bump(k, cut))
           * powf(4.0f, tone * 0.02f * (k - BANDS / 2) / float(BANDS / 2)) * s.level;  // +-12 dB at the ends
+      if (focus) {
+        const float d = k - note;
+        g *= 0.05f + 0.95f * expf(-d * d * 0.7f);
+      }
+      target_gain[k] = g;
+    }
   }
   Viz viz = {};
   // per-block scratch, kept here rather than on the small stack

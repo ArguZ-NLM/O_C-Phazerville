@@ -4127,14 +4127,13 @@ FLASHMEM void ResonatorDevice::FormatMode(int p, char* buf, size_t n) const {
 
 // gain of a band (fractional k for the picture) from CUT / SLOPE (12 dB per
 // octave sides, 6 bands an octave), before RESO and TONE
-// (where the last hit put it, with PITCH's variation)
 FLASHMEM float ResonatorDevice::Base(float k) const {
-  return AudioEffectResonator::Base(k, CutBand() + fx.HitCut(), cur[SLOPE] * 0.02f);
+  return AudioEffectResonator::Base(k, CutBand(), cur[SLOPE] * 0.02f);
 }
 
 // the RESO bump around the cutoff, 0..1
 FLASHMEM float ResonatorDevice::Bump(float k) const {
-  return AudioEffectResonator::Bump(k, CutBand() + fx.HitCut());
+  return AudioEffectResonator::Bump(k, CutBand());
 }
 
 // height of the shape in the picture, 0..1: the pass band at the top, RESO
@@ -4184,6 +4183,15 @@ FLASHMEM void ResonatorDevice::DrawViz(int x, int y, int w, int h) {
     py = sy;
   }
   gfxDottedLine(x, y + h - 1, x + BANDS * 2, y + h - 1, 2);
+  // PITCH's variation on: a small arrow at the top over the band the last
+  // hit went to
+  if (mode[PITCH]) {
+    const int hb = constrain(int(roundf(CutBand()) + fx.HitCut()), 0, BANDS - 1);
+    const int ax = x + hb * 2;
+    gfxLine(ax - 2, y, ax + 2, y);
+    gfxLine(ax - 1, y + 1, ax + 1, y + 1);
+    gfxPixel(ax, y + 2);
+  }
   // output level on the right
   const int mx = x + w - 14;
   gfxFrame(mx, y, 12, h);
