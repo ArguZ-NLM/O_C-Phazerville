@@ -1131,10 +1131,10 @@ PROGMEM static const DeviceDef SPOOL_DEF = {
     // stays when overdubbing, 0..100 % in 5 % steps
     {"MON", 0, 100, 100, UNI, 0, 21, 16},
     {"LEVEL", 0, 100, 100, UNI},
-    // the picture only. Mode (L): ALL, or how much time a closer view shows
-    // (REEL_VIEW_MS); value (R): where it looks, HEAD (-1: follows the play
-    // head) or a place in the loop, 0..100 %
-    {"VIEW", -1, 100, -1, UNI, 0, 10, 0},
+    // the picture only. Mode (L): ALL, LOOP (just START..END), or how much
+    // time a closer view shows (REEL_VIEW_MS); value (R): where it looks,
+    // HEAD (-1: follows the play head) or a place in the loop, 0..100 %
+    {"VIEW", -1, 100, -1, UNI, 0, 11, 0},
   },
   {"", ""},
 };
@@ -1245,7 +1245,8 @@ FLASHMEM void ReelDevice::FormatMode(int p, char* buf, size_t n) const {
     snprintf(buf, n, "DUB%d", mode[p] * 5);
   } else if (p == VIEW) {  // how close the view is (it had no name: blank)
     if (mode[p] == 0) snprintf(buf, n, "ALL");
-    else FormatMs(REEL_VIEW_MS[constrain(mode[p] - 1, 0, 8)], buf, n);
+    else if (mode[p] == 1) snprintf(buf, n, "LOOP");
+    else FormatMs(REEL_VIEW_MS[constrain(mode[p] - 2, 0, 8)], buf, n);
   } else {
     Device::FormatMode(p, buf, n);
   }
@@ -1305,6 +1306,7 @@ FLASHMEM void ReelDevice::Format(int p, char* buf, size_t n) const {
   }
   else if (p == IN) snprintf(buf, n, "%s", InputSourceName(val[p]));
   else if (p == VIEW && mode[p] == 0) snprintf(buf, n, "ALL");
+  else if (p == VIEW && mode[p] == 1) snprintf(buf, n, "LOOP");
   else if (p == VIEW && val[p] < 0) snprintf(buf, n, "HEAD");
   else if (p == VIEW) snprintf(buf, n, "%d%%", val[p]);
   else Device::Format(p, buf, n);
@@ -1401,8 +1403,17 @@ FLASHMEM void ReelDevice::DrawViz(int x, int y, int w, int h) {
     FormatMs(ms, t, sizeof(t));
     DrawZoom(x, y, w, h, long(ms * (AUDIO_SAMPLE_RATE_EXACT / 1000.0f)),
              long(uint64_t(fx.Length()) * cur[view_cursor] / 10000), t);
-  } else if (mode[VIEW] > 0) {
-    const int ms = REEL_VIEW_MS[constrain(mode[VIEW] - 1, 0, 8)];
+  } else if (mode[VIEW] == 1 && st != AudioEffectReel::REC && fx.Length()) {
+    // LOOP: just what plays, START to END across the width (2 pixels of room
+    // either side so their lines show)
+    float a, b;
+    fx.Window(a, b);
+    const long n = long(fx.Length());
+    const long ws = long(a * n), wl = std::max(1L, long((std::min(b, 1.0f) - a) * n));
+    const long span = wl * w / std::max(1, w - 4);
+    DrawZoom(x, y, w, h, span, ws - span * 2 / w + span / 2, "LOOP");
+  } else if (mode[VIEW] > 1) {
+    const int ms = REEL_VIEW_MS[constrain(mode[VIEW] - 2, 0, 8)];
     char t[8];
     FormatMs(ms, t, sizeof(t));
     const long n = long(st == AudioEffectReel::REC ? fx.HeadFrame() : fx.Length());
