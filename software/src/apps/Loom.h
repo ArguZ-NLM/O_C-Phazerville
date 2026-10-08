@@ -370,6 +370,9 @@ private:
   uint32_t undone_at = 0;  // UNDO shown
   bool stop_held = false, stop_armed = false;  // A held to stop the PLAYER ...
   uint32_t stop_hold = 0;                      // ... since then
+  bool tape_held = false;   // OUTPUT: A held 1 s starts / stops TAPE ...
+  uint32_t tape_hold = 0;   // ... since then
+  static constexpr uint32_t TAPE_HOLD_MS = 1000;
   bool undo_held = false, undo_armed = false;  // L held for the undo ...
   uint32_t undo_hold = 0;                      // ... since then
   void UndoReset();
@@ -1374,6 +1377,10 @@ FLASHMEM void AppLoom::MainLoop() {
     reset_held = false;
     ResetFocused();
   }
+  if (tape_held && millis() - tape_hold >= TAPE_HOLD_MS) {
+    tape_held = false;
+    loom::g_tape->Toggle();
+  }
   if (stop_held && millis() - stop_hold >= HOLD_MS) {
     stop_held = false;
     for (int t = 0; t < loom::NUM_TRACKS; t++) {  // linked: both
@@ -1558,9 +1565,12 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
       stop_armed = stop_held = view == CHAIN && col == SOURCE && tracks[track].choice[SOURCE] == 2
           && pl && pl->ActionLit(0);
       stop_hold = millis();
+      tape_held = view == DEVICE && !focus_mod && col == MIX_COL;
+      tape_hold = millis();
     } else if (event.type == UI::EVENT_BUTTON_PRESS || event.type == UI::EVENT_BUTTON_LONG_RELEASE) {
       loop_save_held = false;
       stop_held = false;
+      tape_held = false;
     }
   }
   // chain view: Y held for 2 s saves the settings (see MainLoop)
@@ -1742,6 +1752,7 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
       } else if (d) {
         const int a = event.control == OC::CONTROL_BUTTON_UP ? 0 : 1;
         if (a == 0 && stop_armed) break;  // held to stop (see above)
+        if (a == 0 && col == MIX_COL && !focus_mod) break;  // TAPE: held (see MainLoop)
         const bool was = d->ActionLit(a);
         d->Action(a);
         // linked: toggles end up in the same state, one-shots fire on both
@@ -2097,7 +2108,13 @@ FLASHMEM void AppLoom::DrawDevice() const {
   // a device's own note (PLAYER: where it plays, or its tempo), against
   // the clock mark; not over BYP / MUTE
   char info[12];
-  if (!mod_mode && !byp_on && !mute_turn && d->HeaderInfo(info, sizeof(info)))
+  const uint32_t tape_ms = tape_held ? millis() - tape_hold : 0;
+  if (tape_ms > 150) {
+    // OUTPUT, A held: REC (or STOP) filling up over the second it takes
+    gfxPrint(57, 1, g_tape->Wanted() ? PSTR("STOP") : PSTR("REC"));
+    gfxFrame(55, 0, 28, 9);
+    gfxInvert(55, 0, std::min<int>(28, int(tape_ms * 28 / TAPE_HOLD_MS)), 9);
+  } else if (!mod_mode && !byp_on && !mute_turn && d->HeaderInfo(info, sizeof(info)))
     gfxPrint(98 - 6 * int(strlen(info)), 1, info);
   // a muted track shows MUTE blinking on every page, in the second action
   // place; where a device has its own action there, the two take turns
