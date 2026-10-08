@@ -1795,6 +1795,7 @@ private:
   void Close();
   size_t Fill(int chunks);
   size_t ReadFrames(int16_t* l, int16_t* r, size_t n);
+  void LoopSection(const char* wav_path, size_t& a, size_t& b) const;  // from its .loom
 };
 
 // the one quick listen (made with Loom, before the audio output; CARD
@@ -1890,7 +1891,9 @@ FLASHMEM bool LoomPreview::Begin() {
   stream.SetLevel(level);
   stream.SetSpeed(srate / AUDIO_SAMPLE_RATE_EXACT);  // the module runs at 48 kHz
   stream.Open(frames);
-  stream.SetWindow(0, frames);
+  size_t a = 0, b = frames;
+  if (!strcasecmp(next_dir, REC_DIR)) LoopSection(path, a, b);  // a saved loop: its loop only
+  stream.SetWindow(a, b);
   Fill(8);  // a start buffered before it plays
   stream.Play();
   snprintf(dir_, sizeof(dir_), "%s", next_dir);
@@ -1916,6 +1919,40 @@ FLASHMEM size_t LoomPreview::Fill(int chunks) {
     if (rd < count) break;
   }
   return all;
+}
+
+// the loop START .. END saved next to the file (EDGES: in frames, else
+// START / END in 1/10000 of the file); the whole file when there is none
+FLASHMEM void LoomPreview::LoopSection(const char* wav_path, size_t& a, size_t& b) const {
+  char mp[200];
+  snprintf(mp, sizeof(mp), "%s", wav_path);
+  if (char* dot = strrchr(mp, '.')) *dot = 0;
+  strlcat(mp, ".loom", sizeof(mp));
+  File m = SD.open(mp, FILE_READ);
+  if (!m) return;
+  long s = -1, e = -1, es = -1, ee = -1;
+  char line[48];
+  while (m.available()) {
+    int n = 0;
+    while (m.available() && n < int(sizeof(line)) - 1) {
+      const char c = m.read();
+      if (c == '\n') break;
+      if (c != '\r') line[n++] = c;
+    }
+    line[n] = 0;
+    char key[8];
+    long x = 0, y = 0;
+    if (sscanf(line, "%7s %ld %ld", key, &x, &y) != 3) continue;
+    if (!strcmp(key, "EDGES")) { es = x; ee = y; }
+    else if (!strcmp(key, "START")) s = x;
+    else if (!strcmp(key, "END")) e = x;
+  }
+  m.close();
+  size_t na = a, nb = b;
+  if (es >= 0 && ee > es) { na = size_t(es); nb = size_t(ee); }
+  else if (s >= 0 && e > s) { na = size_t(uint64_t(frames) * s / 10000); nb = size_t(uint64_t(frames) * e / 10000); }
+  nb = std::min(nb, frames);
+  if (na + AUDIO_BLOCK_SAMPLES <= nb) { a = na; b = nb; }
 }
 
 FLASHMEM size_t LoomPreview::ReadFrames(int16_t* l, int16_t* r, size_t n) {
