@@ -2024,11 +2024,16 @@ FLASHMEM void AppLoom::DrawChain() const {
   // an input clipping: said where the slot's name goes, before anything
   // else (IN CLIP: turn down what comes in; GAIN CLIP: turn INPUT's GAIN down)
   int clip = 0, clip_t = 0;
+  float jack_db[NUM_TRACKS];
   for (int t = 0; t < NUM_TRACKS; t++) {
+    jack_db[t] = tracks[t].input ? tracks[t].input->JackDb() : -99.0f;
     if (!tracks[t].input || tracks[t].choice[SOURCE] == 2) continue;  // PLAYER: no input
     const int c = tracks[t].input->Clipping();
     if (c && (!clip || c < clip)) { clip = c; clip_t = t; }
   }
+  // the jack's level at the right end, for the clipping track or on a
+  // SOURCE taking the input (INPUT, SPOOL)
+  const int db_t = clip ? clip_t : col == SOURCE && tr.choice[SOURCE] != 2 ? track : -1;
   if (clip) {
     char t[16];
     snprintf(t, sizeof(t), "%s CLIP %c", clip == 1 ? "IN" : "GAIN", 'A' + clip_t);
@@ -2054,6 +2059,12 @@ FLASHMEM void AppLoom::DrawChain() const {
   const int right = 128 - 6 * 6 - 6;
   if (bp) {
     gfxPrint(128 - 6 * 6, 56, PSTR("bypass"));
+  } else if (db_t >= 0) {
+    char buf[8];
+    const int v = int(lrintf(jack_db[db_t]));
+    if (v <= -60) snprintf(buf, sizeof(buf), "<-60dB");
+    else snprintf(buf, sizeof(buf), "%ddB", v);
+    gfxPrint(128 - 6 * int(strlen(buf)), 56, buf);
   }
   if (!audio_hw()) {
     gfxPrint(right - 24, 56, PSTR("noIO"));

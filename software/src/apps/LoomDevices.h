@@ -1272,7 +1272,14 @@ private:
   static constexpr uint32_t CLIP_SHOW_MS = 1500;
 public:
   int Clipping();  // 0 none, 1 at the jack, 2 at GAIN
+  // the jacks' level as they come in (before GAIN), dB below the
+  // converter's limit: up at once, back down slowly (readable); main loop,
+  // once per screen
+  float JackDb();
 private:
+  volatile int32_t jack_pk = 0;  // since the last JackDb
+  float jack_db = -99.0f;
+  uint32_t jack_db_at = 0;
   void Poll();
   void Scope(const int16_t* l, const int16_t* r);
 };
@@ -1319,10 +1326,13 @@ FASTRUN void InputDevice::update() {
     int32_t pk[2] = {0, 0};
     // the jacks used at the converter's limit (not the test tone, not OUT A)
     if (!from_a && !(g_noise && g_noise->Running()) && src != OFF) {
-      bool jc = false;
-      for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++)
-        jc |= (src != IN2 && (a[n] >= 32760 || a[n] <= -32760)) || (src != IN1 && (b[n] >= 32760 || b[n] <= -32760));
-      if (jc) jack_clip = true;
+      int32_t jp = 0;
+      for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+        if (src != IN2) jp = std::max<int32_t>(jp, abs(a[n]));
+        if (src != IN1) jp = std::max<int32_t>(jp, abs(b[n]));
+      }
+      if (jp >= 32760) jack_clip = true;
+      if (jp > jack_pk) jack_pk = jp;
     }
     bool gc = false;
     for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
@@ -1401,6 +1411,19 @@ FLASHMEM int InputDevice::Clipping() {
   if (jack_clip_at && now - jack_clip_at < CLIP_SHOW_MS) return 1;
   if (gain_clip_at && now - gain_clip_at < CLIP_SHOW_MS) return 2;
   return 0;
+}
+
+FLASHMEM float InputDevice::JackDb() {
+  AudioNoInterrupts();
+  const int32_t pk = jack_pk;
+  jack_pk = 0;
+  AudioInterrupts();
+  const uint32_t now = millis();
+  const float dt = jack_db_at ? (now - jack_db_at) * 0.001f : 0.0f;
+  jack_db_at = now;
+  const float db = pk > 0 ? 20.0f * log10f(pk / 32767.0f) : -99.0f;
+  jack_db = std::max(db, jack_db - 15.0f * dt);  // falls 15 dB a second
+  return jack_db;
 }
 
 FLASHMEM void InputDevice::DrawViz(int x, int y, int w, int h) {
