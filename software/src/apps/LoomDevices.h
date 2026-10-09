@@ -5989,7 +5989,9 @@ FLASHMEM void WarpDevice::DrawViz(int x, int y, int w, int h) {
   for (int i = 0; i < w; i++) {
     const int a = over[i * 128 / w] * half / top;
     if (!a) continue;
-    gfxLine(x + i, cy - a, x + i, cy + a);
+    const uint32_t at = uint32_t(uint64_t(i) * frames / w);  // the quiet ends, left out: dotted
+    if (at >= trim_a && at < trim_b) gfxLine(x + i, cy - a, x + i, cy + a);
+    else if (i % 2 == 0) { gfxPixel(x + i, cy - a); gfxPixel(x + i, cy + a); }
   }
   for (int i = 0; i < AudioEffectWarp::VOICES; i++) {
     if (viz.pos[i] < 0.0f) continue;
