@@ -15,7 +15,8 @@
 // that lets it go over ~5 ms (cut, it clicked).
 //
 // The main loop sends notes through a small queue; the audio interrupt
-// takes them at the start of each block.
+// takes them at the start of each block. Whatever comes in (THREAD: track
+// A's output) passes through under the voices.
 class AudioEffectWarp : public AudioStream {
 public:
   static constexpr int VOICES = 8;
@@ -41,7 +42,7 @@ public:
     uint8_t note[VOICES];
   };
 
-  AudioEffectWarp() : AudioStream(0, nullptr) {}
+  AudioEffectWarp() : AudioStream(2, inq) {}
 
   // main loop: a new sample (nullptr / 0: none). All voices stop.
   void SetSample(const int16_t* l, const int16_t* r, uint32_t frames) {
@@ -96,6 +97,7 @@ private:
   };
   struct Event { uint8_t note, vel; bool once; };
 
+  audio_block_t* inq[2];
   const int16_t* sl = nullptr;
   const int16_t* sr = nullptr;
   uint32_t nframes = 0;
@@ -166,12 +168,17 @@ FASTRUN void AudioEffectWarp::update() {
     if (e.vel) Start(e);
     else Let(e.note);
   }
+  audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   bool any = false;
   for (auto& v : vc) any |= v.on;
-  if (!any || !nframes) return;  // nothing sent: silence downstream
+  if (!any || !nframes) {  // no voice: what comes in, as it is
+    for (int c = 0; c < 2; c++) if (in[c]) { transmit(in[c], c); release(in[c]); }
+    return;
+  }
   audio_block_t* out[2] = {allocate(), allocate()};
   if (!out[0] || !out[1]) {
     for (auto b : out) if (b) release(b);
+    for (auto b : in) if (b) release(b);
     return;
   }
   float sum[2][AUDIO_BLOCK_SAMPLES] = {};
@@ -239,12 +246,15 @@ FASTRUN void AudioEffectWarp::update() {
       }
     }
   }
+  constexpr float q = 1.0f / 32768.0f;
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
-    out[0]->data[n] = ToSample16(SoftLimit(sum[0][n] * g));
-    out[1]->data[n] = ToSample16(SoftLimit(sum[1][n] * g));
+    const float tl = in[0] ? in[0]->data[n] * q : 0.0f, tr = in[1] ? in[1]->data[n] * q : 0.0f;
+    out[0]->data[n] = ToSample16(SoftLimit(sum[0][n] * g + tl));
+    out[1]->data[n] = ToSample16(SoftLimit(sum[1][n] * g + tr));
   }
   transmit(out[0], 0);
   transmit(out[1], 1);
   release(out[0]);
   release(out[1]);
+  for (auto b : in) if (b) release(b);
 }

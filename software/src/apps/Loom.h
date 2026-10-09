@@ -524,6 +524,9 @@ FLASHMEM void AppLoom::Repatch(int t) {
   } else if (tr.choice[SOURCE] == 2 && tr.player) {  // PLAYER instead of the input
     prev = tr.player->out();
   } else if (tr.choice[SOURCE] == 3 && tr.warp) {  // WARP instead of the input
+    // THREAD: B's input (A's output) passes through WARP, under its notes
+    if (t == 1 && threaded)
+      for (int c = 0; c < 2; c++) link[SOURCE][c].Want(*tr.input, c, *tr.warp->in(), c);
     prev = tr.warp->out();
   }
   AudioStream* const source = prev;  // what came in, for OUTPUT's MIX
@@ -899,6 +902,7 @@ FLASHMEM void AppLoom::ToggleLink() {
     unlinked_pan[0] = INT16_MIN;
   }
   link_note_at = millis() | 1;  // the mode, shown for a moment
+  Repatch(1);  // THREAD in / out: WARP on B takes A through (or no more)
 }
 
 FLASHMEM void AppLoom::UnlinkNow() {
@@ -910,6 +914,7 @@ FLASHMEM void AppLoom::UnlinkNow() {
     if (b.reel) { b.reel->val[ReelDevice::IN] = thread_in >= 0 ? thread_spool_in : 0; b.reel->ApplyAll(); }
     thread_in = -1;
     threaded = false;
+    Repatch(1);  // WARP on B: no more A through it
   }
   if (linked) {
     if (link_stereo) StereoOff();

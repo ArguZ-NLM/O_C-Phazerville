@@ -5454,6 +5454,7 @@ public:
   enum { FILE_, NOTE, START, END, LOOP, ATK, REL, LEVEL };
   static constexpr const char* DIRS[4] = {LOOP_DIR, REC_DIR, TapeRecorder::DIR, "/LOOM/WARP"};
   WarpDevice() : Device(WARP_DEF) {}
+  AudioStream* in() override { return &fx; }  // THREAD: track A passes through
   AudioStream* out() override { return &fx; }
   bool Activate() override;
   void Deactivate() override;
