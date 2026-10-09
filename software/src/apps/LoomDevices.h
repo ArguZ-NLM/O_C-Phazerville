@@ -45,6 +45,7 @@
 extern "C" uint8_t external_psram_size;  // MB of PSRAM found at start (Teensy core)
 
 extern volatile bool g_noise_request;  // USB 'N' (Main.cpp)
+extern volatile bool g_capture_request;  // USB 'W' (Main.cpp)
 
 namespace loom {
 // the longest SPOOL loop / PLAYER sample held in memory. They take only
@@ -632,6 +633,58 @@ private:
 };
 inline NoiseTest* g_noise = nullptr;
 
+/////////////////////////////////////////////////////////////////
+// Output capture (USB 'W'): the next 3 s of the output as it goes to the
+// jacks, held in PSRAM, then sent over USB in hex lines ("w" + 16 stereo
+// frames), a bit per main loop. For listening from the Mac.
+/////////////////////////////////////////////////////////////////
+class OutCapture {
+public:
+  static constexpr uint32_t FRAMES = 3 * 48000;
+  bool Start() {
+    if (!buf) buf = static_cast<int16_t*>(extmem_malloc(FRAMES * 4));
+    if (!buf) return false;
+    sent = 0;
+    wr = 0;
+    on = true;
+    return true;
+  }
+  // audio interrupt: one block of the output
+  void Push(const int16_t* l, const int16_t* r) {
+    if (!on) return;
+    for (int n = 0; n < AUDIO_BLOCK_SAMPLES && wr < FRAMES; n++, wr++) {
+      buf[2 * wr] = l[n];
+      buf[2 * wr + 1] = r[n];
+    }
+    if (wr >= FRAMES) on = false;
+  }
+  // main loop: send what is captured, a few lines at a time
+  void Idle() {
+    if (!buf || on || sent >= wr) return;
+    if (sent == 0) Serial.printf("CAPTURE %lu frames 48000 Hz\n", (unsigned long)wr);
+    char line[2 + 16 * 8 + 2];
+    for (int k = 0; k < 8 && sent < wr; k++) {
+      int p = 0;
+      line[p++] = 'w';
+      for (int f = 0; f < 16 && sent < wr; f++, sent++)
+        for (int c = 0; c < 2; c++) {
+          const uint16_t v = uint16_t(buf[2 * sent + c]);
+          p += sprintf(line + p, "%04X", v);
+        }
+      line[p++] = '\n';
+      line[p] = 0;
+      Serial.write(line, p);
+    }
+    if (sent >= wr) Serial.println("--- end ---");
+  }
+private:
+  int16_t* buf = nullptr;
+  volatile uint32_t wr = 0;
+  volatile bool on = false;
+  uint32_t sent = 0;
+};
+inline OutCapture* g_capture = nullptr;
+
 // dB against a full-scale sine (rms 32767 / sqrt 2)
 static inline float NoiseDb(double rms) {
   return rms > 0.0 ? float(20.0 * log10(rms / (32767.0 / M_SQRT2))) : -999.0f;
@@ -776,6 +829,7 @@ FASTRUN void LoomMixer::update() {
         for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) acc[c][n] += int32_t(((b->data[n] * 26214) >> 15) * g[n]);
     for (int c = 0; c < 2; c++)
       for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) out[c]->data[n] = __SSAT(acc[c][n], 16);
+    if (g_capture) g_capture->Push(out[0]->data, out[1]->data);
     transmit(out[0], 0);
     transmit(out[1], 1);
   }

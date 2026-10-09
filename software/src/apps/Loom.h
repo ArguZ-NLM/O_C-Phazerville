@@ -1359,6 +1359,13 @@ FLASHMEM void AppLoom::MainLoop() {
       }
     }
     if (g_noise && g_noise->Done()) g_noise->Report();
+    // the output capture (USB 'W')
+    if (g_capture_request) {
+      g_capture_request = false;
+      if (!g_capture) g_capture = new OutCapture;
+      if (!g_capture->Start()) Serial.println("CAPTURE: no PSRAM");
+    }
+    if (g_capture) g_capture->Idle();
     // the output is muted while a PLAYER reads a file in (the card reading
     // made a high whine on the output)
     bool busy = false;
