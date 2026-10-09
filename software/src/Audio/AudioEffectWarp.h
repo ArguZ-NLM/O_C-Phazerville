@@ -7,10 +7,12 @@
 // Eight voices playing one sample (held in PSRAM) at the pitch of the notes
 // played, for the Loom WARP device.
 //
-// A note starts a voice at START, pitched against NOTE (the root: there the
+// A note starts a voice at START, pitched against the root (there the
 // sample plays as recorded), and plays to END: once (LOOP OFF), looping
-// START .. END with the seam crossfaded into the loop's start, or back and
-// forth (PING). ATTACK fades it in; a note off lets it go over RELEASE.
+// START .. END, or back and forth (PING). LOOP's seam as SPOOL's FADE:
+// CROSS blends what is around END into what is around START (where the
+// sample has nothing beyond them: its last frames into the loop's first),
+// INOUT dips out and back in. ATTACK fades it in; a note off lets it go over RELEASE.
 // A ninth note takes the oldest voice, which hands its sound to a fader
 // that lets it go over ~5 ms (cut, it clicked).
 //
@@ -27,6 +29,7 @@ public:
     float start = 0.0f, end = 1.0f;  // 0..1 of the sample
     uint8_t loop = ONCE;
     float xfade = 0.01f;     // s: LOOP's seam
+    bool cross = true;       // CROSS, else INOUT (a dip)
     float attack = 0.002f;   // s
     float release = 0.2f;    // s, to -60 dB
     float level = 0.8f;
@@ -92,6 +95,7 @@ private:
     uint8_t note = 0;
     uint8_t stage = 0;   // 0 attack, 1 held, 2 release
     int8_t dir = 1;      // PING: the way it goes
+    bool looped = false; // INOUT: came round once (the fade in)
     double pos = 0.0;    // in frames of the sample
     double step = 1.0;
     float env = 0.0f;
@@ -190,8 +194,20 @@ FASTRUN void AudioEffectWarp::update() {
   double b = double(constrain(par.end, 0.0f, 1.0f)) * nframes;
   if (b < a + 64.0) b = std::min<double>(nframes, a + 64.0);
   const double len = b - a;
-  // LOOP: the last xf frames before END fade into the loop's start
-  const double xf = std::min<double>(par.xfade * 48000.0 * par.rate, len * 0.5);
+  // LOOP's seam, in frames of the sample: CROSS h either side of END into
+  // h either side of START; else (no room, h 0) the last f before END into
+  // the first f of the loop; INOUT a dip of f each side
+  const double seam = par.xfade * 48000.0 * par.rate;
+  double h = 0.0, f = 0.0;
+  if (par.loop == LOOP) {
+    if (par.cross) {
+      h = std::min({seam * 0.5, len * 0.5, a, double(nframes) - b});
+      if (h < 16.0) h = 0.0;
+      f = h > 0.0 ? 0.0 : std::min(seam, len * 0.5);
+    } else {
+      f = std::min(seam * 0.5, len * 0.5);
+    }
+  }
   const float att = 1.0f / (std::max(0.001f, par.attack) * AUDIO_SAMPLE_RATE_EXACT);
   const float rel = expf(-6.9078f / (std::max(0.005f, par.release) * AUDIO_SAMPLE_RATE_EXACT));
   constexpr float FADER = 1.0f / (0.005f * AUDIO_SAMPLE_RATE_EXACT);
@@ -222,14 +238,27 @@ FASTRUN void AudioEffectWarp::update() {
       const int32_t k = int32_t(v.pos);
       const float t = float(v.pos - k);
       float l = At(sl, k, t, nframes), r = sr == sl ? l : At(sr, k, t, nframes);
-      if (par.loop == LOOP && xf >= 1.0 && v.pos > b - xf) {
-        const double q = a + (v.pos - (b - xf));  // the same place after the loop's start
-        const float m = float((v.pos - (b - xf)) / xf);
-        const int32_t kq = int32_t(q);
-        const float tq = float(q - kq);
-        const float lq = At(sl, kq, tq, nframes), rq = sr == sl ? lq : At(sr, kq, tq, nframes);
-        l += m * (lq - l);
-        r += m * (rq - r);
+      if (par.loop == LOOP && par.cross) {
+        double q = -1.0;
+        float m = 0.0f;
+        if (h > 0.0 && v.pos > b - h) {  // centred on the edges
+          q = v.pos - len;
+          m = float((v.pos - (b - h)) / (2.0 * h));
+        } else if (f >= 1.0 && v.pos > b - f) {  // the last f into the first f
+          q = a + (v.pos - (b - f));
+          m = float((v.pos - (b - f)) / f);
+        }
+        if (q >= 0.0) {
+          const int32_t kq = int32_t(q);
+          const float tq = float(q - kq);
+          const float lq = At(sl, kq, tq, nframes), rq = sr == sl ? lq : At(sr, kq, tq, nframes);
+          l += m * (lq - l);
+          r += m * (rq - r);
+        }
+      } else if (par.loop == LOOP && f >= 1.0) {  // INOUT
+        float d = float((b - v.pos) / f);
+        if (v.looped) d = std::min(d, float((v.pos - a) / f));
+        if (d < 1.0f) e *= std::max(0.0f, d);
       }
       if (par.loop == ONCE) {  // the last 2 ms before END fade out
         const float left = float((b - v.pos) / v.step);
@@ -242,8 +271,12 @@ FASTRUN void AudioEffectWarp::update() {
       if (par.loop == ONCE) {
         if (v.pos >= b) { v.on = false; break; }
       } else if (par.loop == LOOP) {
-        if (v.pos >= b) v.pos = a + xf + (v.pos - b);  // where the seam left it
-        if (v.pos < a) v.pos = a;
+        const double wrap = h > 0.0 ? b + h : b;  // CROSS: past the blend
+        if (v.pos >= wrap) {
+          v.pos -= h > 0.0 ? len : (b - a) - (par.cross ? f : 0.0);  // where the seam left it
+          v.looped = true;
+        }
+        if (v.pos < a - h) v.pos = a;
       } else {  // PING
         if (v.pos >= b - 1.0) { v.pos = 2.0 * (b - 1.0) - v.pos; v.dir = -1; }
         if (v.pos <= a) { v.pos = 2.0 * a - v.pos; v.dir = 1; }

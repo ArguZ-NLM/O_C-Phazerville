@@ -5457,13 +5457,13 @@ FLASHMEM void ChimeDevice::DrawMini(int x, int y, int w, int h) {
 // loop instead, copied in each time a recording or overdub there ends.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef WARP_DEF = {
-  "WARP", "WRP", 8, {"TRIG", "STOP"},  // A: the root note (LOOP / PING: let go once in); B: every voice let go
+  "WARP", "WRP", 8, {"TRIG", "STOP"},  // A: the root note, 60 (LOOP / PING: let go once in); B: every voice let go
   {
     {"FILE", -1, MAX_FILES - 1, -1, UNI},  // -1: none (the other track's SPOOL loop)
-    {"NOTE", 0, 127, 60, UNI, 0, 17, 0},  // the root (the sample as recorded); mode: MIDI channel, ANY, CH1 .. CH16
     {"START", 0, 10000, 0, UNI},
     {"END", 0, 10000, 10000, UNI},
-    {"LOOP", 0, 2, 0, LIST, 3, 8, 3, {"OFF", "LOOP", "PING"}},  // mode: LOOP's seam, 0 .. 200 ms
+    {"LOOP", 0, 2, 0, LIST, 3, 0, 0, {"OFF", "LOOP", "PING"}},
+    {"FADE", 0, 100, 20, UNI, 0, 2, 0, {}, {"CROSS", "INOUT"}},  // LOOP's seam, as SPOOL's
     {"ATK", 0, 100, 0, UNI},    // 1 ms .. 2 s
     {"REL", 0, 100, 40, UNI},   // 5 ms .. 5 s
     {"LEVEL", 0, 100, 80, UNI, 0, 5, 3},  // mode: how much velocity counts, 0 .. 100 %
@@ -5473,7 +5473,8 @@ PROGMEM static const DeviceDef WARP_DEF = {
 
 class WarpDevice : public Device {
 public:
-  enum { FILE_, NOTE, START, END, LOOP, ATK, REL, LEVEL };
+  enum { FILE_, START, END, LOOP, FADE, ATK, REL, LEVEL };
+  static constexpr int ROOT = 60;  // the note that plays the sample as recorded (MIDI note 60)
   // where a file without its folder is looked for (saved before WARP had
   // the file list: the folder was FILE's mode)
   static constexpr const char* DIRS[4] = {LOOP_DIR, REC_DIR, TapeRecorder::DIR, "/LOOM/WARP"};
@@ -5556,10 +5557,8 @@ private:
   void LoadStep();
   static float Attack(int v) { return 0.001f * powf(2000.0f, v * 0.01f); }
   static float Release(int v) { return 0.005f * powf(1000.0f, v * 0.01f); }
-  static float Xfade(int m) {
-    static const float ms[8] = {0, 2, 5, 10, 20, 50, 100, 200};
-    return ms[constrain(m, 0, 7)] * 0.001f;
-  }
+  // FADE as SPOOL's: up to 1 s, finer at the short end
+  static float Fade(int v) { const float f = v * 0.01f; return (16.0f + f * f * AUDIO_SAMPLE_RATE_EXACT) / AUDIO_SAMPLE_RATE_EXACT; }
   static void FormatSecs(float s, char* buf, size_t n) {
     if (s < 1.0f) snprintf(buf, n, "%dms", int(s * 1000.0f + 0.5f));
     else snprintf(buf, n, "%d.%02ds", int(s), int(s * 100.0f) % 100);
@@ -5739,7 +5738,6 @@ FLASHMEM void WarpDevice::Idle() {
   if (note_ev_n - midi_seen > NOTE_EVS) midi_seen = note_ev_n - NOTE_EVS;
   while (midi_seen != note_ev_n) {
     const NoteEv& e = note_ev[midi_seen++ % NOTE_EVS];
-    if (mode[NOTE] && e.ch != mode[NOTE]) continue;
     if (e.vel) fx.NoteOn(e.note, e.vel);
     else fx.NoteOff(e.note);
   }
@@ -5837,12 +5835,13 @@ FLASHMEM void WarpDevice::Apply(int p) {
   a.start = std::min(s, e) * 0.0001f;
   a.end = std::max(s, e) * 0.0001f;
   a.loop = uint8_t(constrain(int(cur[LOOP]), 0, 2));
-  a.xfade = Xfade(mode[LOOP]);
+  a.xfade = Fade(cur[FADE]);
+  a.cross = mode[FADE] == 0;
   a.attack = Attack(cur[ATK]);
   a.release = Release(cur[REL]);
   a.level = cur[LEVEL] * 0.01f;
   a.vel_amt = mode[LEVEL] * 0.25f;
-  a.root = cur[NOTE];
+  a.root = ROOT;
   a.rate = rate;
   fx.Set(a);
 }
@@ -5853,7 +5852,6 @@ FLASHMEM int WarpDevice::Step(int p, int v, int dir) const {
 }
 
 FLASHMEM void WarpDevice::Format(int p, char* buf, size_t n) const {
-  static const char* const nn[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
   switch (p) {
     case FILE_: {
       if (val[FILE_] < 0 || !nfiles) {
@@ -5865,7 +5863,7 @@ FLASHMEM void WarpDevice::Format(int p, char* buf, size_t n) const {
       if (char* dot = strrchr(buf, '.')) *dot = 0;
       break;
     }
-    case NOTE: snprintf(buf, n, "%s%d", nn[val[NOTE] % 12], val[NOTE] / 12 - 1); break;
+    case FADE: FormatSecs(Fade(val[FADE]), buf, n); break;
     case START: case END: {
       const float secs = frames ? frames / (AUDIO_SAMPLE_RATE_EXACT * rate) : 0.0f;
       FormatSecs(secs * val[p] * 0.0001f, buf, n);
@@ -5878,12 +5876,7 @@ FLASHMEM void WarpDevice::Format(int p, char* buf, size_t n) const {
 }
 
 FLASHMEM void WarpDevice::FormatMode(int p, char* buf, size_t n) const {
-  if (p == NOTE) {
-    if (!mode[NOTE]) snprintf(buf, n, "ANY");
-    else snprintf(buf, n, "CH%d", mode[NOTE]);
-  } else if (p == LOOP) {
-    snprintf(buf, n, "%dms", int(Xfade(mode[LOOP]) * 1000.0f + 0.5f));
-  } else if (p == LEVEL) {
+  if (p == LEVEL) {
     snprintf(buf, n, "V%d%%", mode[LEVEL] * 25);
   } else {
     Device::FormatMode(p, buf, n);
@@ -5892,8 +5885,8 @@ FLASHMEM void WarpDevice::FormatMode(int p, char* buf, size_t n) const {
 
 FLASHMEM void WarpDevice::Action(int a) {
   if (a == 0) {  // TRIG: the root, as if a key was struck (LOOP / PING: let go once in)
-    fx.NoteOff(cur[NOTE]);
-    fx.NoteOn(cur[NOTE], 100, true);
+    fx.NoteOff(ROOT);
+    fx.NoteOn(ROOT, 100, true);
   } else {
     fx.AllOff();
   }
