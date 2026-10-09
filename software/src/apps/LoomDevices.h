@@ -550,6 +550,8 @@ public:
   static constexpr float STEP_DB[STEPS] = {-999.0f, -60.0f, -40.0f, -20.0f, -6.0f};
   static constexpr int SETTLE_BLOCKS = 3 * 375;  // ~3 s
   static constexpr int MEASURE_BLOCKS = 2 * 375; // ~2 s
+  // where it listens (left channels only inside the tracks)
+  enum { OUT_L, OUT_R, A_INPUT, B_INPUT, A_TO_MIX, B_TO_MIX, TAPS };
   void Start() {
     step = 0;
     blocks = 0;
@@ -573,17 +575,13 @@ public:
       for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
         const double s = ref_s[n], c = ref_c[n];
         x.ss += s * s; x.cc += c * c; x.sc += s * c; x.s += s; x.c += c;
-        for (int ch = 0; ch < 2; ch++) {
-          const double v = y[ch][n];
-          ch_sum[ch].yy += v * v; ch_sum[ch].ys += v * s; ch_sum[ch].yc += v * c; ch_sum[ch].y += v;
-        }
+        for (int ch = 0; ch < 2; ch++) Add(ch_sum[ch], y[ch][n], s, c);
       }
       x.n += AUDIO_BLOCK_SAMPLES;
     }
     if (++blocks >= SETTLE_BLOCKS + MEASURE_BLOCKS) {
       result[step].x = x;
-      result[step].ch[0] = ch_sum[0];
-      result[step].ch[1] = ch_sum[1];
+      for (int k = 0; k < TAPS; k++) result[step].ch[k] = ch_sum[k];
       ClearSums();
       blocks = 0;
       if (++step >= STEPS) { running = false; done = true; }
@@ -591,10 +589,19 @@ public:
     }
     Next();
   }
+  // a point inside the path (audio interrupt, before or after the mixer:
+  // the tone's block stays the same until the mixer is done)
+  void Tap(int k, const audio_block_t* b) {
+    if (!running || blocks < SETTLE_BLOCKS) return;
+    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) Add(ch_sum[k], b ? b->data[n] : 0, ref_s[n], ref_c[n]);
+  }
 private:
   struct XSums { double ss, cc, sc, s, c, n; };
   struct YSums { double yy, ys, yc, y; };
-  struct Result { XSums x; YSums ch[2]; };
+  struct Result { XSums x; YSums ch[TAPS]; };
+  static void Add(YSums& y, double v, double s, double c) {
+    y.yy += v * v; y.ys += v * s; y.yc += v * c; y.y += v;
+  }
   volatile bool running = false, done = false;
   int step = 0, blocks = 0;
   double amp = 0.0;
@@ -602,9 +609,9 @@ private:
   double ref_s[AUDIO_BLOCK_SAMPLES] = {}, ref_c[AUDIO_BLOCK_SAMPLES] = {};
   int16_t tone[AUDIO_BLOCK_SAMPLES] = {};
   XSums x;
-  YSums ch_sum[2];
+  YSums ch_sum[TAPS];
   Result result[STEPS];
-  void ClearSums() { x = {}; ch_sum[0] = ch_sum[1] = {}; }
+  void ClearSums() { x = {}; for (auto& c : ch_sum) c = {}; }
   void Level() { amp = STEP_DB[step] < -200.0f ? 0.0 : 32767.0 * pow(10.0, STEP_DB[step] / 20.0); }
   void Next() {
     const double w = 2.0 * M_PI * HZ / AUDIO_SAMPLE_RATE_EXACT;
@@ -637,43 +644,48 @@ static inline const char* DbText(float db, char* buf) {
 
 FLASHMEM void NoiseTest::Report() {
   done = false;
-  // one rounding to 16 bit: 1/sqrt(12) of a step
-  char d1[16], d2[16];
+  char d1[16];
   Serial.printf("NOISE TEST: a %d Hz tone into both tracks' INPUT (jacks ignored, output muted)\n", int(HZ));
+  // one rounding to 16 bit: 1/sqrt(12) of a step
   Serial.printf("  dB against a full-scale sine; one rounding to 16 bit alone = %s dB\n",
                 DbText(NoiseDb(1.0 / sqrt(12.0)), d1));
-  Serial.printf("  tone in   | L: tone out  left over  | R: tone out  left over\n");
-  for (int i = 0; i < STEPS; i++) {
-    const Result& r = result[i];
-    const XSums& s = r.x;
-    if (s.n <= 0) continue;
-    if (STEP_DB[i] < -200.0f) Serial.printf("  silence   |");
-    else Serial.printf("  %5d dB  |", int(STEP_DB[i]));
-    for (int ch = 0; ch < 2; ch++) {
-      const YSums& y = r.ch[ch];
-      // least squares: y ~ a sin + b cos + d (the 3x3 normal equations)
-      const double M[3][3] = {{s.ss, s.sc, s.s}, {s.sc, s.cc, s.c}, {s.s, s.c, s.n}};
-      const double v[3] = {y.ys, y.yc, y.y};
-      const double det = M[0][0] * (M[1][1] * M[2][2] - M[1][2] * M[2][1])
-                       - M[0][1] * (M[1][0] * M[2][2] - M[1][2] * M[2][0])
-                       + M[0][2] * (M[1][0] * M[2][1] - M[1][1] * M[2][0]);
-      double b[3];
-      for (int k = 0; k < 3; k++) {  // Cramer's rule
-        double A[3][3];
-        for (int i2 = 0; i2 < 3; i2++)
-          for (int j = 0; j < 3; j++) A[i2][j] = j == k ? v[i2] : M[i2][j];
-        b[k] = (A[0][0] * (A[1][1] * A[2][2] - A[1][2] * A[2][1])
-              - A[0][1] * (A[1][0] * A[2][2] - A[1][2] * A[2][0])
-              + A[0][2] * (A[1][0] * A[2][1] - A[1][1] * A[2][0])) / det;
-      }
-      const double left = std::max(0.0, y.yy - (b[0] * v[0] + b[1] * v[1] + b[2] * v[2]));
-      const double tone_rms = sqrt((b[0] * b[0] + b[1] * b[1]) / 2.0);
-      if (STEP_DB[i] < -200.0f) Serial.printf("      -     ");
-      else Serial.printf("  %7s dB", DbText(NoiseDb(tone_rms), d1));
-      Serial.printf("  %7s dB |", DbText(NoiseDb(sqrt(left / s.n)), d2));
-    }
+  static const char* const names[TAPS] = {"out L", "out R", "A input", "B input", "A to mix", "B to mix"};
+  for (int table = 0; table < 2; table++) {
+    Serial.printf(table ? "  LEFT OVER (noise + distortion)\n" : "  TONE LEVEL\n");
+    Serial.printf("  tone in  ");
+    for (auto nm : names) Serial.printf(" %9s", nm);
     Serial.println();
-    delay(2);
+    for (int i = 0; i < STEPS; i++) {
+      const Result& r = result[i];
+      const XSums& s = r.x;
+      if (s.n <= 0) continue;
+      if (STEP_DB[i] < -200.0f) Serial.printf("  silence ");
+      else Serial.printf("  %4d dB  ", int(STEP_DB[i]));
+      for (int ch = 0; ch < TAPS; ch++) {
+        const YSums& y = r.ch[ch];
+        // least squares: y ~ a sin + b cos + d (the 3x3 normal equations)
+        const double M[3][3] = {{s.ss, s.sc, s.s}, {s.sc, s.cc, s.c}, {s.s, s.c, s.n}};
+        const double v[3] = {y.ys, y.yc, y.y};
+        auto det3 = [](const double A[3][3]) {
+          return A[0][0] * (A[1][1] * A[2][2] - A[1][2] * A[2][1])
+               - A[0][1] * (A[1][0] * A[2][2] - A[1][2] * A[2][0])
+               + A[0][2] * (A[1][0] * A[2][1] - A[1][1] * A[2][0]);
+        };
+        const double det = det3(M);
+        double b[3];
+        for (int k = 0; k < 3; k++) {  // Cramer's rule
+          double A[3][3];
+          for (int i2 = 0; i2 < 3; i2++)
+            for (int j = 0; j < 3; j++) A[i2][j] = j == k ? v[i2] : M[i2][j];
+          b[k] = det3(A) / det;
+        }
+        const double left = std::max(0.0, y.yy - (b[0] * v[0] + b[1] * v[1] + b[2] * v[2]));
+        const double tone_rms = sqrt((b[0] * b[0] + b[1] * b[1]) / 2.0);
+        Serial.printf(" %9s", DbText(NoiseDb(table ? sqrt(left / s.n) : tone_rms), d1));
+      }
+      Serial.println();
+      delay(2);
+    }
   }
   Serial.println("--- end ---");
 }
@@ -739,7 +751,11 @@ FASTRUN void LoomMixer::update() {
     }
     level[0] = blk[0];
     level[1] = blk[1];
-    if (g_noise) g_noise->Measure(acc[0], acc[1]);  // (before the mute: it mutes the output)
+    if (g_noise) {
+      g_noise->Tap(NoiseTest::A_TO_MIX, in[0]);
+      g_noise->Tap(NoiseTest::B_TO_MIX, in[2]);
+      g_noise->Measure(acc[0], acc[1]);
+    }  // (before the mute: it mutes the output)
     float g[AUDIO_BLOCK_SAMPLES];  // the mute fade, for the quick listen too
     if (mute || mute_g < 1.0f) {  // fade the sum out / back in
       const float to = mute ? 0.0f : 1.0f, step = 1.0f / (0.015f * AUDIO_SAMPLE_RATE_EXACT);
@@ -1258,6 +1274,7 @@ FASTRUN void InputDevice::update() {
     for (int c = 0; c < 2; c++) peak[c] = std::max(peak[c], pk[c] * (1.0f / 32768.0f));
     level = std::max(pk[0], pk[1]) * (1.0f / 32768.0f);
     Scope(l, r);
+    if (g_noise) g_noise->Tap(chained ? NoiseTest::B_INPUT : NoiseTest::A_INPUT, out[0]);
     transmit(out[0], 0);
     transmit(out[1], 1);
   }
