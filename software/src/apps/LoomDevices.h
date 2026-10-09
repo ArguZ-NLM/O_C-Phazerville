@@ -1423,7 +1423,8 @@ FLASHMEM float InputDevice::JackDb() {
   const float dt = jack_db_at ? (now - jack_db_at) * 0.001f : 0.0f;
   jack_db_at = now;
   const float db = pk > 0 ? 20.0f * log10f(pk / 32767.0f) : -99.0f;
-  // up at once; down: a peak is held 0.5 s, then falls 10 dB a second;
+  // up at once; down: a peak is held 1.5 s (a level wobbling with an LFO
+  // reads steady), then falls 10 dB a second;
   // a real drop (more than 6 dB below for 0.2 s) is followed quickly, the
   // faster the bigger the gap (a wobbling level must not set that off)
   const float gap = jack_db - db;
@@ -1431,7 +1432,7 @@ FLASHMEM float InputDevice::JackDb() {
   else if (!jack_low_since) jack_low_since = now | 1;
   if (gap <= 0.0f) { jack_db = db; jack_peak_at = now; }
   else if (jack_low_since && now - jack_low_since > 200) jack_db = std::max(db, jack_db - 8.0f * gap * dt);
-  else if (now - jack_peak_at > 500) jack_db = std::max(db, jack_db - 10.0f * dt);
+  else if (now - jack_peak_at > 1500) jack_db = std::max(db, jack_db - 10.0f * dt);
   // the number moves only once the reading is 1 dB past it (no flicker
   // between two values); up to a new peak at once
   const int v = int(lrintf(jack_db));
