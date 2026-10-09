@@ -270,6 +270,11 @@ public:
   virtual void KeepMore(Saved&) const {}
   // a short note for the page's header bar (false: none)
   virtual bool HeaderInfo(char*, size_t) const { return false; }
+  // the file list (LoomBrowser): R push on FileParam() opens it; a WAV
+  // picked in it comes to Picked
+  virtual int FileParam() const { return -1; }
+  virtual void OpenBrowser() {}
+  virtual void Picked(const char* dir, const char* name) {}
   virtual void RestoreMore(const Saved&) {}
   void Nudge(int p, int dir);
   void NudgeMode(int p, int dir);
@@ -1615,6 +1620,7 @@ public:
   Meter in_m[2];            // the input level, as on INPUT
   // saving the loop to the SD card (the app writes it, A held for 2 s)
   const int16_t* LoopData(int c) const { return fx.Data(c); }
+  AudioEffectReel::State LoopState() const { return fx.state(); }
   void WriteMeta(const char* wav_name) const;  // the loop's settings for PLAYER
   size_t LoopLength() const {
     const auto st = fx.state();
@@ -2349,9 +2355,175 @@ private:
   void LoopSection(const char* wav_path, size_t& a, size_t& b) const;  // from its .loom
 };
 
+// The file list (R push on FILE: PLAYER, WARP): sub-folders first (with a
+// /), then WAVs; ".." goes up. One for the app, open for one device at a
+// time. B listens to the file under the cursor (the quick listen), B held
+// turns AUTO on: every file the cursor rests on plays.
+class LoomBrowser {
+public:
+  const void* owner = nullptr;  // the device whose list is open
+  LoomPreview* preview = nullptr;
+  bool IsOpen(const void* who) const { return owner && owner == who; }
+  void Open(const void* who, const char* dir, const char* select);
+  void Close() { owner = nullptr; autoplay = false; if (preview) preview->Stop(); }
+  void Move(int d) {
+    const int was = bsel;
+    bsel = constrain(bsel + d, 0, std::max(0, bcount - 1));
+    if (autoplay && bsel != was) { auto_due = true; auto_at = millis(); }
+  }
+  // R: a folder goes in (".." up); a WAV: true (the list closes; Dir() /
+  // Name() are the one picked)
+  bool Enter();
+  void Back();  // at the top: closes
+  void Play();
+  void ToggleAutoplay();
+  void AutoplayIdle();
+  const char* Dir() const { return bdir; }
+  const char* Name() const { return bsel < bcount ? bn[bsel] : ""; }
+  void Draw(int x, int y, int w, int h) const;
+
+private:
+  char bdir[96] = "/";
+  char bn[MAX_FILES][NAME_LEN] = {};
+  bool bfolder[MAX_FILES] = {};
+  int bcount = 0, bsel = 0;
+  bool autoplay = false, auto_due = false;
+  uint32_t auto_at = 0;
+  void List();
+};
+inline LoomBrowser* g_browser = nullptr;  // made with Loom (on the heap: RAM2)
+
 // the one quick listen (made with Loom, before the audio output; CARD
 // borrows it while Loom is paused)
 inline LoomPreview* g_preview = nullptr;
+
+// --- the browser: sub-folders first (with a /), then WAVs; ".." goes up
+FLASHMEM void LoomBrowser::List() {
+  bcount = 0;
+  bsel = 0;
+  if (strcmp(bdir, "/")) { snprintf(bn[bcount], NAME_LEN, ".."); bfolder[bcount++] = true; }
+  File d = SD.open(bdir);
+  if (!d) return;
+  Serial.printf("BROWSER %s\n", bdir);  // the whole folder over USB, for checking
+  for (int pass = 0; pass < 2; pass++) {  // folders, then files
+    d.rewindDirectory();
+    const int first = bcount;
+    while (bcount < MAX_FILES) {
+      File e = d.openNextFile();
+      if (!e) break;
+      const char* nm = e.name();
+      const size_t l = strlen(nm);
+      const bool isdir = e.isDirectory();
+      const bool want = nm[0] != '.' && l < NAME_LEN - 1 &&
+                        (pass == 0 ? isdir : (!isdir && l > 4 && !strcasecmp(nm + l - 4, ".WAV")));
+      if (want) { bfolder[bcount] = isdir; snprintf(bn[bcount++], NAME_LEN, "%s", nm); }
+      if (pass == 1) Serial.printf("  %s%s %lu%s\n", nm, isdir ? "/" : "", (unsigned long)e.size(), want ? "" : "  (not listed)");
+      e.close();
+    }
+    for (int i = first + 1; i < bcount; i++)
+      for (int j = i; j > first && ListOrder(bn[j - 1], bn[j]) > 0; j--) {
+        char t[NAME_LEN];
+        memcpy(t, bn[j], NAME_LEN); memcpy(bn[j], bn[j - 1], NAME_LEN); memcpy(bn[j - 1], t, NAME_LEN);
+        std::swap(bfolder[j], bfolder[j - 1]);
+      }
+  }
+  d.close();
+}
+
+FLASHMEM void LoomBrowser::Open(const void* who, const char* dir, const char* select) {
+  if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
+  snprintf(bdir, sizeof(bdir), "%s", dir && dir[0] ? dir : "/");
+  List();
+  for (int i = 0; i < bcount; i++)
+    if (!bfolder[i] && !strcmp(bn[i], select)) { bsel = i; break; }
+  owner = who;
+}
+
+FLASHMEM void LoomBrowser::Back() {
+  if (!strcmp(bdir, "/")) { Close(); return; }  // at the top
+  char* slash = strrchr(bdir, '/');
+  if (slash == bdir) bdir[1] = 0; else if (slash) *slash = 0;
+  List();
+}
+
+FLASHMEM bool LoomBrowser::Enter() {
+  if (bsel >= bcount) return false;
+  if (bfolder[bsel]) {
+    if (!strcmp(bn[bsel], "..")) { Back(); return false; }
+    const size_t l = strlen(bdir);
+    if (l + strlen(bn[bsel]) + 2 < sizeof(bdir))
+      snprintf(bdir + l, sizeof(bdir) - l, "%s%s", l > 1 ? "/" : "", bn[bsel]);
+    List();
+    if (autoplay) { auto_due = true; auto_at = millis(); }
+    return false;
+  }
+  // a WAV (the quick listen ends)
+  Close();
+  return true;
+}
+
+// B in the list: a quick listen to the file under the cursor, straight
+// from the card and past the effects, once through (the device's file
+// stays); B again stops it
+FLASHMEM void LoomBrowser::Play() {
+  if (bsel >= bcount || bfolder[bsel] || !preview) return;
+  if (preview->Is(bdir, bn[bsel])) preview->Stop();
+  else preview->Start(bdir, bn[bsel]);
+}
+
+FLASHMEM void LoomBrowser::ToggleAutoplay() {
+  autoplay = !autoplay;
+  auto_due = false;
+  if (!preview) return;
+  if (!autoplay) { preview->Stop(); return; }
+  if (bsel < bcount && !bfolder[bsel] && !preview->Is(bdir, bn[bsel])) preview->Start(bdir, bn[bsel]);
+}
+
+// AUTO: once the cursor has rested on a file for a moment, it plays (a
+// folder: quiet), so scrolling fast doesn't start every file on the way
+FLASHMEM void LoomBrowser::AutoplayIdle() {
+  if (!owner) autoplay = false;
+  if (!autoplay || !auto_due || !preview || millis() - auto_at < 100) return;
+  auto_due = false;
+  if (bsel >= bcount || bfolder[bsel]) preview->Stop();
+  else if (!preview->Is(bdir, bn[bsel])) preview->Start(bdir, bn[bsel]);
+}
+
+FLASHMEM void LoomBrowser::Draw(int x, int y, int w, int h) const {
+  // the folder on top, then 5 entries around the selection
+  char t[24];
+  const size_t l = strlen(bdir);
+  const size_t room = autoplay ? 16 : 21;  // AUTO takes the right end
+  snprintf(t, sizeof(t), "%s", l > room ? bdir + l - room : bdir);
+  gfxPrint(x, y + 1, t);
+  if (autoplay) {
+    gfxPrint(x + w - 25, y + 1, "AUTO");
+    gfxInvert(x + w - 26, y, 26, 9);
+  }
+  gfxLine(x, y + 10, x + w - 1, y + 10);
+  if (!bcount) { gfxPrint(x + 4, y + 16, PSTR("(empty)")); return; }
+  constexpr int rows = 5;
+  const int first = constrain(bsel - rows / 2, 0, std::max(0, bcount - rows));
+  for (int r = 0; r < rows && first + r < bcount; r++) {
+    const int i = first + r;
+    if (bfolder[i]) {
+      const bool up = !strcmp(bn[i], "..");
+      char f[20];
+      ShortName(bn[i], 19 - !up, f, sizeof(f));
+      snprintf(t, sizeof(t), "%s%s", f, up ? "" : "/");
+    } else {
+      ShortName(bn[i], 20, t, sizeof(t));
+    }
+    const int ry = y + 13 + r * 8;
+    gfxPrint(x + 2, ry, t);
+    // the quick listen playing: a small arrow at the right
+    if (!bfolder[i] && preview && preview->Is(bdir, bn[i])) {
+      graphics.clearRect(x + w - 6, ry - 1, 6, 9);  // over a long name
+      for (int k = 0; k < 3; k++) gfxLine(x + w - 5 + k, ry + k, x + w - 5 + k, ry + 6 - k);
+    }
+    if (i == bsel) gfxInvert(x, ry - 1, w, 9);
+  }
+}
 
 FLASHMEM bool LoomPreview::Start(const char* folder, const char* name) {
   snprintf(next_dir, sizeof(next_dir), "%s", folder);
@@ -2640,27 +2812,10 @@ public:
   }
   void KeepMore(Saved& k) const override { k.ex[0] = ex_pos[0]; k.ex[1] = ex_pos[1]; k.ex_valid = ex_valid; }
   void RestoreMore(const Saved& k) override { ex_pos[0] = k.ex[0]; ex_pos[1] = k.ex[1]; ex_valid = k.ex_valid; }
-  // the browser: folders and WAVs as a text list (R push on FILE)
-  bool browsing = false;
-  void OpenBrowser();
-  void BrowseMove(int d) {
-    const int was = bsel;
-    bsel = constrain(bsel + d, 0, std::max(0, bcount - 1));
-    if (autoplay && bsel != was) { auto_due = true; auto_at = millis(); }
-  }
-  // B held in the list: AUTO, every file the cursor rests on plays (the
-  // quick listen); held again or the list closed: off
-  bool autoplay = false, auto_due = false;
-  uint32_t auto_at = 0;
-  void ToggleAutoplay();
-  void AutoplayIdle();
-  void BrowseEnter();
-  void BrowseBack();
-  void BrowsePlay();
-  void CloseBrowser() { browsing = autoplay = false; if (preview) preview->Stop(); }
-  bool BrowsedIsCurrent() const;
-  LoomPreview* preview = nullptr;  // B in the list (the app's, shared)
-  void DrawBrowser(int x, int y, int w, int h) const;
+  // the file list (R push on FILE)
+  int FileParam() const override { return FILE_; }
+  void OpenBrowser() override;
+  void Picked(const char* folder, const char* name) override;
 
 private:
   AudioPlayStream stream;  // before fx: the audio update order follows the signal
@@ -2669,12 +2824,6 @@ private:
   char names[MAX_FILES][NAME_LEN] = {};
   uint32_t scanned_at = 0;
   char dir[96] = "/LOOM";  // the folder FILE steps through
-  // browser
-  char bdir[96] = "/";
-  char bn[MAX_FILES][NAME_LEN] = {};
-  bool bfolder[MAX_FILES] = {};
-  int bcount = 0, bsel = 0;
-  void List();
   // streaming (files too long for fx)
   bool streaming = false, analysing = false;
   bool indexing = false;   // streaming, and the level index still being read
@@ -2948,147 +3097,18 @@ FLASHMEM void PlayerDevice::BpmSolve() {
   Window();  // SNAP can use the beats now
 }
 
-// --- the browser: sub-folders first (with a /), then WAVs; ".." goes up
-FLASHMEM void PlayerDevice::List() {
-  bcount = 0;
-  bsel = 0;
-  if (strcmp(bdir, "/")) { snprintf(bn[bcount], NAME_LEN, ".."); bfolder[bcount++] = true; }
-  File d = SD.open(bdir);
-  if (!d) return;
-  Serial.printf("BROWSER %s\n", bdir);  // the whole folder over USB, for checking
-  for (int pass = 0; pass < 2; pass++) {  // folders, then files
-    d.rewindDirectory();
-    const int first = bcount;
-    while (bcount < MAX_FILES) {
-      File e = d.openNextFile();
-      if (!e) break;
-      const char* nm = e.name();
-      const size_t l = strlen(nm);
-      const bool isdir = e.isDirectory();
-      const bool want = nm[0] != '.' && l < NAME_LEN - 1 &&
-                        (pass == 0 ? isdir : (!isdir && l > 4 && !strcasecmp(nm + l - 4, ".WAV")));
-      if (want) { bfolder[bcount] = isdir; snprintf(bn[bcount++], NAME_LEN, "%s", nm); }
-      if (pass == 1) Serial.printf("  %s%s %lu%s\n", nm, isdir ? "/" : "", (unsigned long)e.size(), want ? "" : "  (not listed)");
-      e.close();
-    }
-    for (int i = first + 1; i < bcount; i++)
-      for (int j = i; j > first && ListOrder(bn[j - 1], bn[j]) > 0; j--) {
-        char t[NAME_LEN];
-        memcpy(t, bn[j], NAME_LEN); memcpy(bn[j], bn[j - 1], NAME_LEN); memcpy(bn[j - 1], t, NAME_LEN);
-        std::swap(bfolder[j], bfolder[j - 1]);
-      }
-  }
-  d.close();
-}
-
 FLASHMEM void PlayerDevice::OpenBrowser() {
-  if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
   // just after SPOOL saved a loop: on that one, in SPOOLS; else on the file
   // that is playing
   const bool on_fresh = fresh[0] != 0;
-  snprintf(bdir, sizeof(bdir), "%s", on_fresh ? REC_DIR : dir);
-  List();
-  const char* want = on_fresh ? fresh : FileName();
-  for (int i = 0; i < bcount; i++)
-    if (!bfolder[i] && !strcmp(bn[i], want)) { bsel = i; break; }
+  g_browser->Open(this, on_fresh ? REC_DIR : dir, on_fresh ? fresh : FileName());
   fresh[0] = 0;
-  browsing = true;
 }
 
-FLASHMEM void PlayerDevice::BrowseBack() {
-  if (!strcmp(bdir, "/")) {  // at the top: close
-    browsing = autoplay = false;
-    if (preview) preview->Stop();
-    return;
-  }
-  char* slash = strrchr(bdir, '/');
-  if (slash == bdir) bdir[1] = 0; else if (slash) *slash = 0;
-  List();
-}
-
-FLASHMEM void PlayerDevice::BrowseEnter() {
-  if (bsel >= bcount) return;
-  if (bfolder[bsel]) {
-    if (!strcmp(bn[bsel], "..")) { BrowseBack(); return; }
-    const size_t l = strlen(bdir);
-    if (l + strlen(bn[bsel]) + 2 < sizeof(bdir))
-      snprintf(bdir + l, sizeof(bdir) - l, "%s%s", l > 1 ? "/" : "", bn[bsel]);
-    List();
-    if (autoplay) { auto_due = true; auto_at = millis(); }
-    return;
-  }
-  // a WAV: play from this folder (the quick listen ends)
-  if (preview) preview->Stop();
-  if (!BrowsedIsCurrent()) SetFile(bdir, bn[bsel]);
-  browsing = autoplay = false;
-}
-
-FLASHMEM bool PlayerDevice::BrowsedIsCurrent() const {
-  return bsel < bcount && !bfolder[bsel] && nfiles && !strcmp(dir, bdir) &&
-         !strcmp(names[std::min<int>(cur[FILE_], nfiles - 1)], bn[bsel]);
-}
-
-// B in the list: a quick listen to the file under the cursor, straight
-// from the card and past the effects, once through (PLAYER's file stays);
-// B again stops it
-FLASHMEM void PlayerDevice::BrowsePlay() {
-  if (bsel >= bcount || bfolder[bsel] || !preview) return;
-  if (preview->Is(bdir, bn[bsel])) preview->Stop();
-  else preview->Start(bdir, bn[bsel]);
-}
-
-FLASHMEM void PlayerDevice::ToggleAutoplay() {
-  autoplay = !autoplay;
-  auto_due = false;
-  if (!preview) return;
-  if (!autoplay) { preview->Stop(); return; }
-  if (bsel < bcount && !bfolder[bsel] && !preview->Is(bdir, bn[bsel])) preview->Start(bdir, bn[bsel]);
-}
-
-// AUTO: once the cursor has rested on a file for a moment, it plays (a
-// folder: quiet), so scrolling fast doesn't start every file on the way
-FLASHMEM void PlayerDevice::AutoplayIdle() {
-  if (!browsing) autoplay = false;
-  if (!autoplay || !auto_due || !preview || millis() - auto_at < 100) return;
-  auto_due = false;
-  if (bsel >= bcount || bfolder[bsel]) preview->Stop();
-  else if (!preview->Is(bdir, bn[bsel])) preview->Start(bdir, bn[bsel]);
-}
-
-FLASHMEM void PlayerDevice::DrawBrowser(int x, int y, int w, int h) const {
-  // the folder on top, then 5 entries around the selection
-  char t[24];
-  const size_t l = strlen(bdir);
-  const size_t room = autoplay ? 16 : 21;  // AUTO takes the right end
-  snprintf(t, sizeof(t), "%s", l > room ? bdir + l - room : bdir);
-  gfxPrint(x, y + 1, t);
-  if (autoplay) {
-    gfxPrint(x + w - 25, y + 1, "AUTO");
-    gfxInvert(x + w - 26, y, 26, 9);
-  }
-  gfxLine(x, y + 10, x + w - 1, y + 10);
-  if (!bcount) { gfxPrint(x + 4, y + 16, PSTR("(empty)")); return; }
-  constexpr int rows = 5;
-  const int first = constrain(bsel - rows / 2, 0, std::max(0, bcount - rows));
-  for (int r = 0; r < rows && first + r < bcount; r++) {
-    const int i = first + r;
-    if (bfolder[i]) {
-      const bool up = !strcmp(bn[i], "..");
-      char f[20];
-      ShortName(bn[i], 19 - !up, f, sizeof(f));
-      snprintf(t, sizeof(t), "%s%s", f, up ? "" : "/");
-    } else {
-      ShortName(bn[i], 20, t, sizeof(t));
-    }
-    const int ry = y + 13 + r * 8;
-    gfxPrint(x + 2, ry, t);
-    // the quick listen playing: a small arrow at the right
-    if (!bfolder[i] && preview && preview->Is(bdir, bn[i])) {
-      graphics.clearRect(x + w - 6, ry - 1, 6, 9);  // over a long name
-      for (int k = 0; k < 3; k++) gfxLine(x + w - 5 + k, ry + k, x + w - 5 + k, ry + 6 - k);
-    }
-    if (i == bsel) gfxInvert(x, ry - 1, w, 9);
-  }
+// a WAV picked in the list: play from that folder
+FLASHMEM void PlayerDevice::Picked(const char* folder, const char* name) {
+  const bool same = nfiles && !strcmp(dir, folder) && !strcmp(names[std::min<int>(cur[FILE_], nfiles - 1)], name);
+  if (!same) SetFile(folder, name);
 }
 
 // called while the stream is not patched in
@@ -5431,13 +5451,15 @@ FLASHMEM void ChimeDevice::DrawMini(int x, int y, int w, int h) {
 
 /////////////////////////////////////////////////////////////////
 // WARP (Source): eight voices playing a WAV from memory at the pitch of
-// MIDI notes (or of TRIG: the root). FILE: a WAV in the folder its mode
-// picks, loaded once the choice rests; up to 16 s of it.
+// MIDI notes (or of TRIG: the root). FILE: a WAV in a folder (R push: the
+// file list, as PLAYER's), loaded once the choice rests; up to 16 s of it.
+// FILE turned all the way left ("--": none) plays the other track's SPOOL
+// loop instead, copied in each time a recording or overdub there ends.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef WARP_DEF = {
   "WARP", "WRP", 8, {"TRIG", "STOP"},  // A: the root note (LOOP / PING: let go once in); B: every voice let go
   {
-    {"FILE", 0, MAX_FILES - 1, 0, UNI, 0, 4, 0, {}, {"LOOM", "SPOOL", "TAPE", "WARP"}},  // mode: the folder
+    {"FILE", -1, MAX_FILES - 1, -1, UNI},  // -1: none (the other track's SPOOL loop)
     {"NOTE", 0, 127, 60, UNI, 0, 17, 0},  // the root (the sample as recorded); mode: MIDI channel, ANY, CH1 .. CH16
     {"START", 0, 10000, 0, UNI},
     {"END", 0, 10000, 10000, UNI},
@@ -5452,6 +5474,8 @@ PROGMEM static const DeviceDef WARP_DEF = {
 class WarpDevice : public Device {
 public:
   enum { FILE_, NOTE, START, END, LOOP, ATK, REL, LEVEL };
+  // where a file without its folder is looked for (saved before WARP had
+  // the file list: the folder was FILE's mode)
   static constexpr const char* DIRS[4] = {LOOP_DIR, REC_DIR, TapeRecorder::DIR, "/LOOM/WARP"};
   WarpDevice() : Device(WARP_DEF) {}
   AudioStream* in() override { return &fx; }  // THREAD: track A passes through
@@ -5482,19 +5506,34 @@ public:
     mode[FILE_] = m;
     ApplyAll();
   }
-  const char* FileName() const { return nfiles ? names[constrain(int(val[FILE_]), 0, nfiles - 1)] : ""; }
-  // from the saved settings / the linked track: that folder's file by name
-  void SetFile(int folder, const char* name);
+  const char* FileName() const { return nfiles && val[FILE_] >= 0 ? names[std::min<int>(val[FILE_], nfiles - 1)] : ""; }
+  const char* Folder() const { return dir; }
+  // from the saved settings / the linked track: a folder's file by name
+  // (folder empty: looked for in DIRS; name empty: none)
+  void SetFile(const char* folder, const char* name);
+  int FileParam() const override { return FILE_; }
+  void OpenBrowser() override { g_browser->Open(this, dir, FileName()); }
+  void Picked(const char* folder, const char* name) override { SetFile(folder, name); }
+  // the other track's SPOOL (the app sets it every loop; nullptr: not SPOOL)
+  const ReelDevice* spool = nullptr;
+  char spool_tag = 'A';
 private:
   AudioEffectWarp fx;
+  char dir[96] = "/LOOM";  // the folder FILE steps through
   char names[MAX_FILES][NAME_LEN] = {};
-  int nfiles = 0, scanned = -1;
+  int nfiles = 0;
+  bool scanned = false;
   int16_t* bl = nullptr;  // the sample (PSRAM); br null: mono
   int16_t* br = nullptr;
   uint32_t frames = 0;
   float rate = 1.0f;
   char loaded[NAME_LEN] = "";
-  int loaded_dir = -1;
+  char loaded_dir[96] = "";
+  // FILE none: the SPOOL loop is what is in memory / being copied in
+  bool from_spool = false, copying = false;
+  uint8_t spool_was = 0;  // its state last time (a recording that ended: copied again)
+  void SpoolBegin();
+  void SpoolStep();
   uint32_t want_at = 0;   // FILE moved: loads once it rests
   // loading, a chunk at a time
   File lf;
@@ -5524,10 +5563,10 @@ constexpr const char* WarpDevice::DIRS[4];
 
 FLASHMEM void WarpDevice::Scan() {
   nfiles = 0;
-  scanned = mode[FILE_];
+  scanned = true;
   if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
   if (!SDcard_Ready) return;
-  File d = SD.open(DIRS[constrain(int(mode[FILE_]), 0, 3)]);
+  File d = SD.open(dir);
   if (!d) return;
   while (nfiles < MAX_FILES) {
     File e = d.openNextFile();
@@ -5546,18 +5585,25 @@ FLASHMEM void WarpDevice::Scan() {
     }
 }
 
-FLASHMEM void WarpDevice::SetFile(int folder, const char* name) {
-  mode[FILE_] = uint8_t(constrain(folder, 0, 3));
-  Scan();
-  for (int i = 0; i < nfiles; i++)
-    if (!strcmp(names[i], name)) { val[FILE_] = cur[FILE_] = i; break; }
+FLASHMEM void WarpDevice::SetFile(const char* folder, const char* name) {
+  val[FILE_] = cur[FILE_] = -1;
+  if (!name || !name[0]) { want_at = millis() | 1; return; }
+  for (int k = -1; k < 4; k++) {  // the folder given, else where it may be
+    if (k < 0 && !(folder && folder[0])) continue;
+    snprintf(dir, sizeof(dir), "%s", k < 0 ? folder : DIRS[k]);
+    Scan();
+    for (int i = 0; i < nfiles; i++)
+      if (!strcmp(names[i], name)) { val[FILE_] = cur[FILE_] = i; break; }
+    if (val[FILE_] >= 0) break;
+  }
   want_at = millis() | 1;
 }
 
 FLASHMEM bool WarpDevice::Activate() {
   active = true;
   midi_seen = note_ev_n;  // notes from before are not played
-  if (scanned != mode[FILE_]) Scan();
+  spool_was = 0;  // a SPOOL loop there now is copied in
+  if (!scanned) Scan();
   want_at = millis() | 1;  // (re)load what is chosen
   ApplyAll();
   return true;
@@ -5571,27 +5617,28 @@ FLASHMEM void WarpDevice::Deactivate() {
 
 FLASHMEM void WarpDevice::Free() {
   if (loading) { lf.close(); loading = false; }
+  from_spool = copying = false;
   fx.SetSample(nullptr, nullptr, 0);
   if (bl) extmem_free(bl);
   if (br) extmem_free(br);
   bl = br = nullptr;
   frames = 0;
   loaded[0] = 0;
-  loaded_dir = -1;
+  loaded_dir[0] = 0;
 }
 
 FLASHMEM void WarpDevice::Begin() {
   Free();
   no_mem = false;
   memset(over, 0, sizeof(over));
-  if (!nfiles) return;
+  if (!nfiles || val[FILE_] < 0) return;
   const char* nm = FileName();
   char path[192];
-  snprintf(path, sizeof(path), "%s/%s", DIRS[constrain(int(mode[FILE_]), 0, 3)], nm);
+  snprintf(path, sizeof(path), "%s/%s", strcmp(dir, "/") ? dir : "", nm);
   lf = SD.open(path, FILE_READ);
   if (!lf) return;
   snprintf(loaded, sizeof(loaded), "%s", nm);  // (so it isn't tried again and again)
-  loaded_dir = mode[FILE_];
+  snprintf(loaded_dir, sizeof(loaded_dir), "%s", dir);
   uint8_t h[12];
   if (lf.read(h, 12) != 12 || memcmp(h, "RIFF", 4) || memcmp(h + 8, "WAVE", 4)) { lf.close(); return; }
   int bits = 0;
@@ -5685,13 +5732,72 @@ FLASHMEM void WarpDevice::Idle() {
     if (e.vel) fx.NoteOn(e.note, e.vel);
     else fx.NoteOff(e.note);
   }
-  if (scanned != mode[FILE_]) { Scan(); want_at = millis() | 1; }
+  if (!scanned) { Scan(); want_at = millis() | 1; }
   // a new file once FILE rests a moment
   if (want_at && !loading && millis() - want_at > 300) {
     want_at = 0;
-    if (strcmp(loaded, FileName()) || loaded_dir != mode[FILE_]) Begin();
+    if (val[FILE_] >= 0 && (strcmp(loaded, FileName()) || strcmp(loaded_dir, dir))) Begin();
+    if (val[FILE_] < 0 && !from_spool) { Free(); spool_was = 0; }
   }
   if (loading) LoadStep();
+  // no file: the other track's SPOOL loop, once a recording / overdub
+  // there has ended (and when there is one already)
+  const uint8_t st = spool ? spool->LoopState() : AudioEffectReel::EMPTY;
+  const bool rec = st == AudioEffectReel::REC || st == AudioEffectReel::DUB;
+  if (val[FILE_] < 0 && !loading && !want_at) {
+    if (!rec && spool && spool->LoopLength() >= 64 && (!from_spool || spool_was != st) &&
+        (spool_was == 0 || spool_was == AudioEffectReel::REC || spool_was == AudioEffectReel::DUB))
+      SpoolBegin();
+    if (copying) SpoolStep();
+  }
+  spool_was = spool ? st : 0;
+}
+
+FLASHMEM void WarpDevice::SpoolBegin() {
+  Free();
+  memset(over, 0, sizeof(over));
+  const uint32_t n = std::min<uint32_t>(spool->LoopLength(), uint32_t(BigSecs() * AUDIO_SAMPLE_RATE_EXACT));
+  bl = static_cast<int16_t*>(extmem_malloc(n * 2));
+  br = bl ? static_cast<int16_t*>(extmem_malloc(n * 2)) : nullptr;
+  no_mem = !bl || !br;
+  if (no_mem) {
+    if (bl) extmem_free(bl);
+    bl = br = nullptr;
+    return;
+  }
+  frames = n;
+  got = 0;
+  rate = 1.0f;
+  from_spool = copying = true;
+}
+
+// a slice at a time (the loop is in PSRAM too); started over if it changes
+FLASHMEM void WarpDevice::SpoolStep() {
+  const AudioEffectReel::State st = spool ? spool->LoopState() : AudioEffectReel::EMPTY;
+  if (!spool || spool->LoopLength() < frames || st == AudioEffectReel::REC || st == AudioEffectReel::DUB) {
+    Free();  // gone or being recorded over: copied once it is done
+    spool_was = 0;
+    return;
+  }
+  const int16_t* l = spool->LoopData(0);
+  const int16_t* r = spool->LoopData(1);
+  const uint32_t t0 = millis();
+  while (got < frames && millis() - t0 < 3) {
+    const uint32_t k = std::min<uint32_t>(frames - got, 4096);
+    memcpy(bl + got, l + got, k * 2);
+    memcpy(br + got, r + got, k * 2);
+    for (uint32_t i = got; i < got + k; i++) {
+      const int col = int(uint64_t(i) * 128 / frames);
+      const int pk = std::max(abs(bl[i]), abs(br[i]));
+      over[col] = std::max<uint8_t>(over[col], uint8_t(std::min(255, pk >> 7)));
+    }
+    got += k;
+  }
+  if (got >= frames) {
+    copying = false;
+    fx.SetSample(bl, br, frames);
+    ApplyAll();
+  }
 }
 
 FLASHMEM void WarpDevice::Apply(int p) {
@@ -5715,7 +5821,7 @@ FLASHMEM void WarpDevice::Apply(int p) {
 }
 
 FLASHMEM int WarpDevice::Step(int p, int v, int dir) const {
-  if (p == FILE_) return constrain(v + dir, 0, std::max(0, nfiles - 1));
+  if (p == FILE_) return constrain(v + dir, -1, nfiles - 1);
   return v + dir;
 }
 
@@ -5723,7 +5829,11 @@ FLASHMEM void WarpDevice::Format(int p, char* buf, size_t n) const {
   static const char* const nn[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
   switch (p) {
     case FILE_: {
-      if (!nfiles) { snprintf(buf, n, "--"); break; }
+      if (val[FILE_] < 0 || !nfiles) {
+        if (spool) snprintf(buf, n, "SPOOL %c", spool_tag);
+        else snprintf(buf, n, "--");
+        break;
+      }
       snprintf(buf, n, "%s", FileName());
       if (char* dot = strrchr(buf, '.')) *dot = 0;
       break;
@@ -5763,7 +5873,7 @@ FLASHMEM void WarpDevice::Action(int a) {
 }
 
 FLASHMEM bool WarpDevice::HeaderInfo(char* buf, size_t n) const {
-  if (loading) snprintf(buf, n, "%d%%", frames ? int(uint64_t(got) * 100 / frames) : 0);
+  if (loading || copying) snprintf(buf, n, "%d%%", frames ? int(uint64_t(got) * 100 / frames) : 0);
   else snprintf(buf, n, "%d/8", fx.Sounding());
   return true;
 }
@@ -5772,8 +5882,10 @@ FLASHMEM bool WarpDevice::HeaderInfo(char* buf, size_t n) const {
 // voice is
 FLASHMEM void WarpDevice::DrawViz(int x, int y, int w, int h) {
   fx.ReadViz(viz);
-  if (!nfiles || (!frames && !loading)) {
-    gfxPrint(x + 2, y + h / 2 - 4, no_mem ? "NO MEMORY" : nfiles ? "NOT A WAV" : "NO WAV FILES");
+  if (!frames && !loading) {
+    const char* t = no_mem ? "NO MEMORY" : val[FILE_] >= 0 ? "NOT A WAV" : spool ? "RECORD IN SPOOL" : "R: PICK A FILE";
+    gfxPrint(x + 2, y + h / 2 - 4, t);
+    if (val[FILE_] < 0 && spool && !no_mem) gfxPrint(x + 2, y + h / 2 + 6, "OR R: A FILE");
     return;
   }
   const int cy = y + h / 2, half = h / 2 - 1;

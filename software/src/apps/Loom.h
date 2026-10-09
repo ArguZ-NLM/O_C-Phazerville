@@ -336,6 +336,11 @@ private:
   void LoadFile();
   template <typename F> void ForEachDevice(F f) const;
   loom::Device* Focused() const { return FocusOn(track); }
+  // the source device on screen with its file list open (else nullptr)
+  loom::Device* Listing() const {
+    loom::Device* d = view == DEVICE && !focus_mod && col == loom::SOURCE ? Focused() : nullptr;
+    return d && loom::g_browser && loom::g_browser->IsOpen(d) ? d : nullptr;
+  }
   // modulator i (0-7) as seen from track t: its row of types and its type
   static loom::Modulator** ModRow(int t, int i) {
     return i < loom::NUM_MODS ? loom::tracks[t].mods[i] : loom::shared_mods[i - loom::NUM_MODS];
@@ -410,6 +415,7 @@ private:
     uint8_t choice[loom::SLOT_COUNT], last_choice[loom::SLOT_COUNT], order[loom::SLOT_COUNT - 1];
     uint8_t bypass, mod_type[loom::NUM_MODS];
     DevState input, reel, player, warp, mix;
+    char warp_dir[96], warp_name[loom::NAME_LEN];
     DevState inst[loom::SLOT_COUNT][loom::MAX_OPTIONS];
     DevState mods[loom::NUM_MODS][loom::MOD_TYPES];
   };
@@ -486,7 +492,8 @@ FLASHMEM void AppLoom::Start() {
   }
   preview = g_preview = new LoomPreview;
   g_tape = new TapeRecorder;
-  for (auto& tr : tracks) if (tr.player) tr.player->preview = preview;
+  g_browser = new LoomBrowser;
+  g_browser->preview = preview;
   mixer = new LoomMixer;
   for (int t = 0; t < NUM_TRACKS; t++) {
     Track& tr = tracks[t];
@@ -995,6 +1002,8 @@ FLASHMEM void AppLoom::KeepB() {
   k.reel.Take(b.reel);
   k.player.Take(b.player);
   k.warp.Take(b.warp);
+  snprintf(k.warp_dir, sizeof(k.warp_dir), "%s", b.warp ? b.warp->Folder() : "");
+  snprintf(k.warp_name, sizeof(k.warp_name), "%s", b.warp ? b.warp->FileName() : "");
   k.mix.Take(b.mix);
   for (int s = 0; s < SLOT_COUNT; s++)
     for (int o = 0; o < MAX_OPTIONS; o++) k.inst[s][o].Take(s > SOURCE ? b.inst[s][o] : nullptr);
@@ -1017,6 +1026,7 @@ FLASHMEM void AppLoom::BringBackB() {
   k.reel.Give(b.reel);
   k.player.Give(b.player);
   k.warp.Give(b.warp);
+  if (b.warp) b.warp->SetFile(k.warp_dir, k.warp_name);
   k.mix.Give(b.mix);
   for (int s = SOURCE + 1; s < SLOT_COUNT; s++)
     for (int o = 0; o < MAX_OPTIONS; o++) k.inst[s][o].Give(b.inst[s][o]);
@@ -1045,7 +1055,7 @@ FLASHMEM void AppLoom::LinkCopy() {
   }
   if (a.warp && b.warp) {  // the same file and settings
     b.warp->CopyFrom(*a.warp);
-    b.warp->SetFile(a.warp->mode[WarpDevice::FILE_], a.warp->FileName());
+    b.warp->SetFile(a.warp->Folder(), a.warp->FileName());
     b.warp->ApplyAll();
   }
   for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
@@ -1358,17 +1368,20 @@ FLASHMEM void AppLoom::MainLoop() {
         }
       }
       if (tr.player && tr.choice[SOURCE] == 2) tr.player->Idle();
-      if (tr.warp && tr.choice[SOURCE] == 3) tr.warp->Idle();
+      if (tr.warp && tr.choice[SOURCE] == 3) {
+        const Track& o = tracks[1 - t];  // no file: WARP plays the other track's SPOOL loop
+        tr.warp->spool = o.reel && o.choice[SOURCE] == 1 ? o.reel : nullptr;
+        tr.warp->spool_tag = char('A' + 1 - t);
+        tr.warp->Idle();
+      }
       if (tr.reel && tr.choice[SOURCE] == 1) tr.reel->Idle();
       for (int s = SOURCE + 1; s < SLOT_COUNT; s++)  // devices with main-loop work (STRETCH)
         if (Device* d = tr.current(s)) d->Idle();
     }
     // the quick listen: fed while a file list is open, stopped once none is
-    bool listing = false;
-    for (auto& tr : tracks) listing |= tr.player && tr.choice[SOURCE] == 2 && tr.player->browsing;
-    if (!listing || view != DEVICE) preview->Stop();
-    if (listing && view == DEVICE)
-      for (auto& tr : tracks) if (tr.player) tr.player->AutoplayIdle();
+    const bool listing = Listing() != nullptr;
+    if (!listing) preview->Stop();
+    else g_browser->AutoplayIdle();
     preview->Idle(listing && view == DEVICE);
     g_tape->Idle();
     // the noise test (USB 'N')
@@ -1550,8 +1563,7 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
       r_moved = false;
       // held 2 s on a device page: the device back to its defaults (see
       // MainLoop); letting go before, or turning a knob, does nothing
-      const PlayerDevice* pl = tracks[track].player;
-      reset_held = view == DEVICE && !l_held && Focused() && !(pl && pl->browsing && Focused() == pl);
+      reset_held = view == DEVICE && !l_held && Focused() && !Listing();
       reset_hold = millis();
       return;
     }
@@ -1652,11 +1664,9 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
     if (event.type == UI::EVENT_BUTTON_LONG_PRESS && !mod_slot && Focused()) MidiLearn(Focused());
     if (event.type != UI::EVENT_BUTTON_PRESS) return;
   }
-  // PLAYER's file list: B held turns AUTO on / off
-  if (event.type == UI::EVENT_BUTTON_LONG_PRESS && event.control == OC::CONTROL_BUTTON_DOWN &&
-      view == DEVICE && !focus_mod && col == SOURCE && tracks[track].player &&
-      tracks[track].player->browsing && Focused() == tracks[track].player) {
-    tracks[track].player->ToggleAutoplay();
+  // the file list: B held turns AUTO on / off
+  if (event.type == UI::EVENT_BUTTON_LONG_PRESS && event.control == OC::CONTROL_BUTTON_DOWN && Listing()) {
+    g_browser->ToggleAutoplay();
     return;
   }
   if (event.type != UI::EVENT_BUTTON_PRESS) return;
@@ -1664,22 +1674,24 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
   if (view == MODS) focus_mod = true;
   else if (view == CHAIN) focus_mod = false;
   Device* d = Focused();
-  // PLAYER: R push on FILE opens the browser; in it R enters / picks, Y
-  // closes it, as on every page (".." goes up), B listens to the file under
-  // the cursor
-  if (view == DEVICE && !focus_mod && col == SOURCE && d && d == tracks[track].player) {
-    PlayerDevice* pl = tracks[track].player;
-    if (pl->browsing) {
-      if (event.control == OC::CONTROL_BUTTON_R) pl->BrowseEnter();
-      else if (event.control == OC::CONTROL_BUTTON_Y) pl->CloseBrowser();
-      else if (event.control == OC::CONTROL_BUTTON_DOWN) pl->BrowsePlay();
-      return;
+  // PLAYER / WARP: R push on FILE opens the file list; in it R enters /
+  // picks, Y closes it, as on every page (".." goes up), B listens to the
+  // file under the cursor
+  if (Device* ld = Listing()) {
+    if (event.control == OC::CONTROL_BUTTON_R) {
+      if (g_browser->Enter()) ld->Picked(g_browser->Dir(), g_browser->Name());
+    } else if (event.control == OC::CONTROL_BUTTON_Y) {
+      g_browser->Close();
+    } else if (event.control == OC::CONTROL_BUTTON_DOWN) {
+      g_browser->Play();
     }
-    if (event.control == OC::CONTROL_BUTTON_R && cursor == PlayerDevice::FILE_ && !mod_mode) {
-      pl->OpenBrowser();
-      trig_mode = false;
-      return;
-    }
+    return;
+  }
+  if (view == DEVICE && !focus_mod && col == SOURCE && d && event.control == OC::CONTROL_BUTTON_R &&
+      !mod_mode && d->FileParam() >= 0 && cursor == d->FileParam()) {
+    d->OpenBrowser();
+    trig_mode = false;
+    return;
   }
   // MIDI maps page: R push opens the map (then grabs a field), A learns
   // (the next CC or note), B clears it, Y steps back
@@ -1814,9 +1826,8 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
   const int dir = event.value;
   const bool left = event.control == OC::CONTROL_ENCODER_L;
   reset_held = undo_held = false;  // a knob turned: no reset, no undo
-  if (view == DEVICE && !focus_mod && col == SOURCE && tracks[track].player &&
-      tracks[track].player->browsing && Focused() == tracks[track].player) {
-    tracks[track].player->BrowseMove(dir);  // either knob scrolls the browser
+  if (Listing()) {
+    g_browser->Move(dir);  // either knob scrolls the file list
     return;
   }
   if (view == MODS && mod_cursor >= MIDI_CURSOR && map_field >= 0) {
@@ -2143,7 +2154,7 @@ FLASHMEM void AppLoom::DrawDevice() const {
     gfxPrint(64, 1, mod_slot ? PSTR("MOD2") : PSTR("MOD1"));
     gfxInvert(63, 0, 26, 9);
   }
-  const bool browsing = !focus_mod && col == SOURCE && d == tracks[track].player && tracks[track].player->browsing;
+  const bool browsing = Listing() != nullptr;
   if (trig_mode && !browsing) {
     // which outside signal presses A / B for you: a gate (TR1-4), a CV
     // input used as a gate, or a MIDI mapping; the knobs pick them
@@ -2197,9 +2208,9 @@ FLASHMEM void AppLoom::DrawDevice() const {
   }
   gfxLine(0, 9, 127, 9);
 
-  // PLAYER's file browser takes the whole page
+  // the file list takes the whole page
   if (browsing) {
-    tracks[track].player->DrawBrowser(0, 11, 128, 53);
+    g_browser->Draw(0, 11, 128, 53);
     return;
   }
 
@@ -2730,11 +2741,13 @@ FLASHMEM void AppLoom::SaveFile() const {
     if (tr.player) { sec[0] = tr.player->sec_off; sec[1] = tr.player->sec_len; }
     f.write(reinterpret_cast<uint8_t*>(sec), 8);
   }
-  // ... and WARP: its settings and file (the folder is FILE's mode)
+  // ... and WARP: its settings and file (folder/name; none: empty)
   f.write("W", 1);
   for (auto& tr : tracks) {
     WriteDevice(f, tr.warp);
-    const char* fn = tr.warp ? tr.warp->FileName() : "";
+    char fn[200] = "";
+    if (tr.warp && tr.warp->FileName()[0])
+      snprintf(fn, sizeof(fn), "%s/%s", strcmp(tr.warp->Folder(), "/") ? tr.warp->Folder() : "", tr.warp->FileName());
     const uint8_t b = strlen(fn);
     f.write(&b, 1); f.write(fn, b);
   }
@@ -2865,9 +2878,12 @@ FLASHMEM void AppLoom::LoadFile() {
             for (auto& tr : tracks) {
               if (!ReadDevice(f, tr.warp)) break;
               uint8_t b = 0;
-              char fn[96] = {};
-              if (f.read(&b, 1) != 1 || b >= sizeof(fn) || f.read(fn, b) != b) break;
-              if (tr.warp && b) tr.warp->SetFile(tr.warp->mode[WarpDevice::FILE_], fn);
+              char fn[256] = {};
+              if (f.read(&b, 1) != 1 || f.read(fn, b) != b) break;
+              // folder/name (before the file list: just the name)
+              char* slash = strrchr(fn, '/');
+              if (slash) *slash = 0;
+              if (tr.warp) tr.warp->SetFile(slash ? (fn[0] ? fn : "/") : "", slash ? slash + 1 : fn);
             }
           }
         }
