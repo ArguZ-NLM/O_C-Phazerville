@@ -5593,6 +5593,12 @@ private:
   uint8_t over[128] = {};  // the picture: the peak per 1/128 of the sound
   uint32_t midi_seen = 0;
   AudioEffectWarp::Viz viz = {};
+  // where notes start and loop: the quiet at either end left out (frames)
+  uint32_t trim_a = 0, trim_b = 0;
+  void Trim();
+  // up to 4096 frames: one cycle of a waveform, played whole and pitched
+  // so that MIDI 60 is C4
+  bool Cycle() const { return frames && frames <= 4096; }
   void Free();
   void Begin(const char* path, uint32_t from, uint32_t count);  // opens the file and makes room
   void LoadStep();
@@ -5727,6 +5733,7 @@ FLASHMEM void WarpDevice::LoadStep() {
   if (got >= frames) {
     lf.close();
     loading = false;
+    Trim();
     if (frames >= 64) fx.SetSample(bl, br, frames);
     ApplyAll();  // the rate is known now
   }
@@ -5834,6 +5841,7 @@ FLASHMEM void WarpDevice::SpoolStep() {
   if (got >= copy_n) {
     const bool keep = frames > 0;  // the last take still in: the voices go on in the new one
     fx.SetSample(nl, nr, copy_n, keep);
+    // (trimmed below, once it is in place: Trim reads bl / br)
     if (bl) extmem_free(bl);
     if (br) extmem_free(br);
     bl = nl; br = nr;
@@ -5842,13 +5850,45 @@ FLASHMEM void WarpDevice::SpoolStep() {
     rate = 1.0f;
     memcpy(over, over_new, sizeof(over));
     copying = false;
+    Trim();
     ApplyAll();
   }
 }
 
+// the quiet at the start and the end of the sound: notes start where it
+// gets going (5 ms before), and a held note loops round before the tail
+// goes quiet (50 ms after the last of it). Quiet: below 2 % of its peak
+FLASHMEM void WarpDevice::Trim() {
+  trim_a = 0;
+  trim_b = frames;
+  if (!bl || frames < 64 || Cycle()) return;
+  int pk = 0;
+  for (uint32_t i = 0; i < frames; i++) {
+    pk = std::max(pk, abs(int(bl[i])));
+    if (br) pk = std::max(pk, abs(int(br[i])));
+  }
+  const int th = std::max(64, pk / 50);
+  auto loud = [&](uint32_t i) { return abs(int(bl[i])) > th || (br && abs(int(br[i])) > th); };
+  uint32_t a = 0, b = frames;
+  while (a < frames && !loud(a)) a++;
+  while (b > a && !loud(b - 1)) b--;
+  if (b <= a) return;  // all quiet: the whole of it
+  const uint32_t pre = uint32_t(0.005f * AUDIO_SAMPLE_RATE_EXACT * rate);
+  const uint32_t post = uint32_t(0.05f * AUDIO_SAMPLE_RATE_EXACT * rate);
+  trim_a = a > pre ? a - pre : 0;
+  trim_b = std::min(frames, b + post);
+  if (trim_b < trim_a + 64) { trim_a = 0; trim_b = frames; }
+}
+
 FLASHMEM void WarpDevice::Apply(int p) {
   if (Thru() != thru_was) { thru_was = Thru(); thru_changed = true; }
-  AudioEffectWarp::Params a;  // the whole sound, looping with a 40 ms crossfade
+  // the sound without the quiet at either end, looping with a 40 ms
+  // crossfade; a single cycle (a waveform) whole, at the pitch of the note
+  AudioEffectWarp::Params a;
+  if (frames) {
+    a.start = float(trim_a) / frames;
+    a.end = float(trim_b) / frames;
+  }
   a.loop = AudioEffectWarp::LOOP;
   a.cross = true;
   a.xfade = 0.04f;
@@ -5864,7 +5904,7 @@ FLASHMEM void WarpDevice::Apply(int p) {
   a.weft = mode[WEFT];
   a.weft_amt = cur[WEFT] * 0.01f;
   a.root = ROOT;
-  a.rate = rate;
+  a.rate = Cycle() ? frames * 261.6256f / AUDIO_SAMPLE_RATE_EXACT : rate;  // MIDI 60 = C4
   fx.Set(a);
 }
 

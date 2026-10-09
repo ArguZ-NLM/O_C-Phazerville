@@ -236,7 +236,7 @@ FASTRUN void AudioEffectWarp::update() {
   // the first f of the loop; INOUT a dip of f each side
   const double seam = par.xfade * 48000.0 * par.rate;
   double h = 0.0, f = 0.0;
-  if (par.loop == LOOP) {
+  if (par.loop == LOOP && len >= 4800.0) {  // (a short loop, a waveform: none)
     if (par.cross) {
       h = std::min({seam * 0.5, len * 0.5, a, double(nframes) - b});
       if (h < 16.0) h = 0.0;
