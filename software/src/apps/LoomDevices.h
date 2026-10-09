@@ -2347,7 +2347,7 @@ FLASHMEM void TapeRecorder::Finish() {
 // the sample, START / END then within it; back to STRM puts them back.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef PLAYER_DEF = {
-  "PLAYER", "PLY", 8, {"PLAY", "TOP"},
+  "SHUTTLE", "SHT", 8, {"PLAY", "TOP"},  // (was PLAYER / PLY until 2026-10-09)
   {
     {"FILE", 0, MAX_FILES - 1, 0, UNI, 0, 2, 0, {}, {"STRM", "MEM"}},
     {"LOOP", 0, 1, 1, LIST, 2, 0, 0, {"OFF", "ON"}},
@@ -5529,7 +5529,7 @@ PROGMEM static const DeviceDef WARP_DEF = {
   {
     // the other track's SPOOL or PLAYER, or a THRUM: a waveform from the
     // card (/LOOM/WAVES; R push picks one, a fresh WARP a random one)
-    {"SRC", 0, 2, 2, LIST, 3, 0, 0, {"SPL", "PLY", "THR"}},
+    {"SRC", 0, 2, 2, LIST, 3, 0, 0, {"SPL", "SHT", "THR"}},
     {"THRU", 0, 1, 1, LIST, 2, 0, 0, {"OFF", "ON"}},  // THREAD: A's output on under the notes
     {"VEL", 0, 100, 50, UNI},     // %: how much velocity sets a note's loudness
     {"WEFT", -240, 240, 20, BI},  // tenths of a semitone a key bends at full pressure (aftertouch)
@@ -6026,7 +6026,7 @@ FLASHMEM void WarpDevice::Apply(int p) {
 FLASHMEM void WarpDevice::Format(int p, char* buf, size_t n) const {
   switch (p) {
     case SRC:
-      if (cur[SRC] != SRC_THRUM) { snprintf(buf, n, "%s %c", cur[SRC] == SRC_PLAYER ? "PLY" : "SPL", other); break; }
+      if (cur[SRC] != SRC_THRUM) { snprintf(buf, n, "%s %c", cur[SRC] == SRC_PLAYER ? "SHT" : "SPL", other); break; }
       {  // the thrum, short: its name without '_' and ".wav", 5 letters (SAW07, TRI03)
         const char* nm = strrchr(thrum, '/');
         nm = nm ? nm + 1 : thrum;
@@ -6108,7 +6108,7 @@ FLASHMEM void WarpDevice::DrawViz(int x, int y, int w, int h) {
   if (!frames && !loading && !copying) {
     const char* t = no_mem ? "NO MEMORY"
         : cur[SRC] == SRC_THRUM ? (thrum[0] ? "NOT A WAV" : "NO WAVES ON CARD")
-        : cur[SRC] == SRC_PLAYER ? (player ? "NOT A WAV" : "PLAYER IS OFF")
+        : cur[SRC] == SRC_PLAYER ? (player ? "NOT A WAV" : "SHUTTLE IS OFF")
         : spool ? "RECORD IN SPOOL" : "SPOOL IS OFF";
     gfxPrint(x + 2, y + h / 2 - 4, t);
     return;
