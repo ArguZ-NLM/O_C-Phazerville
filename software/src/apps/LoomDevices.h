@@ -1422,8 +1422,12 @@ FLASHMEM float InputDevice::JackDb() {
   const float dt = jack_db_at ? (now - jack_db_at) * 0.001f : 0.0f;
   jack_db_at = now;
   const float db = pk > 0 ? 20.0f * log10f(pk / 32767.0f) : -99.0f;
-  // a peak is held 0.5 s, then it falls 10 dB a second
-  if (db >= jack_db) { jack_db = db; jack_peak_at = now; }
+  // up at once; down: within 2 dB of the level a peak is held 0.5 s, then
+  // falls 10 dB a second (calm); further above it follows quickly, the
+  // faster the bigger the gap (10 dB in ~0.3 s)
+  const float gap = jack_db - db;
+  if (gap <= 0.0f) { jack_db = db; jack_peak_at = now; }
+  else if (gap > 2.0f) jack_db = std::max(db, jack_db - std::max(10.0f, 8.0f * gap) * dt);
   else if (now - jack_peak_at > 500) jack_db = std::max(db, jack_db - 10.0f * dt);
   return jack_db;
 }
