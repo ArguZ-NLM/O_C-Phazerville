@@ -74,6 +74,7 @@ public:
   void Step() { step_req = true; }  // A, a gate: rotate now
   void Reset() {
     for (auto& v : vc) v = Voice{};
+    for (auto& f : fading) f.g = 0.0f;
     retune = true;
   }
   void ReadViz(Viz& v) {
@@ -93,7 +94,13 @@ private:
     float pan_l = 1.0f, pan_r = 0.0f, gain = 1.0f;
     float env = 0.0f;
     int place = -1;  // the place it sounds for while fed
+    float mk_was = -1.0f, gain_was = -1.0f;  // last block's (glided to the new ones)
   };
+  // a ringing resonator taken for a new note hands its ring to one of
+  // these, which fades it out over ~5 ms (cut at once it clicked: fast
+  // NOTE turns ran out of free resonators)
+  struct Fading { Voice v; float g = 0.0f; };
+  Fading fading[PLACES];
   audio_block_t* input_queue_array[2];
   Params par;
   Voice vc[VOICES];
@@ -171,7 +178,15 @@ FASTRUN void AudioEffectChime::Assign() {
     if (use < 0) continue;
     Voice& v = vc[use];
     if (fabsf(v.hz - hz) >= hz * 0.001f) {  // a new note: from silence
+      if (v.env > 1e-4f) {  // still ringing: faded out, not cut
+        Fading* to = &fading[0];
+        for (auto& f : fading) if (f.g < to->g) to = &f;
+        to->v = v;
+        to->v.in_to = 0.0f;
+        to->g = 1.0f;
+      }
       v.la = v.ba = v.lb = v.bb = 0.0f;
+      v.mk_was = v.gain_was = -1.0f;
       v.env = 0.0f;
       Tune(v, hz, place_dec[p]);
     } else {
@@ -255,16 +270,24 @@ FASTRUN void AudioEffectChime::update() {
     const bool quiet = v.in == 0.0f && v.in_to == 0.0f && v.env < 1e-5f;
     if (quiet) { v.la = v.ba = v.lb = v.bb = 0.0f; viz.fed[i] = false; continue; }
     float la = v.la, ba = v.ba, lb = v.lb, bb = v.bb, g = v.in;
-    const float f = v.f, da = v.da, db = v.db, mk = v.makeup * v.gain, to = v.in_to;
+    const float f = v.f, da = v.da, db = v.db, to = v.in_to;
+    // a new DCAY / TONE on a ringing note: its level glides over the block
+    const float mk_to = v.makeup * v.gain;
+    float mk = v.mk_was < 0.0f ? mk_to : v.mk_was, gn = v.gain_was < 0.0f ? v.gain : v.gain_was;
+    const float mk_d = (mk_to - mk) * (1.0f / AUDIO_BLOCK_SAMPLES), gn_d = (v.gain - gn) * (1.0f / AUDIO_BLOCK_SAMPLES);
+    v.mk_was = mk_to;
+    v.gain_was = v.gain;
     float pk = 0.0f;
     for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
       g += std::max(-fade, std::min(fade, to - g));
+      mk += mk_d;
+      gn += gn_d;
       la += f * ba;
       ba += f * (g * x[n] - la - da * ba);
       const float ya = ba * da;
       lb += f * bb;
       bb += f * (ya - lb - db * bb);
-      const float y = bb * db * mk + first * ya * v.gain;
+      const float y = bb * db * mk + first * ya * gn;
       pk = std::max(pk, fabsf(y));
       sum[0][n] += y * v.pan_l;
       sum[1][n] += y * v.pan_r;
@@ -274,6 +297,29 @@ FASTRUN void AudioEffectChime::update() {
     viz.hz[i] = v.hz;
     viz.level[i] = std::max(viz.level[i], pk);
     viz.fed[i] = v.in_to > 0.0f;
+  }
+
+  // rings handed over by resonators taken for new notes: out over ~5 ms
+  constexpr float FADE_OUT = 1.0f / (0.005f * AUDIO_SAMPLE_RATE_EXACT);
+  for (auto& fv : fading) {
+    if (fv.g <= 0.0f) continue;
+    Voice& v = fv.v;
+    float la = v.la, ba = v.ba, lb = v.lb, bb = v.bb, g = v.in, fg = fv.g;
+    const float f = v.f, da = v.da, db = v.db, mk = v.makeup * v.gain;
+    for (int n = 0; n < AUDIO_BLOCK_SAMPLES && fg > 0.0f; n++) {
+      g = std::max(0.0f, g - fade);
+      la += f * ba;
+      ba += f * (g * x[n] - la - da * ba);
+      const float ya = ba * da;
+      lb += f * bb;
+      bb += f * (ya - lb - db * bb);
+      const float y = (bb * db * mk + first * ya * v.gain) * fg;
+      fg -= FADE_OUT;
+      sum[0][n] += y * v.pan_l;
+      sum[1][n] += y * v.pan_r;
+    }
+    v.la = la; v.ba = ba; v.lb = lb; v.bb = bb; v.in = g;
+    fv.g = std::max(0.0f, fg);
   }
 
   // the level control: a held input builds the rings up far past a pluck
