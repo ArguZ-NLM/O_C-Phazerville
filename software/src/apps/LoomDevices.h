@@ -3092,9 +3092,10 @@ FLASHMEM void PlayerDevice::BpmStart() {
   bpm_from = EdgeAt(START);
   if (bpm_from + 800 * IDX_FRAMES > n) bpm_from = 0;  // too little after START: from the beginning
   bpm_n = int(std::min<size_t>((n - bpm_from) / IDX_FRAMES, BPM_BINS));
-  if (bpm_n < 800) return;  // under ~4 s: no tempo
+  if (bpm_n < 800) { Serial.printf("BPM: %u frames from %u, too short\n", unsigned(n), unsigned(bpm_from)); return; }  // under ~4 s: no tempo
   bpm_env = static_cast<float*>(malloc(sizeof(float) * bpm_n));
   if (bpm_env) bpm_got = 0;
+  Serial.printf("BPM: start, %d levels from frame %u of %u%s\n", bpm_n, unsigned(bpm_from), unsigned(n), bpm_env ? "" : ", NO MEMORY");  // over USB
 }
 
 FLASHMEM void PlayerDevice::BpmIdle() {
@@ -3129,13 +3130,13 @@ FLASHMEM void PlayerDevice::BpmSolve() {
   const float bin_s = IDX_FRAMES / FileRate();
   const int lmax = std::min(n / 2, int(4.0f * 60.0f / (70.0f * bin_s)) + 2);
   float* r = static_cast<float*>(malloc(sizeof(float) * (lmax + 1)));
-  if (!r) return;
+  if (!r) { Serial.println("BPM: no memory to solve"); return; }
   for (int l = 0; l <= lmax; l++) {
     float acc = 0.0f;
     for (int i = 0; i + l < n; i++) acc += o[i] * o[i + l];
     r[l] = acc / float(n - l);
   }
-  if (r[0] <= 0.0f) { free(r); return; }
+  if (r[0] <= 0.0f) { free(r); Serial.println("BPM: flat (no level changes)"); return; }
   auto at = [&](float l) {
     const int i = int(l);
     if (i + 1 > lmax) return 0.0f;
@@ -3154,6 +3155,7 @@ FLASHMEM void PlayerDevice::BpmSolve() {
   }
   free(r);
   bpm = best_s > 0.25f ? best : 0.0f;  // too little alike: no clear beat
+  Serial.printf("BPM: best %d.%d, score %d%% (needs 25%%)\n", int(best), int(best * 10) % 10, int(best_s * 100));
   if (bpm <= 0.0f) return;
   // where the beats fall: the hits folded onto one beat as angles, their
   // weighted average (finer than a level entry). A rise shows in the entry
