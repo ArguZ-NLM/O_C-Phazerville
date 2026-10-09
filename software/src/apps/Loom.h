@@ -531,7 +531,7 @@ FLASHMEM void AppLoom::Repatch(int t) {
     prev = tr.player->out();
   } else if (tr.choice[SOURCE] == 3 && tr.warp) {  // WARP instead of the input
     // THREAD: B's input (A's output) passes through WARP, under its notes
-    if (t == 1 && threaded && tr.warp->cur[WarpDevice::THRU])
+    if (t == 1 && threaded && tr.warp->Thru())
       for (int c = 0; c < 2; c++) link[SOURCE][c].Want(*tr.input, c, *tr.warp->in(), c);
     prev = tr.warp->out();
   }
@@ -1213,7 +1213,12 @@ FLASHMEM static void LoomReadMIDI(T& device) {
     };
     if (msg.message == midi::SystemExclusive || msg.message == midi::ProgramChange) continue;
     if (msg.message == midi::Clock) loom::midi_clocks++;
-    if (msg.message == midi::NoteOn && msg.data2 > 0) loom::NoteIn(msg.channel, msg.data1);
+    if (msg.message == midi::NoteOn && msg.data2 > 0) {
+      loom::NoteIn(msg.channel, msg.data1);
+      loom::poly_at[msg.data1 & 127] = 0;  // the key's pressure starts over
+    }
+    if (msg.message == midi::AfterTouchChannel) loom::chan_at = msg.data1;
+    if (msg.message == midi::AfterTouchPoly) loom::poly_at[msg.data1 & 127] = msg.data2;
     if (msg.message == midi::NoteOn || msg.message == midi::NoteOff)  // (note on at 0: off)
       loom::NoteEvent(msg.channel, msg.data1, msg.message == midi::NoteOn ? msg.data2 : 0);
     if (loom::tempo_clock && loom::tempo_clock->midi()) {

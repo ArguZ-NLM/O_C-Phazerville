@@ -13,6 +13,11 @@
 // CROSS blends what is around END into what is around START (where the
 // sample has nothing beyond them: its last frames into the loop's first),
 // INOUT dips out and back in. ATTACK fades it in; a note off lets it go over RELEASE.
+// WEFT: what pressing a key does (its own (poly) aftertouch or the
+// channel's, whichever is more): vibrato (5.5 Hz) up to weft_amt x 100
+// cents, the read moved on by up to weft_amt of the sound (SCAN), a
+// low-pass opening from weft_amt x 7 octaves down (BRITE), or up to
+// weft_amt x 6 dB louder (SWELL).
 // A ninth note takes the oldest voice, which hands its sound to a fader
 // that lets it go over ~5 ms (cut, it clicked).
 //
@@ -24,6 +29,7 @@ public:
   static constexpr int VOICES = 8;
   static constexpr int FADERS = 4;  // voices taken for new notes, fading out
   enum Loop : uint8_t { ONCE, LOOP, PING };
+  enum Weft : uint8_t { W_VIB, W_SCAN, W_BRITE, W_SWELL };
 
   struct Params {
     float start = 0.0f, end = 1.0f;  // 0..1 of the sample
@@ -36,6 +42,8 @@ public:
     float release = 0.2f;    // s, to -60 dB
     float level = 1.0f;      // 1: a note at full velocity as loud as the sample
     float vel_amt = 0.75f;   // 0: every note as loud; 1: velocity sets it all
+    uint8_t weft = W_VIB;
+    float weft_amt = 0.3f;   // 0..1
     int root = 60;
     float rate = 1.0f;       // the file's sample rate / 48 kHz
   };
@@ -72,6 +80,9 @@ public:
   void NoteOn(int note, int vel, bool once = false) { Push(note, constrain(vel, 1, 127), once); }
   void NoteOff(int note) { Push(note, 0, false); }
   void AllOff() { Push(255, 0, false); }  // every voice let go
+  // main loop: aftertouch, the channel's and each key's (poly; the array
+  // stays the caller's)
+  void Pressure(uint8_t chan, const uint8_t* poly) { at_chan = chan; at_poly = poly; }
   int Sounding() const {
     int n = 0;
     for (int i = 0; i < VOICES; i++) n += vc[i].on;
@@ -100,6 +111,9 @@ private:
     bool looped = false; // INOUT: came round once (the fade in)
     double pos = 0.0;    // in frames of the sample
     double step = 1.0;
+    float base = 1.0f;   // step without vibrato
+    float press = 0.0f;  // WEFT: the pressure, smoothed
+    float lp[2] = {};    // BRITE's filter
     float env = 0.0f;
     float gain = 1.0f;
     float fade = 1.0f;   // a fader's own fade out (stolen voices)
@@ -114,6 +128,9 @@ private:
   Params par;
   Voice vc[VOICES + FADERS];
   uint32_t clock = 0;
+  volatile uint8_t at_chan = 0;
+  const uint8_t* volatile at_poly = nullptr;
+  float vib_phase = 0.0f;  // 0..1
   static constexpr int QUEUE = 32;
   Event queue[QUEUE];
   volatile uint32_t ev_wr = 0, ev_rd = 0;
@@ -157,7 +174,8 @@ FASTRUN void AudioEffectWarp::Start(const Event& e) {
   v.once = e.once;
   v.note = e.note;
   v.pos = a;
-  v.step = par.rate * powf(2.0f, (int(e.note) - par.root) / 12.0f);
+  v.base = par.rate * powf(2.0f, (int(e.note) - par.root) / 12.0f);
+  v.step = v.base;
   const float vel = e.vel / 127.0f;
   v.gain = 1.0f - par.vel_amt + par.vel_amt * vel;
   v.age = ++clock;
@@ -215,11 +233,28 @@ FASTRUN void AudioEffectWarp::update() {
   const float dec = expf(-6.9078f / (std::max(0.005f, par.decay) * AUDIO_SAMPLE_RATE_EXACT));
   const float sus = constrain(par.sustain, 0.0f, 1.0f);
   constexpr float FADER = 1.0f / (0.005f * AUDIO_SAMPLE_RATE_EXACT);
+  // WEFT: the vibrato, moved on once a block (5.5 Hz)
+  vib_phase += 5.5f * AUDIO_BLOCK_SAMPLES / AUDIO_SAMPLE_RATE_EXACT;
+  if (vib_phase >= 1.0f) vib_phase -= 1.0f;
+  const float vib = par.weft == W_VIB ? sinf(6.2831853f * vib_phase) * par.weft_amt * (1.0f / 12.0f) : 0.0f;
+  const uint8_t* poly = at_poly;
+  const float chan = at_chan * (1.0f / 127.0f);
   const float g = par.level * (1.0f / 32768.0f);
   for (int i = 0; i < VOICES + FADERS; i++) {
     Voice& v = vc[i];
     if (!v.on) continue;
     const bool fader = i >= VOICES;
+    // WEFT: the pressure (smoothed over ~15 ms) and what it does
+    const float want = std::max(chan, poly ? poly[v.note & 127] * (1.0f / 127.0f) : 0.0f);
+    v.press += (want - v.press) * 0.2f;
+    v.step = v.base * exp2f(vib * v.press);
+    const double scan = par.weft == W_SCAN ? double(v.press * par.weft_amt) * nframes : 0.0;
+    float lpc = 1.0f;  // BRITE: the filter's coefficient (1: open)
+    if (par.weft == W_BRITE) {
+      const float hz = 20000.0f * exp2f(-7.0f * par.weft_amt * (1.0f - v.press));
+      lpc = 1.0f - expf(-6.2831853f * hz / AUDIO_SAMPLE_RATE_EXACT);
+    }
+    const float swell = par.weft == W_SWELL ? 1.0f + v.press * par.weft_amt : 1.0f;
     for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
       // the envelope
       if (v.stage == 0) {
@@ -235,15 +270,17 @@ FASTRUN void AudioEffectWarp::update() {
         v.env *= rel;
         if (v.env < 1e-4f) { v.on = false; break; }
       }
-      float e = v.env * v.gain;
+      float e = v.env * v.gain * swell;
       if (fader) {
         v.fade -= FADER;
         if (v.fade <= 0.0f) { v.on = false; break; }
         e *= v.fade;
       }
       // where it reads, and the seam
-      const int32_t k = int32_t(v.pos);
-      const float t = float(v.pos - k);
+      double rp = v.pos;
+      if (scan > 0.0) { rp += scan; if (rp >= nframes) rp -= nframes; }  // SCAN: further in
+      const int32_t k = int32_t(rp);
+      const float t = float(rp - k);
       float l = At(sl, k, t, nframes), r = sr == sl ? l : At(sr, k, t, nframes);
       if (par.loop == LOOP && par.cross) {
         double q = -1.0;
@@ -255,6 +292,7 @@ FASTRUN void AudioEffectWarp::update() {
           q = a + (v.pos - (b - f));
           m = float((v.pos - (b - f)) / f);
         }
+        if (q >= 0.0 && scan > 0.0) { q += scan; if (q >= nframes) q -= nframes; }  // SCAN: the same way in
         if (q >= 0.0) {
           const int32_t kq = int32_t(q);
           const float tq = float(q - kq);
@@ -270,6 +308,12 @@ FASTRUN void AudioEffectWarp::update() {
       if (par.loop == ONCE) {  // the last 2 ms before END fade out
         const float left = float((b - v.pos) / v.step);
         if (left < 96.0f) e *= std::max(0.0f, left / 96.0f);
+      }
+      if (lpc < 1.0f) {  // BRITE
+        v.lp[0] += lpc * (l - v.lp[0]);
+        v.lp[1] += lpc * (r - v.lp[1]);
+        l = v.lp[0];
+        r = v.lp[1];
       }
       sum[0][n] += l * e;
       sum[1][n] += r * e;

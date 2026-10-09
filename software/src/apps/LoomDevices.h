@@ -96,6 +96,10 @@ struct NoteEv { uint8_t ch, note, vel; };  // vel 0: note off
 constexpr uint32_t NOTE_EVS = 64;
 inline NoteEv note_ev[NOTE_EVS] = {};
 inline uint32_t note_ev_n = 0;
+// MIDI aftertouch, any channel: the channel's pressure, and each key's
+// (poly; a key's starts at 0 with its note)
+inline uint8_t chan_at = 0;
+inline uint8_t poly_at[128] = {};
 inline void NoteEvent(int ch, int note, int vel) {
   note_ev[note_ev_n % NOTE_EVS] = {uint8_t(ch), uint8_t(note), uint8_t(vel)};
   note_ev_n++;
@@ -5475,18 +5479,21 @@ FLASHMEM void ChimeDevice::DrawMini(int x, int y, int w, int h) {
 // pitch of MIDI notes (or of TRIG: the root). SRC picks it: that track's
 // SPOOL loop (copied in each time a recording or overdub there ends) or
 // what its PLAYER plays (its loop section, read from the card once it
-// rests; up to 16 s), all of it, looping. THRU: on track B in THREAD,
-// A's output plays on under the notes (or not). LEVEL 100 %: a note at
-// full velocity as loud as the sound was recorded. Page 2 is the notes'
-// envelope.
+// rests; up to 16 s), all of it, looping; a note at full velocity as
+// loud as the sound was recorded. THRU: on track B in THREAD, A's output
+// on under the notes (or not). WEFT: what pressing a key harder (MIDI
+// aftertouch) does, and how much. Page 2 is the notes' envelope.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef WARP_DEF = {
   "WARP", "WRP", 8, {"TRIG", "STOP"},  // A: the root note, 60 (LOOP on: let go once in); B: every voice let go
   {
     {"SRC", 0, 1, 0, LIST, 2, 0, 0, {"SPL", "PLY"}},  // the other track's SPOOL or PLAYER
     {"THRU", 0, 1, 1, LIST, 2, 0, 0, {"OFF", "ON"}},  // THREAD: A's output on under the notes
-    {"LEVEL", 0, 200, 100, UNI},  // %: 100 the sound as recorded (at full velocity)
     {"VEL", 0, 100, 50, UNI},     // %: how much velocity sets a note's loudness
+    // aftertouch: vibrato (value: cents), moving where the notes read in
+    // the sound (% of it), opening a filter (value: how dark without
+    // pressure), louder (value: up to +6 dB)
+    {"WEFT", 0, 100, 30, UNI, 0, 4, 0, {}, {"VIB", "SCAN", "BRITE", "SWELL"}},
     {"ATK", 0, 100, 0, UNI},    // 1 ms .. 2 s
     {"DEC", 0, 100, 50, UNI},   // 5 ms .. 5 s, to SUS
     {"SUS", 0, 100, 100, UNI},  // %
@@ -5497,7 +5504,7 @@ PROGMEM static const DeviceDef WARP_DEF = {
 
 class WarpDevice : public Device {
 public:
-  enum { SRC, THRU, LEVEL, VEL, ATK, DECAY, SUS, REL };  // (DEC is taken by Print.h)
+  enum { SRC, THRU, VEL, WEFT, ATK, DECAY, SUS, REL };  // (DEC is taken by Print.h)
   enum { SRC_SPOOL, SRC_PLAYER };
   static constexpr int ROOT = 60;  // the note that plays the sound as recorded (MIDI note 60)
   WarpDevice() : Device(WARP_DEF) {}
@@ -5530,10 +5537,11 @@ public:
   const ReelDevice* spool = nullptr;
   const PlayerDevice* player = nullptr;
   char other = 'A';
+  bool Thru() const { return cur[THRU]; }  // THREAD: A's output under the notes
   // THRU turned: the app patches A through again (or not)
   bool thru_changed = false;
 private:
-  int thru_was = 1;
+  bool thru_was = true;
   AudioEffectWarp fx;
   int16_t* bl = nullptr;  // the sound (PSRAM); br null: mono
   int16_t* br = nullptr;
@@ -5714,6 +5722,7 @@ FLASHMEM void WarpDevice::Idle() {
     if (e.vel) fx.NoteOn(e.note, e.vel);
     else fx.NoteOff(e.note);
   }
+  fx.Pressure(chan_at, poly_at);  // WEFT
   // SRC turned: the other sound
   if (src_was != cur[SRC]) {
     Free();
@@ -5819,7 +5828,7 @@ FLASHMEM void WarpDevice::SpoolStep() {
 }
 
 FLASHMEM void WarpDevice::Apply(int p) {
-  if (cur[THRU] != thru_was) { thru_was = cur[THRU]; thru_changed = true; }
+  if (Thru() != thru_was) { thru_was = Thru(); thru_changed = true; }
   AudioEffectWarp::Params a;  // the whole sound, looping with a 40 ms crossfade
   a.loop = AudioEffectWarp::LOOP;
   a.cross = true;
@@ -5828,8 +5837,10 @@ FLASHMEM void WarpDevice::Apply(int p) {
   a.decay = Time5(cur[DECAY]);
   a.sustain = cur[SUS] * 0.01f;
   a.release = Time5(cur[REL]);
-  a.level = cur[LEVEL] * 0.01f;
+  a.level = 1.0f;
   a.vel_amt = cur[VEL] * 0.01f;
+  a.weft = mode[WEFT];
+  a.weft_amt = cur[WEFT] * 0.01f;
   a.root = ROOT;
   a.rate = rate;
   fx.Set(a);
@@ -5838,7 +5849,12 @@ FLASHMEM void WarpDevice::Apply(int p) {
 FLASHMEM void WarpDevice::Format(int p, char* buf, size_t n) const {
   switch (p) {
     case SRC: snprintf(buf, n, "%s %c", cur[SRC] == SRC_PLAYER ? "PLY" : "SPL", other); break;
-    case LEVEL: case VEL: snprintf(buf, n, "%d%%", int(val[p])); break;
+    case VEL: snprintf(buf, n, "%d%%", int(val[p])); break;
+    case WEFT:
+      if (mode[WEFT] == AudioEffectWarp::W_VIB) snprintf(buf, n, "%dct", int(val[WEFT]));
+      else if (mode[WEFT] == AudioEffectWarp::W_SWELL) snprintf(buf, n, "+%d.%ddB", int(val[WEFT]) * 6 / 100, int(val[WEFT]) * 60 / 100 % 10);
+      else snprintf(buf, n, "%d%%", int(val[WEFT]));
+      break;
     case ATK: FormatSecs(Attack(val[ATK]), buf, n); break;
     case DECAY: case REL: FormatSecs(Time5(val[p]), buf, n); break;
     case SUS: snprintf(buf, n, "%d%%", int(val[SUS])); break;
