@@ -1501,9 +1501,6 @@ FLASHMEM void AppLoom::MainLoop() {
     sm_malloc_stats_pool(&extmem_smalloc_pool, &total, &user, &free_b, &nblk);
     Serial.printf("  PSRAM: %u KB used in %d blocks, %u KB free\n", unsigned(user / 1024), nblk, unsigned(free_b / 1024));
   }
-    Serial.printf("  PSRAM: %u KB used in %d blocks, %u KB free, biggest piece %u KB\n",
-                  unsigned(user / 1024), nblk, unsigned(free_b / 1024), unsigned(lo / 1024));
-  }
   Serial.printf("  main loop: longest gap %lu us\n", (unsigned long)loop_gap_max);
   loop_gap_max = 0;
   for (int t = 0; t < loom::NUM_TRACKS; t++)  // SPOOL's memory: the loop, or the small buffer
