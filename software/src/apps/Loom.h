@@ -1417,7 +1417,8 @@ FLASHMEM void AppLoom::MainLoop() {
       if (g_notes_request) {
         g_notes_request = false;
         if (!g_capture) g_capture = new OutCapture;
-        if (g_capture->Start(true)) { notes_at = millis(); notes_i = 0; }
+        if (g_capture->Start(true, 2)) { notes_at = millis(); notes_i = 0; }  // track B L
+        else Serial.println("CAPTURE: no PSRAM");
       }
       while (notes_i >= 0 && notes_i < int(sizeof(seq) / sizeof(seq[0])) && millis() - notes_at >= seq[notes_i][0]) {
         NoteEvent(1, seq[notes_i][1], seq[notes_i][2]);

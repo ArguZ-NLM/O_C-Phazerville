@@ -665,9 +665,15 @@ public:
   static constexpr uint32_t FRAMES = 2 * 48000;
   static constexpr int CH = 4;
   bool track_b = false;  // USB 'U': track B on its way into the mixer instead of the jacks
-  bool Start(bool b_side = false) {
+  // only: -1 all four; else that one channel (0 out L .. 3 in 2 / track B
+  // R): a quarter of the memory, for when the PSRAM is full (USB 'M')
+  bool Start(bool b_side = false, int only = -1) {
     track_b = b_side;
-    if (!buf) buf = static_cast<int16_t*>(extmem_malloc(FRAMES * CH * 2));
+    const int nch = only < 0 ? CH : 1;
+    if (buf && nch != chans) { extmem_free(buf); buf = nullptr; }
+    chans = nch;
+    one = only;
+    if (!buf) buf = static_cast<int16_t*>(extmem_malloc(FRAMES * chans * 2));
     if (!buf) return false;
     sent = 0;
     wr[0] = wr[1] = 0;
@@ -680,8 +686,12 @@ public:
     if (!on) return;
     uint32_t w = wr[part];
     for (int n = 0; n < AUDIO_BLOCK_SAMPLES && w < FRAMES; n++, w++) {
-      buf[CH * w + 2 * part] = a[n];
-      buf[CH * w + 2 * part + 1] = b[n];
+      if (one < 0) {
+        buf[CH * w + 2 * part] = a[n];
+        buf[CH * w + 2 * part + 1] = b[n];
+      } else if (one / 2 == part) {
+        buf[w] = one & 1 ? b[n] : a[n];
+      }
     }
     wr[part] = w;
     if (wr[0] >= FRAMES && wr[1] >= FRAMES) on = false;
@@ -689,22 +699,29 @@ public:
   // main loop: send what is captured, a few lines at a time
   void Idle() {
     if (!buf || on || sent >= FRAMES) return;
-    if (sent == 0) Serial.printf("CAPTURE %lu frames 48000 Hz: out L, out R, %s\n", (unsigned long)FRAMES,
+    if (sent == 0) {
+      if (one < 0) Serial.printf("CAPTURE %lu frames 48000 Hz: out L, out R, %s\n", (unsigned long)FRAMES,
                                  track_b ? "track B L, R" : "in 1, in 2");
+      else Serial.printf("CAPTURE %lu frames 48000 Hz, 1 channel: %d\n", (unsigned long)FRAMES, one);
+    }
     char line[2 + 16 * CH * 4 + 2];
     for (int k = 0; k < 8 && sent < FRAMES; k++) {
       int p = 0;
       line[p++] = 'w';
       for (int f = 0; f < 16 && sent < FRAMES; f++, sent++)
-        for (int c = 0; c < CH; c++) p += sprintf(line + p, "%04X", uint16_t(buf[CH * sent + c]));
+        for (int c = 0; c < chans; c++) p += sprintf(line + p, "%04X", uint16_t(buf[chans * sent + c]));
       line[p++] = '\n';
       line[p] = 0;
       Serial.write(line, p);
     }
-    if (sent >= FRAMES) Serial.println("--- end ---");
+    if (sent >= FRAMES) {
+      Serial.println("--- end ---");
+      if (one >= 0) { extmem_free(buf); buf = nullptr; }  // the room back
+    }
   }
 private:
   int16_t* buf = nullptr;
+  int chans = CH, one = -1;
   volatile uint32_t wr[2] = {};
   volatile bool on = false;
   uint32_t sent = FRAMES;
