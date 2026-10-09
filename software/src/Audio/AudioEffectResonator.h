@@ -226,7 +226,7 @@ FASTRUN void AudioEffectResonator::update() {
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
     for (int c = 0; c < 2; c++) {
       const float v = sum[c][n] * dmp[n];
-      sum[c][n] = v / sqrtf(1.0f + v * v);
+      sum[c][n] = SoftLimit(v);
     }
   }
 

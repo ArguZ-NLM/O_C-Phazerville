@@ -292,8 +292,8 @@ FASTRUN void AudioEffectChime::update() {
     const float want = agc_env > AGC_TARGET ? AGC_TARGET / agc_env : 1.0f;
     agc_g += (want < agc_g ? g_down : g_up) * (want - agc_g);
     const float xl = sum[0][n] * agc_g, xr = sum[1][n] * agc_g;
-    const float sl = xl / sqrtf(1.0f + xl * xl);
-    const float sr = xr / sqrtf(1.0f + xr * xr);
+    const float sl = SoftLimit(xl);
+    const float sr = SoftLimit(xr);
     const float ol = dl + wet * (sl - dl), orr = dr + wet * (sr - dr);
     peak_out = std::max(peak_out, std::max(fabsf(ol), fabsf(orr)));
     out[0]->data[n] = ToSample16(ol);
