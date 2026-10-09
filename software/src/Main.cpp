@@ -98,6 +98,7 @@ void ScanI2C() {
 
 uint_fast8_t MENU_REDRAW = true;
 volatile uint32_t loop_counter = 0;
+volatile bool g_noise_request = false;  // Loom's noise test (USB 'N')
 static OC::UiMode ui_mode = OC::UI_MODE_MENU;
 static OC::IOFrame io_frame;
 
@@ -748,6 +749,9 @@ void FASTRUN loop() {
 #ifdef LOOM_ONLY
           case 'C':  // Loom <-> CARD, as Z held + R push
             OC::SwitchToNextApp();
+            break;
+          case 'N':  // Loom's noise test (the report follows in ~25 s)
+            g_noise_request = true;
             break;
 #endif
           case 'K':  // the crash log the firmware keeps after a crash

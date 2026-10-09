@@ -43,6 +43,8 @@
 
 extern "C" uint8_t external_psram_size;  // MB of PSRAM found at start (Teensy core)
 
+extern volatile bool g_noise_request;  // USB 'N' (Main.cpp)
+
 namespace loom {
 // the longest SPOOL loop / PLAYER sample held in memory. They take only
 // what they hold (SPOOL: what is free when REC starts, then just the loop),
@@ -531,6 +533,143 @@ private:
   void Close();
 };
 inline TapeRecorder* g_tape = nullptr;
+
+/////////////////////////////////////////////////////////////////
+// Noise test (USB 'N'): both tracks' INPUT takes a pure tone in place of
+// the jacks while the output is muted. The final mix is matched with the
+// best-fitting tone at that pitch, and what is left over (noise and
+// distortion added on the way) is reported. All digital: the same result
+// on any system, whatever its power supply.
+/////////////////////////////////////////////////////////////////
+class NoiseTest {
+public:
+  static constexpr double HZ = 997.0;  // not a whole fraction of 48 kHz
+  // silence first (whatever played before has time to die), then up from
+  // quiet, so each step's tail is below the next one
+  static constexpr int STEPS = 5;
+  static constexpr float STEP_DB[STEPS] = {-999.0f, -60.0f, -40.0f, -20.0f, -6.0f};
+  static constexpr int SETTLE_BLOCKS = 3 * 375;  // ~3 s
+  static constexpr int MEASURE_BLOCKS = 2 * 375; // ~2 s
+  void Start() {
+    step = 0;
+    blocks = 0;
+    ClearSums();
+    Level();
+    Next();
+    done = false;
+    running = true;
+  }
+  bool Running() const { return running; }
+  bool Done() const { return done; }
+  void Report();  // main loop, once Done
+  // INPUT (audio interrupt): this cycle's tone, both channels
+  const int16_t* Tone() const { return tone; }
+  // the mixer (audio interrupt): one block of the final mix, then the next
+  // block of the tone
+  void Measure(const int32_t* l, const int32_t* r) {
+    if (!running) return;
+    if (blocks >= SETTLE_BLOCKS) {
+      const int32_t* y[2] = {l, r};
+      for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+        const double s = ref_s[n], c = ref_c[n];
+        x.ss += s * s; x.cc += c * c; x.sc += s * c; x.s += s; x.c += c;
+        for (int ch = 0; ch < 2; ch++) {
+          const double v = y[ch][n];
+          ch_sum[ch].yy += v * v; ch_sum[ch].ys += v * s; ch_sum[ch].yc += v * c; ch_sum[ch].y += v;
+        }
+      }
+      x.n += AUDIO_BLOCK_SAMPLES;
+    }
+    if (++blocks >= SETTLE_BLOCKS + MEASURE_BLOCKS) {
+      result[step].x = x;
+      result[step].ch[0] = ch_sum[0];
+      result[step].ch[1] = ch_sum[1];
+      ClearSums();
+      blocks = 0;
+      if (++step >= STEPS) { running = false; done = true; }
+      else Level();
+    }
+    Next();
+  }
+private:
+  struct XSums { double ss, cc, sc, s, c, n; };
+  struct YSums { double yy, ys, yc, y; };
+  struct Result { XSums x; YSums ch[2]; };
+  volatile bool running = false, done = false;
+  int step = 0, blocks = 0;
+  double amp = 0.0;
+  double re = 1.0, im = 0.0;  // the tone's phase, turned each sample
+  double ref_s[AUDIO_BLOCK_SAMPLES] = {}, ref_c[AUDIO_BLOCK_SAMPLES] = {};
+  int16_t tone[AUDIO_BLOCK_SAMPLES] = {};
+  XSums x;
+  YSums ch_sum[2];
+  Result result[STEPS];
+  void ClearSums() { x = {}; ch_sum[0] = ch_sum[1] = {}; }
+  void Level() { amp = STEP_DB[step] < -200.0f ? 0.0 : 32767.0 * pow(10.0, STEP_DB[step] / 20.0); }
+  void Next() {
+    const double w = 2.0 * M_PI * HZ / AUDIO_SAMPLE_RATE_EXACT;
+    const double cw = cos(w), sw = sin(w);
+    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+      ref_s[n] = im;
+      ref_c[n] = re;
+      tone[n] = int16_t(lrint(amp * im));  // rounded to 16 bit, like a jack
+      const double r2 = re * cw - im * sw;
+      im = re * sw + im * cw;
+      re = r2;
+    }
+    const double m = 1.0 / sqrt(re * re + im * im);  // keep it on the circle
+    re *= m;
+    im *= m;
+  }
+};
+inline NoiseTest* g_noise = nullptr;
+
+// dB against a full-scale sine (rms 32767 / sqrt 2)
+static inline float NoiseDb(double rms) {
+  return rms > 0.0 ? float(20.0 * log10(rms / (32767.0 / M_SQRT2))) : -999.0f;
+}
+
+FLASHMEM void NoiseTest::Report() {
+  done = false;
+  // one rounding to 16 bit: 1/sqrt(12) of a step
+  Serial.printf("NOISE TEST: a %.0f Hz tone into both tracks' INPUT (jacks ignored, output muted)\n", HZ);
+  Serial.printf("  dB against a full-scale sine; one rounding to 16 bit alone = %.1f dB\n",
+                NoiseDb(1.0 / sqrt(12.0)));
+  Serial.printf("  tone in   | L: tone out  left over  | R: tone out  left over\n");
+  for (int i = 0; i < STEPS; i++) {
+    const Result& r = result[i];
+    const XSums& s = r.x;
+    if (s.n <= 0) continue;
+    if (STEP_DB[i] < -200.0f) Serial.printf("  silence   |");
+    else Serial.printf("  %5.0f dB  |", STEP_DB[i]);
+    for (int ch = 0; ch < 2; ch++) {
+      const YSums& y = r.ch[ch];
+      // least squares: y ~ a sin + b cos + d (the 3x3 normal equations)
+      const double M[3][3] = {{s.ss, s.sc, s.s}, {s.sc, s.cc, s.c}, {s.s, s.c, s.n}};
+      const double v[3] = {y.ys, y.yc, y.y};
+      const double det = M[0][0] * (M[1][1] * M[2][2] - M[1][2] * M[2][1])
+                       - M[0][1] * (M[1][0] * M[2][2] - M[1][2] * M[2][0])
+                       + M[0][2] * (M[1][0] * M[2][1] - M[1][1] * M[2][0]);
+      double b[3];
+      for (int k = 0; k < 3; k++) {  // Cramer's rule
+        double A[3][3];
+        for (int i2 = 0; i2 < 3; i2++)
+          for (int j = 0; j < 3; j++) A[i2][j] = j == k ? v[i2] : M[i2][j];
+        b[k] = (A[0][0] * (A[1][1] * A[2][2] - A[1][2] * A[2][1])
+              - A[0][1] * (A[1][0] * A[2][2] - A[1][2] * A[2][0])
+              + A[0][2] * (A[1][0] * A[2][1] - A[1][1] * A[2][0])) / det;
+      }
+      const double left = std::max(0.0, y.yy - (b[0] * v[0] + b[1] * v[1] + b[2] * v[2]));
+      const double tone_rms = sqrt((b[0] * b[0] + b[1] * b[1]) / 2.0);
+      if (STEP_DB[i] < -200.0f) Serial.printf("      -     ");
+      else Serial.printf("  %7.1f dB", NoiseDb(tone_rms));
+      Serial.printf("  %7.1f dB |", NoiseDb(sqrt(left / s.n)));
+    }
+    Serial.println();
+    delay(2);
+  }
+  Serial.println("--- end ---");
+}
 // 12:34, or 1:02:03 past an hour
 inline void FormatTapeTime(uint32_t s, char* buf, size_t n) {
   if (s >= 3600) snprintf(buf, n, "%lu:%02lu:%02lu", s / 3600, s / 60 % 60, s % 60);
@@ -593,6 +732,7 @@ FASTRUN void LoomMixer::update() {
     }
     level[0] = blk[0];
     level[1] = blk[1];
+    if (g_noise) g_noise->Measure(acc[0], acc[1]);  // (before the mute: it mutes the output)
     float g[AUDIO_BLOCK_SAMPLES];  // the mute fade, for the quick listen too
     if (mute || mute_g < 1.0f) {  // fade the sum out / back in
       const float to = mute ? 0.0f : 1.0f, step = 1.0f / (0.015f * AUDIO_SAMPLE_RATE_EXACT);
@@ -1082,6 +1222,7 @@ FASTRUN void InputDevice::update() {
     // channel 0 is L (the input is resynced at start, see AudioIO)
     const int16_t* a = in[base] ? in[base]->data : silence;
     const int16_t* b = in[base + 1] ? in[base + 1]->data : silence;
+    if (!from_a && g_noise && g_noise->Running()) a = b = g_noise->Tone();  // the noise test
     const int32_t g = static_cast<int32_t>(gain * 16384.0f);   // Q14, up to 2.0
     const int32_t wd = static_cast<int32_t>(width * 16384.0f); // Q14
     int16_t* l = out[0]->data;

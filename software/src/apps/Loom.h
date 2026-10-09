@@ -1349,11 +1349,21 @@ FLASHMEM void AppLoom::MainLoop() {
       for (auto& tr : tracks) if (tr.player) tr.player->AutoplayIdle();
     preview->Idle(listing && view == DEVICE);
     g_tape->Idle();
+    // the noise test (USB 'N')
+    if (g_noise_request) {
+      g_noise_request = false;
+      if (!g_noise) g_noise = new NoiseTest;
+      if (!g_noise->Running()) {
+        Serial.println("NOISE TEST: started, about 25 s (output muted)");
+        g_noise->Start();
+      }
+    }
+    if (g_noise && g_noise->Done()) g_noise->Report();
     // the output is muted while a PLAYER reads a file in (the card reading
     // made a high whine on the output)
     bool busy = false;
     for (auto& tr : tracks) busy |= tr.player && tr.choice[SOURCE] == 2 && tr.player->Busy();
-    mixer->mute = busy;
+    mixer->mute = busy || (g_noise && g_noise->Running());
     if (loop_save_held && ms >= 2000) loop_save_held = false;
   }
   if (save_held && millis() - save_hold >= 2000) {
