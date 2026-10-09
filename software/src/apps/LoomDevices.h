@@ -5527,7 +5527,9 @@ FLASHMEM void ChimeDevice::DrawMini(int x, int y, int w, int h) {
 PROGMEM static const DeviceDef WARP_DEF = {
   "WARP", "WRP", 8, {"TRIG", "STOP"},  // A: the root note, 60 (LOOP on: let go once in); B: every voice let go
   {
-    {"SRC", 0, 1, 0, LIST, 2, 0, 0, {"SPL", "PLY"}},  // the other track's SPOOL or PLAYER
+    // the other track's SPOOL or PLAYER, or a THRUM: a waveform from the
+    // card (/LOOM/WAVES; R push picks one, a fresh WARP a random one)
+    {"SRC", 0, 2, 2, LIST, 3, 0, 0, {"SPL", "PLY", "THR"}},
     {"THRU", 0, 1, 1, LIST, 2, 0, 0, {"OFF", "ON"}},  // THREAD: A's output on under the notes
     {"VEL", 0, 100, 50, UNI},     // %: how much velocity sets a note's loudness
     {"WEFT", -240, 240, 20, BI},  // tenths of a semitone a key bends at full pressure (aftertouch)
@@ -5543,7 +5545,15 @@ PROGMEM static const DeviceDef WARP_DEF = {
 class WarpDevice : public Device {
 public:
   enum { SRC, THRU, VEL, WEFT, ATK, DECAY, SUS, REL };  // (DEC is taken by Print.h)
-  enum { SRC_SPOOL, SRC_PLAYER };
+  enum { SRC_SPOOL, SRC_PLAYER, SRC_THRUM };
+  static constexpr const char* THRUM_DIR = "/LOOM/WAVES";
+  // THRUM: R push on SRC opens the file list
+  int FileParam() const override { return cur[SRC] == SRC_THRUM ? SRC : -1; }
+  void OpenBrowser() override;
+  void Picked(const char* dir, const char* name) override;
+  // the thrum's file (folder/name; "" none yet: a random one is picked);
+  // saved with the settings
+  char thrum[200] = "";
   static constexpr int ROOT = 60;  // the note that plays the sound as recorded (MIDI note 60)
   WarpDevice() : Device(WARP_DEF) {}
   AudioStream* in() override { return &fx; }  // THREAD: track A passes through
@@ -5603,6 +5613,8 @@ private:
   uint32_t want_a = 0, want_b = 0, have_a = 0, have_b = 0;
   uint32_t want_at = 0;
   void PlayerIdle();
+  void ThrumIdle();
+  bool PickRandomThrum();
   // loading, a chunk at a time
   File lf;
   bool loading = false, no_mem = false;
@@ -5776,6 +5788,7 @@ FLASHMEM void WarpDevice::Idle() {
     want_at = 0;
   }
   if (cur[SRC] == SRC_PLAYER) { PlayerIdle(); return; }
+  if (cur[SRC] == SRC_THRUM) { ThrumIdle(); return; }
   // the other track's SPOOL loop, once a recording / overdub there has
   // ended (and when there is one already)
   const uint8_t st = spool ? spool->LoopState() : AudioEffectReel::EMPTY;
@@ -5807,6 +5820,90 @@ FLASHMEM void WarpDevice::PlayerIdle() {
   Begin(want_path, want_a, want_b > want_a ? want_b - want_a : 0);
   snprintf(have_path, sizeof(have_path), "%s", want_path);  // (tried once, worked or not)
   have_a = want_a; have_b = want_b;
+}
+
+// THRUM: the wave picked (or, none yet, a random one from /LOOM/WAVES),
+// read in whole once
+FLASHMEM void WarpDevice::ThrumIdle() {
+  if (loading) { LoadStep(); return; }
+  if (!thrum[0] && !PickRandomThrum()) return;
+  if (!strcmp(thrum, have_path)) return;
+  Begin(thrum, 0, 0xFFFFFFFFu);
+  snprintf(have_path, sizeof(have_path), "%s", thrum);  // (tried once, worked or not)
+}
+
+// a random WAV from a random folder of /LOOM/WAVES (or WAVES itself)
+FLASHMEM bool WarpDevice::PickRandomThrum() {
+  if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
+  static uint32_t seed = 0;
+  if (!seed) seed = rtc_get() ^ ARM_DWT_CYCCNT ^ micros();
+  auto rnd = [](uint32_t n) { seed = seed * 1664525u + 1013904223u; return n ? (seed >> 8) % n : 0u; };
+  auto is_wav = [](const char* nm) {
+    const size_t l = strlen(nm);
+    return nm[0] != '.' && l > 4 && !strcasecmp(nm + l - 4, ".wav");
+  };
+  // the folders (and the WAVES folder itself, for loose files)
+  char dir[160];
+  {
+    File d = SD.open(THRUM_DIR);
+    if (!d) return false;
+    int nd = 0;
+    for (File e = d.openNextFile(); e; e = d.openNextFile()) { if (e.isDirectory() && e.name()[0] != '.') nd++; e.close(); }
+    const int want = int(rnd(nd + 1));  // nd: the WAVES folder itself
+    snprintf(dir, sizeof(dir), "%s", THRUM_DIR);
+    d.rewindDirectory();
+    int i = 0;
+    for (File e = d.openNextFile(); e; e = d.openNextFile()) {
+      if (e.isDirectory() && e.name()[0] != '.' && i++ == want) snprintf(dir, sizeof(dir), "%s/%s", THRUM_DIR, e.name());
+      e.close();
+    }
+    d.close();
+  }
+  // a random WAV of that folder; none there: the first WAV of any folder
+  File d = SD.open(dir);
+  if (d) {
+    int nf = 0;
+    for (File e = d.openNextFile(); e; e = d.openNextFile()) { if (!e.isDirectory() && is_wav(e.name())) nf++; e.close(); }
+    const int want = int(rnd(nf));
+    d.rewindDirectory();
+    int i = 0;
+    for (File e = d.openNextFile(); e && nf; e = d.openNextFile()) {
+      if (!e.isDirectory() && is_wav(e.name()) && i++ == want) snprintf(thrum, sizeof(thrum), "%s/%s", dir, e.name());
+      e.close();
+    }
+    d.close();
+  }
+  if (thrum[0]) return true;
+  File w = SD.open(THRUM_DIR);
+  if (!w) return false;
+  for (File e = w.openNextFile(); e && !thrum[0]; e = w.openNextFile()) {
+    if (e.isDirectory() && e.name()[0] != '.') {
+      for (File g = e.openNextFile(); g && !thrum[0]; g = e.openNextFile()) {
+        if (!g.isDirectory() && is_wav(g.name())) snprintf(thrum, sizeof(thrum), "%s/%s/%s", THRUM_DIR, e.name(), g.name());
+        g.close();
+      }
+    }
+    e.close();
+  }
+  w.close();
+  return thrum[0] != 0;
+}
+
+// the list opens on the thrum playing (or in WAVES)
+FLASHMEM void WarpDevice::OpenBrowser() {
+  char dir[200];
+  const char* nm = "";
+  snprintf(dir, sizeof(dir), "%s", thrum[0] ? thrum : THRUM_DIR);
+  if (thrum[0]) {
+    char* sl = strrchr(dir, '/');
+    if (sl) { *sl = 0; nm = thrum + (sl - dir) + 1; }
+  }
+  g_browser->Open(this, dir, nm);
+}
+
+FLASHMEM void WarpDevice::Picked(const char* dir, const char* name) {
+  if (!name || !name[0]) return;
+  snprintf(thrum, sizeof(thrum), "%s/%s", dir, name);
 }
 
 FLASHMEM void WarpDevice::SpoolBegin() {
@@ -5928,7 +6025,20 @@ FLASHMEM void WarpDevice::Apply(int p) {
 
 FLASHMEM void WarpDevice::Format(int p, char* buf, size_t n) const {
   switch (p) {
-    case SRC: snprintf(buf, n, "%s %c", cur[SRC] == SRC_PLAYER ? "PLY" : "SPL", other); break;
+    case SRC:
+      if (cur[SRC] != SRC_THRUM) { snprintf(buf, n, "%s %c", cur[SRC] == SRC_PLAYER ? "PLY" : "SPL", other); break; }
+      {  // the thrum, short: its name without '_' and ".wav", 5 letters (SAW07, TRI03)
+        const char* nm = strrchr(thrum, '/');
+        nm = nm ? nm + 1 : thrum;
+        char s[32];
+        int k = 0;
+        for (const char* c = nm; *c && *c != '.' && k < 31; c++) if (*c != '_' && *c != ' ') s[k++] = *c;
+        s[k] = 0;
+        if (!k) { snprintf(buf, n, "THR"); break; }
+        if (k > 5) { s[3] = s[k - 2]; s[4] = s[k - 1]; s[5] = 0; }
+        snprintf(buf, n, "%s", s);
+      }
+      break;
     case VEL: snprintf(buf, n, "%d%%", int(val[p])); break;
     case WEFT:
     {  // semitones, a tenth at a time: +1.5, -12.0
@@ -5997,6 +6107,7 @@ FLASHMEM void WarpDevice::DrawViz(int x, int y, int w, int h) {
   }
   if (!frames && !loading && !copying) {
     const char* t = no_mem ? "NO MEMORY"
+        : cur[SRC] == SRC_THRUM ? (thrum[0] ? "NOT A WAV" : "NO WAVES ON CARD")
         : cur[SRC] == SRC_PLAYER ? (player ? "NOT A WAV" : "PLAYER IS OFF")
         : spool ? "RECORD IN SPOOL" : "SPOOL IS OFF";
     gfxPrint(x + 2, y + h / 2 - 4, t);
@@ -6016,6 +6127,14 @@ FLASHMEM void WarpDevice::DrawViz(int x, int y, int w, int h) {
     if (viz.pos[i] < 0.0f) continue;
     const int px = x + constrain(int(viz.pos[i] * (w - 1)), 0, w - 1);
     gfxInvert(px, y + int((1.0f - viz.env[i]) * half), 1, std::max(1, int(viz.env[i] * 2 * half)));
+  }
+  if (cur[SRC] == SRC_THRUM && thrum[0] && !loading) {  // the thrum's name, top left
+    const char* nm = strrchr(thrum, '/');
+    char t[24];
+    snprintf(t, sizeof(t), "%s", nm ? nm + 1 : thrum);
+    if (char* dot = strrchr(t, '.')) *dot = 0;
+    graphics.clearRect(x, y, 6 * int(strlen(t)) + 2, 9);
+    gfxPrint(x + 1, y + 1, t);
   }
   {  // WEFT: the pressure coming in (the most of any key), a bar at the right
     int at = chan_at;

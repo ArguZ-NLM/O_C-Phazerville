@@ -1708,7 +1708,7 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
   // file under the cursor
   if (Device* ld = Listing()) {
     if (event.control == OC::CONTROL_BUTTON_R) {
-      if (g_browser->Enter()) ld->Picked(g_browser->Dir(), g_browser->Name());
+      if (g_browser->Enter()) { ld->Picked(g_browser->Dir(), g_browser->Name()); dirty = true; }
     } else if (event.control == OC::CONTROL_BUTTON_Y) {
       g_browser->Close();
     } else if (event.control == OC::CONTROL_BUTTON_DOWN) {
@@ -2774,8 +2774,10 @@ FLASHMEM void AppLoom::SaveFile() const {
   f.write("W", 1);
   for (auto& tr : tracks) {
     WriteDevice(f, tr.warp);
-    const uint8_t b = 0;  // (was its file; WARP takes the other track's sound now)
+    const char* th = tr.warp ? tr.warp->thrum : "";  // its THRUM's file
+    const uint8_t b = strlen(th);
     f.write(&b, 1);
+    f.write(th, b);
   }
   f.close();
   fs.remove(SAVE_FILE);
@@ -2905,7 +2907,8 @@ FLASHMEM void AppLoom::LoadFile() {
               if (!ReadDevice(f, tr.warp)) break;
               uint8_t b = 0;
               char fn[256] = {};
-              if (f.read(&b, 1) != 1 || f.read(fn, b) != b) break;  // (older files: its file, not used now)
+              if (f.read(&b, 1) != 1 || f.read(fn, b) != b) break;  // its THRUM's file
+              if (tr.warp && b < sizeof(tr.warp->thrum)) snprintf(tr.warp->thrum, sizeof(tr.warp->thrum), "%s", fn);
             }
           }
         }
