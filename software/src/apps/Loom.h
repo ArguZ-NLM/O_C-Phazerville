@@ -2063,7 +2063,7 @@ FLASHMEM void AppLoom::DrawChain() const {
     char buf[8];
     const int v = int(lrintf(jack_db[db_t]));
     if (v <= -60) snprintf(buf, sizeof(buf), "<-60dB");
-    else snprintf(buf, sizeof(buf), "%ddB", v);
+    else snprintf(buf, sizeof(buf), "-%02ddB", -v);  // -08dB: always two digits
     gfxPrint(128 - 6 * int(strlen(buf)), 56, buf);
   }
   if (!audio_hw()) {

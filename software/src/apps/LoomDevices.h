@@ -1279,7 +1279,7 @@ public:
 private:
   volatile int32_t jack_pk = 0;  // since the last JackDb
   float jack_db = -99.0f;
-  uint32_t jack_db_at = 0;
+  uint32_t jack_db_at = 0, jack_peak_at = 0;
   void Poll();
   void Scope(const int16_t* l, const int16_t* r);
 };
@@ -1422,7 +1422,9 @@ FLASHMEM float InputDevice::JackDb() {
   const float dt = jack_db_at ? (now - jack_db_at) * 0.001f : 0.0f;
   jack_db_at = now;
   const float db = pk > 0 ? 20.0f * log10f(pk / 32767.0f) : -99.0f;
-  jack_db = std::max(db, jack_db - 15.0f * dt);  // falls 15 dB a second
+  // a peak is held 1 s, then it falls 6 dB a second
+  if (db >= jack_db) { jack_db = db; jack_peak_at = now; }
+  else if (now - jack_peak_at > 1000) jack_db = std::max(db, jack_db - 6.0f * dt);
   return jack_db;
 }
 
