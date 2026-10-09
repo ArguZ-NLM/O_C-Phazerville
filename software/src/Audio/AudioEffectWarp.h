@@ -13,10 +13,11 @@
 // CROSS blends what is around END into what is around START (where the
 // sample has nothing beyond them: its last frames into the loop's first),
 // INOUT dips out and back in. ATTACK fades it in; a note off lets it go over RELEASE.
-// WEFT: pressing a key hard bends its note: its own (poly) aftertouch or
-// the channel's, whichever is more; on a steep exponential curve (hardly
-// anything until it is pressed hard), up to par.pitch semitones at full
-// (up, or down if negative), smoothed over ~15 ms.
+// WEFT: pressing a key hard makes its note waver, as a violinist's
+// vibrato: its own (poly) aftertouch or the channel's, whichever is more;
+// nothing up to 75 % of the pressure, then deeper up to +-par.pitch
+// semitones at full, easing in over ~80 ms; ~5.5 Hz, a little different
+// for every note.
 // A ninth note takes the oldest voice, which hands its sound to a fader
 // that lets it go over ~5 ms (cut, it clicked).
 //
@@ -53,7 +54,7 @@ public:
     uint8_t atk_curve = C_LIN, dec_curve = C_EXP, rel_curve = C_EXP;
     float level = 1.0f;      // 1: a note at full velocity as loud as the sample
     float vel_amt = 0.75f;   // 0: every note as loud; 1: velocity sets it all
-    float pitch = 0.0f;      // WEFT: semitones at full pressure
+    float pitch = 0.0f;      // WEFT: the vibrato's depth at full pressure, +- semitones
     int root = 60;
     float rate = 1.0f;       // the file's sample rate / 48 kHz
   };
@@ -124,7 +125,9 @@ private:
     double pos = 0.0;    // in frames of the sample
     double step = 1.0;
     float base = 1.0f;   // step without WEFT
-    float press = 0.0f;  // WEFT: the key's pressure, smoothed
+    float press = 0.0f;  // WEFT: how deep its vibrato is now (0..1), easing
+    float vph = 0.0f;    // ... where the wobble is (0..1)
+    float vrate = 5.5f;  // ... how fast, Hz
     float env = 0.0f;
     float gain = 1.0f;
     float fade = 1.0f;   // a fader's own fade out (stolen voices)
@@ -140,6 +143,7 @@ private:
   Voice vc[VOICES + FADERS];
   uint32_t clock = 0;
   volatile uint8_t at_chan = 0;
+  uint32_t vib_seed = 12345;
   const uint8_t* volatile at_poly = nullptr;
   static constexpr int QUEUE = 32;
   Event queue[QUEUE];
@@ -189,6 +193,8 @@ FASTRUN void AudioEffectWarp::Start(const Event& e) {
   const float vel = e.vel / 127.0f;
   v.gain = 1.0f - par.vel_amt + par.vel_amt * vel;
   v.age = ++clock;
+  vib_seed = vib_seed * 1664525u + 1013904223u;
+  v.vrate = 5.2f + (vib_seed >> 8) * (0.6f / 16777216.0f);  // WEFT: 5.2 .. 5.8 Hz
 }
 
 FASTRUN void AudioEffectWarp::Let(int note) {
@@ -250,19 +256,24 @@ FASTRUN void AudioEffectWarp::update() {
   const uint8_t* poly = at_poly;
   const float chan = at_chan * (1.0f / 127.0f);
   const float bend = par.pitch * (1.0f / 12.0f);  // octaves at full pressure
+  constexpr float BLOCK_S = AUDIO_BLOCK_SAMPLES / AUDIO_SAMPLE_RATE_EXACT;
   const float g = par.level * (1.0f / 32768.0f);
   for (int i = 0; i < VOICES + FADERS; i++) {
     Voice& v = vc[i];
     if (!v.on) continue;
     const bool fader = i >= VOICES;
-    // WEFT: this note's pressure, gliding over ~15 ms across the block
-    // only pressing hard bends: a steep exponential, so half the pressure
-    // gives 2 % of WEFT, three quarters 13 %, 90 % 45 %, all of it 100 %
+    // WEFT: the vibrato, from 75 % of this note's pressure on, its depth
+    // easing (~80 ms) as a player's does; the pitch at the block's start
+    // and end, drawn straight in between
     const float at = std::max(chan, poly ? poly[v.note & 127] * (1.0f / 127.0f) : 0.0f);
-    const float want = (expf(8.0f * at) - 1.0f) * (1.0f / 2979.958f);  // (e^8 - 1)
-    const float p0 = v.press;
-    v.press += (want - v.press) * (1.0f - expf(-float(AUDIO_BLOCK_SAMPLES) / (0.015f * AUDIO_SAMPLE_RATE_EXACT)));
-    const float s0 = exp2f(bend * p0), s1 = exp2f(bend * v.press);
+    const float want = at > 0.75f ? (at - 0.75f) * 4.0f : 0.0f;
+    const float d0 = v.press * sinf(6.2831853f * v.vph);
+    v.press += (want - v.press) * (1.0f - expf(-BLOCK_S / 0.08f));
+    v.vph += v.vrate * BLOCK_S;
+    if (v.vph >= 1.0f) v.vph -= 1.0f;
+    if (v.press < 1e-4f) v.vph = 0.0f;  // (a new wobble starts on its way up)
+    const float d1 = v.press * sinf(6.2831853f * v.vph);
+    const float s0 = exp2f(bend * d0), s1 = exp2f(bend * d1);
     for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
       v.step = v.base * (s0 + (s1 - s0) * (n * (1.0f / AUDIO_BLOCK_SAMPLES)));
       // the envelope
