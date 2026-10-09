@@ -34,7 +34,7 @@ public:
     float decay = 0.1f;      // s, to sustain (-60 dB of the way)
     float sustain = 1.0f;    // 0..1
     float release = 0.2f;    // s, to -60 dB
-    float level = 0.8f;
+    float level = 1.0f;      // 1: a note at full velocity as loud as the sample
     float vel_amt = 0.75f;   // 0: every note as loud; 1: velocity sets it all
     int root = 60;
     float rate = 1.0f;       // the file's sample rate / 48 kHz
@@ -159,7 +159,7 @@ FASTRUN void AudioEffectWarp::Start(const Event& e) {
   v.pos = a;
   v.step = par.rate * powf(2.0f, (int(e.note) - par.root) / 12.0f);
   const float vel = e.vel / 127.0f;
-  v.gain = 1.0f - par.vel_amt + par.vel_amt * vel * vel;
+  v.gain = 1.0f - par.vel_amt + par.vel_amt * vel;
   v.age = ++clock;
 }
 
@@ -215,7 +215,7 @@ FASTRUN void AudioEffectWarp::update() {
   const float dec = expf(-6.9078f / (std::max(0.005f, par.decay) * AUDIO_SAMPLE_RATE_EXACT));
   const float sus = constrain(par.sustain, 0.0f, 1.0f);
   constexpr float FADER = 1.0f / (0.005f * AUDIO_SAMPLE_RATE_EXACT);
-  const float g = par.level * 0.5f * (1.0f / 32768.0f);  // a voice at most half scale
+  const float g = par.level * (1.0f / 32768.0f);
   for (int i = 0; i < VOICES + FADERS; i++) {
     Voice& v = vc[i];
     if (!v.on) continue;

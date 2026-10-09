@@ -531,7 +531,7 @@ FLASHMEM void AppLoom::Repatch(int t) {
     prev = tr.player->out();
   } else if (tr.choice[SOURCE] == 3 && tr.warp) {  // WARP instead of the input
     // THREAD: B's input (A's output) passes through WARP, under its notes
-    if (t == 1 && threaded)
+    if (t == 1 && threaded && tr.warp->cur[WarpDevice::THRU])
       for (int c = 0; c < 2; c++) link[SOURCE][c].Want(*tr.input, c, *tr.warp->in(), c);
     prev = tr.warp->out();
   }
@@ -1369,6 +1369,7 @@ FLASHMEM void AppLoom::MainLoop() {
         tr.warp->player = o.player && o.choice[SOURCE] == 2 ? o.player : nullptr;
         tr.warp->other = char('A' + 1 - t);
         tr.warp->Idle();
+        if (tr.warp->thru_changed) { tr.warp->thru_changed = false; Repatch(t); }
       }
       if (tr.reel && tr.choice[SOURCE] == 1) tr.reel->Idle();
       for (int s = SOURCE + 1; s < SLOT_COUNT; s++)  // devices with main-loop work (STRETCH)

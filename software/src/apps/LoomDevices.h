@@ -5475,17 +5475,18 @@ FLASHMEM void ChimeDevice::DrawMini(int x, int y, int w, int h) {
 // pitch of MIDI notes (or of TRIG: the root). SRC picks it: that track's
 // SPOOL loop (copied in each time a recording or overdub there ends) or
 // what its PLAYER plays (its loop section, read from the card once it
-// rests; up to 16 s). Page 2 is the notes' envelope.
+// rests; up to 16 s), all of it, looping. THRU: on track B in THREAD,
+// A's output plays on under the notes (or not). LEVEL 100 %: a note at
+// full velocity as loud as the sound was recorded. Page 2 is the notes'
+// envelope.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef WARP_DEF = {
   "WARP", "WRP", 8, {"TRIG", "STOP"},  // A: the root note, 60 (LOOP on: let go once in); B: every voice let go
   {
     {"SRC", 0, 1, 0, LIST, 2, 0, 0, {"SPL", "PLY"}},  // the other track's SPOOL or PLAYER
-    {"START", 0, 10000, 0, UNI},
-    {"END", 0, 10000, 10000, UNI},
-    // value: the seam's fade, as SPOOL's FADE; mode: how a note plays on
-    // (once, looping with a crossfade or a dip at the seam, back and forth)
-    {"LOOP", 0, 100, 20, UNI, 0, 4, 1, {}, {"OFF", "CROSS", "INOUT", "PING"}},
+    {"THRU", 0, 1, 1, LIST, 2, 0, 0, {"OFF", "ON"}},  // THREAD: A's output on under the notes
+    {"LEVEL", 0, 200, 100, UNI},  // %: 100 the sound as recorded (at full velocity)
+    {"VEL", 0, 100, 50, UNI},     // %: how much velocity sets a note's loudness
     {"ATK", 0, 100, 0, UNI},    // 1 ms .. 2 s
     {"DEC", 0, 100, 50, UNI},   // 5 ms .. 5 s, to SUS
     {"SUS", 0, 100, 100, UNI},  // %
@@ -5496,9 +5497,8 @@ PROGMEM static const DeviceDef WARP_DEF = {
 
 class WarpDevice : public Device {
 public:
-  enum { SRC, START, END, LOOP, ATK, DECAY, SUS, REL };  // (DEC is taken by Print.h)
+  enum { SRC, THRU, LEVEL, VEL, ATK, DECAY, SUS, REL };  // (DEC is taken by Print.h)
   enum { SRC_SPOOL, SRC_PLAYER };
-  enum { LOOP_OFF, LOOP_CROSS, LOOP_INOUT, LOOP_PING };  // LOOP's modes
   static constexpr int ROOT = 60;  // the note that plays the sound as recorded (MIDI note 60)
   WarpDevice() : Device(WARP_DEF) {}
   AudioStream* in() override { return &fx; }  // THREAD: track A passes through
@@ -5530,7 +5530,10 @@ public:
   const ReelDevice* spool = nullptr;
   const PlayerDevice* player = nullptr;
   char other = 'A';
+  // THRU turned: the app patches A through again (or not)
+  bool thru_changed = false;
 private:
+  int thru_was = 1;
   AudioEffectWarp fx;
   int16_t* bl = nullptr;  // the sound (PSRAM); br null: mono
   int16_t* br = nullptr;
@@ -5568,8 +5571,6 @@ private:
   void LoadStep();
   static float Attack(int v) { return 0.001f * powf(2000.0f, v * 0.01f); }
   static float Time5(int v) { return 0.005f * powf(1000.0f, v * 0.01f); }  // DEC, REL
-  // LOOP's fade as SPOOL's FADE: up to 1 s, finer at the short end
-  static float Fade(int v) { const float f = v * 0.01f; return (16.0f + f * f * AUDIO_SAMPLE_RATE_EXACT) / AUDIO_SAMPLE_RATE_EXACT; }
   static void FormatSecs(float s, char* buf, size_t n) {
     const int t = int(s * 10000.0f + 0.5f);  // in 0.1 ms
     if (!t) snprintf(buf, n, "0ms");
@@ -5818,20 +5819,17 @@ FLASHMEM void WarpDevice::SpoolStep() {
 }
 
 FLASHMEM void WarpDevice::Apply(int p) {
-  AudioEffectWarp::Params a;
-  const int s = cur[START], e = cur[END];
-  a.start = std::min(s, e) * 0.0001f;
-  a.end = std::max(s, e) * 0.0001f;
-  const int lm = mode[LOOP];
-  a.loop = lm == LOOP_OFF ? AudioEffectWarp::ONCE : lm == LOOP_PING ? AudioEffectWarp::PING : AudioEffectWarp::LOOP;
-  a.cross = lm != LOOP_INOUT;
-  a.xfade = Fade(cur[LOOP]);
+  if (cur[THRU] != thru_was) { thru_was = cur[THRU]; thru_changed = true; }
+  AudioEffectWarp::Params a;  // the whole sound, looping with a 40 ms crossfade
+  a.loop = AudioEffectWarp::LOOP;
+  a.cross = true;
+  a.xfade = 0.04f;
   a.attack = Attack(cur[ATK]);
   a.decay = Time5(cur[DECAY]);
   a.sustain = cur[SUS] * 0.01f;
   a.release = Time5(cur[REL]);
-  a.level = 0.8f;
-  a.vel_amt = 0.75f;
+  a.level = cur[LEVEL] * 0.01f;
+  a.vel_amt = cur[VEL] * 0.01f;
   a.root = ROOT;
   a.rate = rate;
   fx.Set(a);
@@ -5840,12 +5838,7 @@ FLASHMEM void WarpDevice::Apply(int p) {
 FLASHMEM void WarpDevice::Format(int p, char* buf, size_t n) const {
   switch (p) {
     case SRC: snprintf(buf, n, "%s %c", cur[SRC] == SRC_PLAYER ? "PLY" : "SPL", other); break;
-    case START: case END: {
-      const float secs = frames ? frames / (AUDIO_SAMPLE_RATE_EXACT * rate) : 0.0f;
-      FormatSecs(secs * val[p] * 0.0001f, buf, n);
-      break;
-    }
-    case LOOP: FormatSecs(Fade(val[LOOP]), buf, n); break;  // (the mode shows above)
+    case LEVEL: case VEL: snprintf(buf, n, "%d%%", int(val[p])); break;
     case ATK: FormatSecs(Attack(val[ATK]), buf, n); break;
     case DECAY: case REL: FormatSecs(Time5(val[p]), buf, n); break;
     case SUS: snprintf(buf, n, "%d%%", int(val[SUS])); break;
@@ -5869,8 +5862,7 @@ FLASHMEM bool WarpDevice::HeaderInfo(char* buf, size_t n) const {
   return true;
 }
 
-// the sound's outline, dotted outside START .. END, and a line where each
-// voice is; page 2: the envelope
+// the sound's outline, and a line where each voice is; page 2: the envelope
 FLASHMEM void WarpDevice::DrawViz(int x, int y, int w, int h) {
   fx.ReadViz(viz);
   if (view_page == 1) {
@@ -5913,18 +5905,13 @@ FLASHMEM void WarpDevice::DrawViz(int x, int y, int w, int h) {
     return;
   }
   const int cy = y + h / 2, half = h / 2 - 1;
-  const int s = std::min(cur[START], cur[END]), e = std::max(cur[START], cur[END]);
-  const int xs = x + int(int64_t(s) * (w - 1) / 10000), xe = x + int(int64_t(e) * (w - 1) / 10000);
   int top = 1;  // the loudest part fills the height (a quiet sound shows too)
   for (uint8_t o : over) top = std::max<int>(top, o);
   for (int i = 0; i < w; i++) {
     const int a = over[i * 128 / w] * half / top;
     if (!a) continue;
-    if (x + i >= xs && x + i <= xe) gfxLine(x + i, cy - a, x + i, cy + a);
-    else if (i % 2 == 0) { gfxPixel(x + i, cy - a); gfxPixel(x + i, cy + a); }
+    gfxLine(x + i, cy - a, x + i, cy + a);
   }
-  gfxDottedLine(xs, y, xs, y + h - 1, 2);
-  gfxDottedLine(xe, y, xe, y + h - 1, 2);
   for (int i = 0; i < AudioEffectWarp::VOICES; i++) {
     if (viz.pos[i] < 0.0f) continue;
     const int px = x + constrain(int(viz.pos[i] * (w - 1)), 0, w - 1);
