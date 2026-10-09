@@ -1404,6 +1404,26 @@ FLASHMEM void AppLoom::MainLoop() {
       if (!g_capture->Start(b_side)) Serial.println("CAPTURE: no PSRAM");
     }
     if (g_capture) g_capture->Idle();
+    // test notes (USB 'M'), as if from a keyboard, while 'U' captures:
+    // middle C, the G above, a C major chord, the C above (ms, note, vel)
+    {
+      static const uint16_t seq[][3] = {
+        {50, 60, 100}, {450, 60, 0}, {500, 67, 100}, {900, 67, 0},
+        {1000, 60, 90}, {1000, 64, 90}, {1000, 67, 90}, {1550, 60, 0}, {1550, 64, 0}, {1550, 67, 0},
+        {1600, 72, 110}, {1900, 72, 0},
+      };
+      static uint32_t notes_at = 0;
+      static int notes_i = -1;
+      if (g_notes_request) {
+        g_notes_request = false;
+        if (!g_capture) g_capture = new OutCapture;
+        if (g_capture->Start(true)) { notes_at = millis(); notes_i = 0; }
+      }
+      while (notes_i >= 0 && notes_i < int(sizeof(seq) / sizeof(seq[0])) && millis() - notes_at >= seq[notes_i][0]) {
+        NoteEvent(1, seq[notes_i][1], seq[notes_i][2]);
+        notes_i++;
+      }
+    }
     // the output is muted while a PLAYER reads a file in (the card reading
     // made a high whine on the output)
     bool busy = false;

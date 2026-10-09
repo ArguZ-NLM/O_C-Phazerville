@@ -100,6 +100,7 @@ uint_fast8_t MENU_REDRAW = true;
 volatile uint32_t loop_counter = 0;
 volatile bool g_noise_request = false;  // Loom's noise test (USB 'N')
 volatile uint8_t g_capture_request = 0;  // Loom's output capture (USB 'W' / 'U')
+volatile bool g_notes_request = false;   // Loom: test notes, captured (USB 'M')
 static OC::UiMode ui_mode = OC::UI_MODE_MENU;
 static OC::IOFrame io_frame;
 
@@ -759,6 +760,9 @@ void FASTRUN loop() {
             break;
           case 'U':  // ... the output and track B before the mixer
             g_capture_request = 2;
+            break;
+          case 'M':  // a few MIDI notes played in, with 'U's capture (WARP, from the Mac)
+            g_notes_request = true;
             break;
 #endif
           case 'K':  // the crash log the firmware keeps after a crash

@@ -47,6 +47,7 @@ extern "C" uint8_t external_psram_size;  // MB of PSRAM found at start (Teensy c
 
 extern volatile bool g_noise_request;  // USB 'N' (Main.cpp)
 extern volatile uint8_t g_capture_request;  // USB 'W' (1) / 'U' (2) (Main.cpp)
+extern volatile bool g_notes_request;       // USB 'M' (Main.cpp)
 
 namespace loom {
 // the longest SPOOL loop / PLAYER sample held in memory. They take only
