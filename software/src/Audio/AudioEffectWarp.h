@@ -15,9 +15,9 @@
 // INOUT dips out and back in. ATTACK fades it in; a note off lets it go over RELEASE.
 // WEFT: pressing a key hard makes its note waver, as a violinist's
 // vibrato: its own (poly) aftertouch or the channel's, whichever is more;
-// nothing up to 75 % of the pressure, then deeper up to +-par.pitch
-// semitones at full, easing in over ~80 ms; ~5.5 Hz, a little different
-// for every note.
+// nothing up to 75 % of the pressure, then deeper up to +-1 semitone at
+// full, easing in over ~80 ms; par.vib_hz fast, a little different for
+// every note (+-5 %).
 // A ninth note takes the oldest voice, which hands its sound to a fader
 // that lets it go over ~5 ms (cut, it clicked).
 //
@@ -54,7 +54,7 @@ public:
     uint8_t atk_curve = C_LIN, dec_curve = C_EXP, rel_curve = C_EXP;
     float level = 1.0f;      // 1: a note at full velocity as loud as the sample
     float vel_amt = 0.75f;   // 0: every note as loud; 1: velocity sets it all
-    float pitch = 0.0f;      // WEFT: the vibrato's depth at full pressure, +- semitones
+    float vib_hz = 5.5f;     // WEFT: how fast the vibrato wobbles
     int root = 60;
     float rate = 1.0f;       // the file's sample rate / 48 kHz
   };
@@ -127,7 +127,7 @@ private:
     float base = 1.0f;   // step without WEFT
     float press = 0.0f;  // WEFT: how deep its vibrato is now (0..1), easing
     float vph = 0.0f;    // ... where the wobble is (0..1)
-    float vrate = 5.5f;  // ... how fast, Hz
+    float vjit = 1.0f;   // ... its own speed, against WEFT's (0.95 .. 1.05)
     float env = 0.0f;
     float gain = 1.0f;
     float fade = 1.0f;   // a fader's own fade out (stolen voices)
@@ -194,7 +194,7 @@ FASTRUN void AudioEffectWarp::Start(const Event& e) {
   v.gain = 1.0f - par.vel_amt + par.vel_amt * vel;
   v.age = ++clock;
   vib_seed = vib_seed * 1664525u + 1013904223u;
-  v.vrate = 5.2f + (vib_seed >> 8) * (0.6f / 16777216.0f);  // WEFT: 5.2 .. 5.8 Hz
+  v.vjit = 0.95f + (vib_seed >> 8) * (0.1f / 16777216.0f);  // WEFT: each note a little apart
 }
 
 FASTRUN void AudioEffectWarp::Let(int note) {
@@ -255,7 +255,7 @@ FASTRUN void AudioEffectWarp::update() {
   // WEFT: the pressure, per voice (below)
   const uint8_t* poly = at_poly;
   const float chan = at_chan * (1.0f / 127.0f);
-  const float bend = par.pitch * (1.0f / 12.0f);  // octaves at full pressure
+  constexpr float bend = 1.0f / 12.0f;  // octaves at full pressure: +-1 semitone
   constexpr float BLOCK_S = AUDIO_BLOCK_SAMPLES / AUDIO_SAMPLE_RATE_EXACT;
   const float g = par.level * (1.0f / 32768.0f);
   for (int i = 0; i < VOICES + FADERS; i++) {
@@ -269,7 +269,7 @@ FASTRUN void AudioEffectWarp::update() {
     const float want = at > 0.75f ? (at - 0.75f) * 4.0f : 0.0f;
     const float d0 = v.press * sinf(6.2831853f * v.vph);
     v.press += (want - v.press) * (1.0f - expf(-BLOCK_S / 0.08f));
-    v.vph += v.vrate * BLOCK_S;
+    v.vph += par.vib_hz * v.vjit * BLOCK_S;
     if (v.vph >= 1.0f) v.vph -= 1.0f;
     if (v.press < 1e-4f) v.vph = 0.0f;  // (a new wobble starts on its way up)
     const float d1 = v.press * sinf(6.2831853f * v.vph);
