@@ -5472,8 +5472,8 @@ PROGMEM static const DeviceDef WARP_DEF = {
     {"FILE", -1, MAX_FILES - 1, -1, UNI},  // -1: none (the other track's SPOOL loop)
     {"START", 0, 10000, 0, UNI},
     {"END", 0, 10000, 10000, UNI},
-    {"LOOP", 0, 2, 0, LIST, 3, 0, 0, {"OFF", "LOOP", "PING"}},
     {"FADE", 0, 100, 20, UNI, 0, 2, 0, {}, {"CROSS", "INOUT"}},  // LOOP's seam, as SPOOL's
+    {"LOOP", 0, 2, 1, LIST, 3, 0, 0, {"OFF", "LOOP", "PING"}},
     {"ATK", 0, 100, 0, UNI},    // 1 ms .. 2 s
     {"REL", 0, 100, 40, UNI},   // 5 ms .. 5 s
     {"LEVEL", 0, 100, 80, UNI, 0, 5, 3},  // mode: how much velocity counts, 0 .. 100 %
@@ -5483,7 +5483,7 @@ PROGMEM static const DeviceDef WARP_DEF = {
 
 class WarpDevice : public Device {
 public:
-  enum { FILE_, START, END, LOOP, FADE, ATK, REL, LEVEL };
+  enum { FILE_, START, END, FADE, LOOP, ATK, REL, LEVEL };
   static constexpr int ROOT = 60;  // the note that plays the sample as recorded (MIDI note 60)
   // where a file without its folder is looked for (saved before WARP had
   // the file list: the folder was FILE's mode)
