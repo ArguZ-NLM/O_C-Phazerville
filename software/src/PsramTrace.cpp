@@ -4,6 +4,7 @@
 // (-Wl,--wrap=...).
 #ifdef PSRAM_TRACE
 #include <Arduino.h>
+#include <smalloc.h>
 
 extern "C" {
 void* __real_extmem_malloc(size_t);
@@ -64,6 +65,12 @@ void PsramTraceReport() {
     delay(2);
   }
   Serial.printf("--- %lu KB in all ---\n", (unsigned long)(total / 1024));
+  {  // the pool's own count (slow: it walks the PSRAM)
+    size_t pool = 0, user = 0, free_b = 0;
+    int nblk = 0;
+    sm_malloc_stats_pool(&extmem_smalloc_pool, &pool, &user, &free_b, &nblk);
+    Serial.printf("--- pool: %u KB used in %d blocks, %u KB free ---\n", unsigned(user / 1024), nblk, unsigned(free_b / 1024));
+  }
   // the biggest piece one buffer could still take (slow: only on request)
   size_t lo = 0, hi = 8u << 20;
   while (hi - lo > 4096) {
