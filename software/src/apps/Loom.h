@@ -1736,7 +1736,7 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
     return;
   }
   if (view == DEVICE && !focus_mod && col == SOURCE && d && event.control == OC::CONTROL_BUTTON_R &&
-      !mod_mode && d->FileParam() >= 0 && cursor == d->FileParam()) {
+      !mod_mode && d->FileParam() >= 0 && cursor == d->FileParam() && !d->ListsOnDoubleClick()) {
     d->OpenBrowser();
     trig_mode = false;
     return;
@@ -1806,7 +1806,13 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
         // was. SPEED reverses (PLAYER: REV <-> FWD), SPOOL's MON 100 <-> 0,
         // FADE to 0. Not the settings that pick the source or the file.
         if (millis() - r_click_at < 350 && r_click_dev == d && r_click_p == cursor) {
-          DoubleClick(d, cursor);
+          if (d && view == DEVICE && !focus_mod && col == SOURCE && d->ListsOnDoubleClick() &&
+              d->FileParam() >= 0 && cursor == d->FileParam()) {  // WARP: the file list
+            editing = false;
+            d->OpenBrowser();
+          } else {
+            DoubleClick(d, cursor);
+          }
           r_click_at = 0;
         } else {
           r_click_at = millis();

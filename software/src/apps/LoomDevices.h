@@ -304,6 +304,9 @@ public:
   // the WAV under the list's cursor is Picked as the cursor moves (WARP:
   // browse the thrums by ear)
   virtual bool PicksWhileListing() const { return false; }
+  // the list opens on a double click of R (one click grabs the setting as
+  // usual) instead of on a single one (WARP: R turns through the folder)
+  virtual bool ListsOnDoubleClick() const { return false; }
   virtual void RestoreMore(const Saved&) {}
   void Nudge(int p, int dir);
   void NudgeMode(int p, int dir);
@@ -5566,6 +5569,7 @@ public:
   void OpenBrowser() override;
   void Picked(const char* dir, const char* name) override;
   bool PicksWhileListing() const override { return Src() == SRC_THRUM; }
+  bool ListsOnDoubleClick() const override { return true; }
   // the thrum's file (folder/name; "" none yet: a random one is picked);
   // saved with the settings
   char thrum[200] = "";
