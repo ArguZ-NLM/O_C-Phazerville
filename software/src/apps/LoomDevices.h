@@ -5495,10 +5495,10 @@ PROGMEM static const DeviceDef WARP_DEF = {
     // pressure), louder (value: up to +6 dB)
     {"WEFT", 0, 100, 30, UNI, 0, 4, 0, {}, {"VIB", "SCAN", "BRITE", "SWELL"}},
     // times; mode: the stage's curve
-    {"ATK", 0, 100, 0, UNI, 0, 3, 1, {}, {"LOG", "LIN", "EXP"}},   // 1 ms .. 2 s
-    {"DEC", 0, 100, 50, UNI, 0, 3, 2, {}, {"LOG", "LIN", "EXP"}},  // 5 ms .. 5 s, to SUS
-    {"SUS", 0, 100, 100, UNI},  // %
-    {"REL", 0, 100, 40, UNI, 0, 3, 2, {}, {"LOG", "LIN", "EXP"}},  // 5 ms .. 5 s
+    {"ATK", 0, 100, 55, UNI, 0, 3, 0, {}, {"LOG", "LIN", "EXP"}},  // 1 ms .. 2 s (55: 65 ms)
+    {"DEC", 0, 100, 44, UNI, 0, 3, 2, {}, {"LOG", "LIN", "EXP"}},  // 5 ms .. 5 s, to SUS (44: 104 ms)
+    {"SUS", 0, 100, 80, UNI},   // %
+    {"REL", 0, 100, 59, UNI, 0, 3, 2, {}, {"LOG", "LIN", "EXP"}},  // 5 ms .. 5 s (59: 295 ms)
   },
   {"", ""},
 };
