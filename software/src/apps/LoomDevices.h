@@ -5494,10 +5494,11 @@ PROGMEM static const DeviceDef WARP_DEF = {
     // the sound (% of it), opening a filter (value: how dark without
     // pressure), louder (value: up to +6 dB)
     {"WEFT", 0, 100, 30, UNI, 0, 4, 0, {}, {"VIB", "SCAN", "BRITE", "SWELL"}},
-    {"ATK", 0, 100, 0, UNI},    // 1 ms .. 2 s
-    {"DEC", 0, 100, 50, UNI},   // 5 ms .. 5 s, to SUS
+    // times; mode: the stage's curve
+    {"ATK", 0, 100, 0, UNI, 0, 3, 1, {}, {"LOG", "LIN", "EXP"}},   // 1 ms .. 2 s
+    {"DEC", 0, 100, 50, UNI, 0, 3, 2, {}, {"LOG", "LIN", "EXP"}},  // 5 ms .. 5 s, to SUS
     {"SUS", 0, 100, 100, UNI},  // %
-    {"REL", 0, 100, 40, UNI},   // 5 ms .. 5 s
+    {"REL", 0, 100, 40, UNI, 0, 3, 2, {}, {"LOG", "LIN", "EXP"}},  // 5 ms .. 5 s
   },
   {"", ""},
 };
@@ -5837,6 +5838,9 @@ FLASHMEM void WarpDevice::Apply(int p) {
   a.decay = Time5(cur[DECAY]);
   a.sustain = cur[SUS] * 0.01f;
   a.release = Time5(cur[REL]);
+  a.atk_curve = mode[ATK];
+  a.dec_curve = mode[DECAY];
+  a.rel_curve = mode[REL];
   a.level = 1.0f;
   a.vel_amt = cur[VEL] * 0.01f;
   a.weft = mode[WEFT];
@@ -5892,20 +5896,21 @@ FLASHMEM void WarpDevice::DrawViz(int x, int y, int w, int h) {
     const int x3 = x2 + int((w - 3) * ws / total), x4 = x + w - 2;
     const int yb = y + h - 2, yt = y + 1;
     const int ys = yb - int((yb - yt) * sus);
-    gfxLine(x + 1, yb, x1, yt);
-    // the decay and the release fall off quickly at first, as they sound
-    auto fall = [&](int xa, int xb, int ya, int yz) {
+    // each stage in its curve (LOG / LIN / EXP), as it sounds
+    auto stage = [&](int xa, int xb, int ya, int yz, bool rise, uint8_t c) {
       int py = ya;
       for (int i = xa + 1; i <= xb; i++) {
         const float t = float(i - xa) / std::max(1, xb - xa);
-        const int yy = yz + int((ya - yz) * expf(-5.0f * t) * (1.0f - t) + 0.5f) ;
+        const float k = rise ? AudioEffectWarp::Rise(c, t) : AudioEffectWarp::Fall(c, t);
+        const int yy = ya + int((yz - ya) * k + (yz > ya ? 0.5f : -0.5f));
         gfxLine(i - 1, py, i, yy);
         py = yy;
       }
     };
-    fall(x1, x2, yt, ys);
+    stage(x + 1, x1, yb, yt, true, mode[ATK]);
+    stage(x1, x2, yt, ys, false, mode[DECAY]);
     gfxLine(x2, ys, x3, ys);
-    fall(x3, x4, ys, yb);
+    stage(x3, x4, ys, yb, false, mode[REL]);
     for (int i = 0; i < AudioEffectWarp::VOICES; i++) {
       if (viz.pos[i] < 0.0f) continue;
       const int yy = yb - int((yb - yt) * std::min(1.0f, viz.env[i]));

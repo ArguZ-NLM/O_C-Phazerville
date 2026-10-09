@@ -30,6 +30,16 @@ public:
   static constexpr int FADERS = 4;  // voices taken for new notes, fading out
   enum Loop : uint8_t { ONCE, LOOP, PING };
   enum Weft : uint8_t { W_VIB, W_SCAN, W_BRITE, W_SWELL };
+  enum Curve : uint8_t { C_LOG, C_LIN, C_EXP };
+  // how far a stage has got (0..1 of the way) at x (0..1 of its time):
+  // rising, LOG is quick at first and EXP slow; falling, the other way
+  // round (EXP drops quickly and tails off, as a ringing note dies)
+  static float Rise(uint8_t c, float x) {
+    if (c == C_LIN) return x;
+    const float y = c == C_LOG ? 1.0f - x : x;
+    return c == C_LOG ? 1.0f - y * y * y : y * y * y;
+  }
+  static float Fall(uint8_t c, float x) { return Rise(c == C_LOG ? C_EXP : c == C_EXP ? C_LOG : C_LIN, x); }
 
   struct Params {
     float start = 0.0f, end = 1.0f;  // 0..1 of the sample
@@ -37,9 +47,12 @@ public:
     float xfade = 0.01f;     // s: LOOP's seam
     bool cross = true;       // CROSS, else INOUT (a dip)
     float attack = 0.002f;   // s
-    float decay = 0.1f;      // s, to sustain (-60 dB of the way)
+    float decay = 0.1f;      // s, to sustain
     float sustain = 1.0f;    // 0..1
-    float release = 0.2f;    // s, to -60 dB
+    float release = 0.2f;    // s
+    // each stage's curve: LOG (quick at first), LIN, EXP (slow at first
+    // rising; falling, a quick drop and a long tail)
+    uint8_t atk_curve = C_LIN, dec_curve = C_EXP, rel_curve = C_EXP;
     float level = 1.0f;      // 1: a note at full velocity as loud as the sample
     float vel_amt = 0.75f;   // 0: every note as loud; 1: velocity sets it all
     uint8_t weft = W_VIB;
@@ -106,7 +119,9 @@ private:
     bool held = false;   // the key is down
     bool once = false;   // TRIG: let go once it is in (LOOP / PING)
     uint8_t note = 0;
-    uint8_t stage = 0;   // 0 attack, 1 decay / sustain, 2 release
+    uint8_t stage = 0;   // 0 attack, 1 decay, 2 release, 3 sustain
+    float ph = 0.0f;     // 0..1 through the stage
+    float from = 0.0f;   // the level the stage started at
     int8_t dir = 1;      // PING: the way it goes
     bool looped = false; // INOUT: came round once (the fade in)
     double pos = 0.0;    // in frames of the sample
@@ -186,6 +201,8 @@ FASTRUN void AudioEffectWarp::Let(int note) {
     if (vc[i].on && vc[i].held && (note == 255 || vc[i].note == note)) {
       vc[i].held = false;
       vc[i].stage = 2;
+      vc[i].ph = 0.0f;
+      vc[i].from = vc[i].env;
     }
 }
 
@@ -228,9 +245,10 @@ FASTRUN void AudioEffectWarp::update() {
       f = std::min(seam * 0.5, len * 0.5);
     }
   }
+  // each stage's step through it, per sample
   const float att = 1.0f / (std::max(0.001f, par.attack) * AUDIO_SAMPLE_RATE_EXACT);
-  const float rel = expf(-6.9078f / (std::max(0.005f, par.release) * AUDIO_SAMPLE_RATE_EXACT));
-  const float dec = expf(-6.9078f / (std::max(0.005f, par.decay) * AUDIO_SAMPLE_RATE_EXACT));
+  const float rel = 1.0f / (std::max(0.005f, par.release) * AUDIO_SAMPLE_RATE_EXACT);
+  const float dec = 1.0f / (std::max(0.005f, par.decay) * AUDIO_SAMPLE_RATE_EXACT);
   const float sus = constrain(par.sustain, 0.0f, 1.0f);
   constexpr float FADER = 1.0f / (0.005f * AUDIO_SAMPLE_RATE_EXACT);
   // WEFT: the vibrato, moved on once a block (5.5 Hz)
@@ -257,18 +275,31 @@ FASTRUN void AudioEffectWarp::update() {
     const float swell = par.weft == W_SWELL ? 1.0f + v.press * par.weft_amt : 1.0f;
     for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
       // the envelope
-      if (v.stage == 0) {
-        v.env += att;
-        if (v.env >= 1.0f) {
+      if (v.stage == 0) {  // up from where it was (a voice taken over: 0)
+        v.ph += att;
+        if (v.ph >= 1.0f) {
           v.env = 1.0f;
+          v.ph = 0.0f;
+          v.from = 1.0f;
           v.stage = v.once && par.loop != ONCE ? 2 : 1;
+        } else {
+          v.env = v.from + (1.0f - v.from) * Rise(par.atk_curve, v.ph);
         }
-      } else if (v.stage == 1) {
-        v.env = sus + (v.env - sus) * dec;
-        if (v.env < 1e-4f) { v.on = false; break; }  // SUS 0: over once it has decayed
-      } else if (v.stage == 2) {
-        v.env *= rel;
-        if (v.env < 1e-4f) { v.on = false; break; }
+      } else if (v.stage == 1) {  // down to SUS
+        v.ph += dec;
+        if (v.ph >= 1.0f) {
+          v.stage = 3;
+          v.env = sus;
+          if (sus < 1e-4f) { v.on = false; break; }  // SUS 0: over once it has decayed
+        } else {
+          v.env = sus + (1.0f - sus) * (1.0f - Fall(par.dec_curve, v.ph));
+        }
+      } else if (v.stage == 3) {  // held at SUS (which may move)
+        v.env += (sus - v.env) * 0.002f;
+      } else {  // let go
+        v.ph += rel;
+        if (v.ph >= 1.0f) { v.on = false; break; }
+        v.env = v.from * (1.0f - Fall(par.rel_curve, v.ph));
       }
       float e = v.env * v.gain * swell;
       if (fader) {
