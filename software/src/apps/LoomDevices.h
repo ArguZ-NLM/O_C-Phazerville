@@ -97,10 +97,7 @@ struct NoteEv { uint8_t ch, note, vel; };  // vel 0: note off
 constexpr uint32_t NOTE_EVS = 64;
 inline NoteEv note_ev[NOTE_EVS] = {};
 inline uint32_t note_ev_n = 0;
-// MIDI aftertouch, any channel: the channel's pressure, and each key's
-// (poly; a key's starts at 0 with its note)
-inline uint8_t chan_at = 0;
-inline uint8_t poly_at[128] = {};
+
 inline void NoteEvent(int ch, int note, int vel) {
   note_ev[note_ev_n % NOTE_EVS] = {uint8_t(ch), uint8_t(note), uint8_t(vel)};
   note_ev_n++;
@@ -5499,8 +5496,9 @@ FLASHMEM void ChimeDevice::DrawMini(int x, int y, int w, int h) {
 // what its PLAYER plays (its loop section, read from the card once it
 // rests; up to 16 s), all of it, looping; a note at full velocity as
 // loud as the sound was recorded. THRU: on track B in THREAD, A's output
-// on under the notes (or not). WEFT: what pressing a key harder (MIDI
-// aftertouch) does, and how much. Page 2 is the notes' envelope.
+// on under the notes (or not). WEFT: every note faster and higher or
+// slower and lower, gliding (modulate it for swoops). Page 2 is the
+// notes' envelope.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef WARP_DEF = {
   "WARP", "WRP", 8, {"TRIG", "STOP"},  // A: the root note, 60 (LOOP on: let go once in); B: every voice let go
@@ -5508,10 +5506,7 @@ PROGMEM static const DeviceDef WARP_DEF = {
     {"SRC", 0, 1, 0, LIST, 2, 0, 0, {"SPL", "PLY"}},  // the other track's SPOOL or PLAYER
     {"THRU", 0, 1, 1, LIST, 2, 0, 0, {"OFF", "ON"}},  // THREAD: A's output on under the notes
     {"VEL", 0, 100, 50, UNI},     // %: how much velocity sets a note's loudness
-    // aftertouch: vibrato (value: cents), moving where the notes read in
-    // the sound (% of it), opening a filter (value: how dark without
-    // pressure), louder (value: up to +6 dB)
-    {"WEFT", 0, 100, 30, UNI, 0, 4, 0, {}, {"VIB", "SCAN", "BRITE", "SWELL"}},
+    {"WEFT", -240, 240, 0, BI},   // tenths of a semitone, every note (+-2 octaves)
     // times; mode: the stage's curve
     {"ATK", 0, 100, 55, UNI, 0, 3, 0, {}, {"LOG", "LIN", "EXP"}},  // 1 ms .. 2 s (55: 65 ms)
     {"DEC", 0, 100, 44, UNI, 0, 3, 2, {}, {"LOG", "LIN", "EXP"}},  // 5 ms .. 5 s, to SUS (44: 104 ms)
@@ -5748,7 +5743,6 @@ FLASHMEM void WarpDevice::Idle() {
     if (e.vel) fx.NoteOn(e.note, e.vel);
     else fx.NoteOff(e.note);
   }
-  fx.Pressure(chan_at, poly_at);  // WEFT
   // SRC turned: the other sound
   if (src_was != cur[SRC]) {
     Free();
@@ -5901,8 +5895,7 @@ FLASHMEM void WarpDevice::Apply(int p) {
   a.rel_curve = mode[REL];
   a.level = 1.0f;
   a.vel_amt = cur[VEL] * 0.01f;
-  a.weft = mode[WEFT];
-  a.weft_amt = cur[WEFT] * 0.01f;
+  a.pitch = cur[WEFT] * 0.1f;
   a.root = ROOT;
   a.rate = Cycle() ? frames * 261.6256f / AUDIO_SAMPLE_RATE_EXACT : rate;  // MIDI 60 = C4
   fx.Set(a);
@@ -5913,10 +5906,11 @@ FLASHMEM void WarpDevice::Format(int p, char* buf, size_t n) const {
     case SRC: snprintf(buf, n, "%s %c", cur[SRC] == SRC_PLAYER ? "PLY" : "SPL", other); break;
     case VEL: snprintf(buf, n, "%d%%", int(val[p])); break;
     case WEFT:
-      if (mode[WEFT] == AudioEffectWarp::W_VIB) snprintf(buf, n, "%dct", int(val[WEFT]));
-      else if (mode[WEFT] == AudioEffectWarp::W_SWELL) snprintf(buf, n, "+%d.%ddB", int(val[WEFT]) * 6 / 100, int(val[WEFT]) * 60 / 100 % 10);
-      else snprintf(buf, n, "%d%%", int(val[WEFT]));
+    {  // semitones, a tenth at a time: +1.5, -12.0
+      const int v = val[WEFT];
+      snprintf(buf, n, "%c%d.%d", v < 0 ? '-' : v > 0 ? '+' : ' ', abs(v) / 10, abs(v) % 10);
       break;
+    }
     case ATK: FormatSecs(Attack(val[ATK]), buf, n); break;
     case DECAY: case REL: FormatSecs(Time5(val[p]), buf, n); break;
     case SUS: snprintf(buf, n, "%d%%", int(val[SUS])); break;
