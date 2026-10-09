@@ -5927,8 +5927,10 @@ FLASHMEM void WarpDevice::DrawViz(int x, int y, int w, int h) {
   const int cy = y + h / 2, half = h / 2 - 1;
   const int s = std::min(cur[START], cur[END]), e = std::max(cur[START], cur[END]);
   const int xs = x + int(int64_t(s) * (w - 1) / 10000), xe = x + int(int64_t(e) * (w - 1) / 10000);
+  int top = 1;  // the loudest part fills the height (a quiet sample shows too)
+  for (uint8_t o : over) top = std::max<int>(top, o);
   for (int i = 0; i < w; i++) {
-    const int a = over[i * 128 / w] * half / 255;
+    const int a = over[i * 128 / w] * half / top;
     if (!a) continue;
     if (x + i >= xs && x + i <= xe) gfxLine(x + i, cy - a, x + i, cy + a);
     else if (i % 2 == 0) { gfxPixel(x + i, cy - a); gfxPixel(x + i, cy + a); }
