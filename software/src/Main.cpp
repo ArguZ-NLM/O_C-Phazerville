@@ -761,6 +761,11 @@ void FASTRUN loop() {
           case 'U':  // ... the output and track B before the mixer
             g_capture_request = 2;
             break;
+          case 'A': {  // what holds the PSRAM (with PSRAM_TRACE)
+            extern void PsramTraceReport();
+            PsramTraceReport();
+            break;
+          }
           case 'M':  // a few MIDI notes played in, with 'U's capture (WARP, from the Mac)
             g_notes_request = true;
             break;
