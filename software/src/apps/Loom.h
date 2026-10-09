@@ -81,6 +81,7 @@ namespace loom {
     InputDevice* input = nullptr;
     ReelDevice* reel = nullptr;    // SOURCE option 1: a looper after the input
     PlayerDevice* player = nullptr;  // SOURCE option 2: a WAV from the SD card
+    WarpDevice* warp = nullptr;      // SOURCE option 3: a WAV played by MIDI notes
     WavWriter writer;              // saving SPOOL's loop to the SD card
     MixDevice* mix = nullptr;
     uint8_t choice[SLOT_COUNT] = {};
@@ -109,6 +110,7 @@ namespace loom {
       if (s == SOURCE) {
         if (choice[SOURCE] == 1 && reel) return reel;
         if (choice[SOURCE] == 2 && player) return player;
+        if (choice[SOURCE] == 3 && warp) return warp;
         return input;
       }
       return inst[s][choice[s]];
@@ -407,7 +409,7 @@ private:
   struct TrackSnap {
     uint8_t choice[loom::SLOT_COUNT], last_choice[loom::SLOT_COUNT], order[loom::SLOT_COUNT - 1];
     uint8_t bypass, mod_type[loom::NUM_MODS];
-    DevState input, reel, player, mix;
+    DevState input, reel, player, warp, mix;
     DevState inst[loom::SLOT_COUNT][loom::MAX_OPTIONS];
     DevState mods[loom::NUM_MODS][loom::MOD_TYPES];
   };
@@ -457,6 +459,9 @@ FLASHMEM void AppLoom::Start() {
     tr.player = new PlayerDevice;
     tr.player->mod_bus = tr.mod_out;
     tr.player->Defaults();
+    tr.warp = new WarpDevice;
+    tr.warp->mod_bus = tr.mod_out;
+    tr.warp->Defaults();
     for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
       if (s == ECHO) tr.gate = new LoomGate;
       for (int o = 0; o < SLOT_DEFS[s].noptions; o++) {
@@ -518,6 +523,8 @@ FLASHMEM void AppLoom::Repatch(int t) {
     prev = tr.reel->out();
   } else if (tr.choice[SOURCE] == 2 && tr.player) {  // PLAYER instead of the input
     prev = tr.player->out();
+  } else if (tr.choice[SOURCE] == 3 && tr.warp) {  // WARP instead of the input
+    prev = tr.warp->out();
   }
   AudioStream* const source = prev;  // what came in, for OUTPUT's MIX
   for (int k = 0; k < SLOT_COUNT - 1; k++) {  // the effects in their order
@@ -982,6 +989,7 @@ FLASHMEM void AppLoom::KeepB() {
   k.input.Take(b.input);
   k.reel.Take(b.reel);
   k.player.Take(b.player);
+  k.warp.Take(b.warp);
   k.mix.Take(b.mix);
   for (int s = 0; s < SLOT_COUNT; s++)
     for (int o = 0; o < MAX_OPTIONS; o++) k.inst[s][o].Take(s > SOURCE ? b.inst[s][o] : nullptr);
@@ -1003,6 +1011,7 @@ FLASHMEM void AppLoom::BringBackB() {
   k.input.Give(b.input);
   k.reel.Give(b.reel);
   k.player.Give(b.player);
+  k.warp.Give(b.warp);
   k.mix.Give(b.mix);
   for (int s = SOURCE + 1; s < SLOT_COUNT; s++)
     for (int o = 0; o < MAX_OPTIONS; o++) k.inst[s][o].Give(b.inst[s][o]);
@@ -1028,6 +1037,11 @@ FLASHMEM void AppLoom::LinkCopy() {
     b.reel->CopyFrom(*a.reel);
     b.reel->val[ReelDevice::IN] = keep_in;
     b.reel->ApplyAll();
+  }
+  if (a.warp && b.warp) {  // the same file and settings
+    b.warp->CopyFrom(*a.warp);
+    b.warp->SetFile(a.warp->mode[WarpDevice::FILE_], a.warp->FileName());
+    b.warp->ApplyAll();
   }
   for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
     SetChoice(1 - master, s, a.choice[s]);
@@ -1190,6 +1204,8 @@ FLASHMEM static void LoomReadMIDI(T& device) {
     if (msg.message == midi::SystemExclusive || msg.message == midi::ProgramChange) continue;
     if (msg.message == midi::Clock) loom::midi_clocks++;
     if (msg.message == midi::NoteOn && msg.data2 > 0) loom::NoteIn(msg.channel, msg.data1);
+    if (msg.message == midi::NoteOn || msg.message == midi::NoteOff)  // (note on at 0: off)
+      loom::NoteEvent(msg.channel, msg.data1, msg.message == midi::NoteOn ? msg.data2 : 0);
     if (loom::tempo_clock && loom::tempo_clock->midi()) {
       if (msg.message == midi::Start) loom::ClockStart();
       else if (msg.message == midi::Continue) loom::clock_running = true;
@@ -1337,6 +1353,7 @@ FLASHMEM void AppLoom::MainLoop() {
         }
       }
       if (tr.player && tr.choice[SOURCE] == 2) tr.player->Idle();
+      if (tr.warp && tr.choice[SOURCE] == 3) tr.warp->Idle();
       if (tr.reel && tr.choice[SOURCE] == 1) tr.reel->Idle();
       for (int s = SOURCE + 1; s < SLOT_COUNT; s++)  // devices with main-loop work (STRETCH)
         if (Device* d = tr.current(s)) d->Idle();
@@ -1370,6 +1387,7 @@ FLASHMEM void AppLoom::MainLoop() {
     // made a high whine on the output)
     bool busy = false;
     for (auto& tr : tracks) busy |= tr.player && tr.choice[SOURCE] == 2 && tr.player->Busy();
+    for (auto& tr : tracks) busy |= tr.warp && tr.choice[SOURCE] == 3 && tr.warp->Busy();
     mixer->mute = busy || (g_noise && g_noise->Running());
     if (loop_save_held && ms >= 2000) loop_save_held = false;
   }
@@ -2026,13 +2044,13 @@ FLASHMEM void AppLoom::DrawChain() const {
   float jack_db[NUM_TRACKS];
   for (int t = 0; t < NUM_TRACKS; t++) {
     jack_db[t] = tracks[t].input ? tracks[t].input->JackDb() : -99.0f;
-    if (!tracks[t].input || tracks[t].choice[SOURCE] == 2) continue;  // PLAYER: no input
+    if (!tracks[t].input || tracks[t].choice[SOURCE] >= 2) continue;  // PLAYER, WARP: no input
     const int c = tracks[t].input->Clipping();
     if (c && (!clip || c < clip)) { clip = c; clip_t = t; }
   }
   // the jack's level at the right end, for the clipping track or on a
   // SOURCE taking the input (INPUT, SPOOL)
-  const int db_t = clip ? clip_t : col == SOURCE && tr.choice[SOURCE] != 2 ? track : -1;
+  const int db_t = clip ? clip_t : col == SOURCE && tr.choice[SOURCE] < 2 ? track : -1;
   if (g_tape->Recording()) {
     // TAPE running: a blinking dot and its time where the slot's name goes
     // (SLOW blinking in when the card fell behind)
@@ -2630,6 +2648,7 @@ FLASHMEM void AppLoom::ForEachDevice(F f) const {
     f(tr.input);
     if (tr.reel) f(tr.reel);
     if (tr.player) f(tr.player);
+    if (tr.warp) f(tr.warp);
     f(tr.mix);
     for (int s = SOURCE + 1; s < SLOT_COUNT; s++)
       for (auto d : tr.inst[s]) if (d) f(d);
@@ -2703,6 +2722,14 @@ FLASHMEM void AppLoom::SaveFile() const {
     uint32_t sec[2] = {0, 0};
     if (tr.player) { sec[0] = tr.player->sec_off; sec[1] = tr.player->sec_len; }
     f.write(reinterpret_cast<uint8_t*>(sec), 8);
+  }
+  // ... and WARP: its settings and file (the folder is FILE's mode)
+  f.write("W", 1);
+  for (auto& tr : tracks) {
+    WriteDevice(f, tr.warp);
+    const char* fn = tr.warp ? tr.warp->FileName() : "";
+    const uint8_t b = strlen(fn);
+    f.write(&b, 1); f.write(fn, b);
   }
   f.close();
   fs.remove(SAVE_FILE);
@@ -2824,6 +2851,16 @@ FLASHMEM void AppLoom::LoadFile() {
               uint32_t sec[2];
               if (f.read(reinterpret_cast<uint8_t*>(sec), 8) != 8) break;
               if (tr.player) { tr.player->sec_off = sec[0]; tr.player->sec_len = sec[1]; }
+            }
+            got_mark = f.read(&mark, 1) == 1;
+          }
+          if (got_mark && mark == 'W') {
+            for (auto& tr : tracks) {
+              if (!ReadDevice(f, tr.warp)) break;
+              uint8_t b = 0;
+              char fn[96] = {};
+              if (f.read(&b, 1) != 1 || b >= sizeof(fn) || f.read(fn, b) != b) break;
+              if (tr.warp && b) tr.warp->SetFile(tr.warp->mode[WarpDevice::FILE_], fn);
             }
           }
         }
