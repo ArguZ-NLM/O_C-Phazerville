@@ -5531,9 +5531,10 @@ FLASHMEM void ChimeDevice::DrawMini(int x, int y, int w, int h) {
 PROGMEM static const DeviceDef WARP_DEF = {
   "WARP", "WRP", 8, {"TRIG", "STOP"},  // A: the root note, 60 (LOOP on: let go once in); B: every voice let go
   {
-    // the other track's SPOOL or PLAYER, or a THRUM: a waveform from the
-    // card (/LOOM/WAVES; R push picks one, a fresh WARP a random one)
-    {"SRC", 0, 2, 2, LIST, 3, 0, 0, {"SPL", "SHT", "THR"}},
+    // mode (L): the other track's SPOOL or SHUTTLE, or a THRUM: a waveform
+    // from the card (/LOOM/THRUMS; a fresh WARP a random one). Value (R):
+    // the thrum, one of the WAVs in its folder (R push: the file list)
+    {"SRC", 0, 255, 0, UNI, 0, 3, 2, {}, {"SPL", "SHT", "THR"}},
     {"THRU", 0, 1, 1, LIST, 2, 0, 0, {"OFF", "ON"}},  // THREAD: A's output on under the notes
     {"VEL", 0, 100, 50, UNI},     // %: how much velocity sets a note's loudness
     {"WEFT", -240, 240, 20, BI},  // tenths of a semitone a key bends at full pressure (aftertouch)
@@ -5552,12 +5553,23 @@ public:
   enum { SRC_SPOOL, SRC_PLAYER, SRC_THRUM };
   static constexpr const char* THRUM_DIR = "/LOOM/THRUMS";  // (was WAVES on 2026-10-09)
   // THRUM: R push on SRC opens the file list
-  int FileParam() const override { return cur[SRC] == SRC_THRUM ? SRC : -1; }
+  int FileParam() const override { return Src() == SRC_THRUM ? SRC : -1; }
+  int Src() const { return mode[SRC]; }  // where the sound comes from
+  int Step(int p, int v, int dir) const override {  // SRC: the thrums in the folder, no further
+    if (p != SRC) return v + dir;
+    return tcount ? constrain(v + dir, 0, tcount - 1) : v;
+  }
   void OpenBrowser() override;
   void Picked(const char* dir, const char* name) override;
   // the thrum's file (folder/name; "" none yet: a random one is picked);
   // saved with the settings
   char thrum[200] = "";
+  // the WAVs in the thrum's folder, sorted (the R knob steps through them)
+  static constexpr int TMAX = 64, TLEN = 48;
+  char (*tnames)[TLEN] = nullptr;
+  int tcount = 0;
+  char tdir[160] = "";
+  void ThrumList();    // tnames for the thrum's folder, and SRC's value on it
   static constexpr int ROOT = 60;  // the note that plays the sound as recorded (MIDI note 60)
   WarpDevice() : Device(WARP_DEF) {}
   AudioStream* in() override { return &fx; }  // THREAD: track A passes through
@@ -5580,8 +5592,10 @@ public:
   }
   void Reset() override {  // where the sound comes from stays
     const int16_t s = val[SRC];
+    const uint8_t m = mode[SRC];
     Defaults();
     val[SRC] = cur[SRC] = s;
+    mode[SRC] = m;
     ApplyAll();
   }
   // the other track's SPOOL / PLAYER, when that is its source (the app
@@ -5785,14 +5799,14 @@ FLASHMEM void WarpDevice::Idle() {
   }
   fx.Pressure(chan_at, poly_at);  // WEFT
   // SRC turned: the other sound
-  if (src_was != cur[SRC]) {
+  if (src_was != Src()) {
     Free();
-    src_was = cur[SRC];
+    src_was = Src();
     spool_was = 0;
     want_at = 0;
   }
-  if (cur[SRC] == SRC_PLAYER) { PlayerIdle(); return; }
-  if (cur[SRC] == SRC_THRUM) { ThrumIdle(); return; }
+  if (Src() == SRC_PLAYER) { PlayerIdle(); return; }
+  if (Src() == SRC_THRUM) { ThrumIdle(); return; }
   // the other track's SPOOL loop, once a recording / overdub there has
   // ended (and when there is one already)
   const uint8_t st = spool ? spool->LoopState() : AudioEffectReel::EMPTY;
@@ -5838,6 +5852,7 @@ FLASHMEM void WarpDevice::ThrumIdle() {
     if (!SD.exists(THRUM_DIR) && SD.exists("/LOOM/WAVES")) SD.rename("/LOOM/WAVES", THRUM_DIR);
   }
   if (!thrum[0] && !PickRandomThrum()) return;
+  ThrumList();
   if (!strcmp(thrum, have_path)) return;
   Begin(thrum, 0, 0xFFFFFFFFu);
   snprintf(have_path, sizeof(have_path), "%s", thrum);  // (tried once, worked or not)
@@ -5916,6 +5931,35 @@ FLASHMEM void WarpDevice::OpenBrowser() {
 FLASHMEM void WarpDevice::Picked(const char* dir, const char* name) {
   if (!name || !name[0]) return;
   snprintf(thrum, sizeof(thrum), "%s/%s", dir, name);
+  ThrumList();
+}
+
+// the WAVs of the thrum's folder, sorted, once per folder; SRC's value
+// put on the thrum (so the R knob goes on from it)
+FLASHMEM void WarpDevice::ThrumList() {
+  const char* sl = strrchr(thrum, '/');
+  if (!sl) return;
+  char dir[sizeof(tdir)];
+  snprintf(dir, std::min<size_t>(sizeof(dir), size_t(sl - thrum) + 1), "%s", thrum);
+  if (strcmp(dir, tdir)) {
+    snprintf(tdir, sizeof(tdir), "%s", dir);
+    tcount = 0;
+    if (!tnames) tnames = static_cast<char(*)[TLEN]>(malloc(TMAX * TLEN));
+    if (!tnames) return;
+    if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
+    File d = SD.open(dir);
+    for (File e = d ? d.openNextFile() : File(); e && tcount < TMAX; e = d.openNextFile()) {
+      const char* nm = e.name();
+      const size_t l = strlen(nm);
+      if (!e.isDirectory() && nm[0] != '.' && l > 4 && l < TLEN && !strcasecmp(nm + l - 4, ".wav"))
+        snprintf(tnames[tcount++], TLEN, "%s", nm);
+      e.close();
+    }
+    if (d) d.close();
+    qsort(tnames, tcount, TLEN, [](const void* a, const void* b) { return strcasecmp((const char*)a, (const char*)b); });
+  }
+  for (int i = 0; i < tcount; i++)
+    if (!strcmp(tnames[i], sl + 1)) { val[SRC] = cur[SRC] = int16_t(i); break; }
 }
 
 FLASHMEM void WarpDevice::SpoolBegin() {
@@ -6010,6 +6054,12 @@ FLASHMEM void WarpDevice::Trim() {
 
 FLASHMEM void WarpDevice::Apply(int p) {
   if (Thru() != thru_was) { thru_was = Thru(); thru_changed = true; }
+  if (p == SRC && Src() == SRC_THRUM && tnames && tcount) {  // R: another WAV of the folder
+    const int i = constrain(int(cur[SRC]), 0, tcount - 1);
+    char t[sizeof(thrum)];
+    snprintf(t, sizeof(t), "%s/%s", tdir, tnames[i]);
+    if (strcmp(t, thrum)) snprintf(thrum, sizeof(thrum), "%s", t);  // (read in by ThrumIdle)
+  }
   // the sound without the quiet at either end, looping with a 40 ms
   // crossfade; a single cycle (a waveform) whole, at the pitch of the note
   AudioEffectWarp::Params a;
@@ -6038,7 +6088,7 @@ FLASHMEM void WarpDevice::Apply(int p) {
 FLASHMEM void WarpDevice::Format(int p, char* buf, size_t n) const {
   switch (p) {
     case SRC:
-      if (cur[SRC] != SRC_THRUM) { snprintf(buf, n, "%s %c", cur[SRC] == SRC_PLAYER ? "SHT" : "SPL", other); break; }
+      if (Src() != SRC_THRUM) { snprintf(buf, n, "%s %c", Src() == SRC_PLAYER ? "SHT" : "SPL", other); break; }
       {  // the thrum, short: its name without '_' and ".wav", 5 letters (SAW07, TRI03)
         const char* nm = strrchr(thrum, '/');
         nm = nm ? nm + 1 : thrum;
@@ -6119,8 +6169,8 @@ FLASHMEM void WarpDevice::DrawViz(int x, int y, int w, int h) {
   }
   if (!frames && !loading && !copying) {
     const char* t = no_mem ? "NO MEMORY"
-        : cur[SRC] == SRC_THRUM ? (thrum[0] ? "NOT A WAV" : "NO WAVES ON CARD")
-        : cur[SRC] == SRC_PLAYER ? (player ? "NOT A WAV" : "SHUTTLE IS OFF")
+        : Src() == SRC_THRUM ? (thrum[0] ? "NOT A WAV" : "NO WAVES ON CARD")
+        : Src() == SRC_PLAYER ? (player ? "NOT A WAV" : "SHUTTLE IS OFF")
         : spool ? "RECORD IN SPOOL" : "SPOOL IS OFF";
     gfxPrint(x + 2, y + h / 2 - 4, t);
     return;
@@ -6140,7 +6190,7 @@ FLASHMEM void WarpDevice::DrawViz(int x, int y, int w, int h) {
     const int px = x + constrain(int(viz.pos[i] * (w - 1)), 0, w - 1);
     gfxInvert(px, y + int((1.0f - viz.env[i]) * half), 1, std::max(1, int(viz.env[i] * 2 * half)));
   }
-  if (cur[SRC] == SRC_THRUM && thrum[0] && !loading) {  // the thrum's name, top left
+  if (Src() == SRC_THRUM && thrum[0] && !loading) {  // the thrum's name, top left
     const char* nm = strrchr(thrum, '/');
     char t[24];
     snprintf(t, sizeof(t), "%s", nm ? nm + 1 : thrum);
