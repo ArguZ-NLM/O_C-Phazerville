@@ -1495,16 +1495,12 @@ FLASHMEM void AppLoom::MainLoop() {
   AudioProcessorUsageMaxReset();
   AudioMemoryUsageMaxReset();
   Serial.printf("  load:%s\n", loom::load_note);
-  {  // PSRAM: free in all, and the biggest piece one buffer can still take
+  {  // PSRAM in use (the biggest free piece: USB 'A', it is slow to find)
     size_t total = 0, user = 0, free_b = 0;
     int nblk = 0;
     sm_malloc_stats_pool(&extmem_smalloc_pool, &total, &user, &free_b, &nblk);
-    size_t lo = 0, hi = free_b;
-    while (hi - lo > 4096) {
-      const size_t mid = (lo + hi) / 2;
-      void* t = extmem_malloc(mid);
-      if (t) { extmem_free(t); lo = mid; } else hi = mid;
-    }
+    Serial.printf("  PSRAM: %u KB used in %d blocks, %u KB free\n", unsigned(user / 1024), nblk, unsigned(free_b / 1024));
+  }
     Serial.printf("  PSRAM: %u KB used in %d blocks, %u KB free, biggest piece %u KB\n",
                   unsigned(user / 1024), nblk, unsigned(free_b / 1024), unsigned(lo / 1024));
   }

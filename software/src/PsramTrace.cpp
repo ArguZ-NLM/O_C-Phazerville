@@ -64,6 +64,14 @@ void PsramTraceReport() {
     delay(2);
   }
   Serial.printf("--- %lu KB in all ---\n", (unsigned long)(total / 1024));
+  // the biggest piece one buffer could still take (slow: only on request)
+  size_t lo = 0, hi = 8u << 20;
+  while (hi - lo > 4096) {
+    const size_t mid = (lo + hi) / 2;
+    void* t = __real_extmem_malloc(mid);
+    if (t) { __real_extmem_free(t); lo = mid; } else hi = mid;
+  }
+  Serial.printf("--- biggest free piece %lu KB ---\n", (unsigned long)(lo / 1024));
 }
 #else
 void PsramTraceReport() {}
