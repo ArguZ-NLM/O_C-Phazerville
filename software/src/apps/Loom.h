@@ -1387,6 +1387,25 @@ FLASHMEM void AppLoom::MainLoop() {
     if (!listing) preview->Stop();
     else g_browser->AutoplayIdle();
     preview->Idle(listing && view == DEVICE);
+    // WARP's file list: the WAV under the cursor plays as soon as the cursor
+    // rests on it (~80 ms), so turning through a folder is hearing it
+    {
+      static char auto_path[200] = "", seen[200] = "";
+      static uint32_t seen_at = 0;
+      Device* ld = Listing();
+      if (ld && ld->PicksWhileListing() && g_browser->OnWav()) {
+        char p[200];
+        snprintf(p, sizeof(p), "%s/%s", g_browser->Dir(), g_browser->Name());
+        if (strcmp(p, seen)) { snprintf(seen, sizeof(seen), "%s", p); seen_at = millis(); }  // moved
+        else if (strcmp(p, auto_path) && millis() - seen_at >= 80) {  // rested on it
+          ld->Picked(g_browser->Dir(), g_browser->Name());
+          snprintf(auto_path, sizeof(auto_path), "%s", p);
+          dirty = true;
+        }
+      } else {
+        auto_path[0] = seen[0] = 0;
+      }
+    }
     if (g_tape_request) { g_tape_request = false; g_tape->Toggle(); }  // USB 'T'
     if (g_midilog_request) { g_midilog_request = false; MidiLogPrint(); }  // USB 'J'
     g_tape->Idle();
@@ -2039,10 +2058,10 @@ FLASHMEM void AppLoom::DrawChain() const {
 
       // the slot's name at the top, always; underneath its device's little
       // picture, or BP when bypassed
-      // SOURCE is named after what it does: IN (input), SPL (SPOOL), SHT (SHUTTLE) or WRP
+      // SOURCE is named after what it does: IN (input), SPL (SPOOL), SHU (SHUTTLE) or WRP
       const char* tag = c == MIX_COL ? PSTR("OUT")
                       : c == SOURCE ? (tr.choice[SOURCE] == 1 ? PSTR("SPL")
-                                       : tr.choice[SOURCE] == 2 ? PSTR("SHT")
+                                       : tr.choice[SOURCE] == 2 ? PSTR("SHU")
                                        : tr.choice[SOURCE] == 3 ? PSTR("WRP") : PSTR("IN"))
                       : c == RESONATOR && tr.choice[c] == 2 ? PSTR("MOD")  // MODAL
                       : c == RESONATOR && tr.choice[c] == 3 ? PSTR("CHM")  // CHIME
@@ -2589,7 +2608,8 @@ namespace loom {
       {"RNG", "RES"}, {"DEF", "TEX"}, {"DRT", "TEX"}, {"VST", "ECO"}, {"ECH", "ECO"},
       {"MOS", "SPR"}};
     for (auto& r : renamed) if (!memcmp(tag, r[0], 4)) memcpy(tag, r[1], 4);
-    if (!memcmp(tag, "PLY", 4)) memcpy(tag, "SHT", 4);  // SHUTTLE was PLAYER (PLY) until 2026-10-09
+    // SHUTTLE was PLAYER (PLY) until 2026-10-09, and SHT for an hour
+    if (!memcmp(tag, "PLY", 4) || !memcmp(tag, "SHT", 4)) memcpy(tag, "SHU", 4);
     const bool use = d && !memcmp(tag, d->def.tag, 4) && n <= d->num_params();
     const bool remap_spr = use && !memcmp(tag, "SPR", 4) && n == 7;
     const bool remap_mix = use && !memcmp(tag, "MIX", 4) && n == 7;  // MIX came in first
@@ -2602,7 +2622,7 @@ namespace loom {
     // DECAY's value becomes ROOM, TONE's WALL (same places)
     const bool skip_size = use && !memcmp(tag, "ECO", 4) && load_version < 6;
     // before v8 PLAYER's direction was FWD REV (now REV FWD)
-    const bool flip_dir = use && !memcmp(tag, "SHT", 4) && load_version < 8;
+    const bool flip_dir = use && !memcmp(tag, "SHU", 4) && load_version < 8;
     // before v9 SPOOL's VIEW value was the zoom (now its mode; the value is
     // where it looks: HEAD)
     const bool view_mode = use && !memcmp(tag, "REL", 4) && load_version < 9;

@@ -301,6 +301,9 @@ public:
   virtual int FileParam() const { return -1; }
   virtual void OpenBrowser() {}
   virtual void Picked(const char* dir, const char* name) {}
+  // the WAV under the list's cursor is Picked as the cursor moves (WARP:
+  // browse the thrums by ear)
+  virtual bool PicksWhileListing() const { return false; }
   virtual void RestoreMore(const Saved&) {}
   void Nudge(int p, int dir);
   void NudgeMode(int p, int dir);
@@ -2349,7 +2352,7 @@ FLASHMEM void TapeRecorder::Finish() {
 // the sample, START / END then within it; back to STRM puts them back.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef PLAYER_DEF = {
-  "SHUTTLE", "SHT", 8, {"PLAY", "TOP"},  // (was PLAYER / PLY until 2026-10-09)
+  "SHUTTLE", "SHU", 8, {"PLAY", "TOP"},  // (was PLAYER / PLY until 2026-10-09)
   {
     {"FILE", 0, MAX_FILES - 1, 0, UNI, 0, 2, 0, {}, {"STRM", "MEM"}},
     {"LOOP", 0, 1, 1, LIST, 2, 0, 0, {"OFF", "ON"}},
@@ -2427,6 +2430,7 @@ public:
   void AutoplayIdle();
   const char* Dir() const { return OnExtra() ? "" : bdir; }
   const char* Name() const { return bsel < bcount && !OnExtra() ? bn[bsel] : ""; }
+  bool OnWav() const { return bsel < bcount && !OnExtra() && !bfolder[bsel]; }  // the cursor on a WAV
   void Draw(int x, int y, int w, int h) const;
 
 private:
@@ -5534,7 +5538,7 @@ PROGMEM static const DeviceDef WARP_DEF = {
     // mode (L): the other track's SPOOL or SHUTTLE, or a THRUM: a waveform
     // from the card (/LOOM/THRUMS; a fresh WARP a random one). Value (R):
     // the thrum, one of the WAVs in its folder (R push: the file list)
-    {"SRC", 0, 255, 0, UNI, 0, 3, 2, {}, {"SPL", "SHT", "THR"}},
+    {"SRC", 0, 255, 0, UNI, 0, 3, 2, {}, {"SPL", "SHU", "THR"}},
     {"THRU", 0, 1, 1, LIST, 2, 0, 0, {"OFF", "ON"}},  // THREAD: A's output on under the notes
     {"VEL", 0, 100, 50, UNI},     // %: how much velocity sets a note's loudness
     {"WEFT", -240, 240, 20, BI},  // tenths of a semitone a key bends at full pressure (aftertouch)
@@ -5561,6 +5565,7 @@ public:
   }
   void OpenBrowser() override;
   void Picked(const char* dir, const char* name) override;
+  bool PicksWhileListing() const override { return Src() == SRC_THRUM; }
   // the thrum's file (folder/name; "" none yet: a random one is picked);
   // saved with the settings
   char thrum[200] = "";
@@ -5649,7 +5654,10 @@ private:
   // so that MIDI 60 is C4
   bool Cycle() const { return frames && frames <= 4096; }
   void Free();
-  void Begin(const char* path, uint32_t from, uint32_t count);  // opens the file and makes room
+  void Begin(const char* path, uint32_t from, uint32_t count, bool keep = false);  // opens the file and makes room
+  void BeginRead(const char* path, uint32_t from, uint32_t count);
+  int16_t* old_l = nullptr;  // Begin keep: the sound still playing
+  int16_t* old_r = nullptr;
   void LoadStep();
   static float Attack(int v) { return 0.001f * powf(2000.0f, v * 0.01f); }
   static float Time5(int v) { return 0.005f * powf(1000.0f, v * 0.01f); }  // DEC, REL
@@ -5687,6 +5695,9 @@ FLASHMEM void WarpDevice::Free() {
   }
   from_spool = copying = false;
   fx.SetSample(nullptr, nullptr, 0);
+  if (old_l) extmem_free(old_l);
+  if (old_r) extmem_free(old_r);
+  old_l = old_r = nullptr;
   if (bl) extmem_free(bl);
   if (br) extmem_free(br);
   bl = br = nullptr;
@@ -5695,8 +5706,25 @@ FLASHMEM void WarpDevice::Free() {
 }
 
 // count frames of the file from frame from (up to 16 s)
-FLASHMEM void WarpDevice::Begin(const char* path, uint32_t from, uint32_t count) {
-  Free();
+FLASHMEM void WarpDevice::Begin(const char* path, uint32_t from, uint32_t count, bool keep) {
+  // keep: the sound playing stays in while the new one is read in beside
+  // it, then the notes sounding go on in the new one (THRUM: browsing by
+  // ear); not when there is no room for both
+  const float rate_was = rate;
+  if (keep && bl && !loading && !copying && !from_spool) {
+    old_l = bl; old_r = br;
+    bl = br = nullptr;
+  } else {
+    Free();
+  }
+  BeginRead(path, from, count);
+  if (!loading && old_l) {  // nothing read in: the old one stays
+    if (!bl) { bl = old_l; br = old_r; rate = rate_was; }
+    old_l = old_r = nullptr;
+  }
+}
+
+FLASHMEM void WarpDevice::BeginRead(const char* path, uint32_t from, uint32_t count) {
   no_mem = false;
   memset(over, 0, sizeof(over));
   if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
@@ -5783,7 +5811,11 @@ FLASHMEM void WarpDevice::LoadStep() {
     lf.close();
     loading = false;
     Trim();
-    if (frames >= 64) fx.SetSample(bl, br, frames);
+    if (frames >= 64) fx.SetSample(bl, br, frames, old_l != nullptr);  // (kept: the notes go on in it)
+    else if (old_l) fx.SetSample(nullptr, nullptr, 0);
+    if (old_l) extmem_free(old_l);
+    if (old_r) extmem_free(old_r);
+    old_l = old_r = nullptr;
     ApplyAll();  // the rate is known now
   }
 }
@@ -5854,7 +5886,7 @@ FLASHMEM void WarpDevice::ThrumIdle() {
   if (!thrum[0] && !PickRandomThrum()) return;
   ThrumList();
   if (!strcmp(thrum, have_path)) return;
-  Begin(thrum, 0, 0xFFFFFFFFu);
+  Begin(thrum, 0, 0xFFFFFFFFu, true);
   snprintf(have_path, sizeof(have_path), "%s", thrum);  // (tried once, worked or not)
 }
 
@@ -6088,7 +6120,7 @@ FLASHMEM void WarpDevice::Apply(int p) {
 FLASHMEM void WarpDevice::Format(int p, char* buf, size_t n) const {
   switch (p) {
     case SRC:
-      if (Src() != SRC_THRUM) { snprintf(buf, n, "%s %c", Src() == SRC_PLAYER ? "SHT" : "SPL", other); break; }
+      if (Src() != SRC_THRUM) { snprintf(buf, n, "%s %c", Src() == SRC_PLAYER ? "SHU" : "SPL", other); break; }
       {  // the thrum, short: its name without '_' and ".wav", 5 letters (SAW07, TRI03)
         const char* nm = strrchr(thrum, '/');
         nm = nm ? nm + 1 : thrum;
