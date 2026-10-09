@@ -2059,6 +2059,11 @@ FLASHMEM void AppLoom::DrawChain() const {
   const int right = 128 - 6 * 6 - 6;
   if (bp) {
     gfxPrint(128 - 6 * 6, 56, PSTR("bypass"));
+  } else if (clip) {
+    // clipping: CLIP in its place, black on white
+    graphics.clearRect(128 - 4 * 6 - 3, 55, 4 * 6 + 3, 9);
+    gfxPrint(128 - 4 * 6 - 1, 56, PSTR("CLIP"));
+    gfxInvert(128 - 4 * 6 - 3, 55, 4 * 6 + 3, 9);
   } else if (db_t >= 0) {
     char buf[8];
     const int v = int(lrintf(jack_db[db_t]));
