@@ -5531,7 +5531,13 @@ private:
   char loaded_dir[96] = "";
   // FILE none: the SPOOL loop is what is in memory / being copied in
   bool from_spool = false, copying = false;
+  // the loop again (after an overdub): copied beside the one playing, then
+  // swapped in with the voices playing on (if memory allows; else after it)
+  int16_t* nl = nullptr;
+  int16_t* nr = nullptr;
+  uint8_t over_new[128] = {};
   uint8_t spool_was = 0;  // its state last time (a recording that ended: copied again)
+  uint32_t copy_n = 0;
   void SpoolBegin();
   void SpoolStep();
   uint32_t want_at = 0;   // FILE moved: loads once it rests
@@ -5617,6 +5623,11 @@ FLASHMEM void WarpDevice::Deactivate() {
 
 FLASHMEM void WarpDevice::Free() {
   if (loading) { lf.close(); loading = false; }
+  if (copying) {  // the copy under way
+    if (nl) extmem_free(nl);
+    if (nr) extmem_free(nr);
+    nl = nr = nullptr;
+  }
   from_spool = copying = false;
   fx.SetSample(nullptr, nullptr, 0);
   if (bl) extmem_free(bl);
@@ -5754,48 +5765,64 @@ FLASHMEM void WarpDevice::Idle() {
 }
 
 FLASHMEM void WarpDevice::SpoolBegin() {
-  Free();
-  memset(over, 0, sizeof(over));
   const uint32_t n = std::min<uint32_t>(spool->LoopLength(), uint32_t(BigSecs() * AUDIO_SAMPLE_RATE_EXACT));
-  bl = static_cast<int16_t*>(extmem_malloc(n * 2));
-  br = bl ? static_cast<int16_t*>(extmem_malloc(n * 2)) : nullptr;
-  no_mem = !bl || !br;
-  if (no_mem) {
-    if (bl) extmem_free(bl);
-    bl = br = nullptr;
-    return;
+  auto take = [&] {
+    nl = static_cast<int16_t*>(extmem_malloc(n * 2));
+    nr = nl ? static_cast<int16_t*>(extmem_malloc(n * 2)) : nullptr;
+    if (nl && !nr) { extmem_free(nl); nl = nullptr; }
+    return nl != nullptr;
+  };
+  const bool keep = from_spool && !copying && frames;  // playing the loop's last take
+  if (!keep) Free();
+  if (!take()) {
+    if (keep) { Free(); take(); }  // no room for both: the old one goes first
   }
-  frames = n;
+  no_mem = !nl;
+  if (no_mem) return;
+  memset(over_new, 0, sizeof(over_new));
+  copy_n = n;
   got = 0;
-  rate = 1.0f;
   from_spool = copying = true;
 }
 
 // a slice at a time (the loop is in PSRAM too); started over if it changes
 FLASHMEM void WarpDevice::SpoolStep() {
   const AudioEffectReel::State st = spool ? spool->LoopState() : AudioEffectReel::EMPTY;
-  if (!spool || spool->LoopLength() < frames || st == AudioEffectReel::REC || st == AudioEffectReel::DUB) {
-    Free();  // gone or being recorded over: copied once it is done
+  if (!spool || spool->LoopLength() < copy_n || st == AudioEffectReel::REC || st == AudioEffectReel::DUB) {
+    // gone or being recorded over: dropped (copied again once it is done)
+    if (nl) extmem_free(nl);
+    if (nr) extmem_free(nr);
+    nl = nr = nullptr;
+    copying = false;
+    from_spool = frames > 0;  // what played before plays on
     spool_was = 0;
     return;
   }
   const int16_t* l = spool->LoopData(0);
   const int16_t* r = spool->LoopData(1);
   const uint32_t t0 = millis();
-  while (got < frames && millis() - t0 < 3) {
-    const uint32_t k = std::min<uint32_t>(frames - got, 4096);
-    memcpy(bl + got, l + got, k * 2);
-    memcpy(br + got, r + got, k * 2);
+  while (got < copy_n && millis() - t0 < 3) {
+    const uint32_t k = std::min<uint32_t>(copy_n - got, 4096);
+    memcpy(nl + got, l + got, k * 2);
+    memcpy(nr + got, r + got, k * 2);
     for (uint32_t i = got; i < got + k; i++) {
-      const int col = int(uint64_t(i) * 128 / frames);
-      const int pk = std::max(abs(bl[i]), abs(br[i]));
-      over[col] = std::max<uint8_t>(over[col], uint8_t(std::min(255, pk >> 7)));
+      const int col = int(uint64_t(i) * 128 / copy_n);
+      const int pk = std::max(abs(nl[i]), abs(nr[i]));
+      over_new[col] = std::max<uint8_t>(over_new[col], uint8_t(std::min(255, pk >> 7)));
     }
     got += k;
   }
-  if (got >= frames) {
+  if (got >= copy_n) {
+    const bool keep = frames > 0;  // the last take still in: the voices go on in the new one
+    fx.SetSample(nl, nr, copy_n, keep);
+    if (bl) extmem_free(bl);
+    if (br) extmem_free(br);
+    bl = nl; br = nr;
+    nl = nr = nullptr;
+    frames = copy_n;
+    rate = 1.0f;
+    memcpy(over, over_new, sizeof(over));
     copying = false;
-    fx.SetSample(bl, br, frames);
     ApplyAll();
   }
 }
@@ -5873,7 +5900,8 @@ FLASHMEM void WarpDevice::Action(int a) {
 }
 
 FLASHMEM bool WarpDevice::HeaderInfo(char* buf, size_t n) const {
-  if (loading || copying) snprintf(buf, n, "%d%%", frames ? int(uint64_t(got) * 100 / frames) : 0);
+  const uint32_t of = copying ? copy_n : frames;
+  if (loading || copying) snprintf(buf, n, "%d%%", of ? int(uint64_t(got) * 100 / of) : 0);
   else snprintf(buf, n, "%d/8", fx.Sounding());
   return true;
 }
@@ -5882,7 +5910,7 @@ FLASHMEM bool WarpDevice::HeaderInfo(char* buf, size_t n) const {
 // voice is
 FLASHMEM void WarpDevice::DrawViz(int x, int y, int w, int h) {
   fx.ReadViz(viz);
-  if (!frames && !loading) {
+  if (!frames && !loading && !copying) {
     const char* t = no_mem ? "NO MEMORY" : val[FILE_] >= 0 ? "NOT A WAV" : spool ? "RECORD IN SPOOL" : "R: PICK A FILE";
     gfxPrint(x + 2, y + h / 2 - 4, t);
     if (val[FILE_] < 0 && spool && !no_mem) gfxPrint(x + 2, y + h / 2 + 6, "OR R: A FILE");

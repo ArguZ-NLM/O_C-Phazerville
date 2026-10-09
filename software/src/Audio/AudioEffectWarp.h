@@ -44,14 +44,18 @@ public:
 
   AudioEffectWarp() : AudioStream(2, inq) {}
 
-  // main loop: a new sample (nullptr / 0: none). All voices stop.
-  void SetSample(const int16_t* l, const int16_t* r, uint32_t frames) {
+  // main loop: a new sample (nullptr / 0: none). All voices stop, unless
+  // keep (the same sound again, recorded over: they play on in the new one)
+  void SetSample(const int16_t* l, const int16_t* r, uint32_t frames, bool keep = false) {
     AudioNoInterrupts();
     sl = l;
     sr = r ? r : l;
     nframes = l ? frames : 0;
-    for (auto& v : vc) v.on = false;
-    ev_rd = ev_wr;
+    for (auto& v : vc) {
+      if (!keep || !nframes) v.on = false;
+      else if (v.pos >= nframes - 1) v.pos = 0.0;
+    }
+    if (!keep) ev_rd = ev_wr;
     AudioInterrupts();
   }
   void Set(const Params& p) {
