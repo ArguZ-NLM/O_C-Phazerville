@@ -2364,7 +2364,9 @@ public:
   const void* owner = nullptr;  // the device whose list is open
   LoomPreview* preview = nullptr;
   bool IsOpen(const void* who) const { return owner && owner == who; }
-  void Open(const void* who, const char* dir, const char* select);
+  // extra: a first row in every folder that picks no file (WARP: the
+  // other track's SPOOL loop); select nullptr / "": on it
+  void Open(const void* who, const char* dir, const char* select, const char* extra = nullptr);
   void Close() { owner = nullptr; autoplay = false; if (preview) preview->Stop(); }
   void Move(int d) {
     const int was = bsel;
@@ -2372,14 +2374,14 @@ public:
     if (autoplay && bsel != was) { auto_due = true; auto_at = millis(); }
   }
   // R: a folder goes in (".." up); a WAV: true (the list closes; Dir() /
-  // Name() are the one picked)
+  // Name() are the one picked; the extra row: both "")
   bool Enter();
   void Back();  // at the top: closes
   void Play();
   void ToggleAutoplay();
   void AutoplayIdle();
-  const char* Dir() const { return bdir; }
-  const char* Name() const { return bsel < bcount ? bn[bsel] : ""; }
+  const char* Dir() const { return OnExtra() ? "" : bdir; }
+  const char* Name() const { return bsel < bcount && !OnExtra() ? bn[bsel] : ""; }
   void Draw(int x, int y, int w, int h) const;
 
 private:
@@ -2387,6 +2389,9 @@ private:
   char bn[MAX_FILES][NAME_LEN] = {};
   bool bfolder[MAX_FILES] = {};
   int bcount = 0, bsel = 0;
+  char extra_[16] = "";
+  int extra_at = -1;  // its row
+  bool OnExtra() const { return bsel == extra_at; }
   bool autoplay = false, auto_due = false;
   uint32_t auto_at = 0;
   void List();
@@ -2401,6 +2406,8 @@ inline LoomPreview* g_preview = nullptr;
 FLASHMEM void LoomBrowser::List() {
   bcount = 0;
   bsel = 0;
+  extra_at = -1;
+  if (extra_[0]) { extra_at = bcount; snprintf(bn[bcount], NAME_LEN, "%s", extra_); bfolder[bcount++] = false; }
   if (strcmp(bdir, "/")) { snprintf(bn[bcount], NAME_LEN, ".."); bfolder[bcount++] = true; }
   File d = SD.open(bdir);
   if (!d) return;
@@ -2421,7 +2428,7 @@ FLASHMEM void LoomBrowser::List() {
       e.close();
     }
     for (int i = first + 1; i < bcount; i++)
-      for (int j = i; j > first && ListOrder(bn[j - 1], bn[j]) > 0; j--) {
+      for (int j = i; j > first && ListOrder(bn[j - 1], bn[j]) > 0; j--) {  // (the extra row and ".." stay first)
         char t[NAME_LEN];
         memcpy(t, bn[j], NAME_LEN); memcpy(bn[j], bn[j - 1], NAME_LEN); memcpy(bn[j - 1], t, NAME_LEN);
         std::swap(bfolder[j], bfolder[j - 1]);
@@ -2430,12 +2437,15 @@ FLASHMEM void LoomBrowser::List() {
   d.close();
 }
 
-FLASHMEM void LoomBrowser::Open(const void* who, const char* dir, const char* select) {
+FLASHMEM void LoomBrowser::Open(const void* who, const char* dir, const char* select, const char* extra) {
   if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
   snprintf(bdir, sizeof(bdir), "%s", dir && dir[0] ? dir : "/");
+  snprintf(extra_, sizeof(extra_), "%s", extra ? extra : "");
   List();
-  for (int i = 0; i < bcount; i++)
-    if (!bfolder[i] && !strcmp(bn[i], select)) { bsel = i; break; }
+  if (!select || !select[0]) { if (extra_at >= 0) bsel = extra_at; }
+  else
+    for (int i = 0; i < bcount; i++)
+      if (!bfolder[i] && i != extra_at && !strcmp(bn[i], select)) { bsel = i; break; }
   owner = who;
 }
 
@@ -2466,7 +2476,7 @@ FLASHMEM bool LoomBrowser::Enter() {
 // from the card and past the effects, once through (the device's file
 // stays); B again stops it
 FLASHMEM void LoomBrowser::Play() {
-  if (bsel >= bcount || bfolder[bsel] || !preview) return;
+  if (bsel >= bcount || bfolder[bsel] || OnExtra() || !preview) return;
   if (preview->Is(bdir, bn[bsel])) preview->Stop();
   else preview->Start(bdir, bn[bsel]);
 }
@@ -2476,7 +2486,7 @@ FLASHMEM void LoomBrowser::ToggleAutoplay() {
   auto_due = false;
   if (!preview) return;
   if (!autoplay) { preview->Stop(); return; }
-  if (bsel < bcount && !bfolder[bsel] && !preview->Is(bdir, bn[bsel])) preview->Start(bdir, bn[bsel]);
+  if (bsel < bcount && !bfolder[bsel] && !OnExtra() && !preview->Is(bdir, bn[bsel])) preview->Start(bdir, bn[bsel]);
 }
 
 // AUTO: once the cursor has rested on a file for a moment, it plays (a
@@ -2485,7 +2495,7 @@ FLASHMEM void LoomBrowser::AutoplayIdle() {
   if (!owner) autoplay = false;
   if (!autoplay || !auto_due || !preview || millis() - auto_at < 100) return;
   auto_due = false;
-  if (bsel >= bcount || bfolder[bsel]) preview->Stop();
+  if (bsel >= bcount || bfolder[bsel] || OnExtra()) preview->Stop();
   else if (!preview->Is(bdir, bn[bsel])) preview->Start(bdir, bn[bsel]);
 }
 
@@ -5513,7 +5523,12 @@ public:
   // (folder empty: looked for in DIRS; name empty: none)
   void SetFile(const char* folder, const char* name);
   int FileParam() const override { return FILE_; }
-  void OpenBrowser() override { g_browser->Open(this, dir, FileName()); }
+  void OpenBrowser() override {
+    char x[16];
+    if (spool) snprintf(x, sizeof(x), "[SPOOL %c]", spool_tag);
+    else snprintf(x, sizeof(x), "[NO FILE]");
+    g_browser->Open(this, dir, FileName(), x);
+  }
   void Picked(const char* folder, const char* name) override { SetFile(folder, name); }
   // the other track's SPOOL (the app sets it every loop; nullptr: not SPOOL)
   const ReelDevice* spool = nullptr;
