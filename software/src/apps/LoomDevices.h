@@ -2088,10 +2088,12 @@ FLASHMEM void ReelDevice::DrawMini(int x, int y, int w, int h) {
 constexpr char LOOP_DIR[] = "/LOOM";
 constexpr char REC_DIR[] = "/LOOM/SPOOLS";  // SPOOL's saved loops
 constexpr char OLD_REC_DIR[] = "/LOOM/RECORDINGS";  // ... called so until 2026-10
-// file lists: alphabetical, but SPOOLS (the saved loops) always first
+// file lists: alphabetical, but Loom's own folders first: SPOOLS, TAPES, THRUMS
 FLASHMEM static int ListOrder(const char* a, const char* b) {
-  // SPOOLS first, TAPES second, then the rest by name
-  auto rank = [](const char* n) { return !strcasecmp(n, "SPOOLS") ? 0 : !strcasecmp(n, "TAPES") ? 1 : 2; };
+  // SPOOLS, TAPES, THRUMS (in that order), then the rest by name
+  auto rank = [](const char* n) {
+    return !strcasecmp(n, "SPOOLS") ? 0 : !strcasecmp(n, "TAPES") ? 1 : !strcasecmp(n, "THRUMS") ? 2 : 3;
+  };
   if (rank(a) != rank(b)) return rank(a) - rank(b);
   return strcasecmp(a, b);
 }
@@ -2977,6 +2979,8 @@ FLASHMEM void PlayerDevice::Scan() {
   // and SPOOL's loops were in RECORDINGS: now SPOOLS (a file playing from
   // there goes along)
   if (!SD.exists(REC_DIR) && SD.exists(OLD_REC_DIR)) SD.rename(OLD_REC_DIR, REC_DIR);
+  // the thrums were in WAVES for a day: now THRUMS
+  if (!SD.exists("/LOOM/THRUMS") && SD.exists("/LOOM/WAVES")) SD.rename("/LOOM/WAVES", "/LOOM/THRUMS");
   if (!strcasecmp(dir, OLD_REC_DIR)) snprintf(dir, sizeof(dir), "%s", REC_DIR);
   File d = SD.open(dir);
   if (!d) { snprintf(dir, sizeof(dir), "/"); d = SD.open(dir); }
@@ -5546,7 +5550,7 @@ class WarpDevice : public Device {
 public:
   enum { SRC, THRU, VEL, WEFT, ATK, DECAY, SUS, REL };  // (DEC is taken by Print.h)
   enum { SRC_SPOOL, SRC_PLAYER, SRC_THRUM };
-  static constexpr const char* THRUM_DIR = "/LOOM/WAVES";
+  static constexpr const char* THRUM_DIR = "/LOOM/THRUMS";  // (was WAVES on 2026-10-09)
   // THRUM: R push on SRC opens the file list
   int FileParam() const override { return cur[SRC] == SRC_THRUM ? SRC : -1; }
   void OpenBrowser() override;
@@ -5826,6 +5830,13 @@ FLASHMEM void WarpDevice::PlayerIdle() {
 // read in whole once
 FLASHMEM void WarpDevice::ThrumIdle() {
   if (loading) { LoadStep(); return; }
+  if (!strncmp(thrum, "/LOOM/WAVES/", 12)) {  // saved while the folder was WAVES
+    char t[sizeof(thrum)];
+    snprintf(t, sizeof(t), "%s/%s", THRUM_DIR, thrum + 12);
+    snprintf(thrum, sizeof(thrum), "%s", t);
+    if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
+    if (!SD.exists(THRUM_DIR) && SD.exists("/LOOM/WAVES")) SD.rename("/LOOM/WAVES", THRUM_DIR);
+  }
   if (!thrum[0] && !PickRandomThrum()) return;
   if (!strcmp(thrum, have_path)) return;
   Begin(thrum, 0, 0xFFFFFFFFu);
@@ -5835,6 +5846,7 @@ FLASHMEM void WarpDevice::ThrumIdle() {
 // a random WAV from a random folder of /LOOM/WAVES (or WAVES itself)
 FLASHMEM bool WarpDevice::PickRandomThrum() {
   if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
+  if (!SD.exists(THRUM_DIR) && SD.exists("/LOOM/WAVES")) SD.rename("/LOOM/WAVES", THRUM_DIR);
   static uint32_t seed = 0;
   if (!seed) seed = rtc_get() ^ ARM_DWT_CYCCNT ^ micros();
   auto rnd = [](uint32_t n) { seed = seed * 1664525u + 1013904223u; return n ? (seed >> 8) % n : 0u; };

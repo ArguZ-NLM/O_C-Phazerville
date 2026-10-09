@@ -57,10 +57,12 @@ private:
 
 FLASHMEM void AppCard::Init() {}
 
-// alphabetical, but SPOOLS (Loom's saved loops) always first
+// alphabetical, but Loom's own folders first: SPOOLS, TAPES, THRUMS
 static int Order(const char* a, const char* b) {
-  // SPOOLS first, TAPES second, then the rest by name
-  auto rank = [](const char* n) { return !strcasecmp(n, "SPOOLS") ? 0 : !strcasecmp(n, "TAPES") ? 1 : 2; };
+  // SPOOLS, TAPES, THRUMS (in that order), then the rest by name
+  auto rank = [](const char* n) {
+    return !strcasecmp(n, "SPOOLS") ? 0 : !strcasecmp(n, "TAPES") ? 1 : !strcasecmp(n, "THRUMS") ? 2 : 3;
+  };
   if (rank(a) != rank(b)) return rank(a) - rank(b);
   return strcasecmp(a, b);
 }
@@ -119,6 +121,9 @@ FLASHMEM void AppCard::HandleAppEvent(OC::AppEvent event) {
     // SPOOL's loops were in RECORDINGS: now SPOOLS
     if (SDcard_Ready && !SD.exists("/LOOM/SPOOLS") && SD.exists("/LOOM/RECORDINGS"))
       SD.rename("/LOOM/RECORDINGS", "/LOOM/SPOOLS");
+    // and the thrums were in WAVES for a day: now THRUMS
+    if (SDcard_Ready && !SD.exists("/LOOM/THRUMS") && SD.exists("/LOOM/WAVES"))
+      SD.rename("/LOOM/WAVES", "/LOOM/THRUMS");
     sel = 0;
     List();
 #ifdef CARD_LISTEN
