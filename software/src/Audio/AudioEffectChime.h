@@ -94,7 +94,9 @@ private:
     float pan_l = 1.0f, pan_r = 0.0f, gain = 1.0f;
     float env = 0.0f;
     int place = -1;  // the place it sounds for while fed
-    float mk_was = -1.0f, gain_was = -1.0f;  // last block's (glided to the new ones)
+    // last block's level and sides (glided to the new ones: a note that
+    // stays may move to a place on the other side)
+    float mk_was = -1.0f, gain_was = -1.0f, pl_was = -1.0f, pr_was = -1.0f;
   };
   // a ringing resonator taken for a new note hands its ring to one of
   // these, which fades it out over ~5 ms (cut at once it clicked: fast
@@ -186,7 +188,7 @@ FASTRUN void AudioEffectChime::Assign() {
         to->g = 1.0f;
       }
       v.la = v.ba = v.lb = v.bb = 0.0f;
-      v.mk_was = v.gain_was = -1.0f;
+      v.mk_was = v.gain_was = v.pl_was = v.pr_was = -1.0f;
       v.env = 0.0f;
       Tune(v, hz, place_dec[p]);
     } else {
@@ -275,13 +277,19 @@ FASTRUN void AudioEffectChime::update() {
     const float mk_to = v.makeup * v.gain;
     float mk = v.mk_was < 0.0f ? mk_to : v.mk_was, gn = v.gain_was < 0.0f ? v.gain : v.gain_was;
     const float mk_d = (mk_to - mk) * (1.0f / AUDIO_BLOCK_SAMPLES), gn_d = (v.gain - gn) * (1.0f / AUDIO_BLOCK_SAMPLES);
+    float pl = v.pl_was < 0.0f ? v.pan_l : v.pl_was, pr = v.pr_was < 0.0f ? v.pan_r : v.pr_was;
+    const float pl_d = (v.pan_l - pl) * (1.0f / AUDIO_BLOCK_SAMPLES), pr_d = (v.pan_r - pr) * (1.0f / AUDIO_BLOCK_SAMPLES);
     v.mk_was = mk_to;
     v.gain_was = v.gain;
+    v.pl_was = v.pan_l;
+    v.pr_was = v.pan_r;
     float pk = 0.0f;
     for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
       g += std::max(-fade, std::min(fade, to - g));
       mk += mk_d;
       gn += gn_d;
+      pl += pl_d;
+      pr += pr_d;
       la += f * ba;
       ba += f * (g * x[n] - la - da * ba);
       const float ya = ba * da;
@@ -289,8 +297,8 @@ FASTRUN void AudioEffectChime::update() {
       bb += f * (ya - lb - db * bb);
       const float y = bb * db * mk + first * ya * gn;
       pk = std::max(pk, fabsf(y));
-      sum[0][n] += y * v.pan_l;
-      sum[1][n] += y * v.pan_r;
+      sum[0][n] += y * pl;
+      sum[1][n] += y * pr;
     }
     v.la = la; v.ba = ba; v.lb = lb; v.bb = bb; v.in = g;
     v.env = std::max(pk, v.env * 0.9f);
