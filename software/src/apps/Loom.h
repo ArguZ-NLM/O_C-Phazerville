@@ -2181,6 +2181,11 @@ FLASHMEM void AppLoom::DrawDevice() const {
   const bool both = linked || SharedFocus();
   const int name_x = both ? 24 : 12;
   const char* name = mod_mode && name_x + 6 * int(strlen(d->def.name)) > 62 ? d->def.tag : d->def.name;
+  {  // the name would run into the header's info (SHUTTLE + its tempo): its tag
+    char hi[24];
+    if (!mod_mode && d->HeaderInfo(hi, sizeof(hi)) && name_x + 6 * int(strlen(name)) > 98 - 6 * int(strlen(hi)) - 3)
+      name = d->def.tag;
+  }
   if (both) {
     // linked: L, squares, R; the shared mods L+R
     if (linked && !SharedFocus()) DrawLinkLabel(1, 1);
