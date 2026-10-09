@@ -99,7 +99,7 @@ void ScanI2C() {
 uint_fast8_t MENU_REDRAW = true;
 volatile uint32_t loop_counter = 0;
 volatile bool g_noise_request = false;  // Loom's noise test (USB 'N')
-volatile bool g_capture_request = false;  // Loom's output capture (USB 'W')
+volatile uint8_t g_capture_request = 0;  // Loom's output capture (USB 'W' / 'U')
 static OC::UiMode ui_mode = OC::UI_MODE_MENU;
 static OC::IOFrame io_frame;
 
@@ -754,8 +754,11 @@ void FASTRUN loop() {
           case 'N':  // Loom's noise test (the report follows in ~25 s)
             g_noise_request = true;
             break;
-          case 'W':  // Loom: the next 3 s of the output, sent over USB in hex
-            g_capture_request = true;
+          case 'W':  // Loom: the next 2 s of the output and the jacks, sent over USB in hex
+            g_capture_request = 1;
+            break;
+          case 'U':  // ... the output and track B before the mixer
+            g_capture_request = 2;
             break;
 #endif
           case 'K':  // the crash log the firmware keeps after a crash

@@ -46,7 +46,7 @@
 extern "C" uint8_t external_psram_size;  // MB of PSRAM found at start (Teensy core)
 
 extern volatile bool g_noise_request;  // USB 'N' (Main.cpp)
-extern volatile bool g_capture_request;  // USB 'W' (Main.cpp)
+extern volatile uint8_t g_capture_request;  // USB 'W' (1) / 'U' (2) (Main.cpp)
 
 namespace loom {
 // the longest SPOOL loop / PLAYER sample held in memory. They take only
@@ -654,7 +654,9 @@ class OutCapture {
 public:
   static constexpr uint32_t FRAMES = 2 * 48000;
   static constexpr int CH = 4;
-  bool Start() {
+  bool track_b = false;  // USB 'U': track B on its way into the mixer instead of the jacks
+  bool Start(bool b_side = false) {
+    track_b = b_side;
     if (!buf) buf = static_cast<int16_t*>(extmem_malloc(FRAMES * CH * 2));
     if (!buf) return false;
     sent = 0;
@@ -677,7 +679,8 @@ public:
   // main loop: send what is captured, a few lines at a time
   void Idle() {
     if (!buf || on || sent >= FRAMES) return;
-    if (sent == 0) Serial.printf("CAPTURE %lu frames 48000 Hz: out L, out R, in 1, in 2\n", (unsigned long)FRAMES);
+    if (sent == 0) Serial.printf("CAPTURE %lu frames 48000 Hz: out L, out R, %s\n", (unsigned long)FRAMES,
+                                 track_b ? "track B L, R" : "in 1, in 2");
     char line[2 + 16 * CH * 4 + 2];
     for (int k = 0; k < 8 && sent < FRAMES; k++) {
       int p = 0;
@@ -822,6 +825,10 @@ FASTRUN void LoomMixer::update() {
       g_noise->Tap(NoiseTest::A_TO_MIX, in[0]);
       g_noise->Tap(NoiseTest::B_TO_MIX, in[2]);
       g_noise->Measure(acc[0], acc[1]);
+    }
+    if (g_capture && g_capture->track_b) {  // USB 'U': track B as it comes in
+      static const int16_t zero[AUDIO_BLOCK_SAMPLES] = {};
+      g_capture->Push(1, in[2] ? in[2]->data : zero, in[3] ? in[3]->data : zero);
     }  // (before the mute: it mutes the output)
     float g[AUDIO_BLOCK_SAMPLES];  // the mute fade, for the quick listen too
     if (mute || mute_g < 1.0f) {  // fade the sum out / back in
@@ -1330,7 +1337,7 @@ FASTRUN void InputDevice::update() {
     const int16_t* a = in[base] ? in[base]->data : silence;
     const int16_t* b = in[base + 1] ? in[base + 1]->data : silence;
     if (!from_a && g_noise && g_noise->Running()) a = b = g_noise->Tone();  // the noise test
-    if (!chained && g_capture) g_capture->Push(1, a, b);  // the jacks as they come in (USB 'W')
+    if (!chained && g_capture && !g_capture->track_b) g_capture->Push(1, a, b);  // the jacks as they come in (USB 'W')
     const int32_t g = static_cast<int32_t>(gain * 16384.0f);   // Q14, up to 2.0
     const int32_t wd = static_cast<int32_t>(width * 16384.0f); // Q14
     int16_t* l = out[0]->data;

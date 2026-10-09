@@ -1378,9 +1378,10 @@ FLASHMEM void AppLoom::MainLoop() {
     if (g_noise && g_noise->Done()) g_noise->Report();
     // the output capture (USB 'W')
     if (g_capture_request) {
-      g_capture_request = false;
+      const bool b_side = g_capture_request == 2;
+      g_capture_request = 0;
       if (!g_capture) g_capture = new OutCapture;
-      if (!g_capture->Start()) Serial.println("CAPTURE: no PSRAM");
+      if (!g_capture->Start(b_side)) Serial.println("CAPTURE: no PSRAM");
     }
     if (g_capture) g_capture->Idle();
     // the output is muted while a PLAYER reads a file in (the card reading
