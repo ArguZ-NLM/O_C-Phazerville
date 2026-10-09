@@ -1265,6 +1265,14 @@ private:
   int8_t col_lo[128] = {}, col_hi[128] = {};
   void ScopeStart(int16_t v);
   float scope_range = 1024.0f;          // auto range: follows the loudest point, slowly back down
+  // clipping: at the jack (the converter's limit: turn down what comes in)
+  // or at GAIN (turn GAIN down); shown for a while after the last one
+  volatile bool jack_clip = false, gain_clip = false;
+  uint32_t jack_clip_at = 0, gain_clip_at = 0;
+  static constexpr uint32_t CLIP_SHOW_MS = 1500;
+public:
+  int Clipping();  // 0 none, 1 at the jack, 2 at GAIN
+private:
   void Poll();
   void Scope(const int16_t* l, const int16_t* r);
 };
@@ -1309,6 +1317,14 @@ FASTRUN void InputDevice::update() {
     int16_t* l = out[0]->data;
     int16_t* r = out[1]->data;
     int32_t pk[2] = {0, 0};
+    // the jacks used at the converter's limit (not the test tone, not OUT A)
+    if (!from_a && !(g_noise && g_noise->Running()) && src != OFF) {
+      bool jc = false;
+      for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++)
+        jc |= (src != IN2 && (a[n] >= 32760 || a[n] <= -32760)) || (src != IN1 && (b[n] >= 32760 || b[n] <= -32760));
+      if (jc) jack_clip = true;
+    }
+    bool gc = false;
     for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
       int32_t x, y;
       switch (src) {
@@ -1324,11 +1340,14 @@ FASTRUN void InputDevice::update() {
         } break;
       }
       const int32_t gg = g;
-      l[n] = __SSAT((x * gg + 8192) >> 14, 16);  // rounded
-      r[n] = __SSAT((y * gg + 8192) >> 14, 16);
+      const int32_t xl = (x * gg + 8192) >> 14, yr = (y * gg + 8192) >> 14;  // rounded
+      gc |= xl > 32767 || xl < -32768 || yr > 32767 || yr < -32768;
+      l[n] = __SSAT(xl, 16);
+      r[n] = __SSAT(yr, 16);
       pk[0] = std::max<int32_t>(pk[0], abs(l[n]));
       pk[1] = std::max<int32_t>(pk[1], abs(r[n]));
     }
+    if (gc) gain_clip = true;
     for (int c = 0; c < 2; c++) peak[c] = std::max(peak[c], pk[c] * (1.0f / 32768.0f));
     level = std::max(pk[0], pk[1]) * (1.0f / 32768.0f);
     Scope(l, r);
@@ -1375,8 +1394,18 @@ FASTRUN void InputDevice::Scope(const int16_t* l, const int16_t* r) {
   if (scope_col < 0 && ++scope_wait > 30) ScopeStart(0);  // ~90 ms without an edge
 }
 
+FLASHMEM int InputDevice::Clipping() {
+  const uint32_t now = millis();
+  if (jack_clip) { jack_clip = false; jack_clip_at = now | 1; }
+  if (gain_clip) { gain_clip = false; gain_clip_at = now | 1; }
+  if (jack_clip_at && now - jack_clip_at < CLIP_SHOW_MS) return 1;
+  if (gain_clip_at && now - gain_clip_at < CLIP_SHOW_MS) return 2;
+  return 0;
+}
+
 FLASHMEM void InputDevice::DrawViz(int x, int y, int w, int h) {
   Poll();
+  const int clip = Clipping();
   const float l = meters[0].v, r = meters[1].v;
 
   const int cy = y + h / 2, ww = std::min(w - 22, 128);
@@ -1412,6 +1441,14 @@ FLASHMEM void InputDevice::DrawViz(int x, int y, int w, int h) {
     gfxFrame(x + w - 18, y, 17, h);
     DrawVMeter(x + w - 17, y + 1, 15, h - 2, std::max(l, r));
   }
+  // clipping: where, in a box over the picture's top left
+  if (clip) {
+    const char* t = clip == 1 ? "IN CLIP" : "GAIN CLIP";
+    const int tw = 6 * int(strlen(t)) + 3;
+    graphics.clearRect(x, y, tw, 11);
+    gfxPrint(x + 2, y + 2, t);
+    gfxInvert(x, y, tw, 11);
+  }
 }
 
 // standing bars on the side the signal comes from: both for L+R, the left
@@ -1435,6 +1472,11 @@ FLASHMEM void InputDevice::DrawMini(int x, int y, int w, int h) {
     return;
   }
   const int bw = (w - 3) / 2;
+  // clipping: the box blinks
+  if (Clipping() && (millis() / 125) % 2) {
+    gfxRect(x, y, w, h);
+    return;
+  }
   if (cur[0] == STEREO || cur[0] == IN1) DrawVMeter(x, y, bw, h, cur[0] == STEREO ? meters[0].v : std::max(meters[0].v, meters[1].v));
   if (cur[0] == STEREO || cur[0] == IN2) DrawVMeter(x + w - bw, y, bw, h, cur[0] == STEREO ? meters[1].v : std::max(meters[0].v, meters[1].v));
 }

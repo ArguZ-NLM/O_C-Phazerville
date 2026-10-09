@@ -2021,7 +2021,22 @@ FLASHMEM void AppLoom::DrawChain() const {
   const Track& tr = tracks[track];
   Device* d = tr.at(col);
   if (!linked) gfxPrint(0, 56, track ? PSTR("B") : PSTR("A"));
-  if (g_tape->Recording()) {
+  // an input clipping: said where the slot's name goes, before anything
+  // else (IN CLIP: turn down what comes in; GAIN CLIP: turn INPUT's GAIN down)
+  int clip = 0, clip_t = 0;
+  for (int t = 0; t < NUM_TRACKS; t++) {
+    if (!tracks[t].input || tracks[t].choice[SOURCE] == 2) continue;  // PLAYER: no input
+    const int c = tracks[t].input->Clipping();
+    if (c && (!clip || c < clip)) { clip = c; clip_t = t; }
+  }
+  if (clip) {
+    char t[16];
+    snprintf(t, sizeof(t), "%s CLIP %c", clip == 1 ? "IN" : "GAIN", 'A' + clip_t);
+    const int tw = 6 * int(strlen(t)) + 3;
+    graphics.clearRect(7, 55, tw, 9);
+    gfxPrint(9, 56, t);
+    gfxInvert(7, 55, tw, 9);
+  } else if (g_tape->Recording()) {
     // TAPE running: a blinking dot and its time where the slot's name goes
     // (SLOW blinking in when the card fell behind)
     if ((millis() / 500) % 2) gfxRect(9, 57, 5, 5);
