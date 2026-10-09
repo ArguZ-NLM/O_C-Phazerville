@@ -415,7 +415,6 @@ private:
     uint8_t choice[loom::SLOT_COUNT], last_choice[loom::SLOT_COUNT], order[loom::SLOT_COUNT - 1];
     uint8_t bypass, mod_type[loom::NUM_MODS];
     DevState input, reel, player, warp, mix;
-    char warp_dir[96], warp_name[loom::NAME_LEN];
     DevState inst[loom::SLOT_COUNT][loom::MAX_OPTIONS];
     DevState mods[loom::NUM_MODS][loom::MOD_TYPES];
   };
@@ -1002,8 +1001,6 @@ FLASHMEM void AppLoom::KeepB() {
   k.reel.Take(b.reel);
   k.player.Take(b.player);
   k.warp.Take(b.warp);
-  snprintf(k.warp_dir, sizeof(k.warp_dir), "%s", b.warp ? b.warp->Folder() : "");
-  snprintf(k.warp_name, sizeof(k.warp_name), "%s", b.warp ? b.warp->FileName() : "");
   k.mix.Take(b.mix);
   for (int s = 0; s < SLOT_COUNT; s++)
     for (int o = 0; o < MAX_OPTIONS; o++) k.inst[s][o].Take(s > SOURCE ? b.inst[s][o] : nullptr);
@@ -1026,7 +1023,6 @@ FLASHMEM void AppLoom::BringBackB() {
   k.reel.Give(b.reel);
   k.player.Give(b.player);
   k.warp.Give(b.warp);
-  if (b.warp) b.warp->SetFile(k.warp_dir, k.warp_name);
   k.mix.Give(b.mix);
   for (int s = SOURCE + 1; s < SLOT_COUNT; s++)
     for (int o = 0; o < MAX_OPTIONS; o++) k.inst[s][o].Give(b.inst[s][o]);
@@ -1055,7 +1051,6 @@ FLASHMEM void AppLoom::LinkCopy() {
   }
   if (a.warp && b.warp) {  // the same file and settings
     b.warp->CopyFrom(*a.warp);
-    b.warp->SetFile(a.warp->Folder(), a.warp->FileName());
     b.warp->ApplyAll();
   }
   for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
@@ -1369,9 +1364,10 @@ FLASHMEM void AppLoom::MainLoop() {
       }
       if (tr.player && tr.choice[SOURCE] == 2) tr.player->Idle();
       if (tr.warp && tr.choice[SOURCE] == 3) {
-        const Track& o = tracks[1 - t];  // no file: WARP plays the other track's SPOOL loop
+        const Track& o = tracks[1 - t];  // WARP plays the other track's SPOOL or PLAYER
         tr.warp->spool = o.reel && o.choice[SOURCE] == 1 ? o.reel : nullptr;
-        tr.warp->spool_tag = char('A' + 1 - t);
+        tr.warp->player = o.player && o.choice[SOURCE] == 2 ? o.player : nullptr;
+        tr.warp->other = char('A' + 1 - t);
         tr.warp->Idle();
       }
       if (tr.reel && tr.choice[SOURCE] == 1) tr.reel->Idle();
@@ -2741,15 +2737,12 @@ FLASHMEM void AppLoom::SaveFile() const {
     if (tr.player) { sec[0] = tr.player->sec_off; sec[1] = tr.player->sec_len; }
     f.write(reinterpret_cast<uint8_t*>(sec), 8);
   }
-  // ... and WARP: its settings and file (folder/name; none: empty)
+  // ... and WARP: its settings, and an empty name (where its file was)
   f.write("W", 1);
   for (auto& tr : tracks) {
     WriteDevice(f, tr.warp);
-    char fn[200] = "";
-    if (tr.warp && tr.warp->FileName()[0])
-      snprintf(fn, sizeof(fn), "%s/%s", strcmp(tr.warp->Folder(), "/") ? tr.warp->Folder() : "", tr.warp->FileName());
-    const uint8_t b = strlen(fn);
-    f.write(&b, 1); f.write(fn, b);
+    const uint8_t b = 0;  // (was its file; WARP takes the other track's sound now)
+    f.write(&b, 1);
   }
   f.close();
   fs.remove(SAVE_FILE);
@@ -2879,11 +2872,7 @@ FLASHMEM void AppLoom::LoadFile() {
               if (!ReadDevice(f, tr.warp)) break;
               uint8_t b = 0;
               char fn[256] = {};
-              if (f.read(&b, 1) != 1 || f.read(fn, b) != b) break;
-              // folder/name (before the file list: just the name)
-              char* slash = strrchr(fn, '/');
-              if (slash) *slash = 0;
-              if (tr.warp) tr.warp->SetFile(slash ? (fn[0] ? fn : "/") : "", slash ? slash + 1 : fn);
+              if (f.read(&b, 1) != 1 || f.read(fn, b) != b) break;  // (older files: its file, not used now)
             }
           }
         }

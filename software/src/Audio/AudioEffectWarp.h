@@ -31,6 +31,8 @@ public:
     float xfade = 0.01f;     // s: LOOP's seam
     bool cross = true;       // CROSS, else INOUT (a dip)
     float attack = 0.002f;   // s
+    float decay = 0.1f;      // s, to sustain (-60 dB of the way)
+    float sustain = 1.0f;    // 0..1
     float release = 0.2f;    // s, to -60 dB
     float level = 0.8f;
     float vel_amt = 0.75f;   // 0: every note as loud; 1: velocity sets it all
@@ -93,7 +95,7 @@ private:
     bool held = false;   // the key is down
     bool once = false;   // TRIG: let go once it is in (LOOP / PING)
     uint8_t note = 0;
-    uint8_t stage = 0;   // 0 attack, 1 held, 2 release
+    uint8_t stage = 0;   // 0 attack, 1 decay / sustain, 2 release
     int8_t dir = 1;      // PING: the way it goes
     bool looped = false; // INOUT: came round once (the fade in)
     double pos = 0.0;    // in frames of the sample
@@ -210,6 +212,8 @@ FASTRUN void AudioEffectWarp::update() {
   }
   const float att = 1.0f / (std::max(0.001f, par.attack) * AUDIO_SAMPLE_RATE_EXACT);
   const float rel = expf(-6.9078f / (std::max(0.005f, par.release) * AUDIO_SAMPLE_RATE_EXACT));
+  const float dec = expf(-6.9078f / (std::max(0.005f, par.decay) * AUDIO_SAMPLE_RATE_EXACT));
+  const float sus = constrain(par.sustain, 0.0f, 1.0f);
   constexpr float FADER = 1.0f / (0.005f * AUDIO_SAMPLE_RATE_EXACT);
   const float g = par.level * 0.5f * (1.0f / 32768.0f);  // a voice at most half scale
   for (int i = 0; i < VOICES + FADERS; i++) {
@@ -224,6 +228,9 @@ FASTRUN void AudioEffectWarp::update() {
           v.env = 1.0f;
           v.stage = v.once && par.loop != ONCE ? 2 : 1;
         }
+      } else if (v.stage == 1) {
+        v.env = sus + (v.env - sus) * dec;
+        if (v.env < 1e-4f) { v.on = false; break; }  // SUS 0: over once it has decayed
       } else if (v.stage == 2) {
         v.env *= rel;
         if (v.env < 1e-4f) { v.on = false; break; }

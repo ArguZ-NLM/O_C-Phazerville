@@ -2807,6 +2807,17 @@ public:
     SetFile(a.Folder(), a.FileName());
   }
   const char* FileName() const { return nfiles ? names[std::min<int>(cur[FILE_], nfiles - 1)] : ""; }
+  // WARP on the other track: the file's path and its loop section in the
+  // file's frames (false: no file in)
+  bool Section(char* path, size_t n, uint32_t& a, uint32_t& b) const {
+    if (!nfiles || loading || analysing || !Frames()) return false;
+    snprintf(path, n, "%s/%s", strcmp(dir, "/") ? dir : "", FileName());
+    const size_t off = clipped ? sec_off : 0;
+    a = uint32_t(EdgeAt(START) + off);
+    b = uint32_t(EdgeAt(END) + off);
+    if (b < a) std::swap(a, b);
+    return true;
+  }
   // the settings that go with a file: <name>.loom next to the WAV, read
   // when the file is picked (not when the saved settings bring it back),
   // written when they changed (leaving the page, another file, a save)
@@ -5460,43 +5471,42 @@ FLASHMEM void ChimeDevice::DrawMini(int x, int y, int w, int h) {
 }
 
 /////////////////////////////////////////////////////////////////
-// WARP (Source): eight voices playing a WAV from memory at the pitch of
-// MIDI notes (or of TRIG: the root). FILE: a WAV in a folder (R push: the
-// file list, as PLAYER's), loaded once the choice rests; up to 16 s of it.
-// FILE turned all the way left ("--": none) plays the other track's SPOOL
-// loop instead, copied in each time a recording or overdub there ends.
+// WARP (Source): eight voices playing the other track's sound at the
+// pitch of MIDI notes (or of TRIG: the root). SRC picks it: that track's
+// SPOOL loop (copied in each time a recording or overdub there ends) or
+// what its PLAYER plays (its loop section, read from the card once it
+// rests; up to 16 s). Page 2 is the notes' envelope.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef WARP_DEF = {
-  "WARP", "WRP", 8, {"TRIG", "STOP"},  // A: the root note, 60 (LOOP / PING: let go once in); B: every voice let go
+  "WARP", "WRP", 8, {"TRIG", "STOP"},  // A: the root note, 60 (LOOP on: let go once in); B: every voice let go
   {
-    {"FILE", -1, MAX_FILES - 1, -1, UNI},  // -1: none (the other track's SPOOL loop)
+    {"SRC", 0, 1, 0, LIST, 2, 0, 0, {"SPL", "PLY"}},  // the other track's SPOOL or PLAYER
     {"START", 0, 10000, 0, UNI},
     {"END", 0, 10000, 10000, UNI},
-    {"FADE", 0, 100, 20, UNI, 0, 2, 0, {}, {"CROSS", "INOUT"}},  // LOOP's seam, as SPOOL's
-    {"LOOP", 0, 2, 1, LIST, 3, 0, 0, {"OFF", "LOOP", "PING"}},
+    // value: the seam's fade, as SPOOL's FADE; mode: how a note plays on
+    // (once, looping with a crossfade or a dip at the seam, back and forth)
+    {"LOOP", 0, 100, 20, UNI, 0, 4, 1, {}, {"OFF", "CROSS", "INOUT", "PING"}},
     {"ATK", 0, 100, 0, UNI},    // 1 ms .. 2 s
+    {"DEC", 0, 100, 50, UNI},   // 5 ms .. 5 s, to SUS
+    {"SUS", 0, 100, 100, UNI},  // %
     {"REL", 0, 100, 40, UNI},   // 5 ms .. 5 s
-    {"LEVEL", 0, 100, 80, UNI, 0, 5, 3},  // mode: how much velocity counts, 0 .. 100 %
   },
   {"", ""},
 };
 
 class WarpDevice : public Device {
 public:
-  enum { FILE_, START, END, FADE, LOOP, ATK, REL, LEVEL };
-  static constexpr int ROOT = 60;  // the note that plays the sample as recorded (MIDI note 60)
-  // where a file without its folder is looked for (saved before WARP had
-  // the file list: the folder was FILE's mode)
-  static constexpr const char* DIRS[4] = {LOOP_DIR, REC_DIR, TapeRecorder::DIR, "/LOOM/WARP"};
+  enum { SRC, START, END, LOOP, ATK, DECAY, SUS, REL };  // (DEC is taken by Print.h)
+  enum { SRC_SPOOL, SRC_PLAYER };
+  enum { LOOP_OFF, LOOP_CROSS, LOOP_INOUT, LOOP_PING };  // LOOP's modes
+  static constexpr int ROOT = 60;  // the note that plays the sound as recorded (MIDI note 60)
   WarpDevice() : Device(WARP_DEF) {}
   AudioStream* in() override { return &fx; }  // THREAD: track A passes through
   AudioStream* out() override { return &fx; }
   bool Activate() override;
   void Deactivate() override;
   void Apply(int p) override;
-  int Step(int p, int v, int dir) const override;
   void Format(int p, char* buf, size_t n) const override;
-  void FormatMode(int p, char* buf, size_t n) const override;
   void Action(int a) override;
   bool ActionLit(int a) const override { return a == 0 && fx.Sounding() > 0; }
   void Idle() override;
@@ -5509,43 +5519,25 @@ public:
     parts[1] = 0.0f;
     fx.processorUsageMaxReset();
   }
-  void Reset() override {  // the file stays
-    const int16_t f = val[FILE_];
-    const uint8_t m = mode[FILE_];
+  void Reset() override {  // where the sound comes from stays
+    const int16_t s = val[SRC];
     Defaults();
-    val[FILE_] = cur[FILE_] = f;
-    mode[FILE_] = m;
+    val[SRC] = cur[SRC] = s;
     ApplyAll();
   }
-  const char* FileName() const { return nfiles && val[FILE_] >= 0 ? names[std::min<int>(val[FILE_], nfiles - 1)] : ""; }
-  const char* Folder() const { return dir; }
-  // from the saved settings / the linked track: a folder's file by name
-  // (folder empty: looked for in DIRS; name empty: none)
-  void SetFile(const char* folder, const char* name);
-  int FileParam() const override { return FILE_; }
-  void OpenBrowser() override {
-    char x[16];
-    if (spool) snprintf(x, sizeof(x), "[SPOOL %c]", spool_tag);
-    else snprintf(x, sizeof(x), "[NO FILE]");
-    g_browser->Open(this, dir, FileName(), x);
-  }
-  void Picked(const char* folder, const char* name) override { SetFile(folder, name); }
-  // the other track's SPOOL (the app sets it every loop; nullptr: not SPOOL)
+  // the other track's SPOOL / PLAYER, when that is its source (the app
+  // sets them every loop; nullptr: not)
   const ReelDevice* spool = nullptr;
-  char spool_tag = 'A';
+  const PlayerDevice* player = nullptr;
+  char other = 'A';
 private:
   AudioEffectWarp fx;
-  char dir[96] = "/LOOM";  // the folder FILE steps through
-  char names[MAX_FILES][NAME_LEN] = {};
-  int nfiles = 0;
-  bool scanned = false;
-  int16_t* bl = nullptr;  // the sample (PSRAM); br null: mono
+  int16_t* bl = nullptr;  // the sound (PSRAM); br null: mono
   int16_t* br = nullptr;
   uint32_t frames = 0;
   float rate = 1.0f;
-  char loaded[NAME_LEN] = "";
-  char loaded_dir[96] = "";
-  // FILE none: the SPOOL loop is what is in memory / being copied in
+  int src_was = -1;       // SRC when the sound was taken
+  // SPOOL: its loop is what is in memory / being copied in
   bool from_spool = false, copying = false;
   // the loop again (after an overdub): copied beside the one playing, then
   // swapped in with the voices playing on (if memory allows; else after it)
@@ -5556,23 +5548,27 @@ private:
   uint32_t copy_n = 0;
   void SpoolBegin();
   void SpoolStep();
-  uint32_t want_at = 0;   // FILE moved: loads once it rests
+  // PLAYER: its file and loop section (in the file's frames), read in once
+  // they rest
+  char want_path[200] = "", have_path[200] = "";
+  uint32_t want_a = 0, want_b = 0, have_a = 0, have_b = 0;
+  uint32_t want_at = 0;
+  void PlayerIdle();
   // loading, a chunk at a time
   File lf;
   bool loading = false, no_mem = false;
   uint32_t got = 0;
   int bytes = 2, chans = 1;
   bool is_float = false;
-  uint8_t over[128] = {};  // the picture: the peak per 1/128 of the sample
+  uint8_t over[128] = {};  // the picture: the peak per 1/128 of the sound
   uint32_t midi_seen = 0;
   AudioEffectWarp::Viz viz = {};
-  void Scan();
   void Free();
-  void Begin();      // opens the file chosen and makes room
+  void Begin(const char* path, uint32_t from, uint32_t count);  // opens the file and makes room
   void LoadStep();
   static float Attack(int v) { return 0.001f * powf(2000.0f, v * 0.01f); }
-  static float Release(int v) { return 0.005f * powf(1000.0f, v * 0.01f); }
-  // FADE as SPOOL's: up to 1 s, finer at the short end
+  static float Time5(int v) { return 0.005f * powf(1000.0f, v * 0.01f); }  // DEC, REL
+  // LOOP's fade as SPOOL's FADE: up to 1 s, finer at the short end
   static float Fade(int v) { const float f = v * 0.01f; return (16.0f + f * f * AUDIO_SAMPLE_RATE_EXACT) / AUDIO_SAMPLE_RATE_EXACT; }
   static void FormatSecs(float s, char* buf, size_t n) {
     const int t = int(s * 10000.0f + 0.5f);  // in 0.1 ms
@@ -5582,52 +5578,13 @@ private:
     else snprintf(buf, n, "%d.%02ds", int(s), int(s * 100.0f) % 100);
   }
 };
-constexpr const char* WarpDevice::DIRS[4];
-
-FLASHMEM void WarpDevice::Scan() {
-  nfiles = 0;
-  scanned = true;
-  if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
-  if (!SDcard_Ready) return;
-  File d = SD.open(dir);
-  if (!d) return;
-  while (nfiles < MAX_FILES) {
-    File e = d.openNextFile();
-    if (!e) break;
-    const char* nm = e.name();
-    const size_t l = strlen(nm);
-    if (!e.isDirectory() && nm[0] != '.' && l > 4 && l < NAME_LEN - 1 && !strcasecmp(nm + l - 4, ".WAV"))
-      snprintf(names[nfiles++], NAME_LEN, "%s", nm);
-    e.close();
-  }
-  d.close();
-  for (int i = 1; i < nfiles; i++)
-    for (int j = i; j > 0 && strcasecmp(names[j - 1], names[j]) > 0; j--) {
-      char t[NAME_LEN];
-      memcpy(t, names[j], NAME_LEN); memcpy(names[j], names[j - 1], NAME_LEN); memcpy(names[j - 1], t, NAME_LEN);
-    }
-}
-
-FLASHMEM void WarpDevice::SetFile(const char* folder, const char* name) {
-  val[FILE_] = cur[FILE_] = -1;
-  if (!name || !name[0]) { want_at = millis() | 1; return; }
-  for (int k = -1; k < 4; k++) {  // the folder given, else where it may be
-    if (k < 0 && !(folder && folder[0])) continue;
-    snprintf(dir, sizeof(dir), "%s", k < 0 ? folder : DIRS[k]);
-    Scan();
-    for (int i = 0; i < nfiles; i++)
-      if (!strcmp(names[i], name)) { val[FILE_] = cur[FILE_] = i; break; }
-    if (val[FILE_] >= 0) break;
-  }
-  want_at = millis() | 1;
-}
 
 FLASHMEM bool WarpDevice::Activate() {
   active = true;
   midi_seen = note_ev_n;  // notes from before are not played
-  spool_was = 0;  // a SPOOL loop there now is copied in
-  if (!scanned) Scan();
-  want_at = millis() | 1;  // (re)load what is chosen
+  spool_was = 0;          // a SPOOL loop there now is copied in
+  have_path[0] = 0;       // PLAYER's sound is read in again
+  src_was = -1;
   ApplyAll();
   return true;
 }
@@ -5651,22 +5608,17 @@ FLASHMEM void WarpDevice::Free() {
   if (br) extmem_free(br);
   bl = br = nullptr;
   frames = 0;
-  loaded[0] = 0;
-  loaded_dir[0] = 0;
+  have_path[0] = 0;
 }
 
-FLASHMEM void WarpDevice::Begin() {
+// count frames of the file from frame from (up to 16 s)
+FLASHMEM void WarpDevice::Begin(const char* path, uint32_t from, uint32_t count) {
   Free();
   no_mem = false;
   memset(over, 0, sizeof(over));
-  if (!nfiles || val[FILE_] < 0) return;
-  const char* nm = FileName();
-  char path[192];
-  snprintf(path, sizeof(path), "%s/%s", strcmp(dir, "/") ? dir : "", nm);
+  if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
   lf = SD.open(path, FILE_READ);
   if (!lf) return;
-  snprintf(loaded, sizeof(loaded), "%s", nm);  // (so it isn't tried again and again)
-  snprintf(loaded_dir, sizeof(loaded_dir), "%s", dir);
   uint8_t h[12];
   if (lf.read(h, 12) != 12 || memcmp(h, "RIFF", 4) || memcmp(h + 8, "WAVE", 4)) { lf.close(); return; }
   int bits = 0;
@@ -5693,9 +5645,11 @@ FLASHMEM void WarpDevice::Begin() {
       if (!ok_bits || chans < 1 || !srate) break;
       bytes = bits / 8;
       rate = srate / AUDIO_SAMPLE_RATE_EXACT;
-      // up to 16 s of it
-      const uint32_t n = std::min<uint32_t>(sz / (bytes * chans), uint32_t(BigSecs() * srate));
+      const uint32_t total = sz / (bytes * chans);
+      from = std::min(from, total);
+      const uint32_t n = std::min<uint32_t>({count, total - from, uint32_t(BigSecs() * srate)});
       if (n < 64) break;
+      lf.seek(lf.position() + uint64_t(from) * bytes * chans);
       bl = static_cast<int16_t*>(extmem_malloc(n * 2));
       if (chans > 1) br = static_cast<int16_t*>(extmem_malloc(n * 2));
       if (!bl || (chans > 1 && !br)) {
@@ -5752,32 +5706,52 @@ FLASHMEM void WarpDevice::LoadStep() {
 
 FLASHMEM void WarpDevice::Idle() {
   if (!active) return;
-  // MIDI notes on the channel set
+  // MIDI notes, any channel
   if (note_ev_n - midi_seen > NOTE_EVS) midi_seen = note_ev_n - NOTE_EVS;
   while (midi_seen != note_ev_n) {
     const NoteEv& e = note_ev[midi_seen++ % NOTE_EVS];
     if (e.vel) fx.NoteOn(e.note, e.vel);
     else fx.NoteOff(e.note);
   }
-  if (!scanned) { Scan(); want_at = millis() | 1; }
-  // a new file once FILE rests a moment
-  if (want_at && !loading && millis() - want_at > 300) {
+  // SRC turned: the other sound
+  if (src_was != cur[SRC]) {
+    Free();
+    src_was = cur[SRC];
+    spool_was = 0;
     want_at = 0;
-    if (val[FILE_] >= 0 && (strcmp(loaded, FileName()) || strcmp(loaded_dir, dir))) Begin();
-    if (val[FILE_] < 0 && !from_spool) { Free(); spool_was = 0; }
   }
-  if (loading) LoadStep();
-  // no file: the other track's SPOOL loop, once a recording / overdub
-  // there has ended (and when there is one already)
+  if (cur[SRC] == SRC_PLAYER) { PlayerIdle(); return; }
+  // the other track's SPOOL loop, once a recording / overdub there has
+  // ended (and when there is one already)
   const uint8_t st = spool ? spool->LoopState() : AudioEffectReel::EMPTY;
   const bool rec = st == AudioEffectReel::REC || st == AudioEffectReel::DUB;
-  if (val[FILE_] < 0 && !loading && !want_at) {
-    if (!rec && spool && spool->LoopLength() >= 64 && (!from_spool || spool_was != st) &&
-        (spool_was == 0 || spool_was == AudioEffectReel::REC || spool_was == AudioEffectReel::DUB))
-      SpoolBegin();
-    if (copying) SpoolStep();
-  }
+  if (!rec && spool && spool->LoopLength() >= 64 && (!from_spool || spool_was != st) &&
+      (spool_was == 0 || spool_was == AudioEffectReel::REC || spool_was == AudioEffectReel::DUB))
+    SpoolBegin();
+  if (copying) SpoolStep();
   spool_was = spool ? st : 0;
+}
+
+// the other track's PLAYER: its file's loop section, read in once file and
+// section have rested a moment (moving START there doesn't read it over
+// and over)
+FLASHMEM void WarpDevice::PlayerIdle() {
+  if (loading) { LoadStep(); return; }
+  if (!player) return;  // that track isn't on PLAYER: what was read stays
+  char path[200];
+  uint32_t a = 0, b = 0;
+  if (!player->Section(path, sizeof(path), a, b)) return;
+  if (strcmp(path, want_path) || a != want_a || b != want_b) {
+    snprintf(want_path, sizeof(want_path), "%s", path);
+    want_a = a; want_b = b;
+    want_at = millis() | 1;
+  }
+  const bool have = !strcmp(want_path, have_path) && want_a == have_a && want_b == have_b;
+  if (have || !want_at || millis() - want_at < 500) return;
+  want_at = 0;
+  Begin(want_path, want_a, want_b > want_a ? want_b - want_a : 0);
+  snprintf(have_path, sizeof(have_path), "%s", want_path);  // (tried once, worked or not)
+  have_a = want_a; have_b = want_b;
 }
 
 FLASHMEM void WarpDevice::SpoolBegin() {
@@ -5844,65 +5818,43 @@ FLASHMEM void WarpDevice::SpoolStep() {
 }
 
 FLASHMEM void WarpDevice::Apply(int p) {
-  switch (p) {
-    case FILE_: want_at = millis() | 1; break;
-    default: break;
-  }
   AudioEffectWarp::Params a;
   const int s = cur[START], e = cur[END];
   a.start = std::min(s, e) * 0.0001f;
   a.end = std::max(s, e) * 0.0001f;
-  a.loop = uint8_t(constrain(int(cur[LOOP]), 0, 2));
-  a.xfade = Fade(cur[FADE]);
-  a.cross = mode[FADE] == 0;
+  const int lm = mode[LOOP];
+  a.loop = lm == LOOP_OFF ? AudioEffectWarp::ONCE : lm == LOOP_PING ? AudioEffectWarp::PING : AudioEffectWarp::LOOP;
+  a.cross = lm != LOOP_INOUT;
+  a.xfade = Fade(cur[LOOP]);
   a.attack = Attack(cur[ATK]);
-  a.release = Release(cur[REL]);
-  a.level = cur[LEVEL] * 0.01f;
-  a.vel_amt = mode[LEVEL] * 0.25f;
+  a.decay = Time5(cur[DECAY]);
+  a.sustain = cur[SUS] * 0.01f;
+  a.release = Time5(cur[REL]);
+  a.level = 0.8f;
+  a.vel_amt = 0.75f;
   a.root = ROOT;
   a.rate = rate;
   fx.Set(a);
 }
 
-FLASHMEM int WarpDevice::Step(int p, int v, int dir) const {
-  if (p == FILE_) return constrain(v + dir, -1, nfiles - 1);
-  return v + dir;
-}
-
 FLASHMEM void WarpDevice::Format(int p, char* buf, size_t n) const {
   switch (p) {
-    case FILE_: {
-      if (val[FILE_] < 0 || !nfiles) {
-        if (spool) snprintf(buf, n, "SPL %c", spool_tag);  // (the value's column is 5 wide)
-        else snprintf(buf, n, "--");
-        break;
-      }
-      snprintf(buf, n, "%s", FileName());
-      if (char* dot = strrchr(buf, '.')) *dot = 0;
-      break;
-    }
-    case FADE: FormatSecs(Fade(val[FADE]), buf, n); break;
+    case SRC: snprintf(buf, n, "%s %c", cur[SRC] == SRC_PLAYER ? "PLY" : "SPL", other); break;
     case START: case END: {
       const float secs = frames ? frames / (AUDIO_SAMPLE_RATE_EXACT * rate) : 0.0f;
       FormatSecs(secs * val[p] * 0.0001f, buf, n);
       break;
     }
+    case LOOP: FormatSecs(Fade(val[LOOP]), buf, n); break;  // (the mode shows above)
     case ATK: FormatSecs(Attack(val[ATK]), buf, n); break;
-    case REL: FormatSecs(Release(val[REL]), buf, n); break;
+    case DECAY: case REL: FormatSecs(Time5(val[p]), buf, n); break;
+    case SUS: snprintf(buf, n, "%d%%", int(val[SUS])); break;
     default: Device::Format(p, buf, n);
   }
 }
 
-FLASHMEM void WarpDevice::FormatMode(int p, char* buf, size_t n) const {
-  if (p == LEVEL) {
-    snprintf(buf, n, "V%d%%", mode[LEVEL] * 25);
-  } else {
-    Device::FormatMode(p, buf, n);
-  }
-}
-
 FLASHMEM void WarpDevice::Action(int a) {
-  if (a == 0) {  // TRIG: the root, as if a key was struck (LOOP / PING: let go once in)
+  if (a == 0) {  // TRIG: the root, as if a key was struck (LOOP on: let go once in)
     fx.NoteOff(ROOT);
     fx.NoteOn(ROOT, 100, true);
   } else {
@@ -5917,20 +5869,53 @@ FLASHMEM bool WarpDevice::HeaderInfo(char* buf, size_t n) const {
   return true;
 }
 
-// the sample's outline, dotted outside START .. END, and a line where each
-// voice is
+// the sound's outline, dotted outside START .. END, and a line where each
+// voice is; page 2: the envelope
 FLASHMEM void WarpDevice::DrawViz(int x, int y, int w, int h) {
   fx.ReadViz(viz);
+  if (view_page == 1) {
+    // ATK up, DEC down to SUS, held, REL down; a dot per sounding voice on
+    // its height
+    const float ta = Attack(cur[ATK]), td = Time5(cur[DECAY]), tr = Time5(cur[REL]);
+    const float ws = (ta + td + tr) * 0.4f + 0.05f;  // the held part, drawn this long
+    const float total = ta + td + ws + tr;
+    const float sus = cur[SUS] * 0.01f;
+    const int x1 = x + 1 + int((w - 3) * ta / total), x2 = x1 + int((w - 3) * td / total);
+    const int x3 = x2 + int((w - 3) * ws / total), x4 = x + w - 2;
+    const int yb = y + h - 2, yt = y + 1;
+    const int ys = yb - int((yb - yt) * sus);
+    gfxLine(x + 1, yb, x1, yt);
+    // the decay and the release fall off quickly at first, as they sound
+    auto fall = [&](int xa, int xb, int ya, int yz) {
+      int py = ya;
+      for (int i = xa + 1; i <= xb; i++) {
+        const float t = float(i - xa) / std::max(1, xb - xa);
+        const int yy = yz + int((ya - yz) * expf(-5.0f * t) * (1.0f - t) + 0.5f) ;
+        gfxLine(i - 1, py, i, yy);
+        py = yy;
+      }
+    };
+    fall(x1, x2, yt, ys);
+    gfxLine(x2, ys, x3, ys);
+    fall(x3, x4, ys, yb);
+    for (int i = 0; i < AudioEffectWarp::VOICES; i++) {
+      if (viz.pos[i] < 0.0f) continue;
+      const int yy = yb - int((yb - yt) * std::min(1.0f, viz.env[i]));
+      gfxRect(x + w - 6 - i * 4, yy - 1, 3, 3);
+    }
+    return;
+  }
   if (!frames && !loading && !copying) {
-    const char* t = no_mem ? "NO MEMORY" : val[FILE_] >= 0 ? "NOT A WAV" : spool ? "RECORD IN SPOOL" : "R: PICK A FILE";
+    const char* t = no_mem ? "NO MEMORY"
+        : cur[SRC] == SRC_PLAYER ? (player ? "NOT A WAV" : "PLAYER IS OFF")
+        : spool ? "RECORD IN SPOOL" : "SPOOL IS OFF";
     gfxPrint(x + 2, y + h / 2 - 4, t);
-    if (val[FILE_] < 0 && spool && !no_mem) gfxPrint(x + 2, y + h / 2 + 6, "OR R: A FILE");
     return;
   }
   const int cy = y + h / 2, half = h / 2 - 1;
   const int s = std::min(cur[START], cur[END]), e = std::max(cur[START], cur[END]);
   const int xs = x + int(int64_t(s) * (w - 1) / 10000), xe = x + int(int64_t(e) * (w - 1) / 10000);
-  int top = 1;  // the loudest part fills the height (a quiet sample shows too)
+  int top = 1;  // the loudest part fills the height (a quiet sound shows too)
   for (uint8_t o : over) top = std::max<int>(top, o);
   for (int i = 0; i < w; i++) {
     const int a = over[i * 128 / w] * half / top;
