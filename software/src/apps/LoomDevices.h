@@ -5576,7 +5576,8 @@ private:
   static float Fade(int v) { const float f = v * 0.01f; return (16.0f + f * f * AUDIO_SAMPLE_RATE_EXACT) / AUDIO_SAMPLE_RATE_EXACT; }
   static void FormatSecs(float s, char* buf, size_t n) {
     const int t = int(s * 10000.0f + 0.5f);  // in 0.1 ms
-    if (t < 100) snprintf(buf, n, "%d.%dms", t / 10, t % 10);  // short: every step shows
+    if (!t) snprintf(buf, n, "0ms");
+    else if (t < 100) snprintf(buf, n, "%d.%dms", t / 10, t % 10);  // short: every step shows
     else if (s < 1.0f) snprintf(buf, n, "%dms", int(s * 1000.0f + 0.5f));
     else snprintf(buf, n, "%d.%02ds", int(s), int(s * 100.0f) % 100);
   }
