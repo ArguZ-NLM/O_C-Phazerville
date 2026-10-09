@@ -2931,6 +2931,7 @@ private:
   float bpm = 0.0f;           // the file's tempo at SPEED 100 (0: none found)
   int bpm_got = -1;           // levels read so far (-1: no analysis running)
   int bpm_n = 0;
+  bool bpm_loop = false;      // the loop in memory, read round and round (a short one works too)
   size_t bpm_from = 0;
   float* bpm_env = nullptr;   // RAM2, only while it runs
   void BpmStart();
@@ -3089,10 +3090,22 @@ FLASHMEM void PlayerDevice::BpmStart() {
   bpm = 0.0f;
   bpm_got = -1;
   const size_t n = Frames();
-  bpm_from = EdgeAt(START);
-  if (bpm_from + 800 * IDX_FRAMES > n) bpm_from = 0;  // too little after START: from the beginning
-  bpm_n = int(std::min<size_t>((n - bpm_from) / IDX_FRAMES, BPM_BINS));
-  if (bpm_n < 800) { Serial.printf("BPM: %u frames from %u, too short\n", unsigned(n), unsigned(bpm_from)); return; }  // under ~4 s: no tempo
+  // in memory (MEM): the loop, START to END, as a loop: it comes round, so
+  // ~1.5 s of it is enough. Streamed: ~32 s from START (or the beginning)
+  bpm_loop = !streaming;
+  if (bpm_loop) {
+    bpm_from = EdgeAt(START);
+    const size_t e = EdgeAt(END);
+    bpm_n = e > bpm_from ? int(std::min<size_t>((e - bpm_from) / IDX_FRAMES, BPM_BINS)) : 0;
+  } else {
+    bpm_from = EdgeAt(START);
+    if (bpm_from + 800 * IDX_FRAMES > n) bpm_from = 0;  // too little after START: from the beginning
+    bpm_n = int(std::min<size_t>((n - bpm_from) / IDX_FRAMES, BPM_BINS));
+  }
+  if (bpm_n < (bpm_loop ? 280 : 800)) {  // under ~1.5 s (a loop) / ~4 s: no tempo
+    Serial.printf("BPM: %d levels from %u of %u, too short\n", bpm_n, unsigned(bpm_from), unsigned(n));
+    return;
+  }
   bpm_env = static_cast<float*>(malloc(sizeof(float) * bpm_n));
   if (bpm_env) bpm_got = 0;
   Serial.printf("BPM: start, %d levels from frame %u of %u%s\n", bpm_n, unsigned(bpm_from), unsigned(n), bpm_env ? "" : ", NO MEMORY");  // over USB
@@ -3121,20 +3134,26 @@ FLASHMEM void PlayerDevice::BpmIdle() {
 FLASHMEM void PlayerDevice::BpmSolve() {
   float* o = bpm_env;
   const int n = bpm_n;
+  const float first = o[0], last = o[n - 1];
   for (int i = n - 1; i > 0; i--) o[i] = std::max(0.0f, o[i] - o[i - 1]);
-  o[0] = 0.0f;
+  o[0] = bpm_loop ? std::max(0.0f, first - last) : 0.0f;  // (a loop: its end leads into its start)
   float mean = 0.0f;
   for (int i = 0; i < n; i++) mean += o[i];
   mean /= n;
   for (int i = 0; i < n; i++) o[i] -= mean;
   const float bin_s = IDX_FRAMES / FileRate();
-  const int lmax = std::min(n / 2, int(4.0f * 60.0f / (70.0f * bin_s)) + 2);
+  const int lmax = std::min(bpm_loop ? n - 1 : n / 2, int(4.0f * 60.0f / (70.0f * bin_s)) + 2);
   float* r = static_cast<float*>(malloc(sizeof(float) * (lmax + 1)));
   if (!r) { Serial.println("BPM: no memory to solve"); return; }
   for (int l = 0; l <= lmax; l++) {
     float acc = 0.0f;
-    for (int i = 0; i + l < n; i++) acc += o[i] * o[i + l];
-    r[l] = acc / float(n - l);
+    if (bpm_loop) {  // round the loop
+      for (int i = 0; i < n; i++) acc += o[i] * o[(i + l) % n];
+      r[l] = acc / float(n);
+    } else {
+      for (int i = 0; i + l < n; i++) acc += o[i] * o[i + l];
+      r[l] = acc / float(n - l);
+    }
   }
   if (r[0] <= 0.0f) { free(r); Serial.println("BPM: flat (no level changes)"); return; }
   auto at = [&](float l) {
