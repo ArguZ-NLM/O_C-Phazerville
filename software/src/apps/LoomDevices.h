@@ -628,20 +628,27 @@ inline NoiseTest* g_noise = nullptr;
 static inline float NoiseDb(double rms) {
   return rms > 0.0 ? float(20.0 * log10(rms / (32767.0 / M_SQRT2))) : -999.0f;
 }
+// "-98.1" (this printf has no %f)
+static inline const char* DbText(float db, char* buf) {
+  const int t = int(lrintf(fabsf(db) * 10.0f));
+  sprintf(buf, "%s%d.%d", db < 0.0f && t ? "-" : "", t / 10, t % 10);
+  return buf;
+}
 
 FLASHMEM void NoiseTest::Report() {
   done = false;
   // one rounding to 16 bit: 1/sqrt(12) of a step
-  Serial.printf("NOISE TEST: a %.0f Hz tone into both tracks' INPUT (jacks ignored, output muted)\n", HZ);
-  Serial.printf("  dB against a full-scale sine; one rounding to 16 bit alone = %.1f dB\n",
-                NoiseDb(1.0 / sqrt(12.0)));
+  char d1[16], d2[16];
+  Serial.printf("NOISE TEST: a %d Hz tone into both tracks' INPUT (jacks ignored, output muted)\n", int(HZ));
+  Serial.printf("  dB against a full-scale sine; one rounding to 16 bit alone = %s dB\n",
+                DbText(NoiseDb(1.0 / sqrt(12.0)), d1));
   Serial.printf("  tone in   | L: tone out  left over  | R: tone out  left over\n");
   for (int i = 0; i < STEPS; i++) {
     const Result& r = result[i];
     const XSums& s = r.x;
     if (s.n <= 0) continue;
     if (STEP_DB[i] < -200.0f) Serial.printf("  silence   |");
-    else Serial.printf("  %5.0f dB  |", STEP_DB[i]);
+    else Serial.printf("  %5d dB  |", int(STEP_DB[i]));
     for (int ch = 0; ch < 2; ch++) {
       const YSums& y = r.ch[ch];
       // least squares: y ~ a sin + b cos + d (the 3x3 normal equations)
@@ -662,8 +669,8 @@ FLASHMEM void NoiseTest::Report() {
       const double left = std::max(0.0, y.yy - (b[0] * v[0] + b[1] * v[1] + b[2] * v[2]));
       const double tone_rms = sqrt((b[0] * b[0] + b[1] * b[1]) / 2.0);
       if (STEP_DB[i] < -200.0f) Serial.printf("      -     ");
-      else Serial.printf("  %7.1f dB", NoiseDb(tone_rms));
-      Serial.printf("  %7.1f dB |", NoiseDb(sqrt(left / s.n)));
+      else Serial.printf("  %7s dB", DbText(NoiseDb(tone_rms), d1));
+      Serial.printf("  %7s dB |", DbText(NoiseDb(sqrt(left / s.n)), d2));
     }
     Serial.println();
     delay(2);
