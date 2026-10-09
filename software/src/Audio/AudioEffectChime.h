@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Audio.h>
+#include "AudioSample.h"
 #include <algorithm>
 #include <cmath>
 
@@ -295,8 +296,8 @@ FASTRUN void AudioEffectChime::update() {
     const float sr = xr / sqrtf(1.0f + xr * xr);
     const float ol = dl + wet * (sl - dl), orr = dr + wet * (sr - dr);
     peak_out = std::max(peak_out, std::max(fabsf(ol), fabsf(orr)));
-    out[0]->data[n] = __SSAT(int32_t(ol * 32767.0f), 16);
-    out[1]->data[n] = __SSAT(int32_t(orr * 32767.0f), 16);
+    out[0]->data[n] = ToSample16(ol);
+    out[1]->data[n] = ToSample16(orr);
   }
   transmit(out[0], 0);
   transmit(out[1], 1);

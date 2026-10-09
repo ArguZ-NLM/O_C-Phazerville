@@ -30,6 +30,7 @@
 #pragma once
 
 #include "../Audio/AudioEffectEcho.h"
+#include "../Audio/AudioSample.h"
 #include "../Audio/AudioEffectDirt.h"
 #include "../Audio/AudioEffectBandz.h"
 #include "../Audio/AudioEffectResonator.h"
@@ -741,7 +742,7 @@ FASTRUN void LoomMixer::update() {
         const int sh = rt ? 16 : 15;
         int32_t pk = 0;
         for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
-          const int32_t v = (b->data[n] * g) >> sh;
+          const int32_t v = (b->data[n] * g + (1 << (sh - 1))) >> sh;  // rounded
           acc[to][n] += v;
           pk = std::max<int32_t>(pk, abs(v));
         }
@@ -824,7 +825,7 @@ FASTRUN void LoomFade::update() {
         for (int c = 0; c < 2; c++) {
           const float d = in[c] ? in[c]->data[n] * q : 0.0f;
           const float w = in[2 + c] ? in[2 + c]->data[n] * q : 0.0f;
-          out[c]->data[n] = __SSAT(int32_t((d * g_dry + w * g_wet) * 32767.0f), 16);
+          out[c]->data[n] = ToSample16(d * g_dry + w * g_wet);
         }
       }
       transmit(out[0], 0);
@@ -1266,8 +1267,8 @@ FASTRUN void InputDevice::update() {
         } break;
       }
       const int32_t gg = g;
-      l[n] = __SSAT((x * gg) >> 14, 16);
-      r[n] = __SSAT((y * gg) >> 14, 16);
+      l[n] = __SSAT((x * gg + 8192) >> 14, 16);  // rounded
+      r[n] = __SSAT((y * gg + 8192) >> 14, 16);
       pk[0] = std::max<int32_t>(pk[0], abs(l[n]));
       pk[1] = std::max<int32_t>(pk[1], abs(r[n]));
     }
@@ -4660,8 +4661,8 @@ FASTRUN void AudioRings::update() {
     for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
       const float l = fo[n] * a + fa[n] * b, r = fa[n] * a + fo[n] * b;
       pk = std::max(pk, std::max(fabsf(l), fabsf(r)));
-      o[0]->data[n] = __SSAT(int32_t(l * 32767.0f), 16);
-      o[1]->data[n] = __SSAT(int32_t(r * 32767.0f), 16);
+      o[0]->data[n] = ToSample16(l);
+      o[1]->data[n] = ToSample16(r);
     }
     peak = std::max(float(peak), pk);
     transmit(o[0], 0);
@@ -4899,7 +4900,7 @@ FASTRUN void AudioStretch::update() {
         y -= hp_z[c];
         last[2 * n + c] = y;
         pk = std::max(pk, fabsf(y));
-        o[c]->data[n] = __SSAT(int32_t(y * 32767.0f), 16);
+        o[c]->data[n] = ToSample16(y);
       }
     peak = std::max(float(peak), pk);
     transmit(o[0], 0);

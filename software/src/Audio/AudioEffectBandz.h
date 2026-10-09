@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Audio.h>
+#include "AudioSample.h"
 #include <algorithm>
 #include <cmath>
 
@@ -174,7 +175,7 @@ FASTRUN void AudioEffectBandz::update() {
       blk_cmp += y * y;
       y *= auto_gain;
       const float x = in[c] ? in[c]->data[n] * q : 0.0f;
-      out[c]->data[n] = __SSAT(int32_t((x + mixw * (y - x)) * 32767.0f), 16);
+      out[c]->data[n] = ToSample16(x + mixw * (y - x));
     }
   }
 

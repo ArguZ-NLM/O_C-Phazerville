@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Audio.h>
+#include "AudioSample.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -524,8 +525,8 @@ FASTRUN void AudioEffectReel::update() {
       }
     }
     const float ol = yl * g + xl * q * m, orr = yr * g + xr * q * m;
-    out[0]->data[n] = __SSAT(int32_t(ol * 32767.0f), 16);
-    out[1]->data[n] = __SSAT(int32_t(orr * 32767.0f), 16);
+    out[0]->data[n] = ToSample16(ol);
+    out[1]->data[n] = ToSample16(orr);
   }
 
   // one side on both channels (linked PLAYERs: L takes the left, R the right)

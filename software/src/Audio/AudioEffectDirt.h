@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Audio.h>
+#include "AudioSample.h"
 #include <algorithm>
 #include <cmath>
 
@@ -238,7 +239,7 @@ FASTRUN void AudioEffectDirt::update() {
     for (int c = 0; c < 2; c++) {
       const float o = dry[c] + w * (x[c] - dry[c]);
       peak_out = std::max(peak_out, fabsf(o));
-      out[c]->data[n] = __SSAT(int32_t(o * 32767.0f), 16);
+      out[c]->data[n] = ToSample16(o);
     }
   }
 

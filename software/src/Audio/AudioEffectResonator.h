@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Audio.h>
+#include "AudioSample.h"
 #include <algorithm>
 #include <cmath>
 
@@ -236,8 +237,8 @@ FASTRUN void AudioEffectResonator::update() {
     const float ol = dl + wet * (sum[0][n] - dl);
     const float orr = dr + wet * (sum[1][n] - dr);
     peak_out = std::max(peak_out, std::max(fabsf(ol), fabsf(orr)));
-    out[0]->data[n] = __SSAT(int32_t(ol * 32767.0f), 16);
-    out[1]->data[n] = __SSAT(int32_t(orr * 32767.0f), 16);
+    out[0]->data[n] = ToSample16(ol);
+    out[1]->data[n] = ToSample16(orr);
   }
 
   transmit(out[0], 0);

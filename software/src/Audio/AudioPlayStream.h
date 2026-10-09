@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Audio.h>
+#include "AudioSample.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -280,8 +281,8 @@ FASTRUN void AudioPlayStream::update() {
       yl *= ge; yr *= ge;
     }
     const float rg = run_g * run_g * (3.0f - 2.0f * run_g);
-    out[0]->data[n] = __SSAT(int32_t(yl * rg * win_g * 32767.0f), 16);
-    out[1]->data[n] = __SSAT(int32_t(yr * rg * win_g * 32767.0f), 16);
+    out[0]->data[n] = ToSample16(yl * rg * win_g);
+    out[1]->data[n] = ToSample16(yr * rg * win_g);
     p += sp;
     if (xh && p >= double(b + xh)) {
       // centred crossfade: on from after it, in the window crossed into
