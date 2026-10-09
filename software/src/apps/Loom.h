@@ -1212,6 +1212,8 @@ FLASHMEM static void LoomReadMIDI(T& device) {
       device.getChannel(), device.getType(), device.getData1(), device.getData2()
     };
     if (msg.message == midi::SystemExclusive || msg.message == midi::ProgramChange) continue;
+    if ((msg.message >> 4) != 0xF)  // USB 'J' shows them
+      loom::midi_log[loom::midi_log_n++ % loom::MIDI_LOG] = {millis(), uint8_t(msg.message), uint8_t(msg.channel), msg.data1, msg.data2};
     if (msg.message == midi::Clock) loom::midi_clocks++;
     if (msg.message == midi::NoteOn && msg.data2 > 0) {
       loom::NoteIn(msg.channel, msg.data1);
@@ -1385,6 +1387,8 @@ FLASHMEM void AppLoom::MainLoop() {
     if (!listing) preview->Stop();
     else g_browser->AutoplayIdle();
     preview->Idle(listing && view == DEVICE);
+    if (g_tape_request) { g_tape_request = false; g_tape->Toggle(); }  // USB 'T'
+    if (g_midilog_request) { g_midilog_request = false; MidiLogPrint(); }  // USB 'J'
     g_tape->Idle();
     // the noise test (USB 'N')
     if (g_noise_request) {

@@ -101,6 +101,8 @@ volatile uint32_t loop_counter = 0;
 volatile bool g_noise_request = false;  // Loom's noise test (USB 'N')
 volatile uint8_t g_capture_request = 0;  // Loom's output capture (USB 'W' / 'U')
 volatile bool g_notes_request = false;   // Loom: test notes, captured (USB 'M')
+volatile bool g_tape_request = false;    // Loom: TAPE on / off (USB 'T')
+volatile bool g_midilog_request = false; // Loom: the MIDI log (USB 'J')
 static OC::UiMode ui_mode = OC::UI_MODE_MENU;
 static OC::IOFrame io_frame;
 
@@ -766,6 +768,12 @@ void FASTRUN loop() {
             PsramTraceReport();
             break;
           }
+          case 'J':  // Loom: the last MIDI messages in
+            g_midilog_request = true;
+            break;
+          case 'T':  // Loom: start / stop a TAPE take (as holding A on OUTPUT)
+            g_tape_request = true;
+            break;
           case 'M':  // a few MIDI notes played in, with 'U's capture (WARP, from the Mac)
             g_notes_request = true;
             break;

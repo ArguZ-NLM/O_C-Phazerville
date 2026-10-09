@@ -48,6 +48,8 @@ extern "C" uint8_t external_psram_size;  // MB of PSRAM found at start (Teensy c
 extern volatile bool g_noise_request;  // USB 'N' (Main.cpp)
 extern volatile uint8_t g_capture_request;  // USB 'W' (1) / 'U' (2) (Main.cpp)
 extern volatile bool g_notes_request;       // USB 'M' (Main.cpp)
+extern volatile bool g_tape_request;        // USB 'T' (Main.cpp)
+extern volatile bool g_midilog_request;     // USB 'J' (Main.cpp)
 
 namespace loom {
 // the longest SPOOL loop / PLAYER sample held in memory. They take only
@@ -102,6 +104,23 @@ inline uint32_t note_ev_n = 0;
 inline uint8_t chan_at = 0;
 inline uint8_t poly_at[128] = {};
 inline uint32_t at_seen = 0;
+// the last MIDI messages in (USB 'J' prints them): when, what
+struct MidiLogEv { uint32_t ms; uint8_t type, ch, d1, d2; };
+constexpr int MIDI_LOG = 128;
+inline MidiLogEv midi_log[MIDI_LOG] = {};
+inline uint32_t midi_log_n = 0;
+inline void MidiLogPrint() {
+  const uint32_t n = std::min<uint32_t>(midi_log_n, MIDI_LOG);
+  Serial.printf("--- MIDI log, last %lu ---\n", (unsigned long)n);
+  for (uint32_t k = midi_log_n - n; k != midi_log_n; k++) {
+    const MidiLogEv& e = midi_log[k % MIDI_LOG];
+    const char* t = e.type == 0x90 ? "ON " : e.type == 0x80 ? "OFF" : e.type == 0xA0 ? "PAT" : e.type == 0xD0 ? "CAT"
+                  : e.type == 0xE0 ? "BND" : e.type == 0xB0 ? "CC " : "?  ";
+    Serial.printf("%8lu ch%2d %s %3d %3d\n", (unsigned long)e.ms, e.ch, t, e.d1, e.d2);
+    delay(1);
+  }
+  Serial.println("--- end ---");
+}
 
 inline void NoteEvent(int ch, int note, int vel) {
   note_ev[note_ev_n % NOTE_EVS] = {uint8_t(ch), uint8_t(note), uint8_t(vel)};
