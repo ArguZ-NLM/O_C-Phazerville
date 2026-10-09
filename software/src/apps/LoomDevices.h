@@ -1279,7 +1279,8 @@ public:
 private:
   volatile int32_t jack_pk = 0;  // since the last JackDb
   float jack_db = -99.0f;
-  uint32_t jack_db_at = 0, jack_peak_at = 0;
+  uint32_t jack_db_at = 0, jack_peak_at = 0, jack_low_since = 0;
+  int jack_shown = -99;  // the whole dB on screen (moves only 1 dB past it)
   void Poll();
   void Scope(const int16_t* l, const int16_t* r);
 };
@@ -1422,14 +1423,20 @@ FLASHMEM float InputDevice::JackDb() {
   const float dt = jack_db_at ? (now - jack_db_at) * 0.001f : 0.0f;
   jack_db_at = now;
   const float db = pk > 0 ? 20.0f * log10f(pk / 32767.0f) : -99.0f;
-  // up at once; down: within 2 dB of the level a peak is held 0.5 s, then
-  // falls 10 dB a second (calm); further above it follows quickly, the
-  // faster the bigger the gap (10 dB in ~0.3 s)
+  // up at once; down: a peak is held 0.5 s, then falls 10 dB a second;
+  // a real drop (more than 6 dB below for 0.2 s) is followed quickly, the
+  // faster the bigger the gap (a wobbling level must not set that off)
   const float gap = jack_db - db;
+  if (gap <= 6.0f) jack_low_since = 0;
+  else if (!jack_low_since) jack_low_since = now | 1;
   if (gap <= 0.0f) { jack_db = db; jack_peak_at = now; }
-  else if (gap > 2.0f) jack_db = std::max(db, jack_db - std::max(10.0f, 8.0f * gap) * dt);
+  else if (jack_low_since && now - jack_low_since > 200) jack_db = std::max(db, jack_db - 8.0f * gap * dt);
   else if (now - jack_peak_at > 500) jack_db = std::max(db, jack_db - 10.0f * dt);
-  return jack_db;
+  // the number moves only once the reading is 1 dB past it (no flicker
+  // between two values); up to a new peak at once
+  const int v = int(lrintf(jack_db));
+  if (v > jack_shown || fabsf(jack_db - jack_shown) >= 1.0f) jack_shown = v;
+  return float(jack_shown);
 }
 
 FLASHMEM void InputDevice::DrawViz(int x, int y, int w, int h) {
