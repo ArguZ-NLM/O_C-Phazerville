@@ -97,6 +97,11 @@ struct NoteEv { uint8_t ch, note, vel; };  // vel 0: note off
 constexpr uint32_t NOTE_EVS = 64;
 inline NoteEv note_ev[NOTE_EVS] = {};
 inline uint32_t note_ev_n = 0;
+// MIDI aftertouch, any channel: the channel's pressure, and each key's
+// (poly; a key's starts at 0 with its note); at_seen counts them all
+inline uint8_t chan_at = 0;
+inline uint8_t poly_at[128] = {};
+inline uint32_t at_seen = 0;
 
 inline void NoteEvent(int ch, int note, int vel) {
   note_ev[note_ev_n % NOTE_EVS] = {uint8_t(ch), uint8_t(note), uint8_t(vel)};
@@ -5506,7 +5511,7 @@ PROGMEM static const DeviceDef WARP_DEF = {
     {"SRC", 0, 1, 0, LIST, 2, 0, 0, {"SPL", "PLY"}},  // the other track's SPOOL or PLAYER
     {"THRU", 0, 1, 1, LIST, 2, 0, 0, {"OFF", "ON"}},  // THREAD: A's output on under the notes
     {"VEL", 0, 100, 50, UNI},     // %: how much velocity sets a note's loudness
-    {"WEFT", -240, 240, 0, BI},   // tenths of a semitone, every note (+-2 octaves)
+    {"WEFT", -240, 240, 20, BI},  // tenths of a semitone a key bends at full pressure (aftertouch)
     // times; mode: the stage's curve
     {"ATK", 0, 100, 55, UNI, 0, 3, 0, {}, {"LOG", "LIN", "EXP"}},  // 1 ms .. 2 s (55: 65 ms)
     {"DEC", 0, 100, 44, UNI, 0, 3, 2, {}, {"LOG", "LIN", "EXP"}},  // 5 ms .. 5 s, to SUS (44: 104 ms)
@@ -5743,6 +5748,7 @@ FLASHMEM void WarpDevice::Idle() {
     if (e.vel) fx.NoteOn(e.note, e.vel);
     else fx.NoteOff(e.note);
   }
+  fx.Pressure(chan_at, poly_at);  // WEFT
   // SRC turned: the other sound
   if (src_was != cur[SRC]) {
     Free();
@@ -5895,7 +5901,7 @@ FLASHMEM void WarpDevice::Apply(int p) {
   a.rel_curve = mode[REL];
   a.level = 1.0f;
   a.vel_amt = cur[VEL] * 0.01f;
-  a.pitch = cur[WEFT] * 0.1f;
+  a.pitch = cur[WEFT] * 0.1f;  // at full pressure
   a.root = ROOT;
   a.rate = Cycle() ? frames * 261.6256f / AUDIO_SAMPLE_RATE_EXACT : rate;  // MIDI 60 = C4
   fx.Set(a);
@@ -5991,6 +5997,12 @@ FLASHMEM void WarpDevice::DrawViz(int x, int y, int w, int h) {
     if (viz.pos[i] < 0.0f) continue;
     const int px = x + constrain(int(viz.pos[i] * (w - 1)), 0, w - 1);
     gfxInvert(px, y + int((1.0f - viz.env[i]) * half), 1, std::max(1, int(viz.env[i] * 2 * half)));
+  }
+  {  // WEFT: the pressure coming in (the most of any key), a bar at the right
+    int at = chan_at;
+    for (int i = 0; i < AudioEffectWarp::VOICES; i++) if (viz.pos[i] >= 0.0f) at = std::max<int>(at, poly_at[viz.note[i] & 127]);
+    const int bh = at * (h - 2) / 127;
+    if (bh > 0) { graphics.clearRect(x + w - 4, y, 4, h); gfxRect(x + w - 3, y + h - 1 - bh, 2, bh); }
   }
   if (loading) {
     char t[16];

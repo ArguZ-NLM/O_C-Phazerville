@@ -13,8 +13,9 @@
 // CROSS blends what is around END into what is around START (where the
 // sample has nothing beyond them: its last frames into the loop's first),
 // INOUT dips out and back in. ATTACK fades it in; a note off lets it go over RELEASE.
-// WEFT: every voice faster and higher or slower and lower, by semitones;
-// it glides there over ~10 ms, so turning or modulating it is smooth.
+// WEFT: pressing a key bends its note: its own (poly) aftertouch or the
+// channel's, whichever is more, smoothed over ~15 ms; full pressure bends
+// it by par.pitch semitones (up, or down if negative).
 // A ninth note takes the oldest voice, which hands its sound to a fader
 // that lets it go over ~5 ms (cut, it clicked).
 //
@@ -51,7 +52,7 @@ public:
     uint8_t atk_curve = C_LIN, dec_curve = C_EXP, rel_curve = C_EXP;
     float level = 1.0f;      // 1: a note at full velocity as loud as the sample
     float vel_amt = 0.75f;   // 0: every note as loud; 1: velocity sets it all
-    float pitch = 0.0f;      // WEFT: semitones, every voice
+    float pitch = 0.0f;      // WEFT: semitones at full pressure
     int root = 60;
     float rate = 1.0f;       // the file's sample rate / 48 kHz
   };
@@ -88,6 +89,9 @@ public:
   void NoteOn(int note, int vel, bool once = false) { Push(note, constrain(vel, 1, 127), once); }
   void NoteOff(int note) { Push(note, 0, false); }
   void AllOff() { Push(255, 0, false); }  // every voice let go
+  // main loop: aftertouch, the channel's and each key's (poly; the array
+  // stays the caller's)
+  void Pressure(uint8_t chan, const uint8_t* poly) { at_chan = chan; at_poly = poly; }
   int Sounding() const {
     int n = 0;
     for (int i = 0; i < VOICES; i++) n += vc[i].on;
@@ -119,6 +123,7 @@ private:
     double pos = 0.0;    // in frames of the sample
     double step = 1.0;
     float base = 1.0f;   // step without WEFT
+    float press = 0.0f;  // WEFT: the key's pressure, smoothed
     float env = 0.0f;
     float gain = 1.0f;
     float fade = 1.0f;   // a fader's own fade out (stolen voices)
@@ -133,7 +138,8 @@ private:
   Params par;
   Voice vc[VOICES + FADERS];
   uint32_t clock = 0;
-  float glide = 1.0f;  // WEFT's speed factor, on its way to the setting
+  volatile uint8_t at_chan = 0;
+  const uint8_t* volatile at_poly = nullptr;
   static constexpr int QUEUE = 32;
   Event queue[QUEUE];
   volatile uint32_t ev_wr = 0, ev_rd = 0;
@@ -204,8 +210,7 @@ FASTRUN void AudioEffectWarp::update() {
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   bool any = false;
   for (auto& v : vc) any |= v.on;
-  if (!any || !nframes) {  // no voice: what comes in, as it is (and WEFT
-    glide = exp2f(par.pitch * (1.0f / 12.0f));  // already there for the next note)
+  if (!any || !nframes) {  // no voice: what comes in, as it is
     for (int c = 0; c < 2; c++) if (in[c]) { transmit(in[c], c); release(in[c]); }
     return;
   }
@@ -240,20 +245,22 @@ FASTRUN void AudioEffectWarp::update() {
   const float dec = 1.0f / (std::max(0.005f, par.decay) * AUDIO_SAMPLE_RATE_EXACT);
   const float sus = constrain(par.sustain, 0.0f, 1.0f);
   constexpr float FADER = 1.0f / (0.005f * AUDIO_SAMPLE_RATE_EXACT);
-  // WEFT: the speed factor for each sample of the block, gliding (~10 ms)
-  float speed[AUDIO_BLOCK_SAMPLES];
-  {
-    const float want = exp2f(par.pitch * (1.0f / 12.0f));
-    constexpr float K = 1.0f / (0.01f * AUDIO_SAMPLE_RATE_EXACT);
-    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) speed[n] = glide += (want - glide) * K;
-  }
+  // WEFT: the pressure, per voice (below)
+  const uint8_t* poly = at_poly;
+  const float chan = at_chan * (1.0f / 127.0f);
+  const float bend = par.pitch * (1.0f / 12.0f);  // octaves at full pressure
   const float g = par.level * (1.0f / 32768.0f);
   for (int i = 0; i < VOICES + FADERS; i++) {
     Voice& v = vc[i];
     if (!v.on) continue;
     const bool fader = i >= VOICES;
+    // WEFT: this note's pressure, gliding over ~15 ms across the block
+    const float want = std::max(chan, poly ? poly[v.note & 127] * (1.0f / 127.0f) : 0.0f);
+    const float p0 = v.press;
+    v.press += (want - v.press) * (1.0f - expf(-float(AUDIO_BLOCK_SAMPLES) / (0.015f * AUDIO_SAMPLE_RATE_EXACT)));
+    const float s0 = exp2f(bend * p0), s1 = exp2f(bend * v.press);
     for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
-      v.step = v.base * speed[n];
+      v.step = v.base * (s0 + (s1 - s0) * (n * (1.0f / AUDIO_BLOCK_SAMPLES)));
       // the envelope
       if (v.stage == 0) {  // up from where it was (a voice taken over: 0)
         v.ph += att;

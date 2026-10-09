@@ -1213,7 +1213,12 @@ FLASHMEM static void LoomReadMIDI(T& device) {
     };
     if (msg.message == midi::SystemExclusive || msg.message == midi::ProgramChange) continue;
     if (msg.message == midi::Clock) loom::midi_clocks++;
-    if (msg.message == midi::NoteOn && msg.data2 > 0) loom::NoteIn(msg.channel, msg.data1);
+    if (msg.message == midi::NoteOn && msg.data2 > 0) {
+      loom::NoteIn(msg.channel, msg.data1);
+      loom::poly_at[msg.data1 & 127] = 0;  // the key's pressure starts over
+    }
+    if (msg.message == midi::AfterTouchChannel) { loom::chan_at = msg.data1; loom::at_seen++; }
+    if (msg.message == midi::AfterTouchPoly) { loom::poly_at[msg.data1 & 127] = msg.data2; loom::at_seen++; }
     if (msg.message == midi::NoteOn || msg.message == midi::NoteOff)  // (note on at 0: off)
       loom::NoteEvent(msg.channel, msg.data1, msg.message == midi::NoteOn ? msg.data2 : 0);
     if (loom::tempo_clock && loom::tempo_clock->midi()) {
@@ -1491,6 +1496,8 @@ FLASHMEM void AppLoom::MainLoop() {
   AudioMemoryUsageMaxReset();
   Serial.printf("  load:%s\n", loom::load_note);
   Serial.printf("  main loop: longest gap %lu us\n", (unsigned long)loop_gap_max);
+  Serial.printf("  MIDI: notes %lu, aftertouch %lu (channel now %d)\n", (unsigned long)loom::note_ev_n,
+                (unsigned long)loom::at_seen, int(loom::chan_at));
   loop_gap_max = 0;
   for (int t = 0; t < loom::NUM_TRACKS; t++)  // SPOOL's memory: the loop, or the small buffer
     if (loom::tracks[t].reel && loom::tracks[t].choice[loom::SOURCE] == 1)
