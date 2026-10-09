@@ -634,54 +634,56 @@ private:
 inline NoiseTest* g_noise = nullptr;
 
 /////////////////////////////////////////////////////////////////
-// Output capture (USB 'W'): the next 3 s of the output as it goes to the
-// jacks, held in PSRAM, then sent over USB in hex lines ("w" + 16 stereo
-// frames), a bit per main loop. For listening from the Mac.
+// Output capture (USB 'W'): the next 2 s of the output as it goes to the
+// jacks and of the input jacks as they come in, held in PSRAM, then sent
+// over USB in hex lines ("w" + 16 frames of out L, out R, in 1, in 2), a
+// bit per main loop. For listening from the Mac.
 /////////////////////////////////////////////////////////////////
 class OutCapture {
 public:
-  static constexpr uint32_t FRAMES = 3 * 48000;
+  static constexpr uint32_t FRAMES = 2 * 48000;
+  static constexpr int CH = 4;
   bool Start() {
-    if (!buf) buf = static_cast<int16_t*>(extmem_malloc(FRAMES * 4));
+    if (!buf) buf = static_cast<int16_t*>(extmem_malloc(FRAMES * CH * 2));
     if (!buf) return false;
     sent = 0;
-    wr = 0;
+    wr[0] = wr[1] = 0;
     on = true;
     return true;
   }
-  // audio interrupt: one block of the output
-  void Push(const int16_t* l, const int16_t* r) {
+  // audio interrupt: one block of the output (part 0) or of the input jacks
+  // (part 1)
+  void Push(int part, const int16_t* a, const int16_t* b) {
     if (!on) return;
-    for (int n = 0; n < AUDIO_BLOCK_SAMPLES && wr < FRAMES; n++, wr++) {
-      buf[2 * wr] = l[n];
-      buf[2 * wr + 1] = r[n];
+    uint32_t w = wr[part];
+    for (int n = 0; n < AUDIO_BLOCK_SAMPLES && w < FRAMES; n++, w++) {
+      buf[CH * w + 2 * part] = a[n];
+      buf[CH * w + 2 * part + 1] = b[n];
     }
-    if (wr >= FRAMES) on = false;
+    wr[part] = w;
+    if (wr[0] >= FRAMES && wr[1] >= FRAMES) on = false;
   }
   // main loop: send what is captured, a few lines at a time
   void Idle() {
-    if (!buf || on || sent >= wr) return;
-    if (sent == 0) Serial.printf("CAPTURE %lu frames 48000 Hz\n", (unsigned long)wr);
-    char line[2 + 16 * 8 + 2];
-    for (int k = 0; k < 8 && sent < wr; k++) {
+    if (!buf || on || sent >= FRAMES) return;
+    if (sent == 0) Serial.printf("CAPTURE %lu frames 48000 Hz: out L, out R, in 1, in 2\n", (unsigned long)FRAMES);
+    char line[2 + 16 * CH * 4 + 2];
+    for (int k = 0; k < 8 && sent < FRAMES; k++) {
       int p = 0;
       line[p++] = 'w';
-      for (int f = 0; f < 16 && sent < wr; f++, sent++)
-        for (int c = 0; c < 2; c++) {
-          const uint16_t v = uint16_t(buf[2 * sent + c]);
-          p += sprintf(line + p, "%04X", v);
-        }
+      for (int f = 0; f < 16 && sent < FRAMES; f++, sent++)
+        for (int c = 0; c < CH; c++) p += sprintf(line + p, "%04X", uint16_t(buf[CH * sent + c]));
       line[p++] = '\n';
       line[p] = 0;
       Serial.write(line, p);
     }
-    if (sent >= wr) Serial.println("--- end ---");
+    if (sent >= FRAMES) Serial.println("--- end ---");
   }
 private:
   int16_t* buf = nullptr;
-  volatile uint32_t wr = 0;
+  volatile uint32_t wr[2] = {};
   volatile bool on = false;
-  uint32_t sent = 0;
+  uint32_t sent = FRAMES;
 };
 inline OutCapture* g_capture = nullptr;
 
@@ -829,7 +831,7 @@ FASTRUN void LoomMixer::update() {
         for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) acc[c][n] += int32_t(((b->data[n] * 26214) >> 15) * g[n]);
     for (int c = 0; c < 2; c++)
       for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) out[c]->data[n] = __SSAT(acc[c][n], 16);
-    if (g_capture) g_capture->Push(out[0]->data, out[1]->data);
+    if (g_capture) g_capture->Push(0, out[0]->data, out[1]->data);
     transmit(out[0], 0);
     transmit(out[1], 1);
   }
@@ -1301,6 +1303,7 @@ FASTRUN void InputDevice::update() {
     const int16_t* a = in[base] ? in[base]->data : silence;
     const int16_t* b = in[base + 1] ? in[base + 1]->data : silence;
     if (!from_a && g_noise && g_noise->Running()) a = b = g_noise->Tone();  // the noise test
+    if (!chained && g_capture) g_capture->Push(1, a, b);  // the jacks as they come in (USB 'W')
     const int32_t g = static_cast<int32_t>(gain * 16384.0f);   // Q14, up to 2.0
     const int32_t wd = static_cast<int32_t>(width * 16384.0f); // Q14
     int16_t* l = out[0]->data;
