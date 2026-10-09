@@ -5575,7 +5575,9 @@ private:
   // FADE as SPOOL's: up to 1 s, finer at the short end
   static float Fade(int v) { const float f = v * 0.01f; return (16.0f + f * f * AUDIO_SAMPLE_RATE_EXACT) / AUDIO_SAMPLE_RATE_EXACT; }
   static void FormatSecs(float s, char* buf, size_t n) {
-    if (s < 1.0f) snprintf(buf, n, "%dms", int(s * 1000.0f + 0.5f));
+    const int t = int(s * 10000.0f + 0.5f);  // in 0.1 ms
+    if (t < 100) snprintf(buf, n, "%d.%dms", t / 10, t % 10);  // short: every step shows
+    else if (s < 1.0f) snprintf(buf, n, "%dms", int(s * 1000.0f + 0.5f));
     else snprintf(buf, n, "%d.%02ds", int(s), int(s * 100.0f) % 100);
   }
 };
@@ -5870,7 +5872,7 @@ FLASHMEM void WarpDevice::Format(int p, char* buf, size_t n) const {
   switch (p) {
     case FILE_: {
       if (val[FILE_] < 0 || !nfiles) {
-        if (spool) snprintf(buf, n, "SPOOL %c", spool_tag);
+        if (spool) snprintf(buf, n, "SPL %c", spool_tag);  // (the value's column is 5 wide)
         else snprintf(buf, n, "--");
         break;
       }
