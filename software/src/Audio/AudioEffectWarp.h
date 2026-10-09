@@ -13,9 +13,10 @@
 // CROSS blends what is around END into what is around START (where the
 // sample has nothing beyond them: its last frames into the loop's first),
 // INOUT dips out and back in. ATTACK fades it in; a note off lets it go over RELEASE.
-// WEFT: pressing a key bends its note: its own (poly) aftertouch or the
-// channel's, whichever is more, smoothed over ~15 ms; full pressure bends
-// it by par.pitch semitones (up, or down if negative).
+// WEFT: pressing a key hard bends its note: its own (poly) aftertouch or
+// the channel's, whichever is more; nothing over the first half of the
+// pressure, then up to par.pitch semitones at full (up, or down if
+// negative), smoothed over ~15 ms.
 // A ninth note takes the oldest voice, which hands its sound to a fader
 // that lets it go over ~5 ms (cut, it clicked).
 //
@@ -255,7 +256,10 @@ FASTRUN void AudioEffectWarp::update() {
     if (!v.on) continue;
     const bool fader = i >= VOICES;
     // WEFT: this note's pressure, gliding over ~15 ms across the block
-    const float want = std::max(chan, poly ? poly[v.note & 127] * (1.0f / 127.0f) : 0.0f);
+    // only pressing hard bends: the first half of the pressure does
+    // nothing, the second half bends it from 0 to all of WEFT
+    const float at = std::max(chan, poly ? poly[v.note & 127] * (1.0f / 127.0f) : 0.0f);
+    const float want = at > 0.5f ? (at - 0.5f) * 2.0f : 0.0f;
     const float p0 = v.press;
     v.press += (want - v.press) * (1.0f - expf(-float(AUDIO_BLOCK_SAMPLES) / (0.015f * AUDIO_SAMPLE_RATE_EXACT)));
     const float s0 = exp2f(bend * p0), s1 = exp2f(bend * v.press);
