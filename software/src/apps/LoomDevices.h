@@ -5544,7 +5544,7 @@ PROGMEM static const DeviceDef WARP_DEF = {
     {"SRC", 0, 255, 0, UNI, 0, 3, 2, {}, {"SPL", "SHU", "THR"}},
     {"THRU", 0, 1, 1, LIST, 2, 0, 0, {"OFF", "ON"}},  // THREAD: A's output on under the notes
     {"VEL", 0, 100, 50, UNI},     // %: how much velocity sets a note's loudness
-    {"WEFT", 0, 100, 43, UNI},    // the vibrato's speed, as one wobble: 50 ms .. 1 s (43: 180 ms, 5.5 Hz)
+    {"WEFT", 0, 100, 51, UNI},    // how long the vibrato takes to grow to full: 20 ms .. 4 s (51: 0.3 s)
     // times; mode: the stage's curve
     {"ATK", 0, 100, 55, UNI, 0, 3, 0, {}, {"LOG", "LIN", "EXP"}},  // 1 ms .. 2 s (55: 65 ms)
     {"DEC", 0, 100, 44, UNI, 0, 3, 2, {}, {"LOG", "LIN", "EXP"}},  // 5 ms .. 5 s, to SUS (44: 104 ms)
@@ -5664,7 +5664,7 @@ private:
   int16_t* old_r = nullptr;
   void LoadStep();
   static float Attack(int v) { return 0.001f * powf(2000.0f, v * 0.01f); }
-  static float VibPeriod(int v) { return 0.05f * powf(20.0f, v * 0.01f); }  // WEFT: 50 ms .. 1 s
+  static float VibGrow(int v) { return 0.02f * powf(200.0f, v * 0.01f); }  // WEFT: 20 ms .. 4 s
   static float Time5(int v) { return 0.005f * powf(1000.0f, v * 0.01f); }  // DEC, REL
   static void FormatSecs(float s, char* buf, size_t n) {
     const int t = int(s * 10000.0f + 0.5f);  // in 0.1 ms
@@ -6116,7 +6116,7 @@ FLASHMEM void WarpDevice::Apply(int p) {
   a.rel_curve = mode[REL];
   a.level = 1.0f;
   a.vel_amt = cur[VEL] * 0.01f;
-  a.vib_hz = 1.0f / VibPeriod(cur[WEFT]);
+  a.vib_grow = VibGrow(cur[WEFT]);
   a.root = ROOT;
   a.rate = Cycle() ? frames * 261.6256f / AUDIO_SAMPLE_RATE_EXACT : rate;  // MIDI 60 = C4
   fx.Set(a);
@@ -6140,7 +6140,7 @@ FLASHMEM void WarpDevice::Format(int p, char* buf, size_t n) const {
       break;
     case VEL: snprintf(buf, n, "%d%%", int(val[p])); break;
     case WEFT:
-      FormatSecs(VibPeriod(val[WEFT]), buf, n);  // one wobble
+      FormatSecs(VibGrow(val[WEFT]), buf, n);
       break;
     case ATK: FormatSecs(Attack(val[ATK]), buf, n); break;
     case DECAY: case REL: FormatSecs(Time5(val[p]), buf, n); break;
