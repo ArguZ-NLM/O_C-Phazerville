@@ -2065,17 +2065,17 @@ FLASHMEM void AppLoom::DrawChain() const {
       // the slot's name at the top, always; underneath its device's little
       // picture, or BP when bypassed
       // SOURCE is named after what it does: IN (input), SPL (SPOOL), SHU (SHUTTLE) or WRP
-      const char* tag = c == MIX_COL ? PSTR("OUT")
+      const char* tag = c == MIX_COL ? PSTR("CLTH")
                       : c == SOURCE ? (tr.choice[SOURCE] == 1 ? PSTR("SPL")
                                        : tr.choice[SOURCE] == 2 ? PSTR("SHU")
                                        : tr.choice[SOURCE] == 3 ? PSTR("WRP") : PSTR("IN"))
-                      : c == RESONATOR && tr.choice[c] == 2 ? PSTR("MOD")  // MODAL
-                      : c == RESONATOR && tr.choice[c] == 3 ? PSTR("CHM")  // CHIME
-                      : c == SPRAY && tr.choice[c] == 2 ? PSTR("STR")      // STRETCH
+                      : c == RESONATOR && tr.choice[c] == 2 ? PSTR("BTR")  // BEATER
+                      : c == RESONATOR && tr.choice[c] == 3 ? PSTR("TWL")  // TWILL
+                      : c == SPRAY && tr.choice[c] == 2 ? PSTR("DFT")      // DRAFT
                       : SLOT_DEFS[c].tag;
       if (strlen(tag) <= 3) {
         gfxPrint(x + 1 + (bw - 1 - 6 * int(strlen(tag))) / 2, y + 3, tag);
-      } else {  // 4 letters (REED, SLUB): 5 px apart so they fit the box
+      } else {  // 4 letters (REED, CLTH): 5 px apart so they fit the box
         char ch[2] = {0, 0};
         for (int i = 0; i < 4; i++) { ch[0] = tag[i]; gfxPrint(x + 5 * i, y + 3, ch); }
       }
@@ -2133,7 +2133,7 @@ FLASHMEM void AppLoom::DrawChain() const {
     gfxPrint(17, 56, t);
   } else {
     // the slot name; SOURCE names its source (INPUT, SPOOL or PLAYER)
-    gfxPrint(8, 56, col == MIX_COL ? PSTR("OUTPUT")
+    gfxPrint(8, 56, col == MIX_COL ? PSTR("CLOTH")
                     : (col == SOURCE || col == RESONATOR || col == SPRAY) && d ? d->def.name : SLOT_DEFS[col].name);
   }
   // bypass (when on) at the right end; the CPU load always left of its place
@@ -2180,11 +2180,11 @@ FLASHMEM void AppLoom::DrawDevice() const {
   // a shared modulator (MOD E-H) belongs to both tracks: L+R
   const bool both = linked || SharedFocus();
   const int name_x = both ? 24 : 12;
-  const char* name = mod_mode && name_x + 6 * int(strlen(d->def.name)) > 62 ? d->def.tag : d->def.name;
+  const char* name = mod_mode && name_x + 6 * int(strlen(d->def.name)) > 62 ? ShownTag(d->def.tag) : d->def.name;
   {  // the name would run into the header's info (SHUTTLE + its tempo): its tag
     char hi[24];
     if (!mod_mode && d->HeaderInfo(hi, sizeof(hi)) && name_x + 6 * int(strlen(name)) > 98 - 6 * int(strlen(hi)) - 3)
-      name = d->def.tag;
+      name = ShownTag(d->def.tag);
   }
   if (both) {
     // linked: L, squares, R; the shared mods L+R
@@ -2197,7 +2197,7 @@ FLASHMEM void AppLoom::DrawDevice() const {
   }
   if (focus_mod && mod_cursor < CLK_CURSOR) {
     char buf[8];
-    snprintf(buf, sizeof(buf), "%c %s", 'A' + mod_cursor, d->def.tag); // short: actions follow
+    snprintf(buf, sizeof(buf), "%c %s", 'A' + mod_cursor, ShownTag(d->def.tag)); // short: actions follow
     gfxPrint(name_x, 1, buf);
   } else {
     gfxPrint(name_x, 1, name);

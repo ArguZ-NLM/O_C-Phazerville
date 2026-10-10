@@ -529,8 +529,8 @@ FLASHMEM static void DrawHMeter(int x, int y, int w, int h, float lvl) {
 }
 
 /////////////////////////////////////////////////////////////////
-// TAPE: the whole output (both tracks after OUTPUT, not the file list's
-// quick listen) recorded to the card as /LOOM/TAPES/Take_261008_1602.wav, for as
+// BOLT (was TAPE): the whole output (both tracks after OUTPUT, not the file list's
+// quick listen) recorded to the card as /LOOM/BOLTS/Bolt_S014_02.wav, for as
 // long as it runs. The mixer hands every block over in the audio interrupt
 // into a ring in PSRAM; the main loop writes the ring to the card, so the
 // card's pauses (up to a second or so) don't lose anything. The header is
@@ -539,7 +539,8 @@ FLASHMEM static void DrawHMeter(int x, int y, int w, int h, float lvl) {
 /////////////////////////////////////////////////////////////////
 class TapeRecorder {
 public:
-  static constexpr char DIR[] = "/LOOM/TAPES";
+  static constexpr char DIR[] = "/LOOM/BOLTS";  // (was TAPES until 2026-10-10)
+  static constexpr char OLD_DIR[] = "/LOOM/TAPES";
   enum Fault : uint8_t { OK, NO_CARD, NO_MEM };
   // A on OUTPUT (or its gate / MIDI): start or stop, done in Idle; both
   // tracks' OUTPUT may fire on the same trigger: that is one press
@@ -1001,7 +1002,7 @@ FASTRUN void LoomGate::update() {
 // MIX: level / pan / mute per track (not an audio stage itself)
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef MIX_DEF = {
-  "OUTPUT", "MIX", 8, {"REC", ""},  // the tag stays MIX: saved files use it; REC: TAPE
+  "CLOTH", "MIX", 8, {"REC", ""},  // (was OUTPUT) the tag stays MIX: saved files use it; REC: BOLT
   {
     // the chain against the track's source as it came in (0 = only the
     // source, 100 = only the chain): all the effects dialled back at once
@@ -2094,11 +2095,11 @@ FLASHMEM void ReelDevice::DrawMini(int x, int y, int w, int h) {
 constexpr char LOOP_DIR[] = "/LOOM";
 constexpr char REC_DIR[] = "/LOOM/SPOOLS";  // SPOOL's saved loops
 constexpr char OLD_REC_DIR[] = "/LOOM/RECORDINGS";  // ... called so until 2026-10
-// file lists: alphabetical, but Loom's own folders first: SPOOLS, TAPES, THRUMS
+// file lists: alphabetical, but Loom's own folders first: SPOOLS, BOLTS, THRUMS
 FLASHMEM static int ListOrder(const char* a, const char* b) {
-  // SPOOLS, TAPES, THRUMS (in that order), then the rest by name
+  // SPOOLS, BOLTS, THRUMS (in that order), then the rest by name
   auto rank = [](const char* n) {
-    return !strcasecmp(n, "SPOOLS") ? 0 : !strcasecmp(n, "TAPES") ? 1 : !strcasecmp(n, "THRUMS") ? 2 : 3;
+    return !strcasecmp(n, "SPOOLS") ? 0 : !strcasecmp(n, "BOLTS") ? 1 : !strcasecmp(n, "THRUMS") ? 2 : 3;
   };
   if (rank(a) != rank(b)) return rank(a) - rank(b);
   return strcasecmp(a, b);
@@ -2254,9 +2255,10 @@ FLASHMEM bool TapeRecorder::Begin() {
   }
   if (!ring) { fault = NO_MEM; return false; }
   if (!SD.exists(LOOP_DIR)) SD.mkdir(LOOP_DIR);
+  if (!SD.exists(DIR) && SD.exists(OLD_DIR)) SD.rename(OLD_DIR, DIR);
   if (!SD.exists(DIR)) SD.mkdir(DIR);
   char path[64];
-  StampName(DIR, "Take", name, sizeof(name), path, sizeof(path));
+  StampName(DIR, "Bolt", name, sizeof(name), path, sizeof(path));
   f = SD.open(path, FILE_WRITE);
   if (!f) { fault = NO_CARD; extmem_free(ring); ring = nullptr; return false; }
   written = 0;
@@ -2989,7 +2991,10 @@ FLASHMEM void PlayerDevice::Scan() {
   if (!SD.exists(REC_DIR) && SD.exists(OLD_REC_DIR)) SD.rename(OLD_REC_DIR, REC_DIR);
   // the thrums were in WAVES for a day: now THRUMS
   if (!SD.exists("/LOOM/THRUMS") && SD.exists("/LOOM/WAVES")) SD.rename("/LOOM/WAVES", "/LOOM/THRUMS");
+  // and the recordings were in TAPES: now BOLTS
+  if (!SD.exists("/LOOM/BOLTS") && SD.exists("/LOOM/TAPES")) SD.rename("/LOOM/TAPES", "/LOOM/BOLTS");
   if (!strcasecmp(dir, OLD_REC_DIR)) snprintf(dir, sizeof(dir), "%s", REC_DIR);
+  if (!strcasecmp(dir, "/LOOM/TAPES")) snprintf(dir, sizeof(dir), "/LOOM/BOLTS");
   File d = SD.open(dir);
   if (!d) { snprintf(dir, sizeof(dir), "/"); d = SD.open(dir); }
   if (!d) return;
@@ -3950,7 +3955,7 @@ FLASHMEM void PlayerDevice::DrawMini(int x, int y, int w, int h) {
 // ECHO: hybrid delay + reverb
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef ECHO_DEF = {
-  "ECHO", "ECO", 8, {"FRZ", "CLR"},
+  "REPEAT", "ECO", 8, {"FRZ", "CLR"},  // (was ECHO; the tags stay: saved files use them)
   {
     // page 1: the delay, page 2: the reverb and TONE
     {"LEVEL", 0, 100, 40, UNI, 0, 2, 0, {}, {"MIX", "SEND"}},  // the delay's; mode: crossfade / added
@@ -4489,7 +4494,7 @@ FLASHMEM void DirtDevice::DrawMini(int x, int y, int w, int h) {
 // RESONATOR: 48-band resonant filter bank
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef RESONATOR_DEF = {
-  "RESONATOR", "RES", 8, {"", ""},
+  "REED", "RES", 8, {"", ""},  // (was RESONATOR)
   {
     {"CUT", 0, 100, 70, UNI},
     {"SLOPE", -50, 50, -50, BI},
@@ -4682,7 +4687,7 @@ FLASHMEM void ResonatorDevice::DrawMini(int x, int y, int w, int h) {
 // slot's fade mixes them with the dry signal by LEVEL.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef SPRAY_DEF = {
-  "SPRAY", "SPR", 8, {"FRZ", "GRN"},  // B: one grain by hand (RATE 0: only these)
+  "FIBRE", "SPR", 8, {"FRZ", "GRN"},  // (was SPRAY)  // B: one grain by hand (RATE 0: only these)
   {
     // left of the middle: P (periodic), right: R (random), middle: no grains
     {"RATE", -100, 100, 55, BI},
@@ -4943,7 +4948,7 @@ FASTRUN void AudioRings::update() {
 }
 
 PROGMEM static const DeviceDef MODAL_DEF = {
-  "MODAL", "MDL", 8, {"HIT", ""},
+  "BEATER", "MDL", 8, {"HIT", ""},  // (was MODAL)
   {
     {"NOTE", 0, 72, 36, UNI},      // C0 .. C6, C3 in the middle
     {"STRUC", 0, 100, 70, UNI},    // the module's STRUCTURE (SYMQ: the chord)
@@ -5181,7 +5186,7 @@ FASTRUN void AudioStretch::update() {
 }
 
 PROGMEM static const DeviceDef STRETCH_DEF = {
-  "STRETCH", "STR", 8, {"FRZ", ""},
+  "DRAFT", "STR", 8, {"FRZ", ""},  // (was STRETCH)
   {
     // modes (like SPRAY's): random variation per window
     {"PITCH", -24, 24, 0, BI, 0, 25, 0},  // semitones, without changing the speed; mode: pitch spread 0..24
@@ -5337,7 +5342,7 @@ FLASHMEM void StretchDevice::DrawMini(int x, int y, int w, int h) {
 // ring out at their own pitch: chords, or arpeggios with ROT's mode at 1/6.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef CHIME_DEF = {
-  "CHIME", "CHM", 8, {"STEP", ""},
+  "TWILL", "CHM", 8, {"STEP", ""},  // (was CHIME)
   {
     {"NOTE", 24, 84, 48, UNI, 0, 18, 0},  // the first note, C1 .. C6; mode: KNOB, MIDI (any channel), CH1 .. CH16
     {"SPRD", 1, 7, 2, UNI, 0, 13, 0},  // scale steps between the six notes; mode: MORPH, how slowly new notes take over
@@ -6292,11 +6297,21 @@ struct SlotDef {
 
 PROGMEM static const SlotDef SLOT_DEFS[SLOT_COUNT] = {
   {"SOURCE",   "SRC", 4, 4},  // INPUT, SPOOL, PLAYER, WARP (owned by the track, not made here)
-  {"SPRAY",    "SPR", 3, 1},  // BYPASS, SPRAY (grains), STRETCH (Clouds pitch / time)
-  {"RESONATOR", "RES", 4, 1},  // BYPASS, RESONATOR (filter bank), MODAL (struck object), CHIME (tuned resonators)
+  {"FIBRE",    "FIB", 3, 1},  // BYPASS, FIBRE (grains), DRAFT (pitch / time)
+  {"REED",     "REED", 4, 1},  // BYPASS, REED (filter bank), BEATER (struck object), TWILL (tuned resonators)
   {"TEXTURE",  "TEX", 2, 1},  // BYPASS, TEXTURE
-  {"ECHO",     "ECO", 2, 1},  // BYPASS, ECHO
+  {"REPEAT",   "RPT", 2, 1},  // BYPASS, REPEAT (delay, reverb)
 };
+
+// a device's short name on screen. The saved tag stays what it was (files
+// and presets use it); the names moved on to weaving words on 2026-10-10.
+static const char* ShownTag(const char* tag) {
+  static const char map[][2][5] = {
+    {"SPR", "FIB"}, {"STR", "DFT"}, {"RES", "REED"}, {"MDL", "BTR"},
+    {"CHM", "TWL"}, {"ECO", "RPT"}, {"MIX", "CLTH"}, {"REL", "SPL"}};
+  for (auto& m : map) if (!strcmp(tag, m[0])) return m[1];
+  return tag;
+}
 
 // nullptr = BYPASS. SOURCE/INPUT is owned by the track, not made here.
 FLASHMEM static Device* MakeDevice(int slot, int option) {

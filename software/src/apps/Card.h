@@ -57,11 +57,11 @@ private:
 
 FLASHMEM void AppCard::Init() {}
 
-// alphabetical, but Loom's own folders first: SPOOLS, TAPES, THRUMS
+// alphabetical, but Loom's own folders first: SPOOLS, BOLTS, THRUMS
 static int Order(const char* a, const char* b) {
-  // SPOOLS, TAPES, THRUMS (in that order), then the rest by name
+  // SPOOLS, BOLTS, THRUMS (in that order), then the rest by name
   auto rank = [](const char* n) {
-    return !strcasecmp(n, "SPOOLS") ? 0 : !strcasecmp(n, "TAPES") ? 1 : !strcasecmp(n, "THRUMS") ? 2 : 3;
+    return !strcasecmp(n, "SPOOLS") ? 0 : !strcasecmp(n, "BOLTS") ? 1 : !strcasecmp(n, "THRUMS") ? 2 : 3;
   };
   if (rank(a) != rank(b)) return rank(a) - rank(b);
   return strcasecmp(a, b);
