@@ -2065,7 +2065,7 @@ FLASHMEM void AppLoom::DrawChain() const {
       // the slot's name at the top, always; underneath its device's little
       // picture, or BP when bypassed
       // SOURCE is named after what it does: IN (input), SPL (SPOOL), SHU (SHUTTLE) or WRP
-      const char* tag = c == MIX_COL ? PSTR("CLT")
+      const char* tag = c == MIX_COL ? PSTR("CLO")
                       : c == SOURCE ? (tr.choice[SOURCE] == 1 ? PSTR("SPL")
                                        : tr.choice[SOURCE] == 2 ? PSTR("SHU")
                                        : tr.choice[SOURCE] == 3 ? PSTR("WRP") : PSTR("IN"))
