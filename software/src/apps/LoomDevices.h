@@ -1113,8 +1113,11 @@ FLASHMEM void MixDevice::Apply(int p) {
   if (!mixer) return;
   const float lvl = cur[MUTE] ? 0.0f : cur[LEVEL] * 0.01f;
   const float pan = mixer->route[track] ? 0.0f : cur[PAN] * 0.02f; // -1..1 (STEREO link: no pan, the side is fixed)
-  mixer->gain[track][0] = lvl * (pan > 0.0f ? 1.0f - pan : 1.0f);
-  mixer->gain[track][1] = lvl * (pan < 0.0f ? 1.0f + pan : 1.0f);
+  // equal power: -3 dB each side in the middle, so a sound keeps its
+  // loudness wherever it is placed (was a linear balance until 2026-10-10)
+  const float a = (pan + 1.0f) * 0.25f * float(M_PI);
+  mixer->gain[track][0] = lvl * cosf(a);
+  mixer->gain[track][1] = lvl * sinf(a);
 }
 
 // SPLIT shows where the low band ends (the picture above shows both)
