@@ -934,6 +934,8 @@ void FASTRUN loop() {
           case 'g':
             SaveFromUSB();
             break;
+          case 0:  // the padding after a command in the same USB report
+            break;
           default:
             capreq = true;
             break;
