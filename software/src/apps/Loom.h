@@ -2567,7 +2567,9 @@ namespace loom {
   // 5: OUTPUT page 2 LOW MID HIGH OTT (was BANDZ LOW MID HIGH)
   // 6: ECHO's reverb LEVEL PRE ROOM WALL (was LEVEL SIZE DECAY TONE)
   // 7: STRETCH POS turned round (0 = oldest, 100 = now, like SPRAY)
-  constexpr uint8_t SAVE_VERSION = 12;
+  // 13: CLOTH page 2 LOW MID HIGH SPLIT, three compressors (was LOW MID HIGH
+  //     band gains, the splits their modes, and one COMP)
+  constexpr uint8_t SAVE_VERSION = 13;
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -2644,6 +2646,12 @@ namespace loom {
     const bool spool_order = use && !memcmp(tag, "REL", 4) && load_version < 11;
     static constexpr int8_t SPOOL_MAP[8] = {4, 0, 1, 2, -1, 5, 6, 7};
     int old_dub = -1;
+    // before v13 CLOTH's page 2 was band gains (0.5 dB steps; LOW's mode the
+    // low split) and one COMP: COMP becomes each band's squash, the gains
+    // their levels, the low split SPLIT
+    const bool old_bands = use && !memcmp(tag, "MIX", 4) && load_version < 13;
+    int16_t ob_v[4] = {0, 0, 0, 0};
+    uint8_t ob_m[4] = {1, 0, 1, 0};
     for (int p = 0; p < n; p++) {
       int16_t v; uint8_t md; int8_t amt; uint16_t src; uint8_t bus;
       if (f.read(&v, 2) != 2 || f.read(&md, 1) != 1 || f.read(&amt, 1) != 1
@@ -2663,6 +2671,7 @@ namespace loom {
         if (SPOOL_MAP[q] < 0) { old_dub = v; continue; }
         p = SPOOL_MAP[q];
       }
+      if (old_bands && p >= 4) { ob_v[p - 4] = v; ob_m[p - 4] = md; }
       d->mod_amt2[p] = constrain(amt2, -100, 100);
       d->mod_bus2[p] = bus2 <= MOD_BUSES ? bus2 : 0;
       const ParamDef& pd = d->param(p);
@@ -2686,6 +2695,22 @@ namespace loom {
       p = q;
     }
     if (old_dub >= 0) d->mode[ReelDevice::MON] = uint8_t(constrain((old_dub + 2) / 5, 0, 20));
+    if (old_bands) {
+      for (int b = 0; b < 3; b++) {
+        const int v = ob_v[b];
+        d->val[MixDevice::B_LOW + b] = int16_t(constrain(int(ob_v[3]), 0, 100));
+        d->mode[MixDevice::B_LOW + b] = uint8_t(constrain((v + (v > 0 ? 1 : v < 0 ? -1 : 0)) / 2 + 12, 0, 24));
+      }
+      static constexpr int16_t SPLIT_OF[3] = {0, 2, 4};  // 120 / 250 / 500 Hz
+      d->val[MixDevice::SPLIT] = SPLIT_OF[ob_m[0] % 3];
+      d->mode[MixDevice::SPLIT] = 0;
+      // what modulated the old settings would move other things now: off
+      for (int p = 4; p < 8; p++) {
+        d->mod_amt[p] = d->mod_amt2[p] = 0;
+        d->mod_bus_sel[p] = d->mod_bus2[p] = 0;
+        d->mod_in[p] = HS::CVInputMap{};
+      }
+    }
     uint8_t bi, bi2 = 0, trig[2];
     if (f.read(&bi, 1) != 1 || (load_version >= 3 && f.read(&bi2, 1) != 1)
         || f.read(trig, 2) != 2) return false;
@@ -2710,6 +2735,7 @@ namespace loom {
       };
       bi = so(bi); bi2 = so(bi2);
     }
+    if (old_bands) { bi &= 0x0F; bi2 &= 0x0F; }
     if (use) {
       d->mod_bi = bi;
       d->mod_bi2 = bi2;

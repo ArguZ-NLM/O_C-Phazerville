@@ -1010,18 +1010,22 @@ PROGMEM static const DeviceDef MIX_DEF = {
     {"LEVEL", 0, 100, 80, UNI},
     {"PAN", -50, 50, 0, BI},
     {"MUTE", 0, 1, 0, LIST, 2, 0, 0, {"off", "ON"}},
-    {"LOW", -24, 24, 0, BI, 0, 3, 1, {}, {"120", "250", "500"}},
-    {"MID", -24, 24, 0, BI},
-    {"HIGH", -24, 24, 0, BI, 0, 3, 1, {}, {"1.5k", "3k", "6k"}},
-    {"COMP", 0, 100, 0, UNI},  // one-knob 3-band compression (after 3-Bandz; was OTT)
+    // three compressors, one per band: how hard it squashes (0: off); mode:
+    // the band's level after it, -12 .. +12 dB
+    {"LOW", 0, 100, 0, UNI, 0, 25, 12},
+    {"MID", 0, 100, 0, UNI, 0, 25, 12},
+    {"HIGH", 0, 100, 0, UNI, 0, 25, 12},
+    {"SPLIT", 0, 4, 2, UNI},  // where the bands divide: 120 / 1.5k .. 500 / 6k
   }
 };
 
-// level / pan / mute and a 3-band tone + dynamics stage (after 3-Bandz).
+// level / pan / mute and a 3-band compressor (after 3-Bandz).
 // The track's audio runs through the band stage, then into the mixer.
 class MixDevice : public Device {
 public:
-  enum { DRYWET, LEVEL, PAN, MUTE, B_LOW, B_MID, B_HIGH, BANDZ };
+  enum { DRYWET, LEVEL, PAN, MUTE, B_LOW, B_MID, B_HIGH, SPLIT };
+  static constexpr float LO_HZ[5] = {120.0f, 180.0f, 250.0f, 350.0f, 500.0f};
+  static constexpr float HI_HZ[5] = {1500.0f, 2000.0f, 3000.0f, 4000.0f, 6000.0f};
   LoomFade* out_fade = nullptr;  // source (dry) against the chain (wet), before the band stage
   explicit MixDevice(int t) : Device(MIX_DEF), track(t) {}
   void Reset() override {
@@ -1034,6 +1038,7 @@ public:
   AudioStream* out() override { return &bandz; }
   void Apply(int p) override;
   void Format(int p, char* buf, size_t n) const override;
+  void FormatMode(int p, char* buf, size_t n) const override;
   void DrawViz(int x, int y, int w, int h) override;
   bool Muted() const { return cur[MUTE]; }
   // A: TAPE, the whole output to the card (the same on both tracks)
@@ -1086,8 +1091,6 @@ FLASHMEM static void Fft(float* re, float* im, int n) {
 }
 
 FLASHMEM void MixDevice::Apply(int p) {
-  static const float lo_hz[3] = {120.0f, 250.0f, 500.0f};
-  static const float hi_hz[3] = {1500.0f, 3000.0f, 6000.0f};
   switch (p) {
     case DRYWET:
       if (out_fade) {  // equal power; exact at the ends (the fade then just passes one side on)
@@ -1097,10 +1100,14 @@ FLASHMEM void MixDevice::Apply(int p) {
         else out_fade->Set(cosf(m), sinf(m));
       }
       return;
-    case BANDZ: bandz.compress(cur[BANDZ] * 0.01f); return;
-    case B_LOW:   bandz.band_gain(0, cur[B_LOW] * 0.5f); bandz.split_low(lo_hz[mode[B_LOW] % 3]); return;
-    case B_MID:   bandz.band_gain(1, cur[B_MID] * 0.5f); return;
-    case B_HIGH:  bandz.band_gain(2, cur[B_HIGH] * 0.5f); bandz.split_high(hi_hz[mode[B_HIGH] % 3]); return;
+    case B_LOW: case B_MID: case B_HIGH:
+      bandz.compress(p - B_LOW, cur[p] * 0.01f);
+      bandz.band_gain(p - B_LOW, mode[p] - 12.0f);
+      return;
+    case SPLIT:
+      bandz.split_low(LO_HZ[constrain(cur[SPLIT], 0, 4)]);
+      bandz.split_high(HI_HZ[constrain(cur[SPLIT], 0, 4)]);
+      return;
     default: break;
   }
   if (!mixer) return;
@@ -1110,14 +1117,29 @@ FLASHMEM void MixDevice::Apply(int p) {
   mixer->gain[track][1] = lvl * (pan < 0.0f ? 1.0f + pan : 1.0f);
 }
 
-// band gains in 0.5 dB steps
+// SPLIT shows where the low band ends (the picture above shows both)
 FLASHMEM void MixDevice::Format(int p, char* buf, size_t n) const {
+  if (p == SPLIT) snprintf(buf, n, "%d", int(LO_HZ[constrain(val[SPLIT], 0, 4)]));
+  else if (p >= B_LOW && p <= B_HIGH && !val[p]) snprintf(buf, n, "off");
+  else Device::Format(p, buf, n);
+}
+
+// a band's level after its compressor, in dB
+FLASHMEM void MixDevice::FormatMode(int p, char* buf, size_t n) const {
   if (p >= B_LOW && p <= B_HIGH) {
-    const int v = val[p];
-    snprintf(buf, n, "%s%d.%d", v < 0 ? "-" : v > 0 ? "+" : "", abs(v) / 2, abs(v) % 2 ? 5 : 0);
+    const int db = mode[p] - 12;
+    snprintf(buf, n, db > 0 ? "+%ddB" : "%ddB", db);
   } else {
-    Device::Format(p, buf, n);
+    Device::FormatMode(p, buf, n);
   }
+}
+
+FLASHMEM static void PrintHz(int x, int y, float hz) {
+  char b[8];
+  if (hz < 1000.0f) snprintf(b, sizeof(b), "%d", int(hz));
+  else if (int(hz) % 1000) snprintf(b, sizeof(b), "%d.%dk", int(hz) / 1000, int(hz) % 1000 / 100);
+  else snprintf(b, sizeof(b), "%dk", int(hz) / 1000);
+  gfxPrint(x + (24 - 6 * int(strlen(b))) / 2, y, b);
 }
 
 FLASHMEM void MixDevice::DrawViz(int x, int y, int w, int h) {
@@ -1129,13 +1151,14 @@ FLASHMEM void MixDevice::DrawViz(int x, int y, int w, int h) {
   }
   const int cy = y + h / 2;
   // page 1: spectrum of the track's output; page 2: the three bands sit
-  // above their LOW / MID / HIGH settings (columns of 32 px): gain as a bar
-  // from the centre line, and beside it the band's gain reduction, filling
-  // a framed column from the top down (full = 18 dB)
+  // above their LOW / MID / HIGH settings (columns of 32 px): the level
+  // (L knob) as a bar from the centre line, and beside it how much the
+  // band is squashed right now, filling a framed column from the top down
+  // (full = 18 dB)
   if (view_page == 0) DrawSpectrum(x, y, 94, h);
   for (int b = 0; b < 3 && view_page == 1; b++) {
     const int bx = x + b * 32;  // above LOW / MID / HIGH
-    const int gain = cur[B_LOW + b] * (h / 2 - 1) / 24;
+    const int gain = (mode[B_LOW + b] - 12) * (h / 2 - 1) / 12;
     gfxDottedLine(bx + 3, cy, bx + 28, cy, 2);
     if (gain > 0) gfxRect(bx + 10, cy - gain, 8, gain);
     else if (gain < 0) gfxRect(bx + 10, cy, 8, -gain);
@@ -1145,8 +1168,15 @@ FLASHMEM void MixDevice::DrawViz(int x, int y, int w, int h) {
     if (gr > 0) gfxRect(bx + 22, y + 1, 4, gr);
   }
 
-  // output meters with the pan position underneath, on the right (page 2:
-  // above COMP)
+  // page 2, above SPLIT: where the bands divide, the high split on top
+  if (view_page == 1) {
+    const int sx = x + 96 + 4;
+    PrintHz(sx, y + 1, HI_HZ[constrain(cur[SPLIT], 0, 4)]);
+    gfxDottedLine(sx, y + h / 2, sx + 23, y + h / 2, 2);
+    PrintHz(sx, y + h - 8, LO_HZ[constrain(cur[SPLIT], 0, 4)]);
+    return;
+  }
+  // output meters with the pan position underneath, on the right
   const float l = meters[0].Hit(level[0]), r = meters[1].Hit(level[1]);
   const int ox = x + 96 + 6;
   gfxFrame(ox, y, 8, h - 4);
@@ -1221,9 +1251,7 @@ FLASHMEM void MixDevice::DrawSpectrum(int x, int y, int w, int h) {
     if (bh > 0) gfxRect(x + b * bw, y + h - bh, bw - 1, bh);
   }
   // where the 3-band stage splits
-  static const float lo_hz[3] = {120.0f, 250.0f, 500.0f};
-  static const float hi_hz[3] = {1500.0f, 3000.0f, 6000.0f};
-  for (float hz : {lo_hz[mode[B_LOW] % 3], hi_hz[mode[B_HIGH] % 3]}) {
+  for (float hz : {LO_HZ[constrain(cur[SPLIT], 0, 4)], HI_HZ[constrain(cur[SPLIT], 0, 4)]}) {
     const int sx = x + int(log10f(hz / f0) / log10f(f1 / f0) * SPEC_BARS * bw);
     gfxDottedLine(sx, y, sx, y + h - 1, 3);
   }

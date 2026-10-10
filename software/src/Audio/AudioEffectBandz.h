@@ -8,12 +8,14 @@
 // Stereo 3-band tone + dynamics stage for the Loom MIX device, after
 // Phazerville's 3-Bandz applet: the signal is split into low / mid / high
 // (state-variable filters; mid = input - low - high, so the bands always sum
-// back to the input), each band gets a gain and a compressor, then they are
-// summed again. One BANDZ knob sets all three compressors (lower threshold,
-// higher ratio). Auto make-up: a slow (~0.4 s) loudness match brings the
-// compressed sum back to the level it had before compressing (at most
-// +12 dB, held through silence), so COMP changes the feel, not the volume.
-// Flat gains and BANDZ at 0 pass audio through.
+// back to the input), each band gets its own compressor and then a level,
+// and they are summed again. One amount per band sets its compressor (lower
+// threshold, higher ratio); its speed is fixed per band: slow on the lows
+// (no wobble on bass notes), fast on the highs (catches transients). Auto
+// make-up per band: a slow (~0.4 s) loudness match brings each compressed
+// band back to the level it had before (at most +12 dB, held through
+// silence), so squashing changes the feel, not the volume; the band's level
+// comes after that. All levels at 0 dB and no squashing pass audio through.
 class AudioEffectBandz : public AudioStream {
 public:
   static constexpr int BANDS = 3;
@@ -27,13 +29,14 @@ public:
 
   // --- parameters, set from the UI thread ---
   void band_gain(int b, float db) { gain[b] = powf(10.0f, constrain(db, -24.0f, 24.0f) * 0.05f); Check(); }
+  // how hard band b is squashed, 0 (off) .. 1
   void split_low(float hz) { f_lo = Coeff(hz); }
   void set_bypass(bool b) { bypass = b; }  // fades to pass through, settings kept
   void split_high(float hz) { f_hi = Coeff(hz); }
-  void compress(float c) {
+  void compress(int b, float c) {
     c = constrain(c, 0.0f, 1.0f);
-    thresh_db = -6.0f - 24.0f * c;
-    slope = c > 0.0f ? 1.0f - 1.0f / (1.0f + 5.0f * c) : 0.0f;
+    thresh_db[b] = -6.0f - 24.0f * c;
+    slope[b] = c > 0.0f ? 1.0f - 1.0f / (1.0f + 5.0f * c) : 0.0f;
     Check();
   }
 
@@ -69,20 +72,21 @@ private:
   }
   volatile float gain[BANDS] = {1.0f, 1.0f, 1.0f};
   volatile float f_lo = 0.03f, f_hi = 0.3f;
-  volatile float thresh_db = -6.0f, slope = 0.0f;
+  volatile float thresh_db[BANDS] = {-6.0f, -6.0f, -6.0f}, slope[BANDS] = {};
   volatile bool flat = true, bypass = false;
   float mixw = 1.0f;  // processed share, fades with bypass
 
   float lo_l[2] = {}, lo_b[2] = {}, hi_l[2] = {}, hi_b[2] = {};
   float env[BANDS] = {}, cgain[BANDS] = {1.0f, 1.0f, 1.0f}, target[BANDS] = {1.0f, 1.0f, 1.0f};
-  float e_ref = 0.0f, e_cmp = 0.0f, auto_gain = 1.0f;  // auto make-up
+  float e_ref[BANDS] = {}, e_cmp[BANDS] = {}, auto_gain[BANDS] = {1.0f, 1.0f, 1.0f};  // auto make-up
   Viz viz = {};
 
   static float Coeff(float hz) { // Chamberlin SVF frequency coefficient
     return 2.0f * sinf(float(M_PI) * std::min(hz, 7000.0f) / AUDIO_SAMPLE_RATE_EXACT);
   }
   void Check() {
-    flat = slope == 0.0f && gain[0] == 1.0f && gain[1] == 1.0f && gain[2] == 1.0f;
+    flat = slope[0] == 0.0f && slope[1] == 0.0f && slope[2] == 0.0f
+        && gain[0] == 1.0f && gain[1] == 1.0f && gain[2] == 1.0f;
   }
 };
 
@@ -111,21 +115,29 @@ FASTRUN void AudioEffectBandz::update() {
 
   const float g[BANDS] = {gain[0], gain[1], gain[2]};
   const float fl = f_lo, fh = f_hi;
-  const float th = thresh_db, sl = slope;
-  const bool comp = sl > 0.0f;
-  constexpr float att = 0.99584f, rel = 0.99986f; // 5 ms / 150 ms
+  float th[BANDS], sl[BANDS];
+  bool comp[BANDS];
+  for (int b = 0; b < BANDS; b++) { th[b] = thresh_db[b]; sl[b] = slope[b]; comp[b] = sl[b] > 0.0f; }
+  // attack / release per band: low 20 / 300 ms, mid 8 / 150 ms, high 2 / 80 ms
+  static constexpr float att[BANDS] = {0.998867f, 0.997170f, 0.988727f};
+  static constexpr float rel[BANDS] = {0.999924f, 0.999849f, 0.999717f};
   constexpr float q = 1.0f / 32768.0f, damp = 1.4f; // ~Butterworth
 
   float peak[BANDS] = {}, max_gr[BANDS] = {};
-  // auto make-up for this block: from where the last block left it towards
-  // the gain that matches compressed to uncompressed loudness
-  float ag_to = 1.0f;
-  if (comp) {
-    if (e_ref > 1e-7f) ag_to = std::min(4.0f, sqrtf(e_ref / std::max(e_cmp, 1e-9f)));
-    else ag_to = auto_gain;  // silence: hold
+  // auto make-up for this block, per band: from where the last block left
+  // it towards the gain that matches the compressed band to its loudness
+  // before
+  float ag[BANDS], ag_to[BANDS], ag_step[BANDS];
+  for (int b = 0; b < BANDS; b++) {
+    ag[b] = auto_gain[b];
+    ag_to[b] = 1.0f;
+    if (comp[b]) {
+      if (e_ref[b] > 1e-8f) ag_to[b] = std::min(4.0f, sqrtf(e_ref[b] / std::max(e_cmp[b], 1e-10f)));
+      else ag_to[b] = auto_gain[b];  // silence: hold
+    }
+    ag_step[b] = (ag_to[b] - ag[b]) / AUDIO_BLOCK_SAMPLES;
   }
-  const float ag_step = (ag_to - auto_gain) / AUDIO_BLOCK_SAMPLES;
-  float blk_ref = 0.0f, blk_cmp = 0.0f;
+  float blk_ref[BANDS] = {}, blk_cmp[BANDS] = {};
   constexpr float mix_step = 1.0f / (0.015f * AUDIO_SAMPLE_RATE_EXACT);
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
     mixw = mix_to > mixw ? std::min(mix_to, mixw + mix_step) : std::max(mix_to, mixw - mix_step);
@@ -144,46 +156,44 @@ FASTRUN void AudioEffectBandz::update() {
       band[c][0] = lo_l[c];
       band[c][2] = hh;
       band[c][1] = x - lo_l[c] - hh;
-      for (int b = 0; b < BANDS; b++) det[b] = std::max(det[b], fabsf(band[c][b] * g[b]));
+      for (int b = 0; b < BANDS; b++) det[b] = std::max(det[b], fabsf(band[c][b]));
     }
-    if (comp) {
-      for (int b = 0; b < BANDS; b++) {
-        env[b] = det[b] > env[b] ? att * env[b] + (1.0f - att) * det[b]
-                                 : rel * env[b] + (1.0f - rel) * det[b];
-      }
+    for (int b = 0; b < BANDS; b++) {
+      ag[b] += ag_step[b];  // (glides back to 1 when the squashing is turned off)
+      if (!comp[b]) { cgain[b] += 0.05f * (1.0f - cgain[b]); continue; }
+      env[b] = det[b] > env[b] ? att[b] * env[b] + (1.0f - att[b]) * det[b]
+                               : rel[b] * env[b] + (1.0f - rel[b]) * det[b];
       if ((n & 15) == 0) {
-        for (int b = 0; b < BANDS; b++) {
-          const float over = 20.0f * log10f(env[b] + 1e-6f) - th;
-          const float gr = over > 0.0f ? over * sl : 0.0f;
-          max_gr[b] = std::max(max_gr[b], gr);
-          target[b] = powf(10.0f, -gr * 0.05f);
-        }
+        const float over = 20.0f * log10f(env[b] + 1e-6f) - th[b];
+        const float gr = over > 0.0f ? over * sl[b] : 0.0f;
+        max_gr[b] = std::max(max_gr[b], gr);
+        target[b] = powf(10.0f, -gr * 0.05f);
       }
-      for (int b = 0; b < BANDS; b++) cgain[b] += 0.05f * (target[b] - cgain[b]);
+      cgain[b] += 0.05f * (target[b] - cgain[b]);
     }
-    auto_gain += ag_step;
     for (int c = 0; c < 2; c++) {
-      float y = 0.0f, yr = 0.0f;
+      float y = 0.0f;
       for (int b = 0; b < BANDS; b++) {
-        const float u = band[c][b] * g[b];
-        const float v = u * (comp ? cgain[b] : 1.0f);
-        yr += u;
-        y += v;
-        peak[b] = std::max(peak[b], fabsf(v * auto_gain));
+        const float u = band[c][b];
+        const float v = u * cgain[b];
+        blk_ref[b] += u * u;
+        blk_cmp[b] += v * v;
+        const float w = v * ag[b] * g[b];  // made up, then the band's level
+        y += w;
+        peak[b] = std::max(peak[b], fabsf(w));
       }
-      blk_ref += yr * yr;
-      blk_cmp += y * y;
-      y *= auto_gain;
       const float x = in[c] ? in[c]->data[n] * q : 0.0f;
       out[c]->data[n] = ToSample16(x + mixw * (y - x));
     }
   }
 
-  auto_gain = ag_to;
-  // loudness before / after compressing, ~0.4 s
+  // loudness of each band before / after compressing, ~0.4 s
   constexpr float ea = 0.9933f;
-  e_ref = ea * e_ref + (1.0f - ea) * blk_ref / AUDIO_BLOCK_SAMPLES;
-  e_cmp = ea * e_cmp + (1.0f - ea) * blk_cmp / AUDIO_BLOCK_SAMPLES;
+  for (int b = 0; b < BANDS; b++) {
+    auto_gain[b] = ag_to[b];
+    e_ref[b] = ea * e_ref[b] + (1.0f - ea) * blk_ref[b] / AUDIO_BLOCK_SAMPLES;
+    e_cmp[b] = ea * e_cmp[b] + (1.0f - ea) * blk_cmp[b] / AUDIO_BLOCK_SAMPLES;
+  }
 
   Capture(out[0], out[1]);
   transmit(out[0], 0);
