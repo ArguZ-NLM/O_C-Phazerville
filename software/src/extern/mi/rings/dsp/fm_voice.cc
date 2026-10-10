@@ -1,3 +1,5 @@
+// Loom: compiled for speed (the build is -Os; this is per-sample DSP)
+#pragma GCC optimize("O2")
 // Copyright 2015 Emilie Gillet.
 //
 // Author: Emilie Gillet (emilie.o.gillet@gmail.com)

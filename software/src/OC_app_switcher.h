@@ -60,11 +60,28 @@ public:
 
   inline void Process(IOFrame *ioframe) __attribute__((always_inline)) {
     if (current_app_.instance) {
+#ifdef LOOM_ONLY
+      // Loom: the inputs, the app and the outputs every IO_TICKS-th tick
+      // (~4.2 kHz, still faster than the ADC scan; its CV changes slowly);
+      // the trigger edges of the ticks in between are kept
+      static uint32_t edges = 0;
+      static uint8_t phase = 0;
+      edges |= DigitalInputs::rising_edges();
+      if (++phase < IO_TICKS) return;
+      phase = 0;
       IO::Read(ioframe, &current_app_.io_settings());
+      ioframe->digital_inputs.rising_edges = edges;
+      edges = 0;
+#else
+      IO::Read(ioframe, &current_app_.io_settings());
+#endif
       current_app_.Process(current_app_.instance, ioframe);
       IO::Write(ioframe, &current_app_.io_settings());
     }
   }
+#ifdef LOOM_ONLY
+  static constexpr int IO_TICKS = 4;
+#endif
 
 private:
   RuntimeSlot current_app_;

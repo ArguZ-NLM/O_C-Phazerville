@@ -1,3 +1,5 @@
+// Loom: compiled for speed (the build is -Os; this is per-sample DSP)
+#pragma GCC optimize("O2")
 // Copyright 2015 Emilie Gillet.
 //
 // Author: Emilie Gillet (emilie.o.gillet@gmail.com)
@@ -360,7 +362,7 @@ void Part::RenderStringVoice(
 
   if (model_ == RESONATOR_MODEL_SYMPATHETIC_STRING ||
       model_ == RESONATOR_MODEL_SYMPATHETIC_STRING_QUANTIZED) {
-    num_strings = 2 * kMaxPolyphony / polyphony_;
+    num_strings = std::min<int32_t>(2 * kMaxPolyphony / polyphony_, 4);  // Loom: 4 strings, as the module at 2 voices (8 cost ~30 % CPU a track)
     float parameter = model_ == RESONATOR_MODEL_SYMPATHETIC_STRING
         ? patch.structure
         : 2.0f + performance_state.chord;

@@ -79,6 +79,7 @@ public:
     pre_w = 0;
     for (auto& z : rv_lp) z = 0.0f;
     rv_hp_z[0] = rv_hp_z[1] = 0.0f;
+    rv_x0[0] = rv_x0[1] = rv_t[0] = rv_t[1] = 0.0f;
     for (auto b : dbuf) if (b) memset(b, 0, dlen * sizeof(int16_t));
     for (auto& i : ix) i = 0;
     for (int c = 0; c < 2; c++) lp_z[c] = hp_z[c] = 0.0f;
@@ -196,6 +197,7 @@ private:
   volatile float rv_damp_a = 0.5f;
   float rv_lp[RL] = {};
   float rv_hi = 1.0f;       // lines 4..7's share: 1 = all 8 lines, 0 = 4 (lite)
+  float rv_x0[2] = {}, rv_t[2] = {};  // half rate: the even sample's input, the last tail
   bool rv_hi_cold = false;  // lines 4..7 were left out: cleared before they come back
   float rv_hp_z[2] = {};
   float lfo_ph[4] = {0.0f, 0.25f, 0.5f, 0.75f};
@@ -234,6 +236,18 @@ private:
     const float v = x + g * d;
     buf[p] = v;
     if (++p >= AP_LEN[i]) p = 0;
+    return d - g * v;
+  }
+
+  // the reverb's input diffusers run at half the rate: half the length is
+  // the same time
+  __attribute__((always_inline)) inline float AllpassHalf(float x, int i, float g) {
+    float* buf = mem + AP_OFS[i];
+    int& p = ix[i];
+    const float d = buf[p];
+    const float v = x + g * d;
+    buf[p] = v;
+    if (++p >= AP_LEN[i] / 2) p = 0;
     return d - g * v;
   }
 
@@ -321,6 +335,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
     memset(pre, 0, 2 * PRE_MAX * sizeof(int16_t));
     for (auto& z : rv_lp) z = 0.0f;
     rv_hp_z[0] = rv_hp_z[1] = 0.0f;
+    rv_x0[0] = rv_x0[1] = rv_t[0] = rv_t[1] = 0.0f;
     std::fill(mem + AP_OFS[AP_IN_BASE], mem + MEM_TOTAL, 0.0f);
   }
   const float s = spread_;
@@ -342,10 +357,15 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
     const float gi = exp2f(-9.966f * (rv_xf ? lenb[i] : len[i]) / rt);  // 10^(-3 len / rt)
     lg[i] = gi + (1.0f - gi) * frz;
   }
-  const float xf0 = rv_xf ? float(RV_XF - rv_xf) / RV_XF : 0.0f;  // the new one's share at n = 0
-  const float xfs = rv_xf ? 1.0f / RV_XF : 0.0f;
-  const float rda = rv_damp_a + (1.0f - rv_damp_a) * frz;
-  const float rv_hp_a = OnePoleCoeff(90.0f);  // the low cut at the input
+  // the reverb runs at half the rate (HALF steps a block; its tail is
+  // damped to 6 kHz unless TONE is bright, so nothing is lost but CPU): the
+  // lengths in its own samples, the damping and the low cut for its rate
+  constexpr int HALF = AUDIO_BLOCK_SAMPLES / 2;
+  const float xf0 = rv_xf ? float(RV_XF - rv_xf) / RV_XF : 0.0f;  // the new one's share at k = 0
+  const float xfs = rv_xf ? 2.0f / RV_XF : 0.0f;
+  const float rda1 = rv_damp_a + (1.0f - rv_damp_a) * frz;
+  const float rda = 1.0f - (1.0f - rda1) * (1.0f - rda1);  // one step = two of the full rate
+  const float rv_hp_a = OnePoleCoeff(180.0f);  // 90 Hz at half the rate: the low cut at the input
   // pre-delay: a new time crossfades in over ~12 ms
   constexpr int PRE_XF = 512;
   if (pre_xf == 0 && pre_target != pre_cur) { pre_next = pre_target; pre_xf = PRE_XF; }
@@ -356,20 +376,20 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
   // (worked out per block, straight lines in between: it moves slowly)
   float wob[4], wob_step[4];
   for (int k = 0; k < 4; k++) {
-    const float a = LFO_DEPTH[k] * sinf(2.0f * float(M_PI) * lfo_ph[k]);
+    const float a = 0.5f * LFO_DEPTH[k] * sinf(2.0f * float(M_PI) * lfo_ph[k]);  // (half-rate samples)
     lfo_ph[k] += LFO_HZ[k] * AUDIO_BLOCK_SAMPLES / AUDIO_SAMPLE_RATE_EXACT;
     lfo_ph[k] -= floorf(lfo_ph[k]);
-    const float b = LFO_DEPTH[k] * sinf(2.0f * float(M_PI) * lfo_ph[k]);
+    const float b = 0.5f * LFO_DEPTH[k] * sinf(2.0f * float(M_PI) * lfo_ph[k]);
     wob[k] = a;
-    wob_step[k] = (b - a) / AUDIO_BLOCK_SAMPLES;
+    wob_step[k] = (b - a) / HALF;
   }
   // the line lengths with their wobble, per sample: start + n * step
   float dl0[RL], dlb[RL], dls[RL];
   for (int i = 0; i < RL; i++) {
     const int wk = i == 0 ? 0 : i == 2 ? 1 : i == 5 ? 2 : i == 7 ? 3 : -1;
     const float wb = wk >= 0 ? wob[wk] : 0.0f;
-    dl0[i] = len[i] + wb;
-    dlb[i] = lenb[i] + wb;
+    dl0[i] = 0.5f * len[i] + wb;
+    dlb[i] = 0.5f * lenb[i] + wb;
     dls[i] = wk >= 0 ? wob_step[wk] : 0.0f;
   }
 
@@ -423,7 +443,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
   rv_hi = hi1;
   const int nl = hi0 > 0.0f || hi1 > 0.0f ? RL : RL / 2;  // lines computed
   if (nl < RL) rv_hi_cold = true;
-  const float hi_step = (hi1 - hi0) * (1.0f / AUDIO_BLOCK_SAMPLES);
+  const float hi_step = (hi1 - hi0) * (1.0f / HALF);
   static float yb[RL][AUDIO_BLOCK_SAMPLES];
   for (int i = 0; i < nl && rv_on; i++) {
     const int cap = RV_CAP[i];
@@ -440,7 +460,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
       const float fr = rp - i0;
       return (line[i0] + fr * (line[i1] - line[i0])) * (1.0f / RV_Q);
     };
-    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+    for (int n = 0; n < HALF; n++) {
       float d = read(d0i + n * dsi, n);
       if (rv_xf) {  // crossfading to the new size
         const float wgt = std::min(1.0f, xf0 + n * xfs);
@@ -500,41 +520,54 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
       continue;
     }
 
-    // --- REVERB: 8-line FDN fed by the delay stage ---
-    float rin[2];
-    for (int c = 0; c < 2; c++) {
-      float x = live * 0.5f * x1[c];
-      // pre-delay (int16 ring a side)
-      int16_t* pb = pre + c * PRE_MAX;
-      pb[pre_w] = ToQ15(x);
-      auto back = [&](int d) { int r = pre_w - d; if (r < 0) r += PRE_MAX; return pb[r] * (1.0f / 32768.0f); };
-      x = back(pre_cur);
-      if (pre_xf) {
-        const float wgt = float(PRE_XF - pre_xf + n) / PRE_XF;
-        x += std::min(1.0f, wgt) * (back(pre_next) - x);
+    // --- REVERB: 8-line FDN fed by the delay stage, at half the rate:
+    // an even sample is kept, the odd one runs a step on the two (averaged);
+    // the tail out is the last step's, halfway to the new one on odd samples
+    float tail[2] = {rv_t[0], rv_t[1]};
+    if (!(n & 1)) {
+      rv_x0[0] = x1[0];
+      rv_x0[1] = x1[1];
+    } else {
+      const int k = n >> 1;
+      float rin[2];
+      for (int c = 0; c < 2; c++) {
+        float x = live * 0.25f * (rv_x0[c] + x1[c]);  // (0.5 x their average)
+        // pre-delay (int16 ring a side)
+        int16_t* pb = pre + c * PRE_MAX;
+        pb[pre_w] = ToQ15(x);
+        auto back = [&](int d) { int r = pre_w - d; if (r < 0) r += PRE_MAX; return pb[r] * (1.0f / 32768.0f); };
+        x = back(pre_cur >> 1);
+        if (pre_xf) {
+          const float wgt = float(PRE_XF - pre_xf + n) / PRE_XF;
+          x += std::min(1.0f, wgt) * (back(pre_next >> 1) - x);
+        }
+        rv_hp_z[c] += rv_hp_a * (x - rv_hp_z[c]);  // low cut (no mud)
+        x -= rv_hp_z[c];
+        for (int j = 0; j < 4; j++) x = AllpassHalf(x, AP_IN_BASE + c * 4 + j, AP_IN_G[j] * dg);
+        rin[c] = x;
       }
-      rv_hp_z[c] += rv_hp_a * (x - rv_hp_z[c]);  // low cut (no mud)
-      x -= rv_hp_z[c];
-      for (int k = 0; k < 4; k++) x = Allpass(x, AP_IN_BASE + c * 4 + k, AP_IN_G[k] * dg);
-      rin[c] = x;
+      float y[RL] = {};
+      float ysum = 0.0f;
+      const float w = nl == RL ? hi0 + k * hi_step : 0.0f;  // lines 4..7's share
+      for (int i = 0; i < nl; i++) {
+        y[i] = yb[i][k] * (i < RL / 2 ? 1.0f : w);  // read for the whole block above
+        ysum += y[i];
+      }
+      if (++pre_w >= PRE_MAX) pre_w = 0;
+      // Householder: every line into every other, lossless
+      const float hh = ysum * 2.0f / (RL / 2 + RL / 2 * w);  // (2 / the lines in it)
+      for (int i = 0; i < nl; i++) {
+        const float v = y[i] - hh + rin[i & 1] * ((i & 2) ? -0.5f : 0.5f);
+        rv[RV_OFS[i] + rv_wi[i]] = SoftClip16(v * RV_Q);
+        if (++rv_wi[i] >= RV_CAP[i]) rv_wi[i] = 0;
+      }
+      const float ta = 0.42f * (1.0f + 0.414f * (1.0f - w));  // half the lines: x sqrt 2
+      const float t[2] = {ta * (y[0] - y[2] + y[4] - y[6]), ta * (y[1] - y[3] + y[5] - y[7])};
+      for (int c = 0; c < 2; c++) {
+        tail[c] = 0.5f * (rv_t[c] + t[c]);
+        rv_t[c] = t[c];
+      }
     }
-    float y[RL] = {};
-    float ysum = 0.0f;
-    const float w = nl == RL ? hi0 + n * hi_step : 0.0f;  // lines 4..7's share
-    for (int i = 0; i < nl; i++) {
-      y[i] = yb[i][n] * (i < RL / 2 ? 1.0f : w);  // read for the whole block above
-      ysum += y[i];
-    }
-    if (++pre_w >= PRE_MAX) pre_w = 0;
-    // Householder: every line into every other, lossless
-    const float hh = ysum * 2.0f / (RL / 2 + RL / 2 * w);  // (2 / the lines in it)
-    for (int i = 0; i < nl; i++) {
-      const float v = y[i] - hh + rin[i & 1] * ((i & 2) ? -0.5f : 0.5f);
-      rv[RV_OFS[i] + rv_wi[i]] = SoftClip16(v * RV_Q);
-      if (++rv_wi[i] >= RV_CAP[i]) rv_wi[i] = 0;
-    }
-    const float ta = 0.42f * (1.0f + 0.414f * (1.0f - w));  // half the lines: x sqrt 2
-    const float tail[2] = {ta * (y[0] - y[2] + y[4] - y[6]), ta * (y[1] - y[3] + y[5] - y[7])};
     peak_tail = std::max(peak_tail, std::max(fabsf(tail[0]), fabsf(tail[1])));
 
     for (int c = 0; c < 2; c++) {

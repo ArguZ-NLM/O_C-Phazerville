@@ -1,3 +1,5 @@
+// Loom: compiled for speed (the build is -Os; this is per-sample DSP)
+#pragma GCC optimize("O2")
 // One Rings voice for the Loom MODAL device, see RingsVoice.h.
 // The Rings DSP itself is Mutable Instruments' code (Emilie Gillet, MIT),
 // unchanged apart from its sample rate; this file only drives it the way

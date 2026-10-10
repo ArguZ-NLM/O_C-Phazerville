@@ -1,3 +1,5 @@
+// Loom: compiled for speed (the build is -Os; this is per-sample DSP)
+#pragma GCC optimize("O2")
 // Clouds' pitch / time engine for the Loom STRETCH device, see
 // StretchVoice.h. The DSP is Mutable Instruments' code (Emilie Gillet,
 // MIT), unchanged; this file drives it the way Clouds' processor did in its

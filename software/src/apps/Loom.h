@@ -369,6 +369,12 @@ private:
   loom::Device* Twin(loom::Device* d) const;
   void ResetFocused();
   uint32_t reset_at = 0;  // when a device went back to its defaults (DEFAULTS shown)
+  // CPU guard: an effect switched on, another device picked or a costlier
+  // setting is refused when the CPU wouldn't have room for it (CPU FULL)
+  uint32_t full_at = 0;          // when one was refused (the message shows)
+  float admit_pending = 0.0f;    // admitted in the last second, not in the load yet
+  uint32_t admit_at = 0;
+  bool Admit(float extra);
   uint32_t loop_gap_max = 0;  // longest gap between main loops (USB stats)
   // L held after a reset: the settings from before it (while still on that
   // device's page)
@@ -398,6 +404,7 @@ public:
   void UnlinkNow();  // straight to FREE, no TIGHT copy on the way (USB remote, for screen captures)
 private:
   void LinkCopy();   // the track under the cursor copied to the other one
+  bool TightFits();
   // TIGHT copies A onto B; B's own settings are kept here meanwhile and come
   // back when TIGHT is left, so going round the modes loses nothing
   struct DevState {
@@ -756,6 +763,33 @@ FLASHMEM void AppLoom::SetModType(int t, int i, int type) {
   }
 }
 
+// what a device costs at the most (CPU %, all its settings up, measured on
+// the module 2026-10-10), for the CPU guard
+namespace loom {
+extern volatile float audio_load;  // (the overload guard, below)
+constexpr float CPU_BUDGET = 88.0f;  // the load (%) a new effect may take it to
+// the account: Loom's own work and the sources (measured ~15 %, a margin
+// for SPOOL / PLAYER / WARP chords) plus every effect switched on at its
+// most; a new one must fit it too, so turning knobs up later can't
+// overload the CPU (measured: the account runs ~10 % over the real load)
+constexpr float CPU_BASE = 18.0f, CPU_ACCOUNT = 96.0f;
+FLASHMEM static float WorstCost(const Device* d) {
+  if (!d) return 0.0f;
+  const char* t = d->def.tag;
+  if (!strcmp(t, "MDL")) {  // BEATER: the sympathetic strings cost most
+    const int m = d->val[ModalDevice::MODEL];
+    return m == RingsVoice::SYMPATHETIC || m == RingsVoice::SYMPATHETIC_QUANTIZED ? 16.0f : 9.0f;
+  }
+  if (!strcmp(t, "ECO")) return 14.0f;  // REPEAT
+  if (!strcmp(t, "STR")) return 10.0f;  // DRAFT
+  if (!strcmp(t, "TEX")) return 8.0f;   // TEXTURE
+  if (!strcmp(t, "CHM")) return 7.0f;   // TWILL
+  if (!strcmp(t, "SPR")) return 6.0f;   // FIBRE
+  if (!strcmp(t, "RES")) return 3.0f;   // REED
+  return 3.0f;
+}
+}  // namespace loom
+
 FLASHMEM void AppLoom::SetChoiceLinked(int s, int option) {
   using namespace loom;
   if (s == SOURCE) {
@@ -764,6 +798,16 @@ FLASHMEM void AppLoom::SetChoiceLinked(int s, int option) {
     return;
   }
   option = constrain(option, 0, SLOT_DEFS[s].noptions - 1);
+  // room for the new device (instead of the old one, if that was heard)?
+  float extra = 0.0f;
+  for (int t = 0; t < NUM_TRACKS; t++) {
+    if (t != track && !linked) continue;
+    const Track& tr = tracks[t];
+    if (tr.bypass >> s & 1) continue;  // not heard either way
+    const Device* old = tr.parked >> s & 1 ? nullptr : tr.current(s);
+    extra += (option ? WorstCost(tr.inst[s][option]) : 0.0f) - WorstCost(old);
+  }
+  if (!Admit(extra)) return;
   for (int t = 0; t < NUM_TRACKS; t++)
     if (t == track || linked) ChoiceFaded(t, s, option);
 }
@@ -840,10 +884,36 @@ FLASHMEM void AppLoom::ParkBypassed(int t) {
     if (fresh >> s & 1) tr.current(s)->Parked();
 }
 
+
+// room for `extra` % more? (what was let in during the last second counts,
+// the load doesn't show it yet); no: CPU FULL
+FLASHMEM bool AppLoom::Admit(float extra) {
+  using namespace loom;
+  if (extra <= 0.0f) return true;
+  const float pending = millis() - admit_at < 1000 ? admit_pending : 0.0f;
+  float account = CPU_BASE;
+  for (const Track& tr : tracks)
+    for (int s = SOURCE + 1; s < SLOT_COUNT; s++)
+      if (!(tr.bypass >> s & 1)) account += WorstCost(tr.current(s));
+  if (account + extra <= CPU_ACCOUNT && audio_load * 100.0f + pending + extra <= CPU_BUDGET) {
+    admit_pending = pending + extra;
+    admit_at = millis();
+    return true;
+  }
+  full_at = millis() | 1;
+  return false;
+}
+
 FLASHMEM void AppLoom::ToggleBypass(int s) {
   using namespace loom;
   const uint8_t bit = 1 << s;
   const bool on = !(tracks[track].bypass & bit);
+  if (!on) {  // back in: room for it?
+    float extra = 0.0f;
+    for (int t = 0; t < NUM_TRACKS; t++)
+      if (t == track || linked) extra += s < SLOT_COUNT ? WorstCost(tracks[t].current(s)) : 6.0f;  // (CLOTH's bands)
+    if (!Admit(extra)) return;
+  }
   for (int t = 0; t < NUM_TRACKS; t++) {
     if (t != track && !linked) continue;
     Track& tr = tracks[t];
@@ -898,8 +968,8 @@ FLASHMEM void AppLoom::ToggleLink() {
     link_rel = true;
     link_stereo = false;
     track = 0;  // the cursor lives on row A while linked
-  } else if (link_rel) {
-    link_rel = false;  // TIGHT
+  } else if (link_rel && TightFits()) {
+    link_rel = false;  // TIGHT (no room for A's chain on B as well: FREE, CPU FULL)
     KeepB();
     LinkCopy();
     SetPans(0, 0);
@@ -1040,6 +1110,19 @@ FLASHMEM void AppLoom::BringBackB() {
   b_own = nullptr;
 }
 
+// TIGHT copies A's chain onto B: room for A's effects instead of B's?
+FLASHMEM bool AppLoom::TightFits() {
+  using namespace loom;
+  const Track& a = tracks[track];
+  const Track& b = tracks[1 - track];
+  float extra = 0.0f;
+  for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
+    if (!(a.bypass >> s & 1)) extra += WorstCost(a.current(s));
+    if (!(b.parked >> s & 1)) extra -= WorstCost(b.current(s));
+  }
+  return Admit(extra);
+}
+
 FLASHMEM void AppLoom::LinkCopy() {
   using namespace loom;
   const int master = track;
@@ -1169,23 +1252,40 @@ volatile uint32_t audio_skips = 0;  // updates left out (status print)
 // the audio updates' share of the CPU, averaged over ~0.3 s (1 = all of it;
 // interrupts in between count too)
 volatile float audio_load = 0.0f;
+volatile float audio_peak = 0.0f;  // the busiest single update since the last status print
+volatile uint32_t audio_lost = 0;   // blocks that came while the last was still being made (lost: a click)
 FASTRUN static void AudioIsrGuard() {
   static uint32_t last_end = 0, last_start = 0;
   static uint8_t hot = 0;
   const uint32_t start = ARM_DWT_CYCCNT;
-  const uint32_t period = start - last_start;
-  last_start = start;
   // less than 5 % of a block's time between two updates: overloaded
   const uint32_t tight = uint32_t(F_CPU_ACTUAL / AUDIO_SAMPLE_RATE_EXACT * AUDIO_BLOCK_SAMPLES / 20);
+  const uint32_t period = start - last_start;
+  last_start = start;
+  // blocks asked for (the time gone by) against blocks made: a request that
+  // comes while one is still pending is lost (they don't queue up), a gap
+  // in the sound
+  static uint64_t cycles = 0;
+  static uint32_t runs = 0;
+  if (last_end) {
+    cycles += period;
+    runs++;
+    const uint32_t asked = uint32_t((cycles + tight * 10) / (tight * 20));  // (tight = 1/20 of a block)
+    if (asked > runs + audio_lost) audio_lost = asked - runs;
+  }
   hot = start - last_end < tight ? hot + 1 : 0;
-  if (hot >= 8) {
+  if (hot >= 48) {  // (~130 ms with no time between: the main loop is stuck)
     hot = 0;
     audio_skips++;
   } else {
     audio_isr_orig();
   }
   last_end = ARM_DWT_CYCCNT;
-  if (period) audio_load += 0.01f * (std::min(2.0f, float(last_end - start) / float(period)) - audio_load);
+  if (period) {
+    const float duty = std::min(2.0f, float(last_end - start) / float(period));
+    audio_load += 0.01f * (duty - audio_load);
+    if (duty > audio_peak) audio_peak = duty;
+  }
 }
 // LITE: the CPU is short (above 85 %): the costly engines run lighter
 // (REPEAT's reverb on 4 lines, REED leaves out its quiet bands, TWILL's
@@ -1470,6 +1570,70 @@ FLASHMEM void AppLoom::MainLoop() {
     if (g_tape_request) { g_tape_request = false; g_tape->Toggle(); }  // USB 'T'
     if (g_midilog_request) { g_midilog_request = false; MidiLogPrint(); }  // USB 'J'
     g_tape->Idle();
+    // stress test (USB 'H'): both tracks, every effect on, every setting and
+    // numeric mode at its maximum (switches left alone); each 'H' takes the
+    // next devices (FIBRE / DRAFT, REED / BEATER / TWILL). 'h': the saved
+    // settings back, these not saved
+    if (g_heavy_request == 1 || g_heavy_request == 3) {
+      const bool guarded = g_heavy_request == 3;
+      g_heavy_request = 0;
+      static int combo = -1;
+      combo++;
+      const uint8_t fx = uint8_t(((1 << SLOT_COUNT) - 1) & ~(1 << SOURCE));
+      for (int t = 0; t < NUM_TRACKS; t++) {
+        Track& tr = tracks[t];
+        uint8_t on = fx;
+        for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
+          const int n = SLOT_DEFS[s].noptions - 1;  // (option 0: none)
+          const int o = 1 + combo % n;
+          const Device* old = tr.bypass >> s & 1 ? nullptr : tr.current(s);
+          if (guarded && !Admit(WorstCost(tr.inst[s][o]) - WorstCost(old))) {
+            on &= ~(1 << s);
+            Serial.printf("HEAVY %c: %s refused (CPU FULL)\n", t ? 'B' : 'A', tr.inst[s][o]->def.name);
+            continue;
+          }
+          SetChoice(t, s, o);
+          tr.bypass &= ~(1 << s);  // (counted from here on)
+          tr.parked &= ~(1 << s);
+        }
+        for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
+          Device* d = tr.current(s);
+          if (!d || !(on >> s & 1)) continue;
+          const float before = WorstCost(d);
+          int16_t was[MAX_PARAMS];
+          memcpy(was, d->val, sizeof(was));
+          for (int p = 0; p < d->num_params(); p++) {
+            const ParamDef& pd = d->param(p);
+            if (pd.kind == LIST) continue;
+            d->val[p] = d->cur[p] = pd.max;
+            if (pd.nmodes > 4) d->mode[p] = pd.nmodes - 1;
+            d->Apply(p);
+          }
+          // turned up through the guard, as on the panel (BEATER's costly models)
+          const float after = WorstCost(d);
+          if (guarded && after > before) {
+            int16_t up[MAX_PARAMS];
+            memcpy(up, d->val, sizeof(up));
+            memcpy(d->val, was, sizeof(was));  // (the account as it was)
+            const bool ok = Admit(after - before);
+            if (ok) memcpy(d->val, up, sizeof(up));
+            for (int p = 0; p < d->num_params(); p++) { d->cur[p] = d->val[p]; d->Apply(p); }
+            if (!ok) Serial.printf("HEAVY %c: %s kept at its settings (CPU FULL)\n", t ? 'B' : 'A', d->def.name);
+          }
+          Serial.printf("HEAVY %c: %s (combo %d)\n", t ? 'B' : 'A', d->def.name, combo);
+        }
+        Repatch(t);
+        ApplyBypass(t);
+      }
+      dirty = true;
+    } else if (g_heavy_request == 2) {
+      g_heavy_request = 0;
+      dirty = false;
+      Suspend();
+      reload_on_resume = true;
+      Resume();
+      Serial.println("HEAVY: saved settings back");
+    }
     // the noise test (USB 'N')
     if (g_noise_request) {
       g_noise_request = false;
@@ -1575,9 +1739,10 @@ FLASHMEM void AppLoom::MainLoop() {
   stats_timer = 0;
   const float usage = AudioProcessorUsageMax();
   cpu = int(usage + 0.5f);
-  Serial.printf("Loom: AudioProcessorUsageMax %d.%d%%  mem %u/%d blocks  PSRAM %dMB  load %d%%  overload skips %lu\n",
+  Serial.printf("Loom: AudioProcessorUsageMax %d.%d%%  mem %u/%d blocks  PSRAM %dMB  load %d%% (peak %d%%)  overload skips %lu  lost %lu\n",
     int(usage), int(usage * 10) % 10, AudioMemoryUsageMax(), OC::AudioIO::AUDIO_MEMORY, external_psram_size,
-    int(loom::audio_load * 100.0f + 0.5f), (unsigned long)loom::audio_skips);
+    int(loom::audio_load * 100.0f + 0.5f), int(loom::audio_peak * 100.0f + 0.5f), (unsigned long)loom::audio_skips, (unsigned long)loom::audio_lost);
+  loom::audio_peak = 0.0f;
   AudioProcessorUsageMaxReset();
   AudioMemoryUsageMaxReset();
   Serial.printf("  load:%s\n", loom::load_note);
@@ -2036,9 +2201,16 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
     Mirror(d, cursor);
     l_used = true;
   } else {
+    const float before = WorstCost(d);
     d->Nudge(cursor, dir);
     Mirror(d, cursor);
     edit_mode = false;
+    // a costlier setting (BEATER's sympathetic strings) only with room for it
+    const float more = (WorstCost(d) - before) * (linked ? 2.0f : 1.0f);
+    if (more > 0.0f && col > SOURCE && col < SLOT_COUNT && !Admit(more)) {
+      d->Nudge(cursor, -dir);
+      Mirror(d, cursor);
+    }
   }
 }
 
@@ -3093,6 +3265,12 @@ FLASHMEM void AppLoom::View() const {
     graphics.clearRect(31, 22, 66, 15);
     gfxFrame(31, 22, 66, 15);
     gfxPrint(40, 26, PSTR("DEFAULTS"));
+    gfxInvert(32, 23, 64, 13);
+  }
+  if (full_at && millis() - full_at < 1500) {  // the CPU guard said no
+    graphics.clearRect(31, 22, 66, 15);
+    gfxFrame(31, 22, 66, 15);
+    gfxPrint(40, 26, PSTR("CPU FULL"));
     gfxInvert(32, 23, 64, 13);
   }
   // saving: a bar fills while Y is held, then SAVED

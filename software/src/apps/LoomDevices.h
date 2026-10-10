@@ -46,6 +46,7 @@
 extern "C" uint8_t external_psram_size;  // MB of PSRAM found at start (Teensy core)
 
 extern volatile bool g_noise_request;  // USB 'N' (Main.cpp)
+extern volatile uint8_t g_heavy_request;  // USB 'H' / 'h' (Main.cpp)
 extern volatile uint8_t g_capture_request;  // USB 'W' (1) / 'U' (2) (Main.cpp)
 extern volatile bool g_notes_request;       // USB 'M' (Main.cpp)
 extern volatile bool g_tape_request;        // USB 'T' (Main.cpp)

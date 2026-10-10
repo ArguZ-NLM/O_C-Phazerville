@@ -99,6 +99,7 @@ void ScanI2C() {
 uint_fast8_t MENU_REDRAW = true;
 volatile uint32_t loop_counter = 0;
 volatile bool g_noise_request = false;  // Loom's noise test (USB 'N')
+volatile uint8_t g_heavy_request = 0;   // Loom: stress test (USB 'H' everything on and up, 'h' back)
 volatile uint8_t g_capture_request = 0;  // Loom's output capture (USB 'W' / 'U')
 volatile bool g_notes_request = false;   // Loom: test notes, captured (USB 'M')
 volatile bool g_tape_request = false;    // Loom: TAPE on / off (USB 'T')
@@ -756,6 +757,15 @@ void FASTRUN loop() {
             break;
           case 'N':  // Loom's noise test (the report follows in ~25 s)
             g_noise_request = true;
+            break;
+          case 'H':  // Loom stress test: every effect on and all the way up (again: the next devices)
+            g_heavy_request = 1;
+            break;
+          case 'G':  // ... the same, but each effect only with room for it (as on the panel)
+            g_heavy_request = 3;
+            break;
+          case 'h':  // ... and back to the saved settings (not saving these)
+            g_heavy_request = 2;
             break;
           case 'W':  // Loom: the next 2 s of the output and the jacks, sent over USB in hex
             g_capture_request = 1;

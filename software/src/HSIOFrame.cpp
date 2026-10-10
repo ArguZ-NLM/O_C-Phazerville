@@ -2,6 +2,9 @@
 #include "HSMIDI.h"
 #include "HSUtils.h"
 #include "HSIOFrame.h"
+#ifdef LOOM_ONLY
+#include "OC_app_switcher.h"  // IO_TICKS
+#endif
 
 const int HS::MIDIMapping::ViewOut() const {
   if (IsPitch()) return output + Proportion(pitch_bend, 8192, frame.MIDIState.bend_range << 7);
@@ -429,15 +432,22 @@ void HS::IOFrame::Load(OC::IOFrame *ioframe) {
     }
 
     // Handle clock pulse timing
+#ifdef LOOM_ONLY
+    constexpr int step = OC::AppSwitcher::IO_TICKS;  // (Loom: here every few ticks)
+#else
+    constexpr int step = 1;
+#endif
     for (int i = 0; i < IO_CHANNEL_COUNT; ++i) {
         if (clock_countdown[i] > 0) {
-            if (--clock_countdown[i] == 0) Out(i, 0);
+            clock_countdown[i] = std::max(0, clock_countdown[i] - step);
+            if (clock_countdown[i] == 0) Out(i, 0);
         }
     }
     for (int i = 0; i < MIDIMAP_MAX; ++i) {
         MIDIMapping& m = MIDIState.mapping[i];
         if (m.trigout_countdown > 0) {
-            if (--m.trigout_countdown == 0) {
+            m.trigout_countdown = std::max(0, m.trigout_countdown - step);
+            if (m.trigout_countdown == 0) {
                 if (m.gate_retrig) {
                     m.gate_retrig = false;
                     m.output = PULSE_VOLTAGE * (12 << 7);
