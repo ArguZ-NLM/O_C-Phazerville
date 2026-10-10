@@ -2065,7 +2065,7 @@ FLASHMEM void AppLoom::DrawChain() const {
       // the slot's name at the top, always; underneath its device's little
       // picture, or BP when bypassed
       // SOURCE is named after what it does: IN (input), SPL (SPOOL), SHU (SHUTTLE) or WRP
-      const char* tag = c == MIX_COL ? PSTR("CLTH")
+      const char* tag = c == MIX_COL ? PSTR("CLT")
                       : c == SOURCE ? (tr.choice[SOURCE] == 1 ? PSTR("SPL")
                                        : tr.choice[SOURCE] == 2 ? PSTR("SHU")
                                        : tr.choice[SOURCE] == 3 ? PSTR("WRP") : PSTR("IN"))
@@ -2075,7 +2075,7 @@ FLASHMEM void AppLoom::DrawChain() const {
                       : SLOT_DEFS[c].tag;
       if (strlen(tag) <= 3) {
         gfxPrint(x + 1 + (bw - 1 - 6 * int(strlen(tag))) / 2, y + 3, tag);
-      } else {  // 4 letters (REED, CLTH): 5 px apart so they fit the box
+      } else {  // 4 letters: 5 px apart so they fit the box
         char ch[2] = {0, 0};
         for (int i = 0; i < 4; i++) { ch[0] = tag[i]; gfxPrint(x + 5 * i, y + 3, ch); }
       }

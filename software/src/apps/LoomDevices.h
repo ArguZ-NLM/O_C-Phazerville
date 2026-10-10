@@ -6298,7 +6298,7 @@ struct SlotDef {
 PROGMEM static const SlotDef SLOT_DEFS[SLOT_COUNT] = {
   {"SOURCE",   "SRC", 4, 4},  // INPUT, SPOOL, PLAYER, WARP (owned by the track, not made here)
   {"FIBRE",    "FIB", 3, 1},  // BYPASS, FIBRE (grains), DRAFT (pitch / time)
-  {"REED",     "REED", 4, 1},  // BYPASS, REED (filter bank), BEATER (struck object), TWILL (tuned resonators)
+  {"REED",     "RD",  4, 1},  // BYPASS, REED (filter bank), BEATER (struck object), TWILL (tuned resonators)
   {"TEXTURE",  "TEX", 2, 1},  // BYPASS, TEXTURE
   {"REPEAT",   "RPT", 2, 1},  // BYPASS, REPEAT (delay, reverb)
 };
