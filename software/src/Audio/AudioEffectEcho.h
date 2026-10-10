@@ -22,6 +22,9 @@
 class AudioEffectEcho : public AudioStream {
 public:
   static constexpr int TAPS = 4;
+  // the CPU is short (Loom sets it): the reverb runs on 4 of its 8 lines,
+  // the other 4 fading out (and in again, from silence, when it is back)
+  static inline volatile bool lite = false;
   static constexpr int MIN_TAP = AUDIO_BLOCK_SAMPLES;
 
   // Peak levels (0..1), held until the UI reads them with ReadViz()
@@ -39,9 +42,10 @@ public:
   // allocate and clear everything; call while the stream is disconnected
   bool Acquire() {
     if (!mem) mem = static_cast<float*>(calloc(MEM_TOTAL, sizeof(float)));
-    // the pre-delay is read in order: PSRAM suits it (RAM2 stays free)
+    // the pre-delay in RAM2 (it was in PSRAM: a read and a write per sample
+    // there made it the reverb's most costly part)
     if (!pre) {
-      pre = static_cast<int16_t*>(extmem_malloc(2 * PRE_MAX * sizeof(int16_t)));
+      pre = static_cast<int16_t*>(malloc(2 * PRE_MAX * sizeof(int16_t)));
       if (pre) memset(pre, 0, 2 * PRE_MAX * sizeof(int16_t));
     }
     if (!rv) rv = TakeLines();
@@ -55,7 +59,7 @@ public:
   void Release() {
     free(mem);
     mem = nullptr;
-    if (pre) extmem_free(pre);
+    free(pre);
     pre = nullptr;
     GiveLines(rv);
     rv = nullptr;
@@ -191,6 +195,8 @@ private:
   volatile float rv_scale_target = 1.0f;
   volatile float rv_damp_a = 0.5f;
   float rv_lp[RL] = {};
+  float rv_hi = 1.0f;       // lines 4..7's share: 1 = all 8 lines, 0 = 4 (lite)
+  bool rv_hi_cold = false;  // lines 4..7 were left out: cleared before they come back
   float rv_hp_z[2] = {};
   float lfo_ph[4] = {0.0f, 0.25f, 0.5f, 0.75f};
 
@@ -211,12 +217,12 @@ private:
     return 1.0f - expf(-2.0f * float(M_PI) * hz / AUDIO_SAMPLE_RATE_EXACT);
   }
 
-  static inline int16_t ToQ15(float x) {
+  __attribute__((always_inline)) static inline int16_t ToQ15(float x) {
     return SoftClip16(x * 32767.0f);
   }
 
   // cubic soft clip, unity gain near 0, flat at +-1 from +-1.5 on
-  static inline float SoftClip(float x) {
+  __attribute__((always_inline)) static inline float SoftClip(float x) {
     x = constrain(x, -1.5f, 1.5f);
     return x - (4.0f / 27.0f) * x * x * x;
   }
@@ -280,7 +286,8 @@ FLASHMEM void AudioEffectEcho::ReadTap(int ch, int t, int16_t* out) {
 }
 
 // Runs from RAM1 (ITCM) like the other Loom engines.
-FASTRUN void AudioEffectEcho::update() {
+// (O2: the build is -Os, which left the per-sample helpers as calls)
+FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   audio_block_t* out[2] = {allocate(), allocate()};
   if (!out[0] || !out[1] || !ready()) {
@@ -405,14 +412,26 @@ FASTRUN void AudioEffectEcho::update() {
   // the reverb lines' outputs for the whole block first: every line is
   // longer than a block, so nothing read here is written in it. Read len
   // back (lines 0, 2, 5, 7 wobbled), interpolated, damped (TONE), loop gain.
+  // lite: lines 4..7 fade out over ~45 ms and are then left out
+  if (!lite && rv_hi <= 0.0f && rv_hi_cold) {
+    memset(rv + RV_OFS[RL / 2], 0, (RV_TOTAL - RV_OFS[RL / 2]) * sizeof(int16_t));
+    for (int i = RL / 2; i < RL; i++) rv_lp[i] = 0.0f;
+    rv_hi_cold = false;
+  }
+  const float hi0 = rv_hi;
+  const float hi1 = std::max(0.0f, std::min(1.0f, hi0 + (lite ? -1.0f : 1.0f) / 16.0f));
+  rv_hi = hi1;
+  const int nl = hi0 > 0.0f || hi1 > 0.0f ? RL : RL / 2;  // lines computed
+  if (nl < RL) rv_hi_cold = true;
+  const float hi_step = (hi1 - hi0) * (1.0f / AUDIO_BLOCK_SAMPLES);
   static float yb[RL][AUDIO_BLOCK_SAMPLES];
-  for (int i = 0; i < RL && rv_on; i++) {
+  for (int i = 0; i < nl && rv_on; i++) {
     const int cap = RV_CAP[i];
     const int16_t* line = rv + RV_OFS[i];
     const int w0 = rv_wi[i];
     const float g_i = lg[i], d0i = dl0[i], dbi = dlb[i], dsi = dls[i];
     float z = rv_lp[i];
-    auto read = [&](float back, int n) {
+    auto read = [&](float back, int n) __attribute__((always_inline)) {
       float rp = float(w0 + n) - back;
       if (rp < 0.0f) rp += cap;
       else if (rp >= cap) rp -= cap;
@@ -499,21 +518,23 @@ FASTRUN void AudioEffectEcho::update() {
       for (int k = 0; k < 4; k++) x = Allpass(x, AP_IN_BASE + c * 4 + k, AP_IN_G[k] * dg);
       rin[c] = x;
     }
-    float y[RL];
+    float y[RL] = {};
     float ysum = 0.0f;
-    for (int i = 0; i < RL; i++) {
-      y[i] = yb[i][n];  // read for the whole block above
+    const float w = nl == RL ? hi0 + n * hi_step : 0.0f;  // lines 4..7's share
+    for (int i = 0; i < nl; i++) {
+      y[i] = yb[i][n] * (i < RL / 2 ? 1.0f : w);  // read for the whole block above
       ysum += y[i];
     }
     if (++pre_w >= PRE_MAX) pre_w = 0;
     // Householder: every line into every other, lossless
-    const float hh = ysum * (2.0f / RL);
-    for (int i = 0; i < RL; i++) {
+    const float hh = ysum * 2.0f / (RL / 2 + RL / 2 * w);  // (2 / the lines in it)
+    for (int i = 0; i < nl; i++) {
       const float v = y[i] - hh + rin[i & 1] * ((i & 2) ? -0.5f : 0.5f);
       rv[RV_OFS[i] + rv_wi[i]] = SoftClip16(v * RV_Q);
       if (++rv_wi[i] >= RV_CAP[i]) rv_wi[i] = 0;
     }
-    const float tail[2] = {0.42f * (y[0] - y[2] + y[4] - y[6]), 0.42f * (y[1] - y[3] + y[5] - y[7])};
+    const float ta = 0.42f * (1.0f + 0.414f * (1.0f - w));  // half the lines: x sqrt 2
+    const float tail[2] = {ta * (y[0] - y[2] + y[4] - y[6]), ta * (y[1] - y[3] + y[5] - y[7])};
     peak_tail = std::max(peak_tail, std::max(fabsf(tail[0]), fabsf(tail[1])));
 
     for (int c = 0; c < 2; c++) {

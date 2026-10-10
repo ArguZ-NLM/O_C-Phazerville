@@ -81,6 +81,21 @@ private:
   float e_ref[BANDS] = {}, e_cmp[BANDS] = {}, auto_gain[BANDS] = {1.0f, 1.0f, 1.0f};  // auto make-up
   Viz viz = {};
 
+  // log2 / 2^x close enough for a compressor's gain (within 0.03 dB), without
+  // the library calls (they ran from flash, 48 a block)
+  static inline float FastLog2(float x) {
+    union { float f; uint32_t i; } u = {x};
+    const float e = float(int((u.i >> 23) & 255) - 128);
+    u.i = (u.i & 0x007FFFFF) | 0x3F800000;  // mantissa as 1..2
+    const float m = u.f;
+    return e + (-0.34484843f * m + 2.02466578f) * m - 0.67487759f;
+  }
+  static inline float FastExp2(float x) {
+    x = std::max(-126.0f, x);
+    const float fl = floorf(x), fr = x - fl;
+    union { uint32_t i; float f; } u = {uint32_t(int(fl) + 127) << 23};
+    return u.f * (1.0f + fr * (0.6565f + fr * 0.3435f));
+  }
   static float Coeff(float hz) { // Chamberlin SVF frequency coefficient
     return 2.0f * sinf(float(M_PI) * std::min(hz, 7000.0f) / AUDIO_SAMPLE_RATE_EXACT);
   }
@@ -91,7 +106,7 @@ private:
 };
 
 // Runs from RAM1 (ITCM) like the other Loom engines.
-FASTRUN void AudioEffectBandz::update() {
+FASTRUN __attribute__((optimize("O2"))) void AudioEffectBandz::update() {  // (O2: the build is -Os)
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   // bypass fades over ~15 ms; nothing to do once it is all the way out
   const float mix_to = bypass ? 0.0f : 1.0f;
@@ -139,7 +154,37 @@ FASTRUN void AudioEffectBandz::update() {
   }
   float blk_ref[BANDS] = {}, blk_cmp[BANDS] = {};
   constexpr float mix_step = 1.0f / (0.015f * AUDIO_SAMPLE_RATE_EXACT);
-  for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+  // no band squashed (only levels) and nothing gliding: the bands' levels
+  // and the split only, without the compressors' per-sample work
+  bool easy = mixw == mix_to;
+  for (int b = 0; b < BANDS; b++)
+    easy = easy && !comp[b] && fabsf(cgain[b] - 1.0f) < 1e-4f && fabsf(ag_to[b] - ag[b]) < 1e-4f;
+  if (easy) {
+    float gb[BANDS];
+    for (int b = 0; b < BANDS; b++) { gb[b] = g[b] * ag[b]; cgain[b] = 1.0f; }
+    for (int c = 0; c < 2; c++) {
+      float ll = lo_l[c], lb = lo_b[c], hl = hi_l[c], hb = hi_b[c];
+      float pk[BANDS] = {};
+      for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+        const float x = in[c] ? in[c]->data[n] * q : 0.0f;
+        ll += fl * lb;
+        const float lh = x - ll - damp * lb;
+        lb += fl * lh;
+        hl += fh * hb;
+        const float hh = x - hl - damp * hb;
+        hb += fh * hh;
+        const float w0 = ll * gb[0], w1 = (x - ll - hh) * gb[1], w2 = hh * gb[2];
+        pk[0] = std::max(pk[0], fabsf(w0));
+        pk[1] = std::max(pk[1], fabsf(w1));
+        pk[2] = std::max(pk[2], fabsf(w2));
+        const float y = w0 + w1 + w2;
+        out[c]->data[n] = ToSample16(x + mixw * (y - x));
+      }
+      lo_l[c] = ll; lo_b[c] = lb; hi_l[c] = hl; hi_b[c] = hb;
+      for (int b = 0; b < BANDS; b++) peak[b] = std::max(peak[b], pk[b]);
+    }
+  }
+  for (int n = 0; n < AUDIO_BLOCK_SAMPLES && !easy; n++) {
     mixw = mix_to > mixw ? std::min(mix_to, mixw + mix_step) : std::max(mix_to, mixw - mix_step);
     float band[2][BANDS];
     float det[BANDS] = {};
@@ -164,10 +209,10 @@ FASTRUN void AudioEffectBandz::update() {
       env[b] = det[b] > env[b] ? att[b] * env[b] + (1.0f - att[b]) * det[b]
                                : rel[b] * env[b] + (1.0f - rel[b]) * det[b];
       if ((n & 15) == 0) {
-        const float over = 20.0f * log10f(env[b] + 1e-6f) - th[b];
+        const float over = 6.0206f * FastLog2(env[b] + 1e-6f) - th[b];  // dB
         const float gr = over > 0.0f ? over * sl[b] : 0.0f;
         max_gr[b] = std::max(max_gr[b], gr);
-        target[b] = powf(10.0f, -gr * 0.05f);
+        target[b] = FastExp2(-gr * 0.16610f);  // 10^(-gr / 20)
       }
       cgain[b] += 0.05f * (target[b] - cgain[b]);
     }

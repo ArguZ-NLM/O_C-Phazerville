@@ -22,6 +22,9 @@
 class AudioEffectResonator : public AudioStream {
 public:
   static constexpr int BANDS = 48;
+  // the CPU is short (Loom sets it): bands more than 30 dB under the
+  // loudest are left out too (else 60 dB), and quiet ringing ones stop sooner
+  static inline volatile bool lite = false;
 
   struct Viz {
     float band[BANDS];  // peak per band since the last read
@@ -124,7 +127,7 @@ private:
 };
 
 // Runs from RAM1 (ITCM) like the other Loom engines.
-FASTRUN void AudioEffectResonator::update() {
+FASTRUN __attribute__((optimize("O2"))) void AudioEffectResonator::update() {  // (O2: the build is -Os)
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   audio_block_t* out[2] = {allocate(), allocate()};
   if (!out[0] || !out[1]) {
@@ -179,11 +182,12 @@ FASTRUN void AudioEffectResonator::update() {
   float gmax = 0.0f;
   for (int b = 0; b < BANDS; b++) gmax = std::max(gmax, gain[b]);
   memset(sum, 0, sizeof(sum));
+  const float q_rel = lite ? 3e-2f : 1e-3f, ring_min = lite ? 1e-3f : 1e-5f;
   for (int side = 0; side < 2; side++) {
     int act[BANDS / 2 + 3], na = 0;
     for (int b = side; b < BANDS; b += 2) {
-      const bool quiet = gain[b] <= gmax * 1e-3f || gain[b] < 1e-4f;
-      const bool ringing = fabsf(bp[b]) + fabsf(lp[b]) > 1e-5f;
+      const bool quiet = gain[b] <= gmax * q_rel || gain[b] < 1e-4f;
+      const bool ringing = fabsf(bp[b]) + fabsf(lp[b]) > ring_min;
       if (coef[b] <= 0.0f || (quiet && !ringing)) lp[b] = bp[b] = 0.0f;
       else act[na++] = b;
     }

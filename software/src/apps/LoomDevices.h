@@ -850,7 +850,7 @@ private:
   audio_block_t* queue[6];
 };
 
-FASTRUN void LoomMixer::update() {
+FASTRUN __attribute__((optimize("O2"))) void LoomMixer::update() {  // (O2: the build is -Os)
   audio_block_t* in[6];
   for (int i = 0; i < 6; i++) in[i] = receiveReadOnly(i);
   audio_block_t* out[2] = {allocate(), allocate()};
@@ -937,7 +937,7 @@ private:
   float g_dry = 0.0f, g_wet = 1.0f;
 };
 
-FASTRUN void LoomFade::update() {
+FASTRUN __attribute__((optimize("O2"))) void LoomFade::update() {  // (O2: the build is -Os)
   audio_block_t* in[4];
   for (int i = 0; i < 4; i++) in[i] = receiveReadOnly(i);
   const float td = to_dry, tw = to_wet;
@@ -978,7 +978,7 @@ private:
   float g = 1.0f;
 };
 
-FASTRUN void LoomGate::update() {
+FASTRUN __attribute__((optimize("O2"))) void LoomGate::update() {  // (O2: the build is -Os)
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   const float t = to;
   if (g == t && (t == 0.0f || t == 1.0f)) {
@@ -1410,7 +1410,7 @@ FLASHMEM void InputDevice::Apply(int p) {
   }
 }
 
-FASTRUN void InputDevice::update() {
+FASTRUN __attribute__((optimize("O2"))) void InputDevice::update() {  // (O2: the build is -Os)
   audio_block_t* in[4];
   for (int i = 0; i < 4; i++) in[i] = receiveReadOnly(i);
   audio_block_t* out[2] = {allocate(), allocate()};
@@ -4956,7 +4956,7 @@ private:
   audio_block_t* queue[1];
 };
 
-FASTRUN void AudioRings::update() {
+FASTRUN __attribute__((optimize("O2"))) void AudioRings::update() {  // (O2: the build is -Os)
   audio_block_t* in = receiveReadOnly(0);
   if (!voice.ok() || rest) { if (in) release(in); return; }
   audio_block_t* o[2] = {allocate(), allocate()};
@@ -5165,7 +5165,7 @@ private:
   bool resting = false;
 };
 
-FASTRUN void AudioStretch::update() {
+FASTRUN __attribute__((optimize("O2"))) void AudioStretch::update() {  // (O2: the build is -Os)
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   if (!voice.ok()) { for (auto b : in) if (b) release(b); return; }
   static float fi[2 * AUDIO_BLOCK_SAMPLES], fo[2 * AUDIO_BLOCK_SAMPLES];

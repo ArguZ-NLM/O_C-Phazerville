@@ -1166,10 +1166,15 @@ FLASHMEM void AppLoom::StereoOn(int master) {
 namespace loom {
 static void (*audio_isr_orig)() = nullptr;
 volatile uint32_t audio_skips = 0;  // updates left out (status print)
+// the audio updates' share of the CPU, averaged over ~0.3 s (1 = all of it;
+// interrupts in between count too)
+volatile float audio_load = 0.0f;
 FASTRUN static void AudioIsrGuard() {
-  static uint32_t last_end = 0;
+  static uint32_t last_end = 0, last_start = 0;
   static uint8_t hot = 0;
   const uint32_t start = ARM_DWT_CYCCNT;
+  const uint32_t period = start - last_start;
+  last_start = start;
   // less than 5 % of a block's time between two updates: overloaded
   const uint32_t tight = uint32_t(F_CPU_ACTUAL / AUDIO_SAMPLE_RATE_EXACT * AUDIO_BLOCK_SAMPLES / 20);
   hot = start - last_end < tight ? hot + 1 : 0;
@@ -1180,6 +1185,28 @@ FASTRUN static void AudioIsrGuard() {
     audio_isr_orig();
   }
   last_end = ARM_DWT_CYCCNT;
+  if (period) audio_load += 0.01f * (std::min(2.0f, float(last_end - start) / float(period)) - audio_load);
+}
+// LITE: the CPU is short (above 85 %): the costly engines run lighter
+// (REPEAT's reverb on 4 lines, REED leaves out its quiet bands, TWILL's
+// resonators stop sooner, FIBRE at most 5 grains) until it has been under 65 % for 3 s
+bool lite = false;
+static void FollowLoad() {
+  static uint32_t calm_since = 0;
+  const uint32_t now = millis();
+  const float load = audio_load;
+  if (load > 0.85f) {
+    lite = true;
+    calm_since = now;
+  } else if (load > 0.65f) {
+    calm_since = now;
+  } else if (lite && now - calm_since > 3000) {
+    lite = false;
+  }
+  AudioEffectEcho::lite = lite;
+  AudioEffectResonator::lite = lite;
+  AudioEffectChime::lite = lite;
+  AudioEffectClouds::grain_limit = lite ? 5 : 8;
 }
 }  // namespace loom
 
@@ -1214,6 +1241,8 @@ FLASHMEM void AppLoom::Resume() {
 FLASHMEM void AppLoom::Suspend() {
   // the Quadrants applets get all their grains back
   AudioEffectClouds::grain_limit = AudioEffectClouds::MAX_GRAINS;
+  AudioEffectEcho::lite = AudioEffectResonator::lite = AudioEffectChime::lite = false;
+  loom::lite = false;
   using namespace loom;
   if (!active) return;
   OC::AudioIO::ReleaseOutput();
@@ -1486,6 +1515,7 @@ FLASHMEM void AppLoom::MainLoop() {
     for (auto& tr : tracks) busy |= tr.player && tr.choice[SOURCE] == 2 && tr.player->Busy();
     for (auto& tr : tracks) busy |= tr.warp && tr.choice[SOURCE] == 3 && tr.warp->Busy();
     mixer->mute = busy || (g_noise && g_noise->Running());
+    FollowLoad();
     if (loop_save_held && ms >= 2000) loop_save_held = false;
   }
   if (save_held && millis() - save_hold >= 2000) {
@@ -1545,9 +1575,9 @@ FLASHMEM void AppLoom::MainLoop() {
   stats_timer = 0;
   const float usage = AudioProcessorUsageMax();
   cpu = int(usage + 0.5f);
-  Serial.printf("Loom: AudioProcessorUsageMax %d.%d%%  mem %u/%d blocks  PSRAM %dMB  overload skips %lu\n",
+  Serial.printf("Loom: AudioProcessorUsageMax %d.%d%%  mem %u/%d blocks  PSRAM %dMB  load %d%%  overload skips %lu\n",
     int(usage), int(usage * 10) % 10, AudioMemoryUsageMax(), OC::AudioIO::AUDIO_MEMORY, external_psram_size,
-    (unsigned long)loom::audio_skips);
+    int(loom::audio_load * 100.0f + 0.5f), (unsigned long)loom::audio_skips);
   AudioProcessorUsageMaxReset();
   AudioMemoryUsageMaxReset();
   Serial.printf("  load:%s\n", loom::load_note);
@@ -2191,7 +2221,9 @@ FLASHMEM void AppLoom::DrawChain() const {
   } else {
     char buf[6];
     snprintf(buf, sizeof(buf), "%d%%", cpu);
-    gfxPrint(right - 6 * int(strlen(buf)), 56, buf);
+    const int w = 6 * int(strlen(buf));
+    gfxPrint(right - w, 56, buf);
+    if (lite) gfxInvert(right - w - 2, 55, w + 3, 9);  // LITE: the engines run lighter
   }
 }
 

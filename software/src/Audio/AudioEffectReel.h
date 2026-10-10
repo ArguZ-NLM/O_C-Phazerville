@@ -292,7 +292,7 @@ private:
   }
 };
 
-FASTRUN void AudioEffectReel::update() {
+FASTRUN __attribute__((optimize("O2"))) void AudioEffectReel::update() {  // (O2: the build is -Os)
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   for (int c = 0; c < 2; c++) {  // the input's peak, for the meters
     if (!in[c]) continue;

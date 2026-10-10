@@ -31,6 +31,9 @@
 class AudioEffectChime : public AudioStream {
 public:
   static constexpr int PLACES = 6, VOICES = 24;
+  // the CPU is short (Loom sets it): a resonator ringing out stops at
+  // -60 dB (else -100 dB)
+  static inline volatile bool lite = false;
   enum Rotate : uint8_t { ROT_OFF, ROT_UP, ROT_DOWN, ROT_RAND };
 
   struct Params {
@@ -206,7 +209,7 @@ FASTRUN void AudioEffectChime::Assign() {
   for (int i = 0; i < VOICES; i++) if (!keep[i]) vc[i].in_to = 0.0f;
 }
 
-FASTRUN void AudioEffectChime::update() {
+FASTRUN __attribute__((optimize("O2"))) void AudioEffectChime::update() {  // (O2: the build is -Os)
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   audio_block_t* out[2] = {allocate(), allocate()};
   if (!out[0] || !out[1]) {
@@ -269,7 +272,7 @@ FASTRUN void AudioEffectChime::update() {
   for (int i = 0; i < VOICES; i++) {
     Voice& v = vc[i];
     if (v.hz <= 0.0f) continue;
-    const bool quiet = v.in == 0.0f && v.in_to == 0.0f && v.env < 1e-5f;
+    const bool quiet = v.in == 0.0f && v.in_to == 0.0f && v.env < (lite ? 1e-3f : 1e-5f);
     if (quiet) { v.la = v.ba = v.lb = v.bb = 0.0f; viz.fed[i] = false; continue; }
     float la = v.la, ba = v.ba, lb = v.lb, bb = v.bb, g = v.in;
     const float f = v.f, da = v.da, db = v.db, to = v.in_to;

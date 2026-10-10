@@ -149,7 +149,7 @@ private:
 };
 
 // Runs from RAM1 (ITCM) like the other Loom engines.
-FASTRUN void AudioEffectDirt::update() {
+FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2: the build is -Os)
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   audio_block_t* out[2] = {allocate(), allocate()};
   if (!out[0] || !out[1]) {

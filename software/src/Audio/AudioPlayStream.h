@@ -178,7 +178,7 @@ private:
   }
 };
 
-FASTRUN void AudioPlayStream::update() {
+FASTRUN __attribute__((optimize("O2"))) void AudioPlayStream::update() {  // (O2: the build is -Os)
   if (play_in >= 0 && ready()) {  // a start waiting for its moment (a beat)
     const int32_t left = play_in - AUDIO_BLOCK_SAMPLES;
     if (left < 0) { play_in = -1; pos = double(ws); playing = true; }

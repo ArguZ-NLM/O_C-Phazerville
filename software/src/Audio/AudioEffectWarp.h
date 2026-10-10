@@ -212,7 +212,7 @@ FASTRUN void AudioEffectWarp::Let(int note) {
     }
 }
 
-FASTRUN void AudioEffectWarp::update() {
+FASTRUN __attribute__((optimize("O2"))) void AudioEffectWarp::update() {  // (O2: the build is -Os)
   while (ev_rd != ev_wr) {
     const Event e = queue[ev_rd % QUEUE];
     ev_rd = ev_rd + 1;
