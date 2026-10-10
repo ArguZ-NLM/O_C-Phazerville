@@ -641,6 +641,10 @@ FLASHMEM void AppLoom::ConnectTrack(int t) {
   for (int s = SOURCE; s < SLOT_COUNT; s++) {
     if (Device* d = tracks[t].current(s)) d->Activate();
   }
+  // bypassed effects start parked: nothing of them to ring out yet (all
+  // running until the main loop parked them was more than the CPU has, and
+  // then the main loop never got to it: the module froze)
+  tracks[t].parked |= tracks[t].bypass & uint8_t(((1 << SLOT_COUNT) - 1) & ~(1 << SOURCE));
   Repatch(t);
 }
 
@@ -1155,6 +1159,30 @@ FLASHMEM void AppLoom::StereoOn(int master) {
   }
 }
 
+// overload guard: when the audio updates take all of the CPU, block after
+// block, the main loop never runs again and the module freezes (it can't
+// park anything to get out of it). Then one update is left out: ~3 ms of
+// silence, and the main loop gets its turn.
+namespace loom {
+static void (*audio_isr_orig)() = nullptr;
+volatile uint32_t audio_skips = 0;  // updates left out (status print)
+FASTRUN static void AudioIsrGuard() {
+  static uint32_t last_end = 0;
+  static uint8_t hot = 0;
+  const uint32_t start = ARM_DWT_CYCCNT;
+  // less than 5 % of a block's time between two updates: overloaded
+  const uint32_t tight = uint32_t(F_CPU_ACTUAL / AUDIO_SAMPLE_RATE_EXACT * AUDIO_BLOCK_SAMPLES / 20);
+  hot = start - last_end < tight ? hot + 1 : 0;
+  if (hot >= 8) {
+    hot = 0;
+    audio_skips++;
+  } else {
+    audio_isr_orig();
+  }
+  last_end = ARM_DWT_CYCCNT;
+}
+}  // namespace loom
+
 FLASHMEM void AppLoom::Resume() {
   // SPRAY: at most 8 overlapping grains while Loom runs (CPU peaks)
   AudioEffectClouds::grain_limit = 8;
@@ -1173,6 +1201,10 @@ FLASHMEM void AppLoom::Resume() {
   for (int c = 0; c < 2; c++) patch->preview_out[c].connect(preview->stream, c, *mixer, 4 + c);
   AudioInterrupts();
   OC::AudioIO::ClaimOutput(*mixer);
+  if (!audio_isr_orig) {  // (the audio library's own update interrupt, wrapped once)
+    audio_isr_orig = _VectorsRam[IRQ_SOFTWARE + 16];
+    _VectorsRam[IRQ_SOFTWARE + 16] = AudioIsrGuard;
+  }
   OC::AudioIO::ResyncInput();  // L and R in the same order on every start
   AudioProcessorUsageMaxReset();
   AudioMemoryUsageMaxReset();
@@ -1513,8 +1545,9 @@ FLASHMEM void AppLoom::MainLoop() {
   stats_timer = 0;
   const float usage = AudioProcessorUsageMax();
   cpu = int(usage + 0.5f);
-  Serial.printf("Loom: AudioProcessorUsageMax %d.%d%%  mem %u/%d blocks  PSRAM %dMB\n",
-    int(usage), int(usage * 10) % 10, AudioMemoryUsageMax(), OC::AudioIO::AUDIO_MEMORY, external_psram_size);
+  Serial.printf("Loom: AudioProcessorUsageMax %d.%d%%  mem %u/%d blocks  PSRAM %dMB  overload skips %lu\n",
+    int(usage), int(usage * 10) % 10, AudioMemoryUsageMax(), OC::AudioIO::AUDIO_MEMORY, external_psram_size,
+    (unsigned long)loom::audio_skips);
   AudioProcessorUsageMaxReset();
   AudioMemoryUsageMaxReset();
   Serial.printf("  load:%s\n", loom::load_note);

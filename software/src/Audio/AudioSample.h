@@ -5,7 +5,7 @@
 // to 90 % of full scale, past that bent smoothly towards full scale, never
 // cut off flat (digital clipping sounds harsh; Loom never clips hard)
 static constexpr int32_t SOFT_KNEE16 = 29491;  // 0.9 * 32768
-static inline int16_t SoftClip16(float s) {
+__attribute__((always_inline)) static inline int16_t SoftClip16(float s) {
   constexpr float k = float(SOFT_KNEE16), r = 32767.0f - k;
   const float a = fabsf(s);
   if (a > k) {
@@ -14,7 +14,7 @@ static inline int16_t SoftClip16(float s) {
   }
   return int16_t(int32_t(s + (s >= 0.0f ? 0.5f : -0.5f)));
 }
-static inline int16_t SoftClip16(int32_t v) {
+__attribute__((always_inline)) static inline int16_t SoftClip16(int32_t v) {
   if (v <= SOFT_KNEE16 && v >= -SOFT_KNEE16) return int16_t(v);
   return SoftClip16(float(v));
 }
