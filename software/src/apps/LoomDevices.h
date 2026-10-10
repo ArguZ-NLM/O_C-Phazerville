@@ -30,6 +30,7 @@
 #pragma once
 
 #include "../Audio/AudioEffectEcho.h"
+#include "../Audio/PsramAlloc.h"
 #include "../Audio/AudioSample.h"
 #include "../Audio/AudioEffectDirt.h"
 #include "../Audio/AudioEffectBandz.h"
@@ -699,10 +700,10 @@ public:
   bool Start(bool b_side = false, int only = -1) {
     track_b = b_side;
     const int nch = only < 0 ? CH : 1;
-    if (buf && nch != chans) { extmem_free(buf); buf = nullptr; }
+    if (buf && nch != chans) { PsramFree(buf); buf = nullptr; }
     chans = nch;
     one = only;
-    if (!buf) buf = static_cast<int16_t*>(extmem_malloc(FRAMES * chans * 2));
+    if (!buf) buf = static_cast<int16_t*>(PsramAlloc(FRAMES * chans * 2));
     if (!buf) return false;
     sent = 0;
     wr[0] = wr[1] = 0;
@@ -747,7 +748,7 @@ public:
     }
     if (sent >= FRAMES) {
       Serial.println("--- end ---");
-      if (one >= 0) { extmem_free(buf); buf = nullptr; }  // the room back
+      if (one >= 0) { PsramFree(buf); buf = nullptr; }  // the room back
     }
   }
 private:
@@ -2284,7 +2285,7 @@ FLASHMEM bool TapeRecorder::Begin() {
   // the ring: 5.5 s, less when memory is short (SPOOL holds what it records)
   for (const uint32_t frames : {262144u, 131072u, 65536u}) {
     if (ring) break;
-    ring = static_cast<int16_t*>(extmem_malloc(frames * 4));
+    ring = static_cast<int16_t*>(PsramAlloc(frames * 4));
     cap = ring ? frames : 0;
   }
   if (!ring) { fault = NO_MEM; return false; }
@@ -2294,7 +2295,7 @@ FLASHMEM bool TapeRecorder::Begin() {
   char path[64];
   StampName(DIR, "Bolt", name, sizeof(name), path, sizeof(path));
   f = SD.open(path, FILE_WRITE);
-  if (!f) { fault = NO_CARD; extmem_free(ring); ring = nullptr; return false; }
+  if (!f) { fault = NO_CARD; PsramFree(ring); ring = nullptr; return false; }
   written = 0;
   slow = false;
   fault = OK;
@@ -2359,7 +2360,7 @@ FLASHMEM void TapeRecorder::Close() {
   Header();
   f.close();
   file_open = false;
-  extmem_free(ring);  // the memory back to SPOOL / PLAYER
+  PsramFree(ring);  // the memory back to SPOOL / PLAYER
   ring = nullptr;
   cap = 0;
 }
@@ -3265,7 +3266,7 @@ FLASHMEM void PlayerDevice::Deactivate() {
   if (loading || streaming || analysing) lf.close();
   loading = streaming = analysing = false;
   stream.Release();
-  if (idx) { extmem_free(idx); idx = nullptr; }
+  if (idx) { PsramFree(idx); idx = nullptr; }
   if (bpm_env) { free(bpm_env); bpm_env = nullptr; }
   bpm_got = -1;
   fx.Release();
@@ -3365,9 +3366,9 @@ FLASHMEM void PlayerDevice::Load(int i) {
       fx.Resize(MIN_BUF);
       data_off = lf.position();
       if (!stream.ready()) stream.Acquire(4.0f, 1.0f);
-      if (idx) extmem_free(idx);
+      if (idx) PsramFree(idx);
       idx_n = frames / IDX_FRAMES + 1;
-      idx = static_cast<uint8_t*>(extmem_calloc(idx_n, 1));
+      idx = static_cast<uint8_t*>(PsramAlloc((idx_n) * (1)));
       if (!stream.ready() || !idx) {  // no room to stream either: the start of it
         fx.Resize(size_t(MaxSecs() * AUDIO_SAMPLE_RATE_EXACT)) || fx.Resize(size_t(2 * AUDIO_SAMPLE_RATE_EXACT));
         too_long = true; frames = fx.Capacity(); loading = true; return;
@@ -5012,9 +5013,7 @@ public:
     return true;
   }
   void Deactivate() override {
-    AudioNoInterrupts();
-    fx.voice.Free();
-    AudioInterrupts();
+    fx.voice.Free();  // (lets the audio go first itself)
     active = false;
   }
   void Apply(int p) override;
@@ -5253,9 +5252,7 @@ public:
     return true;
   }
   void Deactivate() override {
-    AudioNoInterrupts();
-    fx.voice.Free();
-    AudioInterrupts();
+    fx.voice.Free();  // (lets the audio go first itself)
     active = false;
   }
   // the correlator's search, from the main loop: each time a whole search
@@ -5757,17 +5754,17 @@ FLASHMEM void WarpDevice::Deactivate() {
 FLASHMEM void WarpDevice::Free() {
   if (loading) { lf.close(); loading = false; }
   if (copying) {  // the copy under way
-    if (nl) extmem_free(nl);
-    if (nr) extmem_free(nr);
+    if (nl) PsramFree(nl);
+    if (nr) PsramFree(nr);
     nl = nr = nullptr;
   }
   from_spool = copying = false;
   fx.SetSample(nullptr, nullptr, 0);
-  if (old_l) extmem_free(old_l);
-  if (old_r) extmem_free(old_r);
+  if (old_l) PsramFree(old_l);
+  if (old_r) PsramFree(old_r);
   old_l = old_r = nullptr;
-  if (bl) extmem_free(bl);
-  if (br) extmem_free(br);
+  if (bl) PsramFree(bl);
+  if (br) PsramFree(br);
   bl = br = nullptr;
   frames = 0;
   have_path[0] = 0;
@@ -5829,11 +5826,11 @@ FLASHMEM void WarpDevice::BeginRead(const char* path, uint32_t from, uint32_t co
       const uint32_t n = std::min<uint32_t>({count, total - from, uint32_t(BigSecs() * srate)});
       if (n < 64) break;
       lf.seek(lf.position() + uint64_t(from) * bytes * chans);
-      bl = static_cast<int16_t*>(extmem_malloc(n * 2));
-      if (chans > 1) br = static_cast<int16_t*>(extmem_malloc(n * 2));
+      bl = static_cast<int16_t*>(PsramAlloc(n * 2));
+      if (chans > 1) br = static_cast<int16_t*>(PsramAlloc(n * 2));
       if (!bl || (chans > 1 && !br)) {
-        if (bl) extmem_free(bl);
-        if (br) extmem_free(br);
+        if (bl) PsramFree(bl);
+        if (br) PsramFree(br);
         bl = br = nullptr;
         no_mem = true;
         break;
@@ -5881,8 +5878,8 @@ FLASHMEM void WarpDevice::LoadStep() {
     Trim();
     if (frames >= 64) fx.SetSample(bl, br, frames, old_l != nullptr);  // (kept: the notes go on in it)
     else if (old_l) fx.SetSample(nullptr, nullptr, 0);
-    if (old_l) extmem_free(old_l);
-    if (old_r) extmem_free(old_r);
+    if (old_l) PsramFree(old_l);
+    if (old_r) PsramFree(old_r);
     old_l = old_r = nullptr;
     ApplyAll();  // the rate is known now
   }
@@ -6065,9 +6062,9 @@ FLASHMEM void WarpDevice::ThrumList() {
 FLASHMEM void WarpDevice::SpoolBegin() {
   const uint32_t n = std::min<uint32_t>(spool->LoopLength(), uint32_t(BigSecs() * AUDIO_SAMPLE_RATE_EXACT));
   auto take = [&] {
-    nl = static_cast<int16_t*>(extmem_malloc(n * 2));
-    nr = nl ? static_cast<int16_t*>(extmem_malloc(n * 2)) : nullptr;
-    if (nl && !nr) { extmem_free(nl); nl = nullptr; }
+    nl = static_cast<int16_t*>(PsramAlloc(n * 2));
+    nr = nl ? static_cast<int16_t*>(PsramAlloc(n * 2)) : nullptr;
+    if (nl && !nr) { PsramFree(nl); nl = nullptr; }
     return nl != nullptr;
   };
   const bool keep = from_spool && !copying && frames;  // playing the loop's last take
@@ -6088,8 +6085,8 @@ FLASHMEM void WarpDevice::SpoolStep() {
   const AudioEffectReel::State st = spool ? spool->LoopState() : AudioEffectReel::EMPTY;
   if (!spool || spool->LoopLength() < copy_n || st == AudioEffectReel::REC || st == AudioEffectReel::DUB) {
     // gone or being recorded over: dropped (copied again once it is done)
-    if (nl) extmem_free(nl);
-    if (nr) extmem_free(nr);
+    if (nl) PsramFree(nl);
+    if (nr) PsramFree(nr);
     nl = nr = nullptr;
     copying = false;
     from_spool = frames > 0;  // what played before plays on
@@ -6114,8 +6111,8 @@ FLASHMEM void WarpDevice::SpoolStep() {
     const bool keep = frames > 0;  // the last take still in: the voices go on in the new one
     fx.SetSample(nl, nr, copy_n, keep);
     // (trimmed below, once it is in place: Trim reads bl / br)
-    if (bl) extmem_free(bl);
-    if (br) extmem_free(br);
+    if (bl) PsramFree(bl);
+    if (br) PsramFree(br);
     bl = nl; br = nr;
     nl = nr = nullptr;
     frames = copy_n;

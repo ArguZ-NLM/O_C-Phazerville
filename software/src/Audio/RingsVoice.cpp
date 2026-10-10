@@ -6,6 +6,8 @@
 // the module's main loop did (noise gate, strummer, Part::Process).
 
 #include <Arduino.h>
+#include "PsramAlloc.h"
+#include <Audio.h>
 #include <new>
 
 #include "RingsVoice.h"
@@ -13,8 +15,6 @@
 #include "rings/dsp/strummer.h"
 
 
-extern "C" void* extmem_malloc(size_t);
-extern "C" void extmem_free(void*);
 extern "C" uint8_t external_psram_size;
 
 namespace {
@@ -24,10 +24,10 @@ constexpr float kNoiseGateThreshold = 0.00003f;  // as on the module
 void* Take(size_t n, bool& in_ext) {
   void* p = malloc(n);
   in_ext = false;
-  if (!p && external_psram_size) { p = extmem_malloc(n); in_ext = p != nullptr; }
+  if (!p && external_psram_size) { p = PsramAlloc(n); in_ext = p != nullptr; }
   return p;
 }
-void Give(void* p, bool in_ext) { if (in_ext) extmem_free(p); else free(p); }
+void Give(void* p, bool in_ext) { if (in_ext) PsramFree(p); else free(p); }
 }
 
 FLASHMEM bool RingsVoice::Init() {
@@ -50,15 +50,19 @@ FLASHMEM bool RingsVoice::Init() {
   return true;
 }
 
+// the audio lets go first, then the memory is given back with it going
 FLASHMEM void RingsVoice::Free() {
   if (!part_) return;
+  AudioNoInterrupts();
   void* p = part_;
+  void* st = strummer_;
   part_ = nullptr;
-  static_cast<rings::Part*>(p)->~Part();
-  static_cast<rings::Strummer*>(strummer_)->~Strummer();
-  Give(p, part_ext_);
-  Give(strummer_, strum_ext_);
   strummer_ = nullptr;
+  AudioInterrupts();
+  static_cast<rings::Part*>(p)->~Part();
+  static_cast<rings::Strummer*>(st)->~Strummer();
+  Give(p, part_ext_);
+  Give(st, strum_ext_);
 }
 
 FLASHMEM void RingsVoice::SetModel(int m) {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AudioBuffer.h"
+#include "PsramAlloc.h"
 #include "../dsputils.h"
 #include "../dsputils_arm.h"
 #include "../src/extern/stmlib_utils_random.h"
@@ -573,9 +574,9 @@ FLASHMEM bool AudioEffectClouds::Resize(size_t samples) {
     // allocate first, so the old buffer keeps playing meanwhile
     int16_t *fresh[MAX_CHANNELS] = {};
     for (int c = 0; c < nch_; c++) {
-        fresh[c] = static_cast<int16_t*>(extmem_calloc(samples, sizeof(int16_t)));
+        fresh[c] = static_cast<int16_t*>(PsramAlloc((samples) * (sizeof(int16_t))));
         if (!fresh[c]) {
-            for (int k = 0; k < c; k++) extmem_free(fresh[k]);
+            for (int k = 0; k < c; k++) PsramFree(fresh[k]);
             return false;
         }
     }
@@ -584,7 +585,7 @@ FLASHMEM bool AudioEffectClouds::Resize(size_t samples) {
     for (int c = 0; c < nch_; c++) old[c] = g_buffer[c].Swap(fresh[c], samples);
     for (auto &g : grains) g.active = false;
     AudioInterrupts();
-    for (int c = 0; c < nch_; c++) if (old[c]) extmem_free(old[c]);
+    for (int c = 0; c < nch_; c++) if (old[c]) PsramFree(old[c]);
     return true;
 }
 

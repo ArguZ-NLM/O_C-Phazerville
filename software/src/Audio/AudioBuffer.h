@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../dsputils.h"
+#include "PsramAlloc.h"
 #include <Audio.h>
 #include <smalloc.h>
 
@@ -149,7 +150,7 @@ public:
 
   void Acquire() {
     if (this->buffer == nullptr) {
-      this->buffer = static_cast<T*>(extmem_calloc(this->NumSamples, sizeof(T)));
+      this->buffer = static_cast<T*>(PsramAlloc((this->NumSamples) * (sizeof(T))));
     }
   }
 
@@ -160,8 +161,9 @@ public:
   // https://github.com/PaulStoffregen/cores/blob/master/teensy4/startup.c#L500
   void Release() {
     if (this->buffer != nullptr) {
-      extmem_free(this->buffer);
-      this->buffer = nullptr;
+      T* b = this->buffer;
+      this->buffer = nullptr;  // (the audio sees it gone before it is cleared)
+      PsramFree(b);
     }
   }
 

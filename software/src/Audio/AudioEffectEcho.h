@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Audio.h>
+#include "PsramAlloc.h"
 #include "AudioSample.h"
 #include <algorithm>
 #include <cmath>
@@ -50,7 +51,7 @@ public:
     }
     if (!rv) rv = TakeLines();
     for (auto& b : dbuf) {
-      if (!b) b = static_cast<int16_t*>(extmem_malloc(dlen * sizeof(int16_t)));
+      if (!b) b = static_cast<int16_t*>(PsramAlloc(dlen * sizeof(int16_t)));
     }
     Reset();
     return ready();
@@ -64,7 +65,7 @@ public:
     GiveLines(rv);
     rv = nullptr;
     for (auto& b : dbuf) {
-      if (b) extmem_free(b);
+      if (b) PsramFree(b);
       b = nullptr;
     }
   }

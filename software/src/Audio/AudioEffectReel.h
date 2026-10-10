@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Audio.h>
+#include "PsramAlloc.h"
 #include "AudioSample.h"
 #include <algorithm>
 #include <cmath>
@@ -25,10 +26,10 @@ public:
     Release();
     for (float s = secs; s >= 2.0f; s *= 0.5f) {
       const size_t n = size_t(s * AUDIO_SAMPLE_RATE_EXACT);
-      int16_t* l = static_cast<int16_t*>(extmem_calloc(n, sizeof(int16_t)));
-      int16_t* r = l ? static_cast<int16_t*>(extmem_calloc(n, sizeof(int16_t))) : nullptr;
+      int16_t* l = static_cast<int16_t*>(PsramAlloc((n) * (sizeof(int16_t))));
+      int16_t* r = l ? static_cast<int16_t*>(PsramAlloc((n) * (sizeof(int16_t)))) : nullptr;
       if (l && r) { buf[0] = l; buf[1] = r; cap = n; return s; }
-      if (l) extmem_free(l);
+      if (l) PsramFree(l);
     }
     return 0.0f;
   }
@@ -37,9 +38,9 @@ public:
   // false if it doesn't fit (the old one is kept)
   bool Resize(size_t n) {
     if (n == cap && ready()) return true;
-    int16_t* l = static_cast<int16_t*>(extmem_calloc(n, sizeof(int16_t)));
-    int16_t* r = l ? static_cast<int16_t*>(extmem_calloc(n, sizeof(int16_t))) : nullptr;
-    if (!l || !r) { if (l) extmem_free(l); return false; }
+    int16_t* l = static_cast<int16_t*>(PsramAlloc((n) * (sizeof(int16_t))));
+    int16_t* r = l ? static_cast<int16_t*>(PsramAlloc((n) * (sizeof(int16_t)))) : nullptr;
+    if (!l || !r) { if (l) PsramFree(l); return false; }
     int16_t* old[2];
     AudioNoInterrupts();
     old[0] = buf[0]; old[1] = buf[1];
@@ -47,7 +48,7 @@ public:
     cap = n;
     Reset();
     AudioInterrupts();
-    for (auto b : old) if (b) extmem_free(b);
+    for (auto b : old) if (b) PsramFree(b);
     return true;
   }
   // --- SPOOL: memory only for what is recorded ---
@@ -75,9 +76,9 @@ public:
   void Shrink() {
     if ((st != PLAY && st != STOPPED) || !len || cap <= len + PARK) return;
     const size_t n = len;
-    int16_t* l = static_cast<int16_t*>(extmem_malloc(n * sizeof(int16_t)));
-    int16_t* r = l ? static_cast<int16_t*>(extmem_malloc(n * sizeof(int16_t))) : nullptr;
-    if (!l || !r) { if (l) extmem_free(l); return; }
+    int16_t* l = static_cast<int16_t*>(PsramAlloc(n * sizeof(int16_t)));
+    int16_t* r = l ? static_cast<int16_t*>(PsramAlloc(n * sizeof(int16_t))) : nullptr;
+    if (!l || !r) { if (l) PsramFree(l); return; }
     memcpy(l, buf[0], n * sizeof(int16_t));
     memcpy(r, buf[1], n * sizeof(int16_t));
     int16_t* old[2] = {l, r};
@@ -88,10 +89,10 @@ public:
       cap = n;
     }
     AudioInterrupts();
-    for (auto b : old) extmem_free(b);
+    for (auto b : old) PsramFree(b);
   }
   void Release() {
-    for (auto& b : buf) { if (b) extmem_free(b); b = nullptr; }
+    for (auto& b : buf) { if (b) PsramFree(b); b = nullptr; }
     cap = 0;
     Reset();
   }
@@ -263,16 +264,16 @@ private:
   // a new, empty buffer of n frames swapped in between two audio updates
   // (cleared or not: REC writes before anything is read)
   bool Swap(size_t n, bool clear) {
-    int16_t* l = static_cast<int16_t*>(clear ? extmem_calloc(n, sizeof(int16_t)) : extmem_malloc(n * sizeof(int16_t)));
-    int16_t* r = l ? static_cast<int16_t*>(clear ? extmem_calloc(n, sizeof(int16_t)) : extmem_malloc(n * sizeof(int16_t))) : nullptr;
-    if (!l || !r) { if (l) extmem_free(l); return false; }
+    int16_t* l = static_cast<int16_t*>(clear ? PsramAlloc((n) * (sizeof(int16_t))) : PsramAlloc(n * sizeof(int16_t)));
+    int16_t* r = l ? static_cast<int16_t*>(clear ? PsramAlloc((n) * (sizeof(int16_t))) : PsramAlloc(n * sizeof(int16_t))) : nullptr;
+    if (!l || !r) { if (l) PsramFree(l); return false; }
     int16_t* old[2];
     AudioNoInterrupts();
     old[0] = buf[0]; old[1] = buf[1];
     buf[0] = l; buf[1] = r;
     cap = n;
     AudioInterrupts();
-    for (auto b : old) if (b) extmem_free(b);
+    for (auto b : old) if (b) PsramFree(b);
     return true;
   }
 

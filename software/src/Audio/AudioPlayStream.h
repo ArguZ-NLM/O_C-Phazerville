@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Audio.h>
+#include "PsramAlloc.h"
 #include "AudioSample.h"
 #include <algorithm>
 #include <cmath>
@@ -25,8 +26,8 @@ public:
     ring_cap = size_t(ring_secs * AUDIO_SAMPLE_RATE_EXACT);
     cache_cap = size_t(cache_secs * AUDIO_SAMPLE_RATE_EXACT);
     for (int c = 0; c < 2; c++) {
-      ring[c] = static_cast<int16_t*>(extmem_malloc(ring_cap * 2));
-      for (int k = 0; k < 2; k++) cache[k][c] = static_cast<int16_t*>(extmem_malloc(cache_cap * 2));
+      ring[c] = static_cast<int16_t*>(PsramAlloc(ring_cap * 2));
+      for (int k = 0; k < 2; k++) cache[k][c] = static_cast<int16_t*>(PsramAlloc(cache_cap * 2));
     }
     if (!ready()) { Release(); return false; }
     return true;
@@ -34,8 +35,8 @@ public:
   void Release() {
     playing = false;
     for (int c = 0; c < 2; c++) {
-      if (ring[c]) extmem_free(ring[c]);
-      for (int k = 0; k < 2; k++) { if (cache[k][c]) extmem_free(cache[k][c]); cache[k][c] = nullptr; }
+      if (ring[c]) PsramFree(ring[c]);
+      for (int k = 0; k < 2; k++) { if (cache[k][c]) PsramFree(cache[k][c]); cache[k][c] = nullptr; }
       ring[c] = nullptr;
     }
     ring_cap = cache_cap = 0;

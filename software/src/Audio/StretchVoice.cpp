@@ -7,6 +7,8 @@
 // player, search with the correlator from the main loop, as Clouds did).
 
 #include <Arduino.h>
+#include "PsramAlloc.h"
+#include <Audio.h>
 #include <new>
 
 #include "StretchVoice.h"
@@ -14,8 +16,6 @@
 #include "clouds/dsp/correlator.h"
 #include "clouds/dsp/wsola_sample_player.h"
 
-extern "C" void* extmem_malloc(size_t);
-extern "C" void extmem_free(void*);
 
 namespace {
 constexpr size_t kCorrelatorBlock = (clouds::kMaxWSOLASize / 32) + 2;
@@ -35,10 +35,10 @@ FLASHMEM bool StretchVoice::Init(float seconds) {
   if (ready_) return true;
   const int32_t frames = int32_t(seconds * AUDIO_SAMPLE_RATE_EXACT);
   void* im = malloc(sizeof(Impl));
-  buf_ = static_cast<int16_t*>(extmem_malloc(size_t(frames) * 2 * sizeof(int16_t)));
+  buf_ = static_cast<int16_t*>(PsramAlloc(size_t(frames) * 2 * sizeof(int16_t)));
   if (!im || !buf_) {
     free(im);
-    if (buf_) extmem_free(buf_);
+    if (buf_) PsramFree(buf_);
     buf_ = nullptr;
     return false;
   }
@@ -52,15 +52,20 @@ FLASHMEM bool StretchVoice::Init(float seconds) {
   return true;
 }
 
+// the audio lets go first (an instant); clearing the 4 s buffer takes ~30
+// ms and runs with the audio going (with it held off, that was a gap)
 FLASHMEM void StretchVoice::Free() {
   if (!ready_) return;
+  AudioNoInterrupts();
   ready_ = false;
   auto* p = static_cast<Impl*>(impl_);
+  int16_t* b = buf_;
+  impl_ = nullptr;
+  buf_ = nullptr;
+  AudioInterrupts();
   p->~Impl();
   free(p);
-  impl_ = nullptr;
-  extmem_free(buf_);
-  buf_ = nullptr;
+  PsramFree(b);
 }
 
 void StretchVoice::Work(uint32_t budget_us) {
