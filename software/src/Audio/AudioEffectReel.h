@@ -491,8 +491,8 @@ FASTRUN void AudioEffectReel::update() {
       dub_g = st == DUB ? std::min(1.0f, dub_g + dub_step) : std::max(0.0f, dub_g - dub_step);
       if (dub_g > 0.0f) {
         const float k = 1.0f - dub_g * (1.0f - keep);
-        const int16_t nl = __SSAT(int32_t(buf[0][i0] * k + xl * dub_g), 16);
-        const int16_t nr = __SSAT(int32_t(buf[1][i0] * k + xr * dub_g), 16);
+        const int16_t nl = SoftClip16(buf[0][i0] * k + xl * dub_g);
+        const int16_t nr = SoftClip16(buf[1][i0] * k + xr * dub_g);
         buf[0][i0] = nl;
         buf[1][i0] = nr;
         Mark(i0, nl, nr);

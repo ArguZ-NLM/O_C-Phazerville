@@ -564,8 +564,8 @@ public:
     if (cap - (wr - rd) < AUDIO_BLOCK_SAMPLES) { slow = true; return; }
     for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
       int16_t* p = ring + 2 * ((wr + n) & (cap - 1));
-      p[0] = __SSAT(l[n], 16);
-      p[1] = __SSAT(r[n], 16);
+      p[0] = SoftClip16(l[n]);
+      p[1] = SoftClip16(r[n]);
     }
     wr += AUDIO_BLOCK_SAMPLES;
   }
@@ -905,7 +905,7 @@ FASTRUN void LoomMixer::update() {
       if (const audio_block_t* b = in[4 + c])
         for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) acc[c][n] += int32_t(((b->data[n] * 26214) >> 15) * g[n]);
     for (int c = 0; c < 2; c++)
-      for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) out[c]->data[n] = __SSAT(acc[c][n], 16);
+      for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) out[c]->data[n] = SoftClip16(acc[c][n]);
     if (g_capture) g_capture->Push(0, out[0]->data, out[1]->data);
     transmit(out[0], 0);
     transmit(out[1], 1);
@@ -1459,8 +1459,8 @@ FASTRUN void InputDevice::update() {
       const int32_t gg = g;
       const int32_t xl = (x * gg + 8192) >> 14, yr = (y * gg + 8192) >> 14;  // rounded
       gc |= xl > 32767 || xl < -32768 || yr > 32767 || yr < -32768;
-      l[n] = __SSAT(xl, 16);
-      r[n] = __SSAT(yr, 16);
+      l[n] = SoftClip16(xl);
+      r[n] = SoftClip16(yr);
       pk[0] = std::max<int32_t>(pk[0], abs(l[n]));
       pk[1] = std::max<int32_t>(pk[1], abs(r[n]));
     }
@@ -2149,7 +2149,7 @@ FLASHMEM static int16_t WavSample(const uint8_t* p, int bytes, bool is_float) {
       if (is_float) {
         float f;
         memcpy(&f, p, 4);
-        return int16_t(constrain(f, -1.0f, 1.0f) * 32767.0f);
+        return ToSample16(f);  // (overs bent, not cut off)
       }
       return int16_t(p[2] | p[3] << 8);
   }

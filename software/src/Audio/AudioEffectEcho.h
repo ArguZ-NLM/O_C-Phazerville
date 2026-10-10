@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Audio.h>
+#include "AudioSample.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -211,7 +212,7 @@ private:
   }
 
   static inline int16_t ToQ15(float x) {
-    return static_cast<int16_t>(__SSAT(static_cast<int32_t>(x * 32767.0f), 16));
+    return SoftClip16(x * 32767.0f);
   }
 
   // cubic soft clip, unity gain near 0, flat at +-1 from +-1.5 on
@@ -509,7 +510,7 @@ FASTRUN void AudioEffectEcho::update() {
     const float hh = ysum * (2.0f / RL);
     for (int i = 0; i < RL; i++) {
       const float v = y[i] - hh + rin[i & 1] * ((i & 2) ? -0.5f : 0.5f);
-      rv[RV_OFS[i] + rv_wi[i]] = int16_t(__SSAT(int32_t(v * RV_Q), 16));
+      rv[RV_OFS[i] + rv_wi[i]] = SoftClip16(v * RV_Q);
       if (++rv_wi[i] >= RV_CAP[i]) rv_wi[i] = 0;
     }
     const float tail[2] = {0.42f * (y[0] - y[2] + y[4] - y[6]), 0.42f * (y[1] - y[3] + y[5] - y[7])};

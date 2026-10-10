@@ -5,6 +5,7 @@
 #include "../dsputils_arm.h"
 #include "../src/extern/stmlib_utils_random.h"
 #include <Audio.h>
+#include "AudioSample.h"
 
 // Thin subclass of ExtAudioBuffer exposing write position and raw buffer
 // access needed by AudioEffectClouds for absolute-position grain reads.
@@ -267,7 +268,7 @@ FASTRUN void AudioEffectClouds::update() {
             for (int i = 0; i < AUDIO_BLOCK_SAMPLES; i++) {
                 int32_t s = in[c] ? (int32_t)in[c]->data[i] : 0;
                 if (cur_feedback > 0.0f) s += Clip16(feedback_buf_[c][i]);
-                tmp[i] = (int16_t)(s > 32767 ? 32767 : (s < -32768 ? -32768 : s));
+                tmp[i] = SoftClip16(s);  // (bent, not cut off: AudioSample.h)
                 const int a = tmp[i] < 0 ? -tmp[i] : tmp[i];
                 if (a > hist_peak_) hist_peak_ = a;
             }
