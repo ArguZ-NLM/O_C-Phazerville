@@ -733,7 +733,9 @@ public:
       else Serial.printf("CAPTURE %lu frames 48000 Hz, 1 channel: %d\n", (unsigned long)FRAMES, one);
     }
     char line[2 + 16 * CH * 4 + 2];
-    for (int k = 0; k < 8 && sent < FRAMES; k++) {
+    // only while USB has room for a whole line, else on the next pass (a
+    // full buffer made Serial drop whole lines: gaps in the capture)
+    for (int k = 0; k < 8 && sent < FRAMES && Serial.availableForWrite() >= 2 * 64; k++) {
       int p = 0;
       line[p++] = 'w';
       for (int f = 0; f < 16 && sent < FRAMES; f++, sent++)
