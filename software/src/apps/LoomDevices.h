@@ -5552,8 +5552,9 @@ FLASHMEM void ChimeDevice::DrawMini(int x, int y, int w, int h) {
 // what its PLAYER plays (its loop section, read from the card once it
 // rests; up to 16 s), all of it, looping; a note at full velocity as
 // loud as the sound was recorded. THRU: on track B in THREAD, A's output
-// on under the notes (or not). WEFT: every note faster and higher or
-// slower and lower, gliding (modulate it for swoops). Page 2 is the
+// on under the notes (or not). WEFT: a key pressed hard (aftertouch
+// from 75 %) wavers, a violinist's vibrato: its speed; mode: its pitch,
+// level, tone (a low pass) or place (left / right). Page 2 is the
 // notes' envelope.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef WARP_DEF = {
@@ -5565,7 +5566,9 @@ PROGMEM static const DeviceDef WARP_DEF = {
     {"SRC", 0, 255, 0, UNI, 0, 3, 2, {}, {"SPL", "SHU", "THR"}},
     {"THRU", 0, 1, 1, LIST, 2, 0, 0, {"OFF", "ON"}},  // THREAD: A's output on under the notes
     {"VEL", 0, 100, 50, UNI},     // %: how much velocity sets a note's loudness
-    {"WEFT", 0, 100, 0, UNI},     // the vibrato's speed, as one wobble: 0.18 s (5.5 Hz, the fastest) .. 5 s
+    // the vibrato's speed, as one wobble: 0.18 s (5.5 Hz, the fastest) .. 5 s;
+    // mode: what wavers (the pitch, the level, the tone or the place)
+    {"WEFT", 0, 100, 0, UNI, 0, 4, 0, {}, {"PIT", "LVL", "CUT", "PAN"}},
     // times; mode: the stage's curve
     {"ATK", 0, 100, 55, UNI, 0, 3, 0, {}, {"LOG", "LIN", "EXP"}},  // 1 ms .. 2 s (55: 65 ms)
     {"DEC", 0, 100, 44, UNI, 0, 3, 2, {}, {"LOG", "LIN", "EXP"}},  // 5 ms .. 5 s, to SUS (44: 104 ms)
@@ -6138,6 +6141,7 @@ FLASHMEM void WarpDevice::Apply(int p) {
   a.level = 1.0f;
   a.vel_amt = cur[VEL] * 0.01f;
   a.vib_hz = 1.0f / VibPeriod(cur[WEFT]);
+  a.weft = mode[WEFT];
   a.root = ROOT;
   a.rate = Cycle() ? frames * 261.6256f / AUDIO_SAMPLE_RATE_EXACT : rate;  // MIDI 60 = C4
   fx.Set(a);

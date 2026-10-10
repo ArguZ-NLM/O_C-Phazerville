@@ -15,9 +15,11 @@
 // INOUT dips out and back in. ATTACK fades it in; a note off lets it go over RELEASE.
 // WEFT: pressing a key hard makes its note waver, as a violinist's
 // vibrato: its own (poly) aftertouch or the channel's, whichever is more;
-// nothing up to 75 % of the pressure, then deeper up to +-1 semitone at
-// full, easing in over ~80 ms; par.vib_hz fast (5.5 Hz at most), a little
-// different for every note (+-5 %).
+// nothing up to 75 % of the pressure, then deeper up to full, easing in
+// over ~80 ms; par.vib_hz fast (5.5 Hz at most), a little different for
+// every note (+-5 %). What wavers (par.weft): the pitch (+-1 semitone),
+// the level (down to silence and back), the tone (a low pass from open
+// down to 5 octaves lower, a wah) or the place (left to right).
 // A ninth note takes the oldest voice, which hands its sound to a fader
 // that lets it go over ~5 ms (cut, it clicked).
 //
@@ -30,6 +32,7 @@ public:
   static constexpr int FADERS = 4;  // voices taken for new notes, fading out
   enum Loop : uint8_t { ONCE, LOOP, PING };
   enum Curve : uint8_t { C_LOG, C_LIN, C_EXP };
+  enum Weft : uint8_t { W_PITCH, W_LEVEL, W_TONE, W_PLACE };
   // how far a stage has got (0..1 of the way) at x (0..1 of its time):
   // rising, LOG is quick at first and EXP slow; falling, the other way
   // round (EXP drops quickly and tails off, as a ringing note dies)
@@ -55,6 +58,7 @@ public:
     float level = 1.0f;      // 1: a note at full velocity as loud as the sample
     float vel_amt = 0.75f;   // 0: every note as loud; 1: velocity sets it all
     float vib_hz = 5.5f;     // WEFT: how fast the vibrato wobbles
+    uint8_t weft = W_PITCH;  // ... and what
     int root = 60;
     float rate = 1.0f;       // the file's sample rate / 48 kHz
   };
@@ -128,6 +132,7 @@ private:
     float press = 0.0f;  // WEFT: how deep its vibrato is now (0..1), easing
     float vph = 0.0f;    // ... where the wobble is (0..1)
     float vjit = 1.0f;   // ... its own speed, against WEFT's (0.95 .. 1.05)
+    float lp[2][2] = {};  // ... W_TONE: the low pass, per side
     float env = 0.0f;
     float gain = 1.0f;
     float fade = 1.0f;   // a fader's own fade out (stolen voices)
@@ -273,9 +278,24 @@ FASTRUN void AudioEffectWarp::update() {
     if (v.vph >= 1.0f) v.vph -= 1.0f;
     if (v.press < 1e-4f) v.vph = 0.0f;  // (a new wobble starts on its way up)
     const float d1 = v.press * sinf(6.2831853f * v.vph);
-    const float s0 = exp2f(bend * d0), s1 = exp2f(bend * d1);
+    const uint8_t w = par.weft;
+    const bool pitch = w == W_PITCH;
+    const float s0 = pitch ? exp2f(bend * d0) : 1.0f, s1 = pitch ? exp2f(bend * d1) : 1.0f;
+    // W_TONE: a low pass (two poles, a little peak), open at rest, down to
+    // 1 .. 5 octaves lower at full pressure, along the wobble
+    const bool tone = w == W_TONE && v.press > 1e-3f;
+    float lg = 0.0f, lk = 0.0f;
+    if (tone) {
+      const float fc = 16000.0f * exp2f(-v.press * (3.0f + 2.0f * d1 / v.press));
+      lg = tanf(3.14159265f * std::min(fc, 18000.0f) / AUDIO_SAMPLE_RATE_EXACT);
+      lk = 1.0f / 1.4f;  // 1/Q
+    } else if (w != W_TONE || v.press <= 1e-3f) {
+      v.lp[0][0] = v.lp[0][1] = v.lp[1][0] = v.lp[1][1] = 0.0f;
+    }
+    const float la1 = 1.0f / (1.0f + lg * (lg + lk)), la2 = lg * la1, la3 = lg * la2;
     for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
-      v.step = v.base * (s0 + (s1 - s0) * (n * (1.0f / AUDIO_BLOCK_SAMPLES)));
+      const float x = n * (1.0f / AUDIO_BLOCK_SAMPLES);
+      v.step = v.base * (s0 + (s1 - s0) * x);
       // the envelope
       if (v.stage == 0) {  // up from where it was (a voice taken over: 0)
         v.ph += att;
@@ -339,8 +359,29 @@ FASTRUN void AudioEffectWarp::update() {
         const float left = float((b - v.pos) / v.step);
         if (left < 96.0f) e *= std::max(0.0f, left / 96.0f);
       }
-      sum[0][n] += l * e;
-      sum[1][n] += r * e;
+      float pl = 1.0f, pr = 1.0f;  // W_PLACE
+      if (!pitch && v.press > 1e-4f) {  // WEFT on the level, the tone or the place
+        const float d = d0 + (d1 - d0) * x;  // -press .. press
+        if (w == W_LEVEL) {
+          e *= 1.0f - 0.5f * (v.press + d);  // full: from as loud down to nothing
+        } else if (tone) {
+          float* side[2] = {&l, &r};
+          for (int c = 0; c < (sr == sl ? 1 : 2); c++) {  // (TPT state variable filter)
+            float* z = v.lp[c];
+            const float v3 = *side[c] - z[1];
+            const float v1 = la1 * z[0] + la2 * v3, v2 = z[1] + la2 * z[0] + la3 * v3;
+            z[0] = 2.0f * v1 - z[0];
+            z[1] = 2.0f * v2 - z[1];
+            *side[c] = v2;
+          }
+          if (sr == sl) r = l;
+        } else if (w == W_PLACE) {
+          pl = 1.0f - d;
+          pr = 1.0f + d;
+        }
+      }
+      sum[0][n] += l * e * pl;
+      sum[1][n] += r * e * pr;
       // on
       v.pos += v.step * v.dir;
       if (par.loop == ONCE) {
