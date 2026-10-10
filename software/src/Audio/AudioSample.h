@@ -12,7 +12,13 @@ __attribute__((always_inline)) static inline int16_t SoftClip16(float s) {
     const float y = (a - k) * (1.0f / r);
     s = copysignf(k + r * y / (1.0f + y), s);
   }
-  return int16_t(int32_t(s + (s >= 0.0f ? 0.5f : -0.5f)));
+  // rounded to the nearest step by the FPU itself (a branch on the sign
+  // cost nearly twice the time; a tie goes to the even step)
+  float t;
+  asm("vcvtr.s32.f32 %0, %1" : "=t"(t) : "t"(s));
+  int32_t i;
+  __builtin_memcpy(&i, &t, 4);
+  return int16_t(i);
 }
 __attribute__((always_inline)) static inline int16_t SoftClip16(int32_t v) {
   if (v <= SOFT_KNEE16 && v >= -SOFT_KNEE16) return int16_t(v);

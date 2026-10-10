@@ -45,8 +45,8 @@ public:
     // the pre-delay in RAM2 (it was in PSRAM: a read and a write per sample
     // there made it the reverb's most costly part)
     if (!pre) {
-      pre = static_cast<int16_t*>(malloc(2 * PRE_MAX * sizeof(int16_t)));
-      if (pre) memset(pre, 0, 2 * PRE_MAX * sizeof(int16_t));
+      pre = static_cast<float*>(malloc(2 * PRE_H * sizeof(float)));
+      if (pre) std::fill(pre, pre + 2 * PRE_H, 0.0f);
     }
     if (!rv) rv = TakeLines();
     for (auto& b : dbuf) {
@@ -75,11 +75,11 @@ public:
     if (mem) std::fill(mem, mem + MEM_TOTAL, 0.0f);
     if (rv) memset(rv, 0, RV_TOTAL * sizeof(int16_t));
     for (auto& w : rv_wi) w = 0;
-    if (pre) memset(pre, 0, 2 * PRE_MAX * sizeof(int16_t));
+    if (pre) std::fill(pre, pre + 2 * PRE_H, 0.0f);
     pre_w = 0;
     for (auto& z : rv_lp) z = 0.0f;
     rv_hp_z[0] = rv_hp_z[1] = 0.0f;
-    rv_x0[0] = rv_x0[1] = rv_t[0] = rv_t[1] = 0.0f;
+    rv_t[0] = rv_t[1] = 0.0f;
     for (auto b : dbuf) if (b) memset(b, 0, dlen * sizeof(int16_t));
     for (auto& i : ix) i = 0;
     for (int c = 0; c < 2; c++) lp_z[c] = hp_z[c] = 0.0f;
@@ -164,6 +164,7 @@ private:
   static_assert(RV_TOTAL == 22868, "the RAM1 pool below has this size");
   static constexpr float RV_Q = 8192.0f;  // int16 per 1.0 (headroom x4)
   static constexpr int PRE_MAX = 7201;    // 150 ms of pre-delay, a side
+  static constexpr int PRE_H = PRE_MAX / 2 + 1;  // the same at half the rate
   // the lines live in RAM1 (no cache misses: the reverb costs half): room
   // for two reverbs (one per Loom track), more from the heap
   static int16_t* TakeLines();
@@ -186,7 +187,7 @@ private:
   int ix[NUM_AP] = {};
   int16_t* rv = nullptr;
   int rv_wi[RL] = {};               // each line's write position
-  int16_t* pre = nullptr;           // pre-delay, 2 x PRE_MAX
+  float* pre = nullptr;             // pre-delay at half the rate, 2 x PRE_H
   int pre_w = 0, pre_cur = 0, pre_next = 0, pre_xf = 0;
   volatile int pre_target = 0;
   volatile float rv_diff = 1.0f;
@@ -197,9 +198,10 @@ private:
   volatile float rv_damp_a = 0.5f;
   float rv_lp[RL] = {};
   float rv_hi = 1.0f;       // lines 4..7's share: 1 = all 8 lines, 0 = 4 (lite)
-  float rv_x0[2] = {}, rv_t[2] = {};  // half rate: the even sample's input, the last tail
+  float rv_t[2] = {};  // half rate: the last step's tail
   bool rv_hi_cold = false;  // lines 4..7 were left out: cleared before they come back
   float rv_hp_z[2] = {};
+  const float rv_hp_a = OnePoleCoeff(180.0f);  // 90 Hz at half the rate: the low cut at the input
   float lfo_ph[4] = {0.0f, 0.25f, 0.5f, 0.75f};
 
   volatile float fb_target = 0.0f, dmix_target = 0.4f, rmix_target = 0.3f;
@@ -332,10 +334,10 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
   } else if (rv_cold) {
     rv_cold = false;
     memset(rv, 0, RV_TOTAL * sizeof(int16_t));
-    memset(pre, 0, 2 * PRE_MAX * sizeof(int16_t));
+    std::fill(pre, pre + 2 * PRE_H, 0.0f);
     for (auto& z : rv_lp) z = 0.0f;
     rv_hp_z[0] = rv_hp_z[1] = 0.0f;
-    rv_x0[0] = rv_x0[1] = rv_t[0] = rv_t[1] = 0.0f;
+    rv_t[0] = rv_t[1] = 0.0f;
     std::fill(mem + AP_OFS[AP_IN_BASE], mem + MEM_TOTAL, 0.0f);
   }
   const float s = spread_;
@@ -365,7 +367,6 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
   const float xfs = rv_xf ? 2.0f / RV_XF : 0.0f;
   const float rda1 = rv_damp_a + (1.0f - rv_damp_a) * frz;
   const float rda = 1.0f - (1.0f - rda1) * (1.0f - rda1);  // one step = two of the full rate
-  const float rv_hp_a = OnePoleCoeff(180.0f);  // 90 Hz at half the rate: the low cut at the input
   // pre-delay: a new time crossfades in over ~12 ms
   constexpr int PRE_XF = 512;
   if (pre_xf == 0 && pre_target != pre_cur) { pre_next = pre_target; pre_xf = PRE_XF; }
@@ -429,6 +430,11 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
   int peak_in = 0, peak_out = 0;
   constexpr float q = 1.0f / 32768.0f;
 
+  // The work below is done in passes over the block, the two sides side by
+  // side: the CPU runs in order and waits on every result it needs next, so
+  // one side alone keeps it waiting most of the time; two (or two reverb
+  // lines) fill those gaps. Same steps, same numbers as one sample at a time.
+
   // the reverb lines' outputs for the whole block first: every line is
   // longer than a block, so nothing read here is written in it. Read len
   // back (lines 0, 2, 5, 7 wobbled), interpolated, damped (TONE), loop gain.
@@ -444,139 +450,249 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
   const int nl = hi0 > 0.0f || hi1 > 0.0f ? RL : RL / 2;  // lines computed
   if (nl < RL) rv_hi_cold = true;
   const float hi_step = (hi1 - hi0) * (1.0f / HALF);
-  static float yb[RL][AUDIO_BLOCK_SAMPLES];
-  for (int i = 0; i < nl && rv_on; i++) {
-    const int cap = RV_CAP[i];
-    const int16_t* line = rv + RV_OFS[i];
-    const int w0 = rv_wi[i];
-    const float g_i = lg[i], d0i = dl0[i], dbi = dlb[i], dsi = dls[i];
-    float z = rv_lp[i];
-    auto read = [&](float back, int n) __attribute__((always_inline)) {
-      float rp = float(w0 + n) - back;
+  static float yb[RL][HALF];
+  if (rv_on) {
+    // read `back` behind the write position (always more than a block, so
+    // never past it), interpolated
+    auto read = [](const int16_t* line, int cap, float rp) __attribute__((always_inline)) {
       if (rp < 0.0f) rp += cap;
-      else if (rp >= cap) rp -= cap;
       const int i0 = int(rp);
       const int i1 = i0 + 1 >= cap ? 0 : i0 + 1;
       const float fr = rp - i0;
       return (line[i0] + fr * (line[i1] - line[i0])) * (1.0f / RV_Q);
     };
-    for (int n = 0; n < HALF; n++) {
-      float d = read(d0i + n * dsi, n);
-      if (rv_xf) {  // crossfading to the new size
-        const float wgt = std::min(1.0f, xf0 + n * xfs);
-        d += wgt * (read(dbi + n * dsi, n) - d);
+    for (int i = 0; i < nl; i += 2) {  // two lines at a time
+      const int16_t* la_ = rv + RV_OFS[i];
+      const int16_t* lb_ = rv + RV_OFS[i + 1];
+      const int ca = RV_CAP[i], cb = RV_CAP[i + 1];
+      const float wa = float(rv_wi[i]), wb = float(rv_wi[i + 1]);
+      const float ga = lg[i], gb = lg[i + 1];
+      const float da = dl0[i], db = dl0[i + 1], dba = dlb[i], dbb = dlb[i + 1];
+      const float sa_ = 1.0f - dls[i], sb_ = 1.0f - dls[i + 1];  // the read moves on by this a step
+      float za = rv_lp[i], zb = rv_lp[i + 1];
+      if (!rv_xf) {
+        for (int n = 0; n < HALF; n++) {
+          const float a = read(la_, ca, wa - da + n * sa_);
+          const float b = read(lb_, cb, wb - db + n * sb_);
+          za += rda * (a - za);
+          zb += rda * (b - zb);
+          yb[i][n] = za * ga;
+          yb[i + 1][n] = zb * gb;
+        }
+      } else {  // crossfading to the new size
+        for (int n = 0; n < HALF; n++) {
+          const float wgt = std::min(1.0f, xf0 + n * xfs);
+          float a = read(la_, ca, wa - da + n * sa_);
+          float b = read(lb_, cb, wb - db + n * sb_);
+          a += wgt * (read(la_, ca, wa - dba + n * sa_) - a);
+          b += wgt * (read(lb_, cb, wb - dbb + n * sb_) - b);
+          za += rda * (a - za);
+          zb += rda * (b - zb);
+          yb[i][n] = za * ga;
+          yb[i + 1][n] = zb * gb;
+        }
       }
-      z += rda * (d - z);
-      yb[i][n] = z * g_i;
+      rv_lp[i] = za;
+      rv_lp[i + 1] = zb;
     }
-    rv_lp[i] = z;
   }
 
+  // --- the delay: the write signal (input + processed feedback) and
+  // DELAY's crossfade dry -> echoes (x1, what the reverb is fed)
+  float x1b[2][AUDIO_BLOCK_SAMPLES];
+  const float dm = dmix;
+  const float dsub = dsend ? 0.0f : 1.0f;
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
     const int16_t d0 = dry_in[0][n], d1 = dry_in[1][n];
     peak_in = std::max(peak_in, std::max(abs(d0), abs(d1)));
-    const float dry[2] = {d0 * q, d1 * q};
-    const float lst[2] = {dly_on ? last[0][n] * q : 0.0f, dly_on ? last[1][n] * q : 0.0f};
-
-    // --- delay write: input + processed feedback ---
-    // ping-pong 0 = straight stereo, 1 = mono into L, L<->R in the loop
-    const float mono = 0.5f * (dry[0] + dry[1]);
-    const float inj[2] = {
-      live * (dry[0] + s * (mono - dry[0])),
-      live * (dry[1] * (1.0f - s)),
+  }
+  if (!dly_on) {  // the input only
+    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+      const float dry0 = dry_in[0][n] * q, dry1 = dry_in[1][n] * q;
+      const float mono = 0.5f * (dry0 + dry1);
+      wr[0][n] = ToQ15(live * (dry0 + s * (mono - dry0)));
+      wr[1][n] = ToQ15(live * (dry1 * (1.0f - s)));
+      x1b[0][n] = dry0;
+      x1b[1][n] = dry1;
+    }
+  } else {
+    float lz0 = lp_z[0], lz1 = lp_z[1], hz0 = hp_z[0], hz1 = hp_z[1];
+    int p[4] = {ix[AP_FB_BASE], ix[AP_FB_BASE + 1], ix[AP_FB_BASE + 2], ix[AP_FB_BASE + 3]};
+    float* const ab = mem + AP_OFS[AP_FB_BASE];
+    auto ap = [&](float x, int j) __attribute__((always_inline)) {
+      float* b = ab + (AP_OFS[AP_FB_BASE + j] - AP_OFS[AP_FB_BASE]);
+      const float d = b[p[j]];
+      const float v = x + g * d;
+      b[p[j]] = v;
+      if (++p[j] >= AP_LEN[AP_FB_BASE + j]) p[j] = 0;
+      return d - g * v;
     };
-    const float fbsrc[2] = {
-      lst[0] + s * (lst[1] - lst[0]),
-      lst[1] + s * (lst[0] - lst[1]),
+    auto clip = [](float x) __attribute__((always_inline)) {  // SoftClip, without branches
+      x = fminf(fmaxf(x, -1.5f), 1.5f);
+      return x - (4.0f / 27.0f) * x * x * x;
     };
-    for (int c = 0; c < 2; c++) {
-      if (!dly_on) { wr[c][n] = ToQ15(inj[c]); continue; }  // the input only
-      float x = fbsrc[c] * fb;
-      lp_z[c] += la * (x - lp_z[c]);
-      x = lp_z[c];
-      hp_z[c] += ha * (x - hp_z[c]);
-      x -= hp_z[c];
-      if (g > 0.0f) {
-        x = Allpass(x, AP_FB_BASE + c * 2, g);
-        x = Allpass(x, AP_FB_BASE + c * 2 + 1, g);
-      }
-      x = SoftClip(x);
-      // frozen: loop the last tap untouched
-      wr[c][n] = ToQ15(inj[c] + x * live + fbsrc[c] * frz);
-    }
-
-    // DELAY: crossfade dry -> echoes
-    float x1[2] = {dry[0], dry[1]};
-    if (dly_on) {
-      x1[0] += dmix * (tsum[0][n] - (dsend ? 0.0f : dry[0]));
-      x1[1] += dmix * (tsum[1][n] - (dsend ? 0.0f : dry[1]));
-    }
-    if (!rv_on) {
-      for (int c = 0; c < 2; c++) {
-        const int16_t o = ToQ15(x1[c]);
-        out[c]->data[n] = o;
-        peak_out = std::max(peak_out, abs(o));
-      }
-      continue;
-    }
-
-    // --- REVERB: 8-line FDN fed by the delay stage, at half the rate:
-    // an even sample is kept, the odd one runs a step on the two (averaged);
-    // the tail out is the last step's, halfway to the new one on odd samples
-    float tail[2] = {rv_t[0], rv_t[1]};
-    if (!(n & 1)) {
-      rv_x0[0] = x1[0];
-      rv_x0[1] = x1[1];
-    } else {
-      const int k = n >> 1;
-      float rin[2];
-      for (int c = 0; c < 2; c++) {
-        float x = live * 0.25f * (rv_x0[c] + x1[c]);  // (0.5 x their average)
-        // pre-delay (int16 ring a side)
-        int16_t* pb = pre + c * PRE_MAX;
-        pb[pre_w] = ToQ15(x);
-        auto back = [&](int d) { int r = pre_w - d; if (r < 0) r += PRE_MAX; return pb[r] * (1.0f / 32768.0f); };
-        x = back(pre_cur >> 1);
-        if (pre_xf) {
-          const float wgt = float(PRE_XF - pre_xf + n) / PRE_XF;
-          x += std::min(1.0f, wgt) * (back(pre_next >> 1) - x);
+    auto run = [&](auto diffuse) __attribute__((always_inline)) {
+      for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+        const float dry0 = dry_in[0][n] * q, dry1 = dry_in[1][n] * q;
+        const float l0 = last[0][n] * q, l1 = last[1][n] * q;
+        // ping-pong 0 = straight stereo, 1 = mono into L, L<->R in the loop
+        const float mono = 0.5f * (dry0 + dry1);
+        const float inj0 = live * (dry0 + s * (mono - dry0));
+        const float inj1 = live * (dry1 * (1.0f - s));
+        const float f0 = l0 + s * (l1 - l0);
+        const float f1 = l1 + s * (l0 - l1);
+        float x0 = f0 * fb, y0 = f1 * fb;
+        lz0 += la * (x0 - lz0);
+        lz1 += la * (y0 - lz1);
+        hz0 += ha * (lz0 - hz0);
+        hz1 += ha * (lz1 - hz1);
+        x0 = lz0 - hz0;
+        y0 = lz1 - hz1;
+        if constexpr (decltype(diffuse)::value) {
+          x0 = ap(x0, 0);
+          y0 = ap(y0, 2);
+          x0 = ap(x0, 1);
+          y0 = ap(y0, 3);
         }
-        rv_hp_z[c] += rv_hp_a * (x - rv_hp_z[c]);  // low cut (no mud)
-        x -= rv_hp_z[c];
-        for (int j = 0; j < 4; j++) x = AllpassHalf(x, AP_IN_BASE + c * 4 + j, AP_IN_G[j] * dg);
-        rin[c] = x;
+        x0 = clip(x0);
+        y0 = clip(y0);
+        // frozen: loop the last tap untouched
+        wr[0][n] = ToQ15(inj0 + x0 * live + f0 * frz);
+        wr[1][n] = ToQ15(inj1 + y0 * live + f1 * frz);
+        x1b[0][n] = dry0 + dm * (tsum[0][n] - dsub * dry0);
+        x1b[1][n] = dry1 + dm * (tsum[1][n] - dsub * dry1);
       }
+    };
+    if (g > 0.0f) run(std::true_type{});
+    else run(std::false_type{});
+    lp_z[0] = lz0; lp_z[1] = lz1; hp_z[0] = hz0; hp_z[1] = hz1;
+    for (int j = 0; j < 4; j++) ix[AP_FB_BASE + j] = p[j];
+  }
+
+  if (!rv_on) {
+    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+      const int16_t o0 = ToQ15(x1b[0][n]), o1 = ToQ15(x1b[1][n]);
+      out[0]->data[n] = o0;
+      out[1]->data[n] = o1;
+      peak_out = std::max(peak_out, std::max(abs(o0), abs(o1)));
+    }
+  } else {
+    // --- REVERB: 8-line FDN fed by the delay stage, at half the rate: a
+    // step takes two samples (their average)
+    float rin[2][HALF];
+    {
+      float* pb0 = pre;
+      float* pb1 = pre + PRE_H;
+      int pw = pre_w;
+      const int bc = pre_cur >> 1, bn = pre_next >> 1;
+      float h0 = rv_hp_z[0], h1 = rv_hp_z[1];
+      int p[8];
+      for (int j = 0; j < 8; j++) p[j] = ix[AP_IN_BASE + j];
+      float gj[4];
+      for (int j = 0; j < 4; j++) gj[j] = AP_IN_G[j] * dg;
+      float* const ab = mem + AP_OFS[AP_IN_BASE];
+      // (half the length is the same time at half the rate)
+      auto ap = [&](float x, int j, float gg) __attribute__((always_inline)) {
+        float* b = ab + (AP_OFS[AP_IN_BASE + j] - AP_OFS[AP_IN_BASE]);
+        const float d = b[p[j]];
+        const float v = x + gg * d;
+        b[p[j]] = v;
+        if (++p[j] >= AP_LEN[AP_IN_BASE + j] / 2) p[j] = 0;
+        return d - gg * v;
+      };
+      for (int k = 0; k < HALF; k++) {
+        const int n = 2 * k + 1;
+        float x0 = live * 0.25f * (x1b[0][n - 1] + x1b[0][n]);  // (0.5 x their average)
+        float x1 = live * 0.25f * (x1b[1][n - 1] + x1b[1][n]);
+        // pre-delay (a ring a side)
+        pb0[pw] = x0;
+        pb1[pw] = x1;
+        int r = pw - bc;
+        if (r < 0) r += PRE_H;
+        x0 = pb0[r];
+        x1 = pb1[r];
+        if (pre_xf) {  // a new time crossfades in
+          const float wgt = std::min(1.0f, float(PRE_XF - pre_xf + n) * (1.0f / PRE_XF));
+          int rn = pw - bn;
+          if (rn < 0) rn += PRE_H;
+          x0 += wgt * (pb0[rn] - x0);
+          x1 += wgt * (pb1[rn] - x1);
+        }
+        if (++pw >= PRE_H) pw = 0;
+        h0 += rv_hp_a * (x0 - h0);  // low cut (no mud)
+        h1 += rv_hp_a * (x1 - h1);
+        x0 -= h0;
+        x1 -= h1;
+        for (int j = 0; j < 4; j++) {
+          x0 = ap(x0, j, gj[j]);
+          x1 = ap(x1, 4 + j, gj[j]);
+        }
+        rin[0][k] = x0;
+        rin[1][k] = x1;
+      }
+      pre_w = pw;
+      rv_hp_z[0] = h0;
+      rv_hp_z[1] = h1;
+      for (int j = 0; j < 8; j++) ix[AP_IN_BASE + j] = p[j];
+    }
+
+    // Householder: every line into every other, lossless; what goes back
+    // into the lines (kept in yb) and the tail out
+    float tb[2][HALF];
+    float hn = 2.0f / (RL / 2 + RL / 2 * (nl == RL ? hi0 : 0.0f));  // (2 / the lines in it)
+    for (int k = 0; k < HALF; k++) {
       float y[RL] = {};
       float ysum = 0.0f;
       const float w = nl == RL ? hi0 + k * hi_step : 0.0f;  // lines 4..7's share
+      if (hi_step != 0.0f) hn = 2.0f / (RL / 2 + RL / 2 * w);
       for (int i = 0; i < nl; i++) {
-        y[i] = yb[i][k] * (i < RL / 2 ? 1.0f : w);  // read for the whole block above
+        y[i] = yb[i][k] * (i < RL / 2 ? 1.0f : w);
         ysum += y[i];
       }
-      if (++pre_w >= PRE_MAX) pre_w = 0;
-      // Householder: every line into every other, lossless
-      const float hh = ysum * 2.0f / (RL / 2 + RL / 2 * w);  // (2 / the lines in it)
-      for (int i = 0; i < nl; i++) {
-        const float v = y[i] - hh + rin[i & 1] * ((i & 2) ? -0.5f : 0.5f);
-        rv[RV_OFS[i] + rv_wi[i]] = SoftClip16(v * RV_Q);
-        if (++rv_wi[i] >= RV_CAP[i]) rv_wi[i] = 0;
-      }
+      const float hh = ysum * hn;
+      for (int i = 0; i < nl; i++)
+        yb[i][k] = (y[i] - hh + rin[i & 1][k] * ((i & 2) ? -0.5f : 0.5f)) * RV_Q;
       const float ta = 0.42f * (1.0f + 0.414f * (1.0f - w));  // half the lines: x sqrt 2
-      const float t[2] = {ta * (y[0] - y[2] + y[4] - y[6]), ta * (y[1] - y[3] + y[5] - y[7])};
-      for (int c = 0; c < 2; c++) {
-        tail[c] = 0.5f * (rv_t[c] + t[c]);
-        rv_t[c] = t[c];
+      tb[0][k] = ta * (y[0] - y[2] + y[4] - y[6]);
+      tb[1][k] = ta * (y[1] - y[3] + y[5] - y[7]);
+    }
+    for (int i = 0; i < nl; i++) {
+      int16_t* line = rv + RV_OFS[i];
+      const int cap = RV_CAP[i];
+      int wi = rv_wi[i];
+      for (int k = 0; k < HALF; k++) {
+        line[wi] = SoftClip16(yb[i][k]);
+        if (++wi >= cap) wi = 0;
+      }
+      rv_wi[i] = wi;
+    }
+
+    // the tail out is the last step's, halfway to the new one on odd samples
+    const float rm = rmix;
+    const float rsub = rsend ? 0.0f : 1.0f;
+    float t0 = rv_t[0], t1 = rv_t[1];
+    for (int k = 0; k < HALF; k++) {
+      for (int h = 0; h < 2; h++) {
+        const int n = 2 * k + h;
+        float e0 = t0, e1 = t1;
+        if (h) {
+          e0 = 0.5f * (t0 + tb[0][k]);
+          e1 = 0.5f * (t1 + tb[1][k]);
+          t0 = tb[0][k];
+          t1 = tb[1][k];
+        }
+        peak_tail = std::max(peak_tail, std::max(fabsf(e0), fabsf(e1)));
+        const float a = x1b[0][n], b = x1b[1][n];
+        const int16_t o0 = ToQ15(a + rm * (e0 - rsub * a));
+        const int16_t o1 = ToQ15(b + rm * (e1 - rsub * b));
+        out[0]->data[n] = o0;
+        out[1]->data[n] = o1;
+        peak_out = std::max(peak_out, std::max(abs(o0), abs(o1)));
       }
     }
-    peak_tail = std::max(peak_tail, std::max(fabsf(tail[0]), fabsf(tail[1])));
-
-    for (int c = 0; c < 2; c++) {
-      const int16_t o = ToQ15(x1[c] + rmix * (tail[c] - (rsend ? 0.0f : x1[c])));
-      out[c]->data[n] = o;
-      peak_out = std::max(peak_out, abs(o));
-    }
+    rv_t[0] = t0;
+    rv_t[1] = t1;
   }
-
   if (rv_xf) {
     rv_xf -= AUDIO_BLOCK_SAMPLES;
     if (rv_xf <= 0) { rv_xf = 0; rv_sc_a = rv_sc_b; }
