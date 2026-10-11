@@ -781,7 +781,7 @@ FLASHMEM static float WorstCost(const Device* d) {
     return m == RingsVoice::SYMPATHETIC || m == RingsVoice::SYMPATHETIC_QUANTIZED ? 16.0f : 9.0f;
   }
   if (!strcmp(t, "ECO")) return 12.0f;  // REPEAT
-  if (!strcmp(t, "STR")) return 10.0f;  // DRAFT
+  if (!strcmp(t, "STR")) return 11.5f;  // DRAFT (with its diffuser)
   if (!strcmp(t, "TEX")) return 8.0f;   // TEXTURE
   if (!strcmp(t, "CHM")) return 7.0f;   // TWILL
   if (!strcmp(t, "SPR")) return 6.0f;   // FIBRE
