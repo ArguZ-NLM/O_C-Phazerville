@@ -214,18 +214,23 @@ public:
   }
   // HIST columns, read from the audio itself (a short loop only covers a
   // slot or two of the coarse hist, which drew a solid block)
+  // (the reads are scattered over the PSRAM, ~100 ns each: all 128 columns
+  // took ~13 ms, and every picture asked for them, holding up the main
+  // loop. Now 16 columns are read again per call, round the picture.)
   void ReadHistory(uint8_t* dst) const {
     const size_t n = st == REC ? wpos : len;
     if (!n || !cap) { std::fill(dst, dst + HIST, 0); return; }
     const size_t span = std::max<size_t>(1, n / HIST);
     const size_t step = std::max<size_t>(1, span / 48);  // ~48 reads a column is plenty
-    for (int k = 0; k < HIST; k++) {
+    for (int j = 0; j < 16; j++, rh_next = (rh_next + 1) % HIST) {
+      const int k = rh_next;
       const size_t from = size_t(k) * n / HIST, to = std::min(n, from + span);
       int pk = 0;
       for (size_t i = from; i < to; i += step)
         pk = std::max(pk, std::max(abs(buf[0][i]), abs(buf[1][i])));
-      dst[k] = uint8_t(std::min(255, pk >> 7));
+      rh[k] = uint8_t(std::min(255, pk >> 7));
     }
+    std::copy(rh, rh + HIST, dst);
   }
 
   void update() override;
@@ -260,6 +265,8 @@ private:
   volatile size_t ex_ws = 0, ex_wl = 0;
   volatile bool exact = false;
   uint8_t hist[HIST] = {};
+  mutable uint8_t rh[HIST] = {};  // ReadHistory's columns, as last read
+  mutable int rh_next = 0;
 
   // a new, empty buffer of n frames swapped in between two audio updates
   // (cleared or not: REC writes before anything is read)
