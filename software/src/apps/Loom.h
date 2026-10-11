@@ -2094,6 +2094,11 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
         Track& tr = tracks[track];
         if (col == MIX_COL || (col > SOURCE && tr.choice[col])) ToggleBypass(col);
         else if (col > SOURCE) SetChoiceLinked(col, tr.last_choice[col]);
+      } else if (view == CHAIN) {
+        // A in the chain view presses no device action (FRZ, HIT, REC...):
+        // the chain view only arranges and bypasses, so a set never stops
+        // or changes by a stray press here (the holds still work: SHUTTLE
+        // stops, CLOTH records)
       } else if (d && event.control == OC::CONTROL_BUTTON_DOWN && BypassKey()) {
         ToggleBypass(col);
       } else if (d) {
