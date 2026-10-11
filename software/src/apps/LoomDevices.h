@@ -5384,12 +5384,11 @@ FLASHMEM void StretchDevice::Apply(int p) {
   }
 }
 
-// the spreads, as on SPRAY: OFF, then +-semitones (PITCH) or percent
+// the variations: OFF, then +-semitones (PITCH) or percent
 FLASHMEM void StretchDevice::FormatMode(int p, char* buf, size_t n) const {
   if (mode[p] == 0) snprintf(buf, n, "OFF");
   else if (p == PITCH) snprintf(buf, n, "+-%d", mode[p]);
   else snprintf(buf, n, "%d%%", mode[p] * 5);
-  else Device::FormatMode(p, buf, n);
 }
 
 FLASHMEM void StretchDevice::Format(int p, char* buf, size_t n) const {
