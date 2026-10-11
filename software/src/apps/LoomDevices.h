@@ -5329,7 +5329,7 @@ PROGMEM static const DeviceDef STRETCH_DEF = {
   {
     // page 1 in FIBRE's places (SPEED where FIBRE has RATE); every mode is
     // a random variation per window, 0..100 % (PITCH: 0..24 semitones)
-    {"SPEED", -200, 200, 100, BI, 0, 21, 0},  // frozen: through the buffer (%, < 0 backwards)
+    {"SPEED", -200, 200, 0, BI, 0, 21, 0},  // frozen: through the buffer (%, < 0 backwards); 0 holds it at POS, as Clouds does (and a double click goes there)
     {"SIZE", 0, 100, 50, UNI, 0, 21, 0},  // the window: short = quick and grainy, long = smooth
     {"PITCH", -24, 24, 0, BI, 0, 25, 0},  // semitones, without changing the speed
     {"POS", 0, 100, 80, UNI, 0, 21, 0},   // like FIBRE: 0 = the oldest audio (left), 100 = now (right)
