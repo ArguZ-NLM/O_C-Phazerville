@@ -5370,11 +5370,13 @@ public:
     fx.processorUsageMaxReset();
   }
 private:
-  // the window's variations as the picture shows them: following the new
-  // ones each window brings (every few ms) over ~0.2 s, so the box sways
-  // instead of flickering from one to the next
+  // the window's variations as the picture shows them: every ~0.15 s it
+  // takes the playing window's (their whole reach) and glides there, so the
+  // box sways instead of flickering with each window (every few ms);
+  // following each one smoothly averaged them to a third of their reach
   float v_pos = 0.0f, v_size = 0.0f, v_pitch = 0.0f, v_tone = 0.0f, v_diff = 0.0f;
-  uint32_t v_at = 0;  // when they were last moved (us)
+  float t_pos = 0.0f, t_size = 0.0f, t_pitch = 0.0f, t_tone = 0.0f, t_diff = 0.0f;
+  uint32_t v_at = 0, t_at = 0;  // last moved, last taken (us)
   AudioStretch fx;
   Meter out_m;
   bool frozen = false;
@@ -5433,13 +5435,21 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
   out_m.Hit(pk);
   // (by the time passed: the picture is drawn every main loop, a few ms)
   const uint32_t now = micros();
-  const float k = 1.0f - expf(-float(now - v_at) * (1.0f / 200000.0f));
+  if (now - t_at >= 150000) {
+    t_at = now;
+    t_pos = fx.voice.DPos();
+    t_size = fx.voice.DSize();
+    t_pitch = fx.voice.DPitch();
+    t_tone = fx.tone_now;
+    t_diff = fx.diff_now;
+  }
+  const float k = 1.0f - expf(-float(now - v_at) * (1.0f / 50000.0f));
   v_at = now;
-  v_pos += k * (fx.voice.DPos() - v_pos);
-  v_size += k * (fx.voice.DSize() - v_size);
-  v_pitch += k * (fx.voice.DPitch() - v_pitch);
-  v_tone += k * (float(fx.tone_now) - v_tone);
-  v_diff += k * (float(fx.diff_now) - v_diff);
+  v_pos += k * (t_pos - v_pos);
+  v_size += k * (t_size - v_size);
+  v_pitch += k * (t_pitch - v_pitch);
+  v_tone += k * (t_tone - v_tone);
+  v_diff += k * (t_diff - v_diff);
   const int ww = w - 8, cy = y + h / 2, base = y + h - 1;
   constexpr int HIST = AudioStretch::HIST;
   const float head = fx.HeadPos();
