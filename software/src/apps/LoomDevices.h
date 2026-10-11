@@ -5196,6 +5196,10 @@ private:
   int ap_at[2][4] = {};
   float diff_a = 0.0f;  // the amount as heard (ramped per block)
   float mix_g = 1.0f;   // MIX's variation, as a gain on the wet part
+  // TONE, DIFF and MIX's variations glide to each window's new value
+  // (~30 ms) instead of jumping: jumps in the blend of blurred and clear
+  // (they are out of step) or in the filter clicked at every window
+  float tone_s = 0.0f, diff_s = 0.0f, mix_s = 1.0f;
   audio_block_t* queue[2];
   float lp_z[2] = {}, hp_z[2] = {};
   bool resting = false;
@@ -5276,10 +5280,14 @@ FASTRUN __attribute__((optimize("O2"))) void AudioStretch::update() {  // (O2: t
       }
     voice.Process(fi, fo, AUDIO_BLOCK_SAMPLES);
     Level(fi);
-    // this window's TONE, DIFF and MIX: the settings plus their variations
-    const float t = constrain(tone + voice.DRand(0) * tone_var, -50.0f, 50.0f) * 0.02f;
-    tone_now = t * 50.0f;
-    const float dn = constrain(diff + voice.DRand(1) * diff_var, 0.0f, 1.0f);
+    // this window's TONE, DIFF and MIX: the settings plus their variations,
+    // glided to
+    constexpr float glide = 0.085f;  // per block: ~30 ms
+    tone_s += glide * (constrain(tone + voice.DRand(0) * tone_var, -50.0f, 50.0f) - tone_s);
+    diff_s += glide * (constrain(diff + voice.DRand(1) * diff_var, 0.0f, 1.0f) - diff_s);
+    const float t = tone_s * 0.02f;
+    tone_now = tone_s;
+    const float dn = diff_s;
     diff_now = dn;
     Diffuse(fo, dn);
     // TONE, Clouds' texture filter: left closes a lowpass, right opens a highpass
@@ -5290,8 +5298,8 @@ FASTRUN __attribute__((optimize("O2"))) void AudioStretch::update() {  // (O2: t
     // MIX's variation: the slot mixes by MIX, so the wet part here is
     // scaled to what this window's MIX would give (ramped over the block)
     const float w = wet;
-    const float g_to = mix_var > 0.0f && w > 0.01f
-        ? constrain(w + voice.DRand(2) * mix_var, 0.0f, 1.0f) / w : 1.0f;
+    mix_s += glide * ((mix_var > 0.0f ? constrain(w + voice.DRand(2) * mix_var, 0.0f, 1.0f) : w) - mix_s);
+    const float g_to = w > 0.01f ? mix_s / w : 1.0f;
     const float g_from = mix_g, g_step = (g_to - g_from) / AUDIO_BLOCK_SAMPLES;
     mix_g = g_to;
     float pk = 0.0f;
