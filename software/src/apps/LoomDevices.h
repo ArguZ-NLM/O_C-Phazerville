@@ -5271,6 +5271,7 @@ public:
     fx.processorUsageMaxReset();
   }
 private:
+  void DrawSound(int x, int y, int ww, int h);
   AudioStretch fx;
   Meter out_m;
   bool frozen = false;
@@ -5315,45 +5316,98 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
   fx.peak = 0.0f;
   out_m.Hit(pk);
   const int ww = w - 8, cy = y + h / 2, base = y + h - 1;
-  gfxDottedLine(x, cy, x + ww - 1, cy, 2);
-  if (!frozen) gfxLine(x + ww - 1, y + 2, x + ww - 1, y + h - 3);  // now: the record head
-  float pos = 1.0f - cur[POS] * 0.01f + (frozen ? fx.voice.Scrub() : 0.0f);  // back from now
-  pos -= floorf(pos);
-  auto pos_x = [&](float p) { p -= floorf(p); return x + int((1.0f - p) * (ww - 1)); };
-  const float semis_px = float(h / 2 - 4) / 24.0f;
-  // the variations' reach, like SPRAY's: POS as brackets either side, PITCH
-  // as a dotted line up and down through the middle
-  const float pv = mode[POS] * 0.025f;
-  if (pv > 0.0f) {
-    const int wl = std::max(x, pos_x(pos + pv)), wr = std::min(x + ww - 1, pos_x(pos - pv));
-    for (int px = wl; px <= wr; px++) { gfxPixel(px, y); gfxPixel(px, base); }
-    for (int k = 0; k < 5; k++) {
-      gfxPixel(wl, y + k); gfxPixel(wr, y + k);
-      gfxPixel(wl, base - k); gfxPixel(wr, base - k);
+  if (view_page == 1) {
+    DrawSound(x, y, ww, h);
+  } else {
+    gfxDottedLine(x, cy, x + ww - 1, cy, 2);
+    if (!frozen) gfxLine(x + ww - 1, y + 2, x + ww - 1, y + h - 3);  // now: the record head
+    float pos = 1.0f - cur[POS] * 0.01f + (frozen ? fx.voice.Scrub() : 0.0f);  // back from now
+    pos -= floorf(pos);
+    auto pos_x = [&](float p) { p -= floorf(p); return x + int((1.0f - p) * (ww - 1)); };
+    const float semis_px = float(h / 2 - 4) / 24.0f;
+    // the variations' reach, like SPRAY's: POS as brackets either side, PITCH
+    // as a dotted line up and down through the middle
+    const float pv = mode[POS] * 0.025f;
+    if (pv > 0.0f) {
+      const int wl = std::max(x, pos_x(pos + pv)), wr = std::min(x + ww - 1, pos_x(pos - pv));
+      for (int px = wl; px <= wr; px++) { gfxPixel(px, y); gfxPixel(px, base); }
+      for (int k = 0; k < 5; k++) {
+        gfxPixel(wl, y + k); gfxPixel(wr, y + k);
+        gfxPixel(wl, base - k); gfxPixel(wr, base - k);
+      }
     }
+    const int pyc = cy - int(cur[PITCH] * semis_px);
+    if (mode[PITCH] > 0) {
+      const int a = int(mode[PITCH] * semis_px);
+      for (int yy = std::max(y + 1, pyc - a); yy <= std::min(base - 1, pyc + a); yy += 2) gfxPixel(pos_x(pos), yy);
+    }
+    // the window playing now: POS back from now (plus its variation), as wide
+    // as SIZE, raised or lowered by PITCH; frozen, it runs through the buffer
+    const int px = pos_x(pos + fx.voice.DPos());
+    const float sz = constrain(cur[SIZE] * 0.01f + fx.voice.DSize(), 0.0f, 1.0f);
+    const int bw = 4 + int(sz * (ww / 4));
+    const int py = cy - int((cur[PITCH] + fx.voice.DPitch()) * semis_px);
+    const int bx = constrain(px - bw / 2, x, x + ww - bw);
+    graphics.clearRect(bx, py - 3, bw, 7);
+    gfxFrame(bx, py - 3, bw, 7);
+    // SPRD: a dot inside the box, where it sits left / right
+    if (cur[SPRD] > 0) gfxPixel(bx + 1 + int((fx.voice.Pan() + 1.0f) * 0.5f * (bw - 3)), py);
   }
-  const int pyc = cy - int(cur[PITCH] * semis_px);
-  if (mode[PITCH] > 0) {
-    const int a = int(mode[PITCH] * semis_px);
-    for (int yy = std::max(y + 1, pyc - a); yy <= std::min(base - 1, pyc + a); yy += 2) gfxPixel(pos_x(pos), yy);
-  }
-  // the window playing now: POS back from now (plus its variation), as wide
-  // as SIZE, raised or lowered by PITCH; frozen, it runs through the buffer
-  const int px = pos_x(pos + fx.voice.DPos());
-  const float sz = constrain(cur[SIZE] * 0.01f + fx.voice.DSize(), 0.0f, 1.0f);
-  const int bw = 4 + int(sz * (ww / 4));
-  const int py = cy - int((cur[PITCH] + fx.voice.DPitch()) * semis_px);
-  const int bx = constrain(px - bw / 2, x, x + ww - bw);
-  graphics.clearRect(bx, py - 3, bw, 7);
-  gfxFrame(bx, py - 3, bw, 7);
-  // SPRD: a dot inside the box, where it sits left / right
-  if (cur[SPRD] > 0) gfxPixel(bx + 1 + int((fx.voice.Pan() + 1.0f) * 0.5f * (bw - 3)), py);
   if (frozen) {
     gfxPrint(x + 1, y + 1, PSTR("FRZ"));
     gfxInvert(x, y, 20, 9);
   }
   gfxFrame(x + w - 4, y, 4, h);
   DrawVMeter(x + w - 4, y, 4, h, out_m.v);
+}
+
+// page 2, what happens to the sound: the window again (where POS puts it),
+// bigger. TONE fills it with pixels from one side: from the top as the
+// lowpass closes (the highs gone), from the bottom as the highpass opens
+// (the lows gone), denser towards the edge it cuts from. FDBK stacks up to
+// three dotted copies behind it. SPRD a line under it, as wide as the
+// spread, with the window's place left / right on it. MIX thins out the
+// dry line running through: solid with only the dry heard, gone at 100.
+FLASHMEM void StretchDevice::DrawSound(int x, int y, int ww, int h) {
+  static const uint8_t bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
+  const int cy = y + h / 2;
+  const int dry = 16 - cur[MIX] * 16 / 100;  // 16 .. 0 of 16
+  for (int px = x; px < x + ww; px++)
+    if (((px * 5) & 15) < dry) gfxPixel(px, cy);
+  float pos = 1.0f - cur[POS] * 0.01f + (frozen ? fx.voice.Scrub() : 0.0f);
+  pos += fx.voice.DPos();
+  pos -= floorf(pos);
+  const int px = x + int((1.0f - pos) * (ww - 1));
+  const float sz = constrain(cur[SIZE] * 0.01f + fx.voice.DSize(), 0.0f, 1.0f);
+  const int bw = 10 + int(sz * (ww / 4 - 6)), bh = 16;
+  const int bx = constrain(px - bw / 2, x + 6, x + ww - bw), by = cy - bh / 2 - 1;
+  // FDBK: the copies, each 2 px further up and left
+  const int copies = (cur[FDBK] * 3 + 50) / 100;
+  for (int k = copies; k > 0; k--) {
+    const int gx = bx - 2 * k, gy = by - 2 * k;
+    gfxDottedLine(gx, gy, gx + bw - 1, gy, 2);
+    gfxDottedLine(gx, gy, gx, gy + bh - 1, 2);
+  }
+  graphics.clearRect(bx, by, bw, bh);
+  gfxFrame(bx, by, bw, bh);
+  // TONE
+  const int ih = bh - 2, depth = (abs(cur[TONE]) * ih + 25) / 50;
+  for (int k = 0; k < depth; k++) {  // k 0: the row at the edge cut from
+    const int yy = cur[TONE] < 0 ? by + 1 + k : by + bh - 2 - k;
+    const int fill = 16 - 12 * k / depth;  // solid at the edge, 4 of 16 deepest in
+    for (int xx = bx + 1; xx < bx + bw - 1; xx++)
+      if (bayer[yy & 3][xx & 3] < fill) gfxPixel(xx, yy);
+  }
+  // SPRD
+  if (cur[SPRD] > 0) {
+    const int mid = bx + bw / 2, half = std::max(1, cur[SPRD] * (bw / 2) / 100);
+    const int ly = by + bh + 2;
+    gfxLine(mid - half, ly, mid + half, ly);
+    gfxPixel(mid - half, ly - 1);
+    gfxPixel(mid + half, ly - 1);
+    const int dx = mid + int(fx.voice.Pan() * (bw / 2));
+    gfxLine(dx, ly - 1, dx, ly + 1);
+  }
 }
 
 FLASHMEM void StretchDevice::DrawMini(int x, int y, int w, int h) {
