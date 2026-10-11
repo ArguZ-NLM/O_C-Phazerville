@@ -5374,6 +5374,7 @@ private:
   // ones each window brings (every few ms) over ~0.2 s, so the box sways
   // instead of flickering from one to the next
   float v_pos = 0.0f, v_size = 0.0f, v_pitch = 0.0f, v_tone = 0.0f, v_diff = 0.0f;
+  uint32_t v_at = 0;  // when they were last moved (us)
   AudioStretch fx;
   Meter out_m;
   bool frozen = false;
@@ -5430,7 +5431,10 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
   const float pk = fx.peak;
   fx.peak = 0.0f;
   out_m.Hit(pk);
-  constexpr float k = 0.15f;  // per frame
+  // (by the time passed: the picture is drawn every main loop, a few ms)
+  const uint32_t now = micros();
+  const float k = 1.0f - expf(-float(now - v_at) * (1.0f / 200000.0f));
+  v_at = now;
   v_pos += k * (fx.voice.DPos() - v_pos);
   v_size += k * (fx.voice.DSize() - v_size);
   v_pitch += k * (fx.voice.DPitch() - v_pitch);
