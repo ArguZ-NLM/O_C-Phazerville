@@ -5352,7 +5352,12 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
   const int head = fx.hist_pos;
   // the window's place, as FIBRE's: from now (right) back to the oldest
   // audio (left), standing still while the record head runs
-  auto pos_x = [&](float p) { p -= floorf(p); return x + int((1.0f - p) * (ww - 1)); };
+  // (frozen it runs round the buffer; else it stops at the ends, as the
+  // engine does)
+  auto pos_x = [&](float p) {
+    p = frozen ? p - floorf(p) : constrain(p, 0.0f, 1.0f);
+    return x + int((1.0f - p) * (ww - 1));
+  };
   gfxDottedLine(x, cy, x + ww - 1, cy, 2);
   const int wave_fill = 16 - cur[MIX] * 16 / 100;  // 16 .. 0 of 16
   if (wave_fill > 0)
@@ -5367,7 +5372,7 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
   graphics.clearRect(cl, y, cr - cl + 1, h);
   if (!frozen) gfxLine(hx, y + 2, hx, y + h - 3);  // the record head
   float pos = 1.0f - cur[POS] * 0.01f + (frozen ? fx.voice.Scrub() : 0.0f);  // back from now
-  pos -= floorf(pos);
+  if (frozen) pos -= floorf(pos);
   const float semis_px = float(h / 2 - 4) / 24.0f;
   // the variations' reach, like SPRAY's: POS as brackets either side, PITCH
   // as a dotted line up and down through the middle
@@ -5413,7 +5418,7 @@ FLASHMEM void StretchDevice::DrawMini(int x, int y, int w, int h) {
   const int cy = y + h / 2;
   gfxLine(x, cy, x + w - 1, cy);
   float pos = 1.0f - cur[POS] * 0.01f + (frozen ? fx.voice.Scrub() : 0.0f);  // back from now
-  pos -= floorf(pos);
+  if (frozen) pos -= floorf(pos);
   const int px = x + int((1.0f - pos) * (w - 1));
   const int py = cy - cur[PITCH] * (h / 2 - 2) / 24;
   gfxFrame(constrain(px - 2, x, x + w - 5), py - 2, 5, 5);

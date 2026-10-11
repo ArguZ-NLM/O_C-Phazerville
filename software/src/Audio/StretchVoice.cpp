@@ -140,8 +140,12 @@ void StretchVoice::Process(const float* in, float* out, size_t n) {
     }
     if (hop_left_ <= 0) NextWindow();
     hop_left_ -= int32_t(size);
+    // frozen, it runs round the held buffer; recording, the window stops at
+    // now and at the oldest sound (wrapping, it jumped from one to the other,
+    // into what is being written)
     float pos = position_ + scrub_ + d_pos_;
-    pos -= floorf(pos);
+    if (freeze_) pos -= floorf(pos);
+    else pos = std::min(0.98f, std::max(0.0f, pos));
     clouds::Parameters prm = {};
     prm.position = pos;
     prm.size = std::min(1.0f, std::max(0.0f, size_ + d_size_));
