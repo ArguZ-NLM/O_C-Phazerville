@@ -5440,9 +5440,11 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
         if (bayer[yy & 3][px & 3] < wave_fill) gfxPixel(px, yy);
     }
   const int hx = x + int(head * ww / HIST) % ww;
-  const int cl = std::max(x, hx - 1), cr = std::min(x + ww - 1, hx + 1);
-  graphics.clearRect(cl, y, cr - cl + 1, h);
-  if (!frozen) gfxLine(hx, y + 2, hx, y + h - 3);  // the record head
+  if (!frozen) {  // the record head, with a gap either side (none frozen)
+    const int cl = std::max(x, hx - 1), cr = std::min(x + ww - 1, hx + 1);
+    graphics.clearRect(cl, y, cr - cl + 1, h);
+    gfxLine(hx, y + 2, hx, y + h - 3);
+  }
   const float pos = 1.0f - cur[POS] * 0.01f;  // back from now
   const float semis_px = float(h / 2 - 4) / 24.0f;
   // the variations' reach, like SPRAY's: POS as brackets either side, PITCH
