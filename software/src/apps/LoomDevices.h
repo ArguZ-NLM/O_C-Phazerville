@@ -5172,11 +5172,15 @@ public:
   static constexpr int HIST = 120;
   uint8_t hist[HIST] = {};
   volatile int hist_pos = 0;
+  // where the record head is, in columns (with the part of the next one
+  // written so far, so the picture moves smoothly)
+  float HeadPos() const { return head_f; }
   void update() override;
 private:
   void Level(const float* x);
   void Diffuse(float* x, float to);
   float hist_peak = 0.0f, hist_blocks = 0.0f;
+  volatile float head_f = 0.0f;  // hist_pos + hist_blocks, set in one go
   // Clouds' diffuser: four allpasses a side, its lengths (at 32 kHz) x 1.5
   static constexpr int AP_MEM = 1529 + 1511;
   float ap_mem[AP_MEM] = {};
@@ -5200,6 +5204,7 @@ inline void AudioStretch::Level(const float* x) {
     hist_pos = (hist_pos + 1) % HIST;
     hist_peak = 0.0f;
   }
+  head_f = hist_pos + hist_blocks;
 }
 
 // the windows (interleaved L R) through the diffuser, crossfaded by its
@@ -5414,12 +5419,12 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
   out_m.Hit(pk);
   const int ww = w - 8, cy = y + h / 2, base = y + h - 1;
   constexpr int HIST = AudioStretch::HIST;
-  const int head = fx.hist_pos;
+  const float head = fx.HeadPos();
   // a place p back from the record head (0 = now, 1 = the oldest), round
   // the loop; recording, the window stops at the ends, as the engine does
   auto pos_x = [&](float p) {
     p = frozen ? p - floorf(p) : constrain(p, 0.0f, 0.98f);
-    float f = float(head) / HIST - p;
+    float f = head / HIST - p;
     f -= floorf(f);
     return x + int(f * ww) % ww;
   };
@@ -5434,7 +5439,7 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
       for (int yy = cy - a; yy <= cy + a; yy++)
         if (bayer[yy & 3][px & 3] < wave_fill) gfxPixel(px, yy);
     }
-  const int hx = x + head * ww / HIST;
+  const int hx = x + int(head * ww / HIST) % ww;
   const int cl = std::max(x, hx - 1), cr = std::min(x + ww - 1, hx + 1);
   graphics.clearRect(cl, y, cr - cl + 1, h);
   if (!frozen) gfxLine(hx, y + 2, hx, y + h - 3);  // the record head
