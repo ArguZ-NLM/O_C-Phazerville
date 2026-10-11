@@ -766,6 +766,7 @@ FLASHMEM void AppLoom::SetModType(int t, int i, int type) {
 // what a device costs at the most (CPU %, all its settings up, measured on
 // the module 2026-10-10), for the CPU guard
 namespace loom {
+inline uint32_t prof_view[2] = {}, prof_mini[2][6] = {};  // PROF (temporary)
 extern volatile float audio_load;  // (the overload guard, below)
 constexpr float CPU_BUDGET = 88.0f;  // the load (%) a new effect may take it to
 // the account: Loom's own work and the sources (measured ~15 %, a margin
@@ -1758,6 +1759,10 @@ FLASHMEM void AppLoom::MainLoop() {
   AudioMemoryUsageMaxReset();
   Serial.printf("  load:%s\n", loom::load_note);
   Serial.printf("  main loop: longest gap %lu us\n", (unsigned long)loop_gap_max);
+  Serial.printf("  PROF levels %lu draw %lu mini", (unsigned long)loom::prof_view[0], (unsigned long)loom::prof_view[1]);
+  for (int t = 0; t < 2; t++) for (int c = 0; c < 6; c++) { Serial.printf(" %lu", (unsigned long)loom::prof_mini[t][c]); loom::prof_mini[t][c] = 0; }
+  Serial.println();
+  loom::prof_view[0] = loom::prof_view[1] = 0;
   Serial.printf("  MIDI: notes %lu, aftertouch %lu (channel now %d)\n", (unsigned long)loom::note_ev_n,
                 (unsigned long)loom::at_seen, int(loom::chan_at));
   loop_gap_max = 0;
@@ -2337,7 +2342,12 @@ FLASHMEM void AppLoom::DrawChain() const {
         for (int i = 0; i < 4; i++) { ch[0] = tag[i]; gfxPrint(x + 5 * i, y + 3, ch); }
       }
       if (!d) gfxPrint(x + 1 + (bw - 1 - 12) / 2, y + 14, PSTR("BP"));
-      else if (d->ok()) d->DrawMini(x + 2, y + 13, bw - 3, 10);
+      else if (d->ok()) {
+        const uint32_t t0 = micros();  // PROF (temporary)
+        d->DrawMini(x + 2, y + 13, bw - 3, 10);
+        const uint32_t dt = micros() - t0;
+        if (dt > loom::prof_mini[t][pos]) loom::prof_mini[t][pos] = dt;
+      }
       else gfxPrint(x + 5, y + 14, PSTR("!!"));
       if (t == track && c == col) {
         gfxInvert(x + 1, y + 1, bw - 1, bh - 2);
@@ -3280,10 +3290,15 @@ FLASHMEM void AppLoom::LoadFile() {
 }
 
 FLASHMEM void AppLoom::View() const {
+  const uint32_t pv0 = micros();  // PROF (temporary)
   UpdateMixLevels();
+  const uint32_t pv1 = micros();
   if (view == DEVICE && Focused()) DrawDevice();
   else if (view == MODS) DrawMods();
   else DrawChain();
+  const uint32_t pv2 = micros();
+  if (pv1 - pv0 > loom::prof_view[0]) loom::prof_view[0] = pv1 - pv0;
+  if (pv2 - pv1 > loom::prof_view[1]) loom::prof_view[1] = pv2 - pv1;
   // the link mode, for a moment after it changed: in a box with a double
   // outline (like the boot picture's LOOM, smaller)
   if (link_note_at && millis() - link_note_at < 1200) {
