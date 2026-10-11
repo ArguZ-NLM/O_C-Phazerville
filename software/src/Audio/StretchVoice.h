@@ -71,7 +71,10 @@ private:
   float stereo_var_ = 0.0f, speed_sp_ = 0.0f, d_speed_ = 0.0f;
   float d_rand_[3] = {};
   float d_pitch_ = 0.0f, d_size_ = 0.0f, d_pos_ = 0.0f;  // this window's variation
-  float pan_ = 0.0f, pan_to_ = 0.0f, pan_step_ = 0.0f;   // -1 .. 1, ramped over a hop
+  // -1 .. 1: a new place every ~0.25 s, glided to (a new one per window,
+  // every few ms, swung so fast the ear heard the middle)
+  float pan_ = 0.0f, pan_to_ = 0.0f, pan_step_ = 0.0f;
+  int32_t pan_left_ = 0;
   int32_t hop_left_ = 0;
   uint32_t rng_ = 0x9E3779B9u;
   float Rand();  // -1 .. 1

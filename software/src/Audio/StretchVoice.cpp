@@ -101,8 +101,6 @@ void StretchVoice::NextWindow() {
   const float size = std::min(1.0f, std::max(0.0f, size_ + d_size_));
   // the player's window: kMaxWSOLASize at size 1, 5 octaves shorter at 0
   hop_left_ = std::max<int32_t>(64, int32_t(clouds::kMaxWSOLASize * exp2f((size - 1.0f) * 5.0f)) / 2);
-  pan_to_ = Rand() * std::min(1.0f, std::max(0.0f, stereo_sp_ + Rand() * stereo_var_));
-  pan_step_ = (pan_to_ - pan_) / hop_left_;
 }
 
 float StretchVoice::Window() const {
@@ -164,6 +162,12 @@ void StretchVoice::Process(const float* in, float* out, size_t n) {
       scrub_ = 0.0f;
     }
     if (hop_left_ <= 0) NextWindow();
+    if (pan_left_ <= 0) {  // SPRD: the next place to wander to
+      pan_left_ = 12000;
+      pan_to_ = Rand() * std::min(1.0f, std::max(0.0f, stereo_sp_ + Rand() * stereo_var_));
+      pan_step_ = (pan_to_ - pan_) / pan_left_;
+    }
+    pan_left_ -= int32_t(size);
     hop_left_ -= int32_t(size);
     // frozen, it runs round the held buffer; recording, the window stops at
     // now and at the oldest sound (wrapping, it jumped from one to the other,

@@ -5318,7 +5318,8 @@ FASTRUN __attribute__((optimize("O2"))) void AudioStretch::update() {  // (O2: t
     Diffuse(fo, dn);
     // TONE, Clouds' texture filter: left closes a lowpass, right opens a highpass
     const float lp_hz = t < 0.0f ? 18000.0f * powf(150.0f / 18000.0f, -t) : 18000.0f;
-    const float hp_hz = t > 0.0f ? 20.0f * powf(4000.0f / 20.0f, t) : 20.0f;
+    // (right: up to 1.5 kHz, gently at first; 4 kHz left only the hiss)
+    const float hp_hz = t > 0.0f ? 20.0f * powf(1500.0f / 20.0f, t * t) : 20.0f;
     const float la = 1.0f - expf(-2.0f * float(M_PI) * lp_hz / AUDIO_SAMPLE_RATE_EXACT);
     const float ha = 1.0f - expf(-2.0f * float(M_PI) * hp_hz / AUDIO_SAMPLE_RATE_EXACT);
     // MIX's variation: the slot mixes by MIX, so the wet part here is
