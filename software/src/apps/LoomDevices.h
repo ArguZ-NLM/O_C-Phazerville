@@ -5545,9 +5545,11 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
 FLASHMEM void StretchDevice::DrawMini(int x, int y, int w, int h) {
   const int cy = y + h / 2;
   gfxLine(x, cy, x + w - 1, cy);
-  float pos = 1.0f - cur[POS] * 0.01f + (frozen ? fx.voice.Scrub() : 0.0f);  // back from now
-  if (frozen) pos -= floorf(pos);
-  const int px = x + int((1.0f - pos) * (w - 1));
+  // as on the page: the window POS behind the record head, riding along
+  // with it round the loop; frozen, both stand still
+  float f = fx.HeadPos() / AudioStretch::HIST - std::min(0.98f, 1.0f - cur[POS] * 0.01f);
+  f -= floorf(f);
+  const int px = x + int(f * w) % w;
   const int py = cy - cur[PITCH] * (h / 2 - 2) / 24;
   gfxFrame(constrain(px - 2, x, x + w - 5), py - 2, 5, 5);
 }
