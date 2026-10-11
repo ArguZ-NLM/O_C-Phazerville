@@ -2177,8 +2177,14 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
     } else if (col == MIX_COL) {
       tracks[track].mix->Nudge(MixDevice::LEVEL, dir);
       Mirror(tracks[track].mix, MixDevice::LEVEL);
+    } else if (col == SOURCE) {
+      SetChoiceLinked(col, tracks[track].shown_choice(col) + dir);  // INPUT / SPOOL ...
     } else {
-      SetChoiceLinked(col, tracks[track].shown_choice(col) + dir);  // SOURCE: INPUT / SPOOL
+      // the effect slots' devices only: no device (0) is not dialled in (B
+      // bypasses)
+      const int o = tracks[track].shown_choice(col) + dir;
+      if (o >= 1 && o < SLOT_DEFS[col].noptions) SetChoiceLinked(col, o);
+      else if (!tracks[track].shown_choice(col)) SetChoiceLinked(col, 1);
     }
     return;
   }
