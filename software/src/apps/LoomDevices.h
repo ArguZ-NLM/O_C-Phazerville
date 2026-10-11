@@ -5576,9 +5576,12 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
     const int y0 = std::max(y, by - 1), y1 = std::min(base, by + bh);
     graphics.clearRect(xx, y0, 1, y1 - y0 + 1);  // a gap around it
     if (i < 0 || i == bw) continue;
+    // SPRD: a band from the middle out, as wide as the spread (the whole
+    // box at 100), where DIFF's dots are drawn the other way round
+    const bool band = 2 * abs(2 * i - (bw - 1)) < cur[SPRD] * (bw - 1) / 50;
     for (int yy = by; yy < by + bh; yy++) {
       const bool edge = i == 0 || i == bw - 1 || yy == by || yy == by + bh - 1;
-      if (edge || bayer[yy & 3][xx & 3] < fill) gfxPixel(xx, yy);
+      if (edge || ((bayer[yy & 3][xx & 3] < fill) != band)) gfxPixel(xx, yy);
     }
   }
   // frozen: where SPEED has taken the playback
@@ -5586,8 +5589,6 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
     float f = pos + fx.voice.Scrub();
     gfxDottedLine(pos_x(f), y, pos_x(f), base, 2);
   }
-  // SPRD: a dot inside the box, where it sits left / right
-  if (cur[SPRD] > 0) gfxInvert(wrap(bx + 1 + int((fx.voice.Pan() + 1.0f) * 0.5f * (bw - 3))), std::min(by + bh - 2, py), 1, 1);
   if (frozen) {
     gfxPrint(x + 1, y + 1, PSTR("FRZ"));
     gfxInvert(x, y, 20, 9);
