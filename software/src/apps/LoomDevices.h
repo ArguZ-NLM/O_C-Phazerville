@@ -5332,7 +5332,7 @@ PROGMEM static const DeviceDef STRETCH_DEF = {
     {"SPEED", -200, 200, 0, BI, 0, 21, 0},  // frozen: through the buffer (%, < 0 backwards); 0 holds it at POS, as Clouds does (and a double click goes there)
     {"SIZE", 0, 100, 50, UNI, 0, 21, 0},  // the window: short = quick and grainy, long = smooth
     {"PITCH", -24, 24, 0, BI, 0, 25, 0},  // semitones, without changing the speed
-    {"POS", 0, 100, 80, UNI, 0, 21, 0},   // like FIBRE: 0 = the oldest audio (left), 100 = now (right)
+    {"POS", 0, 100, 50, UNI, 0, 21, 0},   // like FIBRE: 0 = the oldest audio (left), 100 = now (right)
     {"DIFF", 0, 100, 0, UNI, 0, 21, 0},   // the diffuser: clear .. blurred
     {"TONE", -50, 50, 0, BI, 0, 21, 0},   // left lowpass, right highpass
     {"SPRD", 0, 100, 0, UNI, 0, 21, 0},   // stereo spread: the windows wander left / right
