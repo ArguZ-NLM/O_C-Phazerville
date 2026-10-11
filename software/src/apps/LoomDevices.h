@@ -2940,6 +2940,10 @@ private:
   uint32_t indexed_at = 0;
   size_t data_off = 0, done = 0;  // where the samples start in the file; analysis progress
   uint8_t* idx = nullptr;         // level per IDX_FRAMES frames, for the picture
+  // and per IDX2 entries of it (after the fine one, in the same block), so
+  // a picture of a whole long file doesn't read every entry (13 ms a frame)
+  static constexpr size_t IDX2 = 64;
+  uint8_t* idx2 = nullptr;
   size_t idx_n = 0;
   bool Playing() const { return streaming ? stream.Playing() : fx.state() == AudioEffectReel::PLAY; }
   size_t Frames() const { return streaming ? frames : fx.Length(); }
@@ -3266,7 +3270,7 @@ FLASHMEM void PlayerDevice::Deactivate() {
   if (loading || streaming || analysing) lf.close();
   loading = streaming = analysing = false;
   stream.Release();
-  if (idx) { PsramFree(idx); idx = nullptr; }
+  if (idx) { PsramFree(idx); idx = nullptr; idx2 = nullptr; }
   if (bpm_env) { free(bpm_env); bpm_env = nullptr; }
   bpm_got = -1;
   fx.Release();
@@ -3368,7 +3372,8 @@ FLASHMEM void PlayerDevice::Load(int i) {
       if (!stream.ready()) stream.Acquire(4.0f, 1.0f);
       if (idx) PsramFree(idx);
       idx_n = frames / IDX_FRAMES + 1;
-      idx = static_cast<uint8_t*>(PsramAlloc((idx_n) * (1)));
+      idx = static_cast<uint8_t*>(PsramAlloc(idx_n + idx_n / IDX2 + 1));
+      idx2 = idx ? idx + idx_n : nullptr;
       if (!stream.ready() || !idx) {  // no room to stream either: the start of it
         fx.Resize(size_t(MaxSecs() * AUDIO_SAMPLE_RATE_EXACT)) || fx.Resize(size_t(2 * AUDIO_SAMPLE_RATE_EXACT));
         too_long = true; frames = fx.Capacity(); loading = true; return;
@@ -3436,7 +3441,7 @@ FLASHMEM void PlayerDevice::Idle() {
     for (size_t i = 0; i < rd; i++) {
       const size_t e = (done + i) / IDX_FRAMES;
       const uint8_t pk = uint8_t(std::min(255, std::max(abs(tl[i]), abs(tr[i])) >> 7));
-      if (e < idx_n && pk > idx[e]) idx[e] = pk;
+      if (e < idx_n && pk > idx[e]) { idx[e] = pk; if (pk > idx2[e / IDX2]) idx2[e / IDX2] = pk; }
     }
     done += rd;
     if (!rd || done >= frames) {
@@ -3467,7 +3472,7 @@ FLASHMEM void PlayerDevice::Idle() {
       for (size_t i = 0; i < rd; i++) {
         const size_t e = (done + i) / IDX_FRAMES;
         const uint8_t pk = uint8_t(std::min(255, std::max(abs(tl[i]), abs(tr[i])) >> 7));
-        if (e < idx_n && pk > idx[e]) idx[e] = pk;
+        if (e < idx_n && pk > idx[e]) { idx[e] = pk; if (pk > idx2[e / IDX2]) idx2[e / IDX2] = pk; }
       }
       done += rd;
       if (!rd || done >= frames) indexing = false;
@@ -3954,7 +3959,11 @@ FLASHMEM bool PlayerDevice::FillWave(int64_t v0, size_t span, int w, int fi) con
 FLASHMEM int PlayerDevice::PeakAt(size_t a, size_t b) const {
   if (!streaming) return fx.Peak(a, b, std::max<size_t>(1, (b - a) / 24));
   int pk = 0;
-  for (size_t e = a / IDX_FRAMES; e <= (b - 1) / IDX_FRAMES && e < idx_n; e++) pk = std::max<int>(pk, idx[e]);
+  const size_t e1 = std::min((b - 1) / IDX_FRAMES, idx_n - 1);
+  for (size_t e = a / IDX_FRAMES; e <= e1 && idx_n;) {
+    if (e % IDX2 == 0 && e + IDX2 - 1 <= e1) { pk = std::max<int>(pk, idx2[e / IDX2]); e += IDX2; }
+    else pk = std::max<int>(pk, idx[e++]);
+  }
   return pk << 7;
 }
 
