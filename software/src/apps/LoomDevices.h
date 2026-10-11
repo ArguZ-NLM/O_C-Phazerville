@@ -4530,9 +4530,29 @@ FLASHMEM void DirtDevice::DrawMini(int x, int y, int w, int h) {
     const float in = sinf(2.0f * float(M_PI) * i / (w - 1));
     float yo = AudioEffectDirt::Shape(AudioEffectDirt::Fold(in, fld), drv);
     if (levels > 0.0f) yo = roundf(constrain(yo, -1.0f, 1.0f) * levels) / levels;
-    ys[i] = cy - int(constrain(yo, -1.0f, 1.0f) * lim);
+    // TILT tips the picture: brighter rises to the right, darker to the left
+    const int tilt = int(cur[TILT] * 0.02f * 3.0f * (2.0f * i / std::max(1, nc - 1) - 1.0f));
+    ys[i] = constrain(cy - int(constrain(yo, -1.0f, 1.0f) * lim) - tilt, y, y + h - 1);
   }
   ThinLine(x, ys, nc, keep);
+  // NOICE: grains over it as loud as the noise is now, looking like its type
+  // (as on the page): WHITE fine and even, PINK bigger and sinking to the
+  // bottom, DUST the odd speck in bursts
+  const float lvl = noise_m.v;
+  switch (mode[NOISE]) {
+    case AudioEffectDirt::NOISE_WHITE:
+      for (int i = 0, n = int(lvl * 30.0f); i < n; i++) gfxPixel(x + random(w), y + random(h));
+      break;
+    case AudioEffectDirt::NOISE_PINK:
+      for (int i = 0, n = int(lvl * 12.0f); i < n; i++) {
+        const int r = random(h - 1);
+        gfxRect(x + random(w - 1), y + (h - 2) - (r * r) / (h - 1), 2, 2);
+      }
+      break;
+    default:
+      if (lvl > 0.02f && random(100) < int(lvl * 160.0f))
+        gfxRect(x + random(w - 2), y + random(h - 2), 2, 2);
+  }
 }
 
 /////////////////////////////////////////////////////////////////
