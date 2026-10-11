@@ -1991,6 +1991,9 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
         break;
       case OC::CONTROL_BUTTON_UP:
         map.AutoLearn();
+        // (the channel filter lets every channel in while a map learns;
+        // without this the next CC on a channel no map used was dropped)
+        HS::frame.MIDIState.UpdateMidiChannelFilter();
         maps_dirty = true;
         break;
       case OC::CONTROL_BUTTON_DOWN:
