@@ -5226,6 +5226,9 @@ private:
   // (~30 ms) instead of jumping: jumps in the blend of blurred and clear
   // (they are out of step) or in the filter clicked at every window
   float tone_s = 0.0f, diff_s = 0.0f, mix_s = 1.0f;
+  // TONE's make-up gain: the level before and after the filter (smoothed
+  // power) and the gain that brings it back, up to +12 dB
+  float pw_in = 0.0f, pw_out = 0.0f, tone_g = 1.0f;
   audio_block_t* queue[2];
   float lp_z[2] = {}, hp_z[2] = {};
   bool resting = false;
@@ -5329,20 +5332,33 @@ FASTRUN __attribute__((optimize("O2"))) void AudioStretch::update() {  // (O2: t
     const float g_to = w > 0.01f ? mix_s / w : 1.0f;
     const float g_from = mix_g, g_step = (g_to - g_from) / AUDIO_BLOCK_SAMPLES;
     mix_g = g_to;
-    float pk = 0.0f;
+    float pk = 0.0f, e_in = 0.0f, e_out = 0.0f;
+    const float tg_from = tone_g;
+    float tg_to = 1.0f;
+    if (fabsf(tone_s) > 0.5f && pw_out > 1e-9f) tg_to = std::min(4.0f, sqrtf(pw_in / pw_out));
+    tg_to = std::max(1.0f, tg_to);
+    tone_g = tg_to;
+    const float tg_step = (tg_to - tg_from) / AUDIO_BLOCK_SAMPLES;
     for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
       const float g = g_from + g_step * (n + 1);
+      const float tg = tg_from + tg_step * (n + 1);
       for (int c = 0; c < 2; c++) {
         float y = fo[2 * n + c];
+        e_in += y * y;
         lp_z[c] += la * (y - lp_z[c]);  // TONE: lowpass ...
         y = lp_z[c];
         hp_z[c] += ha * (y - hp_z[c]);  // ... or highpass
         y -= hp_z[c];
+        e_out += y * y;
+        y *= tg;                        // ... and back up to the level before
         if (g != 1.0f) y = fi[2 * n + c] + g * (y - fi[2 * n + c]);
         pk = std::max(pk, fabsf(y));
         o[c]->data[n] = ToSample16(y);
       }
     }
+    constexpr float lvl = 0.03f;  // per block: ~0.1 s
+    pw_in += lvl * (e_in - pw_in);
+    pw_out += lvl * (e_out - pw_out);
     peak = std::max(float(peak), pk);
     transmit(o[0], 0);
     transmit(o[1], 1);
