@@ -5361,6 +5361,7 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
     const int fill = 16 - cur[MIX] * 11 / 100;  // 16 .. 5 of 16 (DRAFT is all window by default)
     for (int px = x; px < x + ww; px++) {
       const int a = wave_at(px);
+      if (!a) continue;  // silence: the dotted line alone, as on page 1
       for (int yy = cy - a; yy <= cy + a; yy++)
         if (bayer[yy & 3][px & 3] < fill) gfxPixel(px, yy);
     }
