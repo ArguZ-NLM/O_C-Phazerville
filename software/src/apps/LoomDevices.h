@@ -5400,11 +5400,13 @@ FLASHMEM void StretchDevice::Format(int p, char* buf, size_t n) const {
 // place and the record head (a line) runs across it, writing over the
 // oldest audio, like a tape loop; it stops when frozen. The recording's wave
 // is thinner as MIX brings the window in, gone at 100. The window playing
-// now is a box POS back from now (the right edge, as FIBRE's window), as wide as SIZE, raised or lowered by
-// PITCH, taller with TONE (left it grows down, right up) and filled like
-// FIBRE's grains, thinning out with DIFF: solid when clear, a scatter of
-// dots when blurred (TONE and DIFF as heard, with their variations).
-// Frozen, it runs through the buffer at SPEED. Both pages show the same.
+// now is a box POS behind the record head, riding along with it (frozen,
+// both stand still), as wide as SIZE, raised or lowered by PITCH, taller
+// with TONE (left it grows down, right up) and filled like FIBRE's grains,
+// thinning out with DIFF: solid when clear, a scatter of dots when blurred
+// (TONE and DIFF as heard, with their variations). Frozen, a dotted line
+// shows where SPEED has taken the playback in the held sound. Both pages
+// show the same.
 FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
   static const uint8_t bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
   const float pk = fx.peak;
@@ -5413,14 +5415,16 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
   const int ww = w - 8, cy = y + h / 2, base = y + h - 1;
   constexpr int HIST = AudioStretch::HIST;
   const int head = fx.hist_pos;
-  // the window's place, as FIBRE's: from now (right) back to the oldest
-  // audio (left), standing still while the record head runs
-  // (frozen it runs round the buffer; else it stops at the ends, as the
-  // engine does)
+  // a place p back from the record head (0 = now, 1 = the oldest), round
+  // the loop; recording, the window stops at the ends, as the engine does
   auto pos_x = [&](float p) {
-    p = frozen ? p - floorf(p) : constrain(p, 0.0f, 1.0f);
-    return x + int((1.0f - p) * (ww - 1));
+    p = frozen ? p - floorf(p) : constrain(p, 0.0f, 0.98f);
+    float f = float(head) / HIST - p;
+    f -= floorf(f);
+    return x + int(f * ww) % ww;
   };
+  // a column of the picture, round the loop (the box and brackets wrap)
+  auto wrap = [&](int px) { return x + ((px - x) % ww + ww) % ww; };
   gfxDottedLine(x, cy, x + ww - 1, cy, 2);
   const int wave_fill = 16 - cur[MIX] * 16 / 100;  // 16 .. 0 of 16
   if (wave_fill > 0)
@@ -5434,15 +5438,17 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
   const int cl = std::max(x, hx - 1), cr = std::min(x + ww - 1, hx + 1);
   graphics.clearRect(cl, y, cr - cl + 1, h);
   if (!frozen) gfxLine(hx, y + 2, hx, y + h - 3);  // the record head
-  float pos = 1.0f - cur[POS] * 0.01f + (frozen ? fx.voice.Scrub() : 0.0f);  // back from now
-  if (frozen) pos -= floorf(pos);
+  const float pos = 1.0f - cur[POS] * 0.01f;  // back from now
   const float semis_px = float(h / 2 - 4) / 24.0f;
   // the variations' reach, like SPRAY's: POS as brackets either side, PITCH
   // as a dotted line up and down through the middle
   const float pv = mode[POS] * 0.025f;
   if (pv > 0.0f) {
-    const int wl = std::max(x, pos_x(pos + pv)), wr = std::min(x + ww - 1, pos_x(pos - pv));
-    for (int px = wl; px <= wr; px++) { gfxPixel(px, y); gfxPixel(px, base); }
+    const int wl = pos_x(pos + pv), wr = pos_x(pos - pv);
+    for (int k = 0, n = (wr - wl + ww) % ww; k <= n; k++) {
+      gfxPixel(wrap(wl + k), y);
+      gfxPixel(wrap(wl + k), base);
+    }
     for (int k = 0; k < 5; k++) {
       gfxPixel(wl, y + k); gfxPixel(wr, y + k);
       gfxPixel(wl, base - k); gfxPixel(wr, base - k);
@@ -5460,16 +5466,26 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
   const int tn = int(fx.tone_now);
   const int grow = abs(tn) * 10 / 50, bh = 7 + grow;
   const int py = cy - int((cur[PITCH] + fx.voice.DPitch()) * semis_px);
-  const int bx = constrain(px - bw / 2, x, x + ww - bw);
+  const int bx = px - bw / 2;  // (may run over an edge: drawn round the loop)
   const int by = constrain(py - 3 - (tn > 0 ? grow : 0), y, base - bh + 1);
-  graphics.clearRect(std::max(x, bx - 1), std::max(y, by - 1), bw + 2, bh + 2);  // a gap around it
-  gfxFrame(bx, by, bw, bh);
   const int fill = 16 - int(fx.diff_now * 14.0f + 0.5f);  // 2 of 16 left at 100
-  for (int yy = by + 1; yy < by + bh - 1; yy++)
-    for (int xx = bx + 1; xx < bx + bw - 1; xx++)
-      if (bayer[yy & 3][xx & 3] < fill) gfxPixel(xx, yy);
+  for (int i = -1; i <= bw; i++) {
+    const int xx = wrap(bx + i);
+    const int y0 = std::max(y, by - 1), y1 = std::min(base, by + bh);
+    graphics.clearRect(xx, y0, 1, y1 - y0 + 1);  // a gap around it
+    if (i < 0 || i == bw) continue;
+    for (int yy = by; yy < by + bh; yy++) {
+      const bool edge = i == 0 || i == bw - 1 || yy == by || yy == by + bh - 1;
+      if (edge || bayer[yy & 3][xx & 3] < fill) gfxPixel(xx, yy);
+    }
+  }
+  // frozen: where SPEED has taken the playback
+  if (frozen && cur[SPEED] != 0) {
+    float f = pos + fx.voice.Scrub();
+    gfxDottedLine(pos_x(f), y, pos_x(f), base, 2);
+  }
   // SPRD: a dot inside the box, where it sits left / right
-  if (cur[SPRD] > 0) gfxInvert(bx + 1 + int((fx.voice.Pan() + 1.0f) * 0.5f * (bw - 3)), std::min(by + bh - 2, py), 1, 1);
+  if (cur[SPRD] > 0) gfxInvert(wrap(bx + 1 + int((fx.voice.Pan() + 1.0f) * 0.5f * (bw - 3))), std::min(by + bh - 2, py), 1, 1);
   if (frozen) {
     gfxPrint(x + 1, y + 1, PSTR("FRZ"));
     gfxInvert(x, y, 20, 9);
