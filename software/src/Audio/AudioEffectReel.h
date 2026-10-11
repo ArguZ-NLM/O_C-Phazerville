@@ -216,13 +216,13 @@ public:
   // slot or two of the coarse hist, which drew a solid block)
   // (the reads are scattered over the PSRAM, ~100 ns each: all 128 columns
   // took ~13 ms, and every picture asked for them, holding up the main
-  // loop. Now 16 columns are read again per call, round the picture.)
+  // loop. Now 8 columns are read again per call, round the picture.)
   void ReadHistory(uint8_t* dst) const {
     const size_t n = st == REC ? wpos : len;
     if (!n || !cap) { std::fill(dst, dst + HIST, 0); return; }
     const size_t span = std::max<size_t>(1, n / HIST);
     const size_t step = std::max<size_t>(1, span / 48);  // ~48 reads a column is plenty
-    for (int j = 0; j < 16; j++, rh_next = (rh_next + 1) % HIST) {
+    for (int j = 0; j < 8; j++, rh_next = (rh_next + 1) % HIST) {
       const int k = rh_next;
       const size_t from = size_t(k) * n / HIST, to = std::min(n, from + span);
       int pk = 0;

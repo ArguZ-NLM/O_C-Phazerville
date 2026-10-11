@@ -3967,10 +3967,8 @@ FLASHMEM int PlayerDevice::PeakAt(size_t a, size_t b) const {
   return pk << 7;
 }
 
-inline uint32_t prof_pm[3] = {};  // PROF (temporary)
 FLASHMEM void PlayerDevice::DrawMini(int x, int y, int w, int h) {
   const int cy = y + h / 2;
-  prof_pm[0] = streaming ? 1 : fx.Length() ? 2 : 3;
   if (streaming) {
     for (int i = 0; i < w; i++) {
       const size_t a = size_t(i) * frames / w, b = size_t(i + 1) * frames / w;
