@@ -3853,19 +3853,20 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
 }
 
 // the header: playing, the head's place in the whole file (m:ss.t);
-// stopped, the tempo as heard (with SPEED; ... while it is worked out)
+// stopped, the tempo in BPM as heard (with SPEED; ... while it is worked
+// out, - when there is none)
 FLASHMEM bool PlayerDevice::HeaderInfo(char* buf, size_t n) const {
   if (!active || !Frames() || loading || analysing) return false;
   if (Playing() && !too_long) {
     const uint32_t ds = uint32_t(HeadFrame() * 10.0f / FileRate());
     snprintf(buf, n, "%lu:%02lu.%lu", (unsigned long)(ds / 600), (unsigned long)(ds / 10 % 60), (unsigned long)(ds % 10));
   } else if (bpm_got >= 0) {
-    snprintf(buf, n, "...BPM");
+    snprintf(buf, n, "...");
   } else if (bpm > 0.0f) {
     const int tb = int(bpm * SyncRatio() * cur[SPEED] + 5.0f) / 10;  // tenths
-    snprintf(buf, n, "%d.%dBPM", tb / 10, tb % 10);
+    snprintf(buf, n, "%d.%d", tb / 10, tb % 10);
   } else {
-    snprintf(buf, n, "-BPM");
+    snprintf(buf, n, "-");
   }
   return true;
 }
@@ -4736,7 +4737,7 @@ PROGMEM static const DeviceDef SPRAY_DEF = {
     {"SPRD", 0, 100, 60, UNI},  // stereo spread: each grain's random place left / right
     {"MIX", 0, 100, 50, UNI},  // source <> grains
   },
-  {"GRAIN", ""},
+  {"", ""},
 };
 
 class SprayDevice : public Device {

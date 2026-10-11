@@ -2437,7 +2437,7 @@ FLASHMEM void AppLoom::DrawDevice() const {
   const char* name = mod_mode && name_x + 6 * int(strlen(d->def.name)) > 62 ? ShownTag(d->def.tag) : d->def.name;
   {  // the name would run into the header's info (SHUTTLE + its tempo): its tag
     char hi[24];
-    if (!mod_mode && d->HeaderInfo(hi, sizeof(hi)) && name_x + 6 * int(strlen(name)) > 98 - 6 * int(strlen(hi)) - 3)
+    if (!mod_mode && d->HeaderInfo(hi, sizeof(hi)) && name_x + 6 * int(strlen(name)) > 98 - 6 * int(strlen(hi)))
       name = ShownTag(d->def.tag);
   }
   if (both) {
