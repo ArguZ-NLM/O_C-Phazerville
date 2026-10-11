@@ -5400,18 +5400,25 @@ public:
   void Action(int a) override {
     if (a != 0) return;
     const float h = fx.HeadPos() / AudioStretch::HIST;
-    float f = frozen ? h - val[POS] * 0.01f : h - (1.0f - val[POS] * 0.01f);
-    f -= floorf(f);  // frozen: back from the head; recording: the place
-    val[POS] = int16_t(lroundf((frozen ? 1.0f - f : f) * 100.0f)) % 101;
+    if (!frozen) {  // the place on the picture where it plays now
+      float f = h - fx.voice.BackOf(1.0f - val[POS] * 0.01f);
+      f -= floorf(f);
+      val[POS] = int16_t(lroundf(f * 100.0f)) % 101;
+    } else {        // how far back that is, in the engine's positions
+      float b = h - val[POS] * 0.01f;
+      b -= floorf(b);
+      val[POS] = int16_t(constrain(lroundf((1.0f - fx.voice.PositionOf(b)) * 100.0f), 0L, 100L));
+    }
     frozen = !frozen;
     Refresh(POS);
     Apply(PITCH);
   }
-  // how far back from the record head the window is (0..1, as the engine)
+  // the engine's position (0..1, how far back from the record head)
   float Back() const {
     if (!frozen) return 1.0f - cur[POS] * 0.01f;
-    const float b = fx.HeadPos() / AudioStretch::HIST - cur[POS] * 0.01f;
-    return b - floorf(b);
+    float b = fx.HeadPos() / AudioStretch::HIST - cur[POS] * 0.01f;
+    b -= floorf(b);
+    return constrain(fx.voice.PositionOf(b), 0.0f, 0.999f);
   }
   bool ActionLit(int a) const override { return a == 0 && frozen; }
   void Format(int p, char* buf, size_t n) const override;
@@ -5508,9 +5515,10 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
   const float head = fx.HeadPos();
   // a place p back from the record head (0 = now, 1 = the oldest), round
   // the loop; recording, the window stops at the ends, as the engine does
+  // (an engine position, where it really plays: see BackOf)
   auto pos_x = [&](float p) {
     p = frozen ? p - floorf(p) : constrain(p, 0.0f, 0.98f);
-    float f = head / HIST - p;
+    float f = head / HIST - fx.voice.BackOf(p);
     f -= floorf(f);
     return x + int(f * ww) % ww;
   };
@@ -5592,7 +5600,7 @@ FLASHMEM void StretchDevice::DrawMini(int x, int y, int w, int h) {
   gfxLine(x, cy, x + w - 1, cy);
   // as on the page: the window POS behind the record head, riding along
   // with it round the loop; frozen, both stand still
-  float f = fx.HeadPos() / AudioStretch::HIST - (frozen ? Back() : std::min(0.98f, Back()));
+  float f = fx.HeadPos() / AudioStretch::HIST - fx.voice.BackOf(frozen ? Back() : std::min(0.98f, Back()));
   f -= floorf(f);
   const int px = x + int(f * w) % w;
   const int py = cy - cur[PITCH] * (h / 2 - 2) / 24;

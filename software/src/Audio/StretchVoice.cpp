@@ -44,6 +44,7 @@ FLASHMEM bool StretchVoice::Init(float seconds) {
   }
   auto* p = new (im) Impl();
   p->frames = frames;
+  frames_ = frames;
   for (int c = 0; c < 2; c++) p->buffer[c].Init(buf_ + size_t(c) * frames, frames, p->tail[c]);
   p->correlator.Init(&p->correlator_data[0], &p->correlator_data[kCorrelatorBlock]);
   p->player.Init(&p->correlator, 2);
@@ -104,6 +105,28 @@ void StretchVoice::NextWindow() {
   pan_step_ = (pan_to_ - pan_) / hop_left_;
 }
 
+float StretchVoice::Window() const {
+  const float size = std::min(1.0f, std::max(0.0f, size_ + d_size_));
+  return clouds::kMaxWSOLASize * exp2f((size - 1.0f) * 5.0f);
+}
+
+// as the player works it out: the buffer less two windows and two windows
+// stretched by the pitch
+float StretchVoice::Limit() const {
+  const float ws = Window();
+  const float inv = exp2f(-(pitch_ + d_pitch_) / 12.0f);
+  return std::max(0.0f, frames_ - 2.0f * ws * inv - 2.0f * ws);
+}
+
+float StretchVoice::BackOf(float position) const {
+  return frames_ ? (Limit() * position + 0.5f * Window()) / frames_ : 0.0f;
+}
+
+float StretchVoice::PositionOf(float back) const {
+  const float l = Limit();
+  return l > 0.0f ? (back * frames_ - 0.5f * Window()) / l : 0.0f;
+}
+
 void StretchVoice::Record(const float* in, size_t n) {
   if (!ready_) return;
   auto* p = static_cast<Impl*>(impl_);
@@ -134,7 +157,7 @@ void StretchVoice::Process(const float* in, float* out, size_t n) {
     // frozen: play through the buffer at SPEED (the position moves; live,
     // the head moves and the position stays)
     if (freeze_) {
-      const float limit = float(p->frames) * 0.9f;
+      const float limit = std::max(1.0f, Limit());  // SPEED 100 %: as recorded
       scrub_ -= (speed_ + d_speed_) * size / limit;
       scrub_ -= floorf(scrub_);
     } else {

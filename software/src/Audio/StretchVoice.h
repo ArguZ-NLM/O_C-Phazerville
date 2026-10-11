@@ -42,7 +42,12 @@ public:
     stereo_var_ = stereo_var; speed_sp_ = speed;
   }
   void Trigger() { trigger_ = true; }
-  float Scrub() const { return scrub_; }  // where the frozen playback is (0..1, for the picture)
+  float Scrub() const { return scrub_; }
+  // where a position really plays: the window's middle, back from the record
+  // head as a part of the whole buffer (the engine leaves out a stretch by
+  // the head that depends on the window length and the pitch), and back
+  float BackOf(float position) const;
+  float PositionOf(float back) const;  // where the frozen playback is (0..1, for the picture)
   // this window's variation (for the picture)
   float DPitch() const { return d_pitch_; }
   float DPos() const { return d_pos_; }
@@ -56,6 +61,9 @@ private:
   void* impl_ = nullptr;  // the Clouds objects
   int16_t* buf_ = nullptr;
   bool ready_ = false;
+  int32_t frames_ = 0;
+  float Window() const;  // the player's window (frames), as it sizes it
+  float Limit() const;   // the frames the positions 0..1 reach over
   float position_ = 0.2f, size_ = 0.5f, pitch_ = 0.0f, speed_ = 1.0f;
   float scrub_ = 0.0f;   // frozen: the moving part of the position
   bool freeze_ = false;
