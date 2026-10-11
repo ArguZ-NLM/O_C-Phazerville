@@ -95,10 +95,12 @@ void StretchVoice::NextWindow() {
   d_pitch_ = Rand() * pitch_sp_;
   d_size_ = Rand() * size_sp_ * 0.5f;
   d_pos_ = Rand() * pos_sp_;
+  d_speed_ = Rand() * speed_sp_;
+  for (float& r : d_rand_) r = Rand();
   const float size = std::min(1.0f, std::max(0.0f, size_ + d_size_));
   // the player's window: kMaxWSOLASize at size 1, 5 octaves shorter at 0
   hop_left_ = std::max<int32_t>(64, int32_t(clouds::kMaxWSOLASize * exp2f((size - 1.0f) * 5.0f)) / 2);
-  pan_to_ = Rand() * stereo_sp_;
+  pan_to_ = Rand() * std::min(1.0f, std::max(0.0f, stereo_sp_ + Rand() * stereo_var_));
   pan_step_ = (pan_to_ - pan_) / hop_left_;
 }
 
@@ -133,7 +135,7 @@ void StretchVoice::Process(const float* in, float* out, size_t n) {
     // the head moves and the position stays)
     if (freeze_) {
       const float limit = float(p->frames) * 0.9f;
-      scrub_ -= speed_ * size / limit;
+      scrub_ -= (speed_ + d_speed_) * size / limit;
       scrub_ -= floorf(scrub_);
     } else {
       scrub_ = 0.0f;
@@ -156,7 +158,7 @@ void StretchVoice::Process(const float* in, float* out, size_t n) {
     p->player.Play(p->buffer, prm, out + 2 * done, size);
     // stereo spread: the output moved left / right (equal power, the
     // middle untouched)
-    if (stereo_sp_ > 0.0f || pan_ != 0.0f) {
+    if (stereo_sp_ > 0.0f || stereo_var_ > 0.0f || pan_ != 0.0f) {
       float* o = out + 2 * done;
       for (size_t i = 0; i < size; i++, o += 2) {
         pan_ += pan_step_;

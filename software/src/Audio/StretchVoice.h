@@ -36,14 +36,19 @@ public:
   }
   // random variation, drawn anew for each window (roughly): pitch +-semitones,
   // size and position 0..1, and stereo: each window's place left / right 0..1
-  void SetSpread(float pitch, float size, float pos, float stereo) {
+  // speed: +- (frozen), 1 = 100 %; stereo_var: +- on the stereo spread
+  void SetSpread(float pitch, float size, float pos, float stereo, float stereo_var = 0.0f, float speed = 0.0f) {
     pitch_sp_ = pitch; size_sp_ = size; pos_sp_ = pos; stereo_sp_ = stereo;
+    stereo_var_ = stereo_var; speed_sp_ = speed;
   }
   void Trigger() { trigger_ = true; }
   float Scrub() const { return scrub_; }  // where the frozen playback is (0..1, for the picture)
   // this window's variation (for the picture)
   float DPitch() const { return d_pitch_; }
   float DPos() const { return d_pos_; }
+  // three more random numbers (-1 .. 1), new for each window, for the
+  // device's own variations (TONE, DIFF, MIX)
+  float DRand(int k) const { return d_rand_[k]; }
   float DSize() const { return d_size_; }
   float Pan() const { return pan_; }
 
@@ -55,6 +60,8 @@ private:
   float scrub_ = 0.0f;   // frozen: the moving part of the position
   bool freeze_ = false;
   float pitch_sp_ = 0.0f, size_sp_ = 0.0f, pos_sp_ = 0.0f, stereo_sp_ = 0.0f;
+  float stereo_var_ = 0.0f, speed_sp_ = 0.0f, d_speed_ = 0.0f;
+  float d_rand_[3] = {};
   float d_pitch_ = 0.0f, d_size_ = 0.0f, d_pos_ = 0.0f;  // this window's variation
   float pan_ = 0.0f, pan_to_ = 0.0f, pan_step_ = 0.0f;   // -1 .. 1, ramped over a hop
   int32_t hop_left_ = 0;

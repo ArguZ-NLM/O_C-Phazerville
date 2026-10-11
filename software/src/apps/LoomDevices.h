@@ -5149,16 +5149,20 @@ FLASHMEM void ModalDevice::DrawMini(int x, int y, int w, int h) {
 // unless frozen) and played back POS behind now, PITCH shifted without
 // changing the speed; frozen (A), it plays through the buffer at SPEED
 // without changing the pitch. SIZE: the window (short = grainy and quick,
-// long = smooth). TONE: Clouds' filter (left lowpass, right highpass);
-// its mode the diffuser, which smears the windows' seams into a blur (what
-// Clouds' DENSITY does in this mode).
+// long = smooth). DIFF: Clouds' diffuser (its DENSITY in this mode): it
+// smears the windows' seams into a blur, as if behind glass or in the rain.
+// TONE: Clouds' filter (left lowpass, right highpass). Every setting has a
+// variation (L knob), drawn anew for each window.
 /////////////////////////////////////////////////////////////////
 class AudioStretch : public AudioStream {
 public:
   AudioStretch() : AudioStream(2, queue) {}
   StretchVoice voice;
-  volatile float fdbk = 0.0f, lp_a = 1.0f, hp_a = 0.0f;
-  volatile float diff = 0.0f;  // the diffuser's amount, 0..1
+  // TONE -50..50, DIFF and MIX 0..1, each with its variation (+-)
+  volatile float tone = 0.0f, tone_var = 0.0f, diff = 0.0f, diff_var = 0.0f;
+  volatile float wet = 1.0f, mix_var = 0.0f;
+  // as heard in this window (for the picture)
+  volatile float tone_now = 0.0f, diff_now = 0.0f;
   volatile float peak = 0.0f;
   volatile bool rest = false;  // parked: nothing to compute
   volatile bool frz = false;   // frozen: the buffer (and its picture) stands still
@@ -5171,16 +5175,16 @@ public:
   void update() override;
 private:
   void Level(const float* x);
-  void Diffuse(float* x);
+  void Diffuse(float* x, float to);
   float hist_peak = 0.0f, hist_blocks = 0.0f;
   // Clouds' diffuser: four allpasses a side, its lengths (at 32 kHz) x 1.5
   static constexpr int AP_MEM = 1529 + 1511;
   float ap_mem[AP_MEM] = {};
   int ap_at[2][4] = {};
   float diff_a = 0.0f;  // the amount as heard (ramped per block)
+  float mix_g = 1.0f;   // MIX's variation, as a gain on the wet part
   audio_block_t* queue[2];
-  float last[2 * AUDIO_BLOCK_SAMPLES] = {};
-  float lp_z[2] = {}, hp_z[2] = {}, dc_z[2] = {};
+  float lp_z[2] = {}, hp_z[2] = {};
   bool resting = false;
 };
 
@@ -5200,9 +5204,9 @@ inline void AudioStretch::Level(const float* x) {
 
 // the windows (interleaved L R) through the diffuser, crossfaded by its
 // amount; nothing to do while it is (and stays) at 0
-FASTRUN __attribute__((optimize("O2"))) void AudioStretch::Diffuse(float* x) {
+FASTRUN __attribute__((optimize("O2"))) void AudioStretch::Diffuse(float* x, float to) {
   static const int16_t LEN[2][4] = {{189, 270, 404, 666}, {227, 308, 368, 608}};
-  const float to = diff, from = diff_a;
+  const float from = diff_a;
   diff_a = to;
   if (to <= 0.0f && from <= 0.0f) return;
   constexpr float kap = 0.625f;
@@ -5243,42 +5247,53 @@ FASTRUN __attribute__((optimize("O2"))) void AudioStretch::update() {  // (O2: t
     for (auto b : in) if (b) release(b);
     return;
   }
-  if (resting) {  // back: fresh windows, no old feedback or filter state
+  if (resting) {  // back: fresh windows, no old filter state
     resting = false;
     voice.Restart();
-    memset(last, 0, sizeof(last));
     memset(ap_mem, 0, sizeof(ap_mem));
-    for (int c = 0; c < 2; c++) lp_z[c] = hp_z[c] = dc_z[c] = 0.0f;
+    for (int c = 0; c < 2; c++) lp_z[c] = hp_z[c] = 0.0f;
   }
   audio_block_t* o[2] = {allocate(), allocate()};
   if (o[0] && o[1]) {
-    const float fb = fdbk;
     for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++)
       for (int c = 0; c < 2; c++) {
-        float x = in[c] ? in[c]->data[n] * (1.0f / 32768.0f) : 0.0f;
-        // feedback: last block's output, DC taken out, softly limited
-        float f = last[2 * n + c];
-        dc_z[c] += 0.002f * (f - dc_z[c]);
-        f -= dc_z[c];
-        x += fb * f;
-        fi[2 * n + c] = x / (1.0f + fabsf(x) * 0.25f);
+        const float x = in[c] ? in[c]->data[n] * (1.0f / 32768.0f) : 0.0f;
+        fi[2 * n + c] = x / (1.0f + fabsf(x) * 0.25f);  // softly limited
       }
     voice.Process(fi, fo, AUDIO_BLOCK_SAMPLES);
     Level(fi);
-    Diffuse(fo);
-    const float la = lp_a, ha = hp_a;
+    // this window's TONE, DIFF and MIX: the settings plus their variations
+    const float t = constrain(tone + voice.DRand(0) * tone_var, -50.0f, 50.0f) * 0.02f;
+    tone_now = t * 50.0f;
+    const float dn = constrain(diff + voice.DRand(1) * diff_var, 0.0f, 1.0f);
+    diff_now = dn;
+    Diffuse(fo, dn);
+    // TONE, Clouds' texture filter: left closes a lowpass, right opens a highpass
+    const float lp_hz = t < 0.0f ? 18000.0f * powf(150.0f / 18000.0f, -t) : 18000.0f;
+    const float hp_hz = t > 0.0f ? 20.0f * powf(4000.0f / 20.0f, t) : 20.0f;
+    const float la = 1.0f - expf(-2.0f * float(M_PI) * lp_hz / AUDIO_SAMPLE_RATE_EXACT);
+    const float ha = 1.0f - expf(-2.0f * float(M_PI) * hp_hz / AUDIO_SAMPLE_RATE_EXACT);
+    // MIX's variation: the slot mixes by MIX, so the wet part here is
+    // scaled to what this window's MIX would give (ramped over the block)
+    const float w = wet;
+    const float g_to = mix_var > 0.0f && w > 0.01f
+        ? constrain(w + voice.DRand(2) * mix_var, 0.0f, 1.0f) / w : 1.0f;
+    const float g_from = mix_g, g_step = (g_to - g_from) / AUDIO_BLOCK_SAMPLES;
+    mix_g = g_to;
     float pk = 0.0f;
-    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++)
+    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+      const float g = g_from + g_step * (n + 1);
       for (int c = 0; c < 2; c++) {
         float y = fo[2 * n + c];
         lp_z[c] += la * (y - lp_z[c]);  // TONE: lowpass ...
         y = lp_z[c];
         hp_z[c] += ha * (y - hp_z[c]);  // ... or highpass
         y -= hp_z[c];
-        last[2 * n + c] = y;
+        if (g != 1.0f) y = fi[2 * n + c] + g * (y - fi[2 * n + c]);
         pk = std::max(pk, fabsf(y));
         o[c]->data[n] = ToSample16(y);
       }
+    }
     peak = std::max(float(peak), pk);
     transmit(o[0], 0);
     transmit(o[1], 1);
@@ -5290,23 +5305,23 @@ FASTRUN __attribute__((optimize("O2"))) void AudioStretch::update() {  // (O2: t
 PROGMEM static const DeviceDef STRETCH_DEF = {
   "DRAFT", "STR", 8, {"FRZ", ""},  // (was STRETCH)
   {
-    // in FIBRE's places (SPEED where FIBRE has RATE, TONE where SHAPE);
-    // modes (like FIBRE's): random variation per window
-    {"SPEED", -200, 200, 100, BI}, // frozen: through the buffer (%, < 0 backwards)
-    {"SIZE", 0, 100, 50, UNI, 0, 21, 0},  // the window: short = quick and grainy, long = smooth; mode: size spread
-    {"PITCH", -24, 24, 0, BI, 0, 25, 0},  // semitones, without changing the speed; mode: pitch spread 0..24
-    {"POS", 0, 100, 80, UNI, 0, 21, 0},   // like FIBRE: 0 = the oldest audio (left), 100 = now (right); mode: position variation
-    {"TONE", -50, 50, 0, BI, 0, 21, 0},   // left lowpass, right highpass; mode: diffusion 0..100%
-    {"FDBK", 0, 100, 0, UNI},
-    {"SPRD", 0, 100, 0, UNI},      // stereo spread: the windows wander left / right
-    {"MIX", 0, 100, 100, UNI},
+    // page 1 in FIBRE's places (SPEED where FIBRE has RATE); every mode is
+    // a random variation per window, 0..100 % (PITCH: 0..24 semitones)
+    {"SPEED", -200, 200, 100, BI, 0, 21, 0},  // frozen: through the buffer (%, < 0 backwards)
+    {"SIZE", 0, 100, 50, UNI, 0, 21, 0},  // the window: short = quick and grainy, long = smooth
+    {"PITCH", -24, 24, 0, BI, 0, 25, 0},  // semitones, without changing the speed
+    {"POS", 0, 100, 80, UNI, 0, 21, 0},   // like FIBRE: 0 = the oldest audio (left), 100 = now (right)
+    {"DIFF", 0, 100, 0, UNI, 0, 21, 0},   // the diffuser: clear .. blurred
+    {"TONE", -50, 50, 0, BI, 0, 21, 0},   // left lowpass, right highpass
+    {"SPRD", 0, 100, 0, UNI, 0, 21, 0},   // stereo spread: the windows wander left / right
+    {"MIX", 0, 100, 100, UNI, 0, 21, 0},
   },
   {"", ""},
 };
 
 class StretchDevice : public Device {
 public:
-  enum { SPEED, SIZE, PITCH, POS, TONE, FDBK, SPRD, MIX };
+  enum { SPEED, SIZE, PITCH, POS, DIFF, TONE, SPRD, MIX };
   static constexpr float BUF_SECS = AudioStretch::BUF_SECS;
   void FormatMode(int p, char* buf, size_t n) const override;
   StretchDevice() : Device(STRETCH_DEF) {}
@@ -5348,29 +5363,32 @@ private:
 
 FLASHMEM void StretchDevice::Apply(int p) {
   switch (p) {
-    case MIX: wet = cur[MIX] * 0.01f; return;
-    case FDBK: fx.fdbk = 0.95f * cur[FDBK] * 0.01f; return;
-    case TONE: {  // Clouds' texture filter: left closes a lowpass, right opens a highpass
-      const float t = cur[TONE] * 0.02f;
-      const float lp_hz = t < 0.0f ? 18000.0f * powf(150.0f / 18000.0f, -t) : 18000.0f;
-      const float hp_hz = t > 0.0f ? 20.0f * powf(4000.0f / 20.0f, t) : 20.0f;
-      fx.lp_a = 1.0f - expf(-2.0f * float(M_PI) * lp_hz / AUDIO_SAMPLE_RATE_EXACT);
-      fx.hp_a = 1.0f - expf(-2.0f * float(M_PI) * hp_hz / AUDIO_SAMPLE_RATE_EXACT);
-      fx.diff = mode[TONE] * 0.05f;
+    case MIX:
+      wet = cur[MIX] * 0.01f;
+      fx.wet = wet;
+      fx.mix_var = mode[MIX] * 0.05f;
       return;
-    }
+    case DIFF:
+      fx.diff = cur[DIFF] * 0.01f;
+      fx.diff_var = mode[DIFF] * 0.05f;
+      return;
+    case TONE:
+      fx.tone = cur[TONE];
+      fx.tone_var = mode[TONE] * 2.5f;  // up to +-50
+      return;
     default:
       fx.frz = frozen;
       fx.voice.Set(1.0f - cur[POS] * 0.01f, cur[SIZE] * 0.01f, cur[PITCH], cur[SPEED] * 0.01f, frozen);
-      fx.voice.SetSpread(mode[PITCH], mode[SIZE] * 0.05f, mode[POS] * 0.025f, cur[SPRD] * 0.01f);
+      fx.voice.SetSpread(mode[PITCH], mode[SIZE] * 0.05f, mode[POS] * 0.025f, cur[SPRD] * 0.01f,
+                         mode[SPRD] * 0.05f, mode[SPEED] * 0.05f);
   }
 }
 
 // the spreads, as on SPRAY: OFF, then +-semitones (PITCH) or percent
 FLASHMEM void StretchDevice::FormatMode(int p, char* buf, size_t n) const {
-  if ((p == PITCH || p == SIZE || p == POS || p == TONE) && mode[p] == 0) snprintf(buf, n, "OFF");
+  if (mode[p] == 0) snprintf(buf, n, "OFF");
   else if (p == PITCH) snprintf(buf, n, "+-%d", mode[p]);
-  else if (p == SIZE || p == POS || p == TONE) snprintf(buf, n, "%d%%", mode[p] * 5);
+  else snprintf(buf, n, "%d%%", mode[p] * 5);
   else Device::FormatMode(p, buf, n);
 }
 
@@ -5385,7 +5403,8 @@ FLASHMEM void StretchDevice::Format(int p, char* buf, size_t n) const {
 // is thinner as MIX brings the window in, gone at 100. The window playing
 // now is a box POS back from now (the right edge, as FIBRE's window), as wide as SIZE, raised or lowered by
 // PITCH, taller with TONE (left it grows down, right up) and filled like
-// FIBRE's grains: solid at FDBK 0, thinning out, just the outline at 100.
+// FIBRE's grains, thinning out with DIFF: solid when clear, a scatter of
+// dots when blurred (TONE and DIFF as heard, with their variations).
 // Frozen, it runs through the buffer at SPEED. Both pages show the same.
 FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
   static const uint8_t bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
@@ -5439,13 +5458,14 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
   const int px = pos_x(pos + fx.voice.DPos());
   const float sz = constrain(cur[SIZE] * 0.01f + fx.voice.DSize(), 0.0f, 1.0f);
   const int bw = 4 + int(sz * (ww / 4));
-  const int grow = abs(cur[TONE]) * 10 / 50, bh = 7 + grow;
+  const int tn = int(fx.tone_now);
+  const int grow = abs(tn) * 10 / 50, bh = 7 + grow;
   const int py = cy - int((cur[PITCH] + fx.voice.DPitch()) * semis_px);
   const int bx = constrain(px - bw / 2, x, x + ww - bw);
-  const int by = constrain(py - 3 - (cur[TONE] > 0 ? grow : 0), y, base - bh + 1);
+  const int by = constrain(py - 3 - (tn > 0 ? grow : 0), y, base - bh + 1);
   graphics.clearRect(std::max(x, bx - 1), std::max(y, by - 1), bw + 2, bh + 2);  // a gap around it
   gfxFrame(bx, by, bw, bh);
-  const int fill = 16 - cur[FDBK] * 16 / 100;
+  const int fill = 16 - int(fx.diff_now * 14.0f + 0.5f);  // 2 of 16 left at 100
   for (int yy = by + 1; yy < by + bh - 1; yy++)
     for (int xx = bx + 1; xx < bx + bw - 1; xx++)
       if (bayer[yy & 3][xx & 3] < fill) gfxPixel(xx, yy);

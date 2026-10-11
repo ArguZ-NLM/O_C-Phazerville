@@ -2824,7 +2824,9 @@ namespace loom {
   // 13: CLOTH page 2 LOW MID HIGH SPLIT, three compressors (was LOW MID HIGH
   //     band gains, the splits their modes, and one COMP)
   // 14: DRAFT in FIBRE's order SPEED SIZE PITCH POS (was PITCH POS SIZE SPEED)
-  constexpr uint8_t SAVE_VERSION = 14;
+  // 15: DRAFT page 2 DIFF TONE SPRD MIX (was TONE FDBK SPRD MIX, TONE's mode
+  //     the diffusion)
+  constexpr uint8_t SAVE_VERSION = 15;
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -2889,6 +2891,10 @@ namespace loom {
     // before v14 DRAFT's page 1 was PITCH POS SIZE SPEED
     const bool str_order = use && !memcmp(tag, "STR", 4) && load_version < 14;
     static constexpr int8_t STR_MAP[4] = {StretchDevice::PITCH, StretchDevice::POS, StretchDevice::SIZE, StretchDevice::SPEED};
+    // before v15 its page 2 was TONE FDBK SPRD MIX (FDBK is gone; v14's
+    // TONE mode was the diffusion, now DIFF)
+    const bool str_page2 = use && !memcmp(tag, "STR", 4) && load_version < 15;
+    int old_diff = -1;
     // before v6 the reverb's 6th was SIZE (now PRE: left at its default);
     // DECAY's value becomes ROOM, TONE's WALL (same places)
     const bool skip_size = use && !memcmp(tag, "ECO", 4) && load_version < 6;
@@ -2925,6 +2931,12 @@ namespace loom {
       if (reorder_out && p >= 4) p = p == 4 ? 7 : p - 1;
       if ((remap_mdl || remap_str) && p == 6) p = 7;
       if (str_order && p < 4) p = STR_MAP[p];
+      if (str_page2 && p == 5) { p = q; continue; }  // FDBK
+      if (str_page2 && p == 4) {
+        if (load_version >= 14) old_diff = md * 5;
+        md = 0;
+        p = StretchDevice::TONE;
+      }
       if (skip_size && p == 5) { p = q; continue; }
       if (spool_order) {
         if (SPOOL_MAP[q] < 0) { old_dub = v; continue; }
@@ -2954,6 +2966,7 @@ namespace loom {
       p = q;
     }
     if (old_dub >= 0) d->mode[ReelDevice::MON] = uint8_t(constrain((old_dub + 2) / 5, 0, 20));
+    if (old_diff >= 0) d->val[StretchDevice::DIFF] = int16_t(constrain(old_diff, 0, 100));
     if (old_bands) {
       for (int b = 0; b < 3; b++) {
         const int v = ob_v[b];
