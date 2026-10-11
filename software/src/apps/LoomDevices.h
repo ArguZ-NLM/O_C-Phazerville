@@ -5337,7 +5337,7 @@ FLASHMEM void StretchDevice::Format(int p, char* buf, size_t n) const {
 // being played as a box POS back from now, as wide as SIZE, raised or
 // lowered by PITCH; frozen, it runs through the buffer at SPEED.
 // Page 2 is the same picture with the recording's wave behind it (as on
-// FIBRE: thinner as MIX brings the window in, gone at 100) and the box
+// FIBRE: thinner as MIX brings the window in, a third left at 100) and the box
 // bigger: TONE fills it with pixels from the top as the lowpass closes (the
 // highs gone) or from the bottom as the highpass opens (the lows gone),
 // denser towards that edge; the wave runs on through it, drawn over the fill
@@ -5358,7 +5358,7 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
   }
   auto wave_at = [&](int px) { return wave[constrain((px - x) * HIST / ww, 0, HIST - 1)]; };
   if (sound) {
-    const int fill = 16 - cur[MIX] * 16 / 100;  // 16 .. 0 of 16
+    const int fill = 16 - cur[MIX] * 11 / 100;  // 16 .. 5 of 16 (DRAFT is all window by default)
     for (int px = x; px < x + ww; px++) {
       const int a = wave_at(px);
       for (int yy = cy - a; yy <= cy + a; yy++)
