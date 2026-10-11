@@ -5680,6 +5680,11 @@ private:
   Meter out_m;
   uint32_t step_at = 0;
   uint32_t note_seen = 0;
+  // NOTE on MIDI: the last note played; NOTE's value is then an offset to
+  // it, 48 (C3) = none, so it is saved like any setting
+  int16_t midi_base = 48;
+  int8_t note_mode_was = -1;  // (-1: not seen yet, as after loading)
+  static int FoldNote(int nt) { while (nt < 24) nt += 12; while (nt > 84) nt -= 12; return nt; }
   float Decay(int v) const { return 0.02f * powf(600.0f, v * 0.01f); }  // 20 ms .. 12 s
   static float Blend(int v) { return constrain((40 - v) / 40.0f, 0.0f, 1.0f); }  // below 40: more and more of the wide pass
   static float Morph(int m) { return m ? 0.05f * powf(2.0f, (m - 1) * 0.5f) : 0.003f; }  // 3 ms, 50 ms .. 2.3 s
@@ -5714,8 +5719,12 @@ FLASHMEM void ChimeDevice::Apply(int p) {
   static const float shruti[22] = {0, 90.2f, 111.7f, 182.4f, 203.9f, 294.1f, 315.6f, 386.3f, 407.8f, 498.0f, 519.6f,
                                    590.2f, 611.7f, 702.0f, 792.2f, 813.7f, 884.4f, 905.9f, 996.1f, 1017.6f, 1088.3f, 1109.8f};
   static const float harmonic[8] = {0, 203.91f, 386.31f, 551.32f, 701.96f, 840.53f, 968.83f, 1088.27f};
+  if (p == NOTE) {  // NOTE turned to MIDI: the offset starts at none
+    if (note_mode_was == 0 && mode[NOTE]) { val[NOTE] = 48; cur[NOTE] = Modulated(NOTE); }
+    note_mode_was = mode[NOTE] ? 1 : 0;
+  }
   AudioEffectChime::Params a;
-  a.root = cur[NOTE];
+  a.root = mode[NOTE] ? FoldNote(midi_base + cur[NOTE] - 48) : cur[NOTE];
   const int sc = constrain(int(cur[SCALE]), 0, SCALES - 1);
   a.steps = 0;
   a.period = 1200.0f;
@@ -5759,7 +5768,11 @@ FLASHMEM void ChimeDevice::Format(int p, char* buf, size_t n) const {
   static const char* const names[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
   static const char* const scales[SCALES] = {"CHROM", "MAJOR", "MINOR", "PENTA", "mPENT", "FIFTH", "WHOLE",
                                              "QUART", "17ET", "19ET", "SLEND", "PELOG", "BOHLN", "SHRUT", "HARMO"};
-  if (p == NOTE) snprintf(buf, n, "%s%d", names[val[NOTE] % 12], val[NOTE] / 12 - 1);
+  if (p == NOTE && mode[NOTE]) {  // MIDI: the note played, and the offset (E3+6)
+    const int off = val[NOTE] - 48;
+    if (off) snprintf(buf, n, "%s%d%+d", names[midi_base % 12], midi_base / 12 - 1, off);
+    else snprintf(buf, n, "%s%d", names[midi_base % 12], midi_base / 12 - 1);
+  } else if (p == NOTE) snprintf(buf, n, "%s%d", names[val[NOTE] % 12], val[NOTE] / 12 - 1);
   else if (p == SCALE) snprintf(buf, n, "%s", scales[constrain(int(val[SCALE]), 0, SCALES - 1)]);
   else if (p == DECAY) {
     const float t = Decay(val[DECAY]);
@@ -5768,18 +5781,15 @@ FLASHMEM void ChimeDevice::Format(int p, char* buf, size_t n) const {
   } else Device::Format(p, buf, n);
 }
 
-// NOTE on MIDI: a note played (on the channel set) becomes NOTE, moved by
-// octaves into C1 .. C6
+// NOTE on MIDI: a note played (on the channel set) becomes the first note,
+// moved by NOTE's offset (the R knob) and by octaves into C1 .. C6
 FLASHMEM void ChimeDevice::Idle() {
   if (!mode[NOTE]) return;
   const int ch = mode[NOTE] - 1;  // 0: any
   if (midi_note_seq[ch] == note_seen) return;
   note_seen = midi_note_seq[ch];
-  int nt = midi_note[ch];
-  while (nt < 24) nt += 12;
-  while (nt > 84) nt -= 12;
-  if (nt == val[NOTE]) return;
-  val[NOTE] = int16_t(nt);
+  if (midi_note[ch] == midi_base) return;
+  midi_base = int16_t(midi_note[ch]);
   Refresh(NOTE);
 }
 
