@@ -1761,7 +1761,7 @@ FLASHMEM void AppLoom::MainLoop() {
   Serial.printf("  main loop: longest gap %lu us\n", (unsigned long)loop_gap_max);
   Serial.printf("  PROF levels %lu draw %lu mini", (unsigned long)loom::prof_view[0], (unsigned long)loom::prof_view[1]);
   for (int t = 0; t < 2; t++) for (int c = 0; c < 6; c++) { Serial.printf(" %lu", (unsigned long)loom::prof_mini[t][c]); loom::prof_mini[t][c] = 0; }
-  Serial.println();
+  Serial.printf(" pm %lu\n", (unsigned long)loom::prof_pm[0]);
   loom::prof_view[0] = loom::prof_view[1] = 0;
   Serial.printf("  MIDI: notes %lu, aftertouch %lu (channel now %d)\n", (unsigned long)loom::note_ev_n,
                 (unsigned long)loom::at_seen, int(loom::chan_at));
