@@ -5337,7 +5337,7 @@ FLASHMEM void StretchDevice::Format(int p, char* buf, size_t n) const {
 // place and the record head (a line) runs across it, writing over the
 // oldest audio, like a tape loop; it stops when frozen. The recording's wave
 // is thinner as MIX brings the window in, gone at 100. The window playing
-// now is a box POS back from the head, as wide as SIZE, raised or lowered by
+// now is a box POS back from now (the right edge, as FIBRE's window), as wide as SIZE, raised or lowered by
 // PITCH, taller with TONE (left it grows down, right up) and filled like
 // FIBRE's grains: solid at FDBK 0, thinning out, just the outline at 100.
 // Frozen, it runs through the buffer at SPEED. Both pages show the same.
@@ -5349,12 +5349,9 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
   const int ww = w - 8, cy = y + h / 2, base = y + h - 1;
   constexpr int HIST = AudioStretch::HIST;
   const int head = fx.hist_pos;
-  // screen column of a place in the buffer, p back from the head (wraps)
-  auto pos_x = [&](float p) {
-    float f = float(head) / HIST - p;
-    f -= floorf(f);
-    return x + int(f * ww) % ww;
-  };
+  // the window's place, as FIBRE's: from now (right) back to the oldest
+  // audio (left), standing still while the record head runs
+  auto pos_x = [&](float p) { p -= floorf(p); return x + int((1.0f - p) * (ww - 1)); };
   gfxDottedLine(x, cy, x + ww - 1, cy, 2);
   const int wave_fill = 16 - cur[MIX] * 16 / 100;  // 16 .. 0 of 16
   if (wave_fill > 0)
@@ -5373,14 +5370,10 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
   const float semis_px = float(h / 2 - 4) / 24.0f;
   // the variations' reach, like SPRAY's: POS as brackets either side, PITCH
   // as a dotted line up and down through the middle
-  const float pv = std::min(mode[POS] * 0.025f, 0.49f);
+  const float pv = mode[POS] * 0.025f;
   if (pv > 0.0f) {
-    const int wl = pos_x(pos + pv), wr = pos_x(pos - pv);
-    const int n = (wr - wl + ww) % ww;
-    for (int k = 0; k <= n; k++) {
-      const int px = x + (wl - x + k) % ww;
-      gfxPixel(px, y); gfxPixel(px, base);
-    }
+    const int wl = std::max(x, pos_x(pos + pv)), wr = std::min(x + ww - 1, pos_x(pos - pv));
+    for (int px = wl; px <= wr; px++) { gfxPixel(px, y); gfxPixel(px, base); }
     for (int k = 0; k < 5; k++) {
       gfxPixel(wl, y + k); gfxPixel(wr, y + k);
       gfxPixel(wl, base - k); gfxPixel(wr, base - k);
