@@ -312,6 +312,9 @@ public:
   virtual void RestoreMore(const Saved&) {}
   void Nudge(int p, int dir);
   void NudgeMode(int p, int dir);
+  // a setting that goes round when turned past an end (DRAFT's POS: its
+  // recording is a loop)
+  virtual bool Wraps(int p) const { return false; }
   bool Bipolar(int p) const { return mod_bi & (1 << p); }
   bool Bipolar2(int p) const { return mod_bi2 & (1 << p); }
   bool Modded(int p) const { return mod_amt[p] || mod_amt2[p]; }
@@ -483,7 +486,10 @@ FLASHMEM void Device::ModSourceName(int p, char* buf, size_t n) const {
 FLASHMEM void Device::Nudge(int p, int dir) {
   const ParamDef& d = param(p);
   const int16_t was = val[p];
-  val[p] = constrain(Step(p, val[p], dir), d.min, d.max);
+  int v = Step(p, val[p], dir);
+  if (Wraps(p) && v > d.max) v = d.min + (v - d.max - 1);
+  else if (Wraps(p) && v < d.min) v = d.max - (d.min - v - 1);
+  val[p] = constrain(v, d.min, d.max);
   last_delta[p] = val[p] - was;  // for a LINKED twin
   Refresh(p);
 }
@@ -5369,6 +5375,7 @@ public:
   StretchDevice() : Device(STRETCH_DEF) {}
   void Rest(bool on) override { fx.rest = on; }
   bool FeedsWhileParked() const override { return true; }
+  bool Wraps(int p) const override { return p == POS; }
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
   bool ok() const override { return fx.voice.ok(); }
