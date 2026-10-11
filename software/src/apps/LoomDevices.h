@@ -5394,7 +5394,25 @@ public:
   // view drew, and sounded different). From the audio it hung the module.
   void Idle() override { if (active && !fx.rest) fx.voice.Work(2000); }
   void Apply(int p) override;
-  void Action(int a) override { if (a == 0) { frozen = !frozen; Apply(PITCH); } }
+  // FRZ: POS changes meaning, its number turned to keep the window where it
+  // is (no jump): recording, how far back from the record head; frozen, the
+  // place in the held sound (on the picture, 0 left .. 100 right)
+  void Action(int a) override {
+    if (a != 0) return;
+    const float h = fx.HeadPos() / AudioStretch::HIST;
+    float f = frozen ? h - val[POS] * 0.01f : h - (1.0f - val[POS] * 0.01f);
+    f -= floorf(f);  // frozen: back from the head; recording: the place
+    val[POS] = int16_t(lroundf((frozen ? 1.0f - f : f) * 100.0f)) % 101;
+    frozen = !frozen;
+    Refresh(POS);
+    Apply(PITCH);
+  }
+  // how far back from the record head the window is (0..1, as the engine)
+  float Back() const {
+    if (!frozen) return 1.0f - cur[POS] * 0.01f;
+    const float b = fx.HeadPos() / AudioStretch::HIST - cur[POS] * 0.01f;
+    return b - floorf(b);
+  }
   bool ActionLit(int a) const override { return a == 0 && frozen; }
   void Format(int p, char* buf, size_t n) const override;
   void DrawViz(int x, int y, int w, int h) override;
@@ -5434,7 +5452,7 @@ FLASHMEM void StretchDevice::Apply(int p) {
       return;
     default:
       fx.frz = frozen;
-      fx.voice.Set(1.0f - cur[POS] * 0.01f, cur[SIZE] * 0.01f, cur[PITCH], cur[SPEED] * 0.01f, frozen);
+      fx.voice.Set(Back(), cur[SIZE] * 0.01f, cur[PITCH], cur[SPEED] * 0.01f, frozen);
       fx.voice.SetSpread(mode[PITCH], mode[SIZE] * 0.05f, mode[POS] * 0.025f, cur[SPRD] * 0.01f,
                          mode[SPRD] * 0.05f, mode[SPEED] * 0.05f);
   }
@@ -5513,7 +5531,7 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
     graphics.clearRect(cl, y, cr - cl + 1, h);
     gfxLine(hx, y + 2, hx, y + h - 3);
   }
-  const float pos = 1.0f - cur[POS] * 0.01f;  // back from now
+  const float pos = Back();  // back from now
   const float semis_px = float(h / 2 - 4) / 24.0f;
   // the variations' reach, like SPRAY's: POS as brackets either side, PITCH
   // as a dotted line up and down through the middle
@@ -5574,7 +5592,7 @@ FLASHMEM void StretchDevice::DrawMini(int x, int y, int w, int h) {
   gfxLine(x, cy, x + w - 1, cy);
   // as on the page: the window POS behind the record head, riding along
   // with it round the loop; frozen, both stand still
-  float f = fx.HeadPos() / AudioStretch::HIST - std::min(0.98f, 1.0f - cur[POS] * 0.01f);
+  float f = fx.HeadPos() / AudioStretch::HIST - (frozen ? Back() : std::min(0.98f, Back()));
   f -= floorf(f);
   const int px = x + int(f * w) % w;
   const int py = cy - cur[PITCH] * (h / 2 - 2) / 24;
