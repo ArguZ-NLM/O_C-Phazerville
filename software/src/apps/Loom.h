@@ -2823,7 +2823,8 @@ namespace loom {
   // 7: STRETCH POS turned round (0 = oldest, 100 = now, like SPRAY)
   // 13: CLOTH page 2 LOW MID HIGH SPLIT, three compressors (was LOW MID HIGH
   //     band gains, the splits their modes, and one COMP)
-  constexpr uint8_t SAVE_VERSION = 13;
+  // 14: DRAFT in FIBRE's order SPEED SIZE PITCH POS (was PITCH POS SIZE SPEED)
+  constexpr uint8_t SAVE_VERSION = 14;
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -2885,6 +2886,9 @@ namespace loom {
     const bool remap_str = use && !memcmp(tag, "STR", 4) && n == 7;  // SPRD came in before MIX
     // before v7 STRETCH's POS ran the other way (0 = now)
     const bool flip_pos = use && !memcmp(tag, "STR", 4) && load_version < 7;
+    // before v14 DRAFT's page 1 was PITCH POS SIZE SPEED
+    const bool str_order = use && !memcmp(tag, "STR", 4) && load_version < 14;
+    static constexpr int8_t STR_MAP[4] = {StretchDevice::PITCH, StretchDevice::POS, StretchDevice::SIZE, StretchDevice::SPEED};
     // before v6 the reverb's 6th was SIZE (now PRE: left at its default);
     // DECAY's value becomes ROOM, TONE's WALL (same places)
     const bool skip_size = use && !memcmp(tag, "ECO", 4) && load_version < 6;
@@ -2920,6 +2924,7 @@ namespace loom {
       // before v5 OUTPUT's page 2 was BANDZ LOW MID HIGH: now LOW MID HIGH OTT
       if (reorder_out && p >= 4) p = p == 4 ? 7 : p - 1;
       if ((remap_mdl || remap_str) && p == 6) p = 7;
+      if (str_order && p < 4) p = STR_MAP[p];
       if (skip_size && p == 5) { p = q; continue; }
       if (spool_order) {
         if (SPOOL_MAP[q] < 0) { old_dub = v; continue; }
@@ -2934,7 +2939,7 @@ namespace loom {
       d->mod_amt[p] = constrain(amt, -100, 100);
       d->mod_in[p].Unpack(src);
       d->mod_bus_sel[p] = bus <= MOD_BUSES ? bus : 0;
-      if (flip_pos && p == 1) {
+      if (flip_pos && p == StretchDevice::POS) {
         d->val[p] = 100 - d->val[p];
         d->mod_amt[p] = -d->mod_amt[p];
         d->mod_amt2[p] = -d->mod_amt2[p];

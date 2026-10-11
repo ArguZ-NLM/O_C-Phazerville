@@ -5149,13 +5149,16 @@ FLASHMEM void ModalDevice::DrawMini(int x, int y, int w, int h) {
 // unless frozen) and played back POS behind now, PITCH shifted without
 // changing the speed; frozen (A), it plays through the buffer at SPEED
 // without changing the pitch. SIZE: the window (short = grainy and quick,
-// long = smooth). TONE: Clouds' filter (left lowpass, right highpass).
+// long = smooth). TONE: Clouds' filter (left lowpass, right highpass);
+// its mode the diffuser, which smears the windows' seams into a blur (what
+// Clouds' DENSITY does in this mode).
 /////////////////////////////////////////////////////////////////
 class AudioStretch : public AudioStream {
 public:
   AudioStretch() : AudioStream(2, queue) {}
   StretchVoice voice;
   volatile float fdbk = 0.0f, lp_a = 1.0f, hp_a = 0.0f;
+  volatile float diff = 0.0f;  // the diffuser's amount, 0..1
   volatile float peak = 0.0f;
   volatile bool rest = false;  // parked: nothing to compute
   volatile bool frz = false;   // frozen: the buffer (and its picture) stands still
@@ -5168,7 +5171,13 @@ public:
   void update() override;
 private:
   void Level(const float* x);
+  void Diffuse(float* x);
   float hist_peak = 0.0f, hist_blocks = 0.0f;
+  // Clouds' diffuser: four allpasses a side, its lengths (at 32 kHz) x 1.5
+  static constexpr int AP_MEM = 1529 + 1511;
+  float ap_mem[AP_MEM] = {};
+  int ap_at[2][4] = {};
+  float diff_a = 0.0f;  // the amount as heard (ramped per block)
   audio_block_t* queue[2];
   float last[2 * AUDIO_BLOCK_SAMPLES] = {};
   float lp_z[2] = {}, hp_z[2] = {}, dc_z[2] = {};
@@ -5189,6 +5198,38 @@ inline void AudioStretch::Level(const float* x) {
   }
 }
 
+// the windows (interleaved L R) through the diffuser, crossfaded by its
+// amount; nothing to do while it is (and stays) at 0
+FASTRUN __attribute__((optimize("O2"))) void AudioStretch::Diffuse(float* x) {
+  static const int16_t LEN[2][4] = {{189, 270, 404, 666}, {227, 308, 368, 608}};
+  const float to = diff, from = diff_a;
+  diff_a = to;
+  if (to <= 0.0f && from <= 0.0f) return;
+  constexpr float kap = 0.625f;
+  const float step = (to - from) / AUDIO_BLOCK_SAMPLES;
+  float* mem = ap_mem;
+  for (int c = 0; c < 2; c++) {
+    float* b[4];
+    int at[4];
+    for (int k = 0; k < 4; k++) { b[k] = mem; mem += LEN[c][k]; at[k] = ap_at[c][k]; }
+    float a = from;
+    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+      const float in = x[2 * n + c];
+      float v = in;
+      for (int k = 0; k < 4; k++) {
+        const float d = b[k][at[k]];
+        const float w = v + kap * d;
+        b[k][at[k]] = w;
+        if (++at[k] == LEN[c][k]) at[k] = 0;
+        v = d - kap * w;
+      }
+      a += step;
+      x[2 * n + c] = in + a * (v - in);
+    }
+    for (int k = 0; k < 4; k++) ap_at[c][k] = at[k];
+  }
+}
+
 FASTRUN __attribute__((optimize("O2"))) void AudioStretch::update() {  // (O2: the build is -Os)
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   if (!voice.ok()) { for (auto b : in) if (b) release(b); return; }
@@ -5206,6 +5247,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioStretch::update() {  // (O2: t
     resting = false;
     voice.Restart();
     memset(last, 0, sizeof(last));
+    memset(ap_mem, 0, sizeof(ap_mem));
     for (int c = 0; c < 2; c++) lp_z[c] = hp_z[c] = dc_z[c] = 0.0f;
   }
   audio_block_t* o[2] = {allocate(), allocate()};
@@ -5223,6 +5265,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioStretch::update() {  // (O2: t
       }
     voice.Process(fi, fo, AUDIO_BLOCK_SAMPLES);
     Level(fi);
+    Diffuse(fo);
     const float la = lp_a, ha = hp_a;
     float pk = 0.0f;
     for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++)
@@ -5247,12 +5290,13 @@ FASTRUN __attribute__((optimize("O2"))) void AudioStretch::update() {  // (O2: t
 PROGMEM static const DeviceDef STRETCH_DEF = {
   "DRAFT", "STR", 8, {"FRZ", ""},  // (was STRETCH)
   {
-    // modes (like SPRAY's): random variation per window
-    {"PITCH", -24, 24, 0, BI, 0, 25, 0},  // semitones, without changing the speed; mode: pitch spread 0..24
-    {"POS", 0, 100, 80, UNI, 0, 21, 0},   // like SPRAY: 0 = the oldest audio (left), 100 = now (right); mode: position variation
-    {"SIZE", 0, 100, 50, UNI, 0, 21, 0},  // the window: short = quick and grainy, long = smooth; mode: size spread
+    // in FIBRE's places (SPEED where FIBRE has RATE, TONE where SHAPE);
+    // modes (like FIBRE's): random variation per window
     {"SPEED", -200, 200, 100, BI}, // frozen: through the buffer (%, < 0 backwards)
-    {"TONE", -50, 50, 0, BI},      // left lowpass, right highpass
+    {"SIZE", 0, 100, 50, UNI, 0, 21, 0},  // the window: short = quick and grainy, long = smooth; mode: size spread
+    {"PITCH", -24, 24, 0, BI, 0, 25, 0},  // semitones, without changing the speed; mode: pitch spread 0..24
+    {"POS", 0, 100, 80, UNI, 0, 21, 0},   // like FIBRE: 0 = the oldest audio (left), 100 = now (right); mode: position variation
+    {"TONE", -50, 50, 0, BI, 0, 21, 0},   // left lowpass, right highpass; mode: diffusion 0..100%
     {"FDBK", 0, 100, 0, UNI},
     {"SPRD", 0, 100, 0, UNI},      // stereo spread: the windows wander left / right
     {"MIX", 0, 100, 100, UNI},
@@ -5262,7 +5306,7 @@ PROGMEM static const DeviceDef STRETCH_DEF = {
 
 class StretchDevice : public Device {
 public:
-  enum { PITCH, POS, SIZE, SPEED, TONE, FDBK, SPRD, MIX };
+  enum { SPEED, SIZE, PITCH, POS, TONE, FDBK, SPRD, MIX };
   static constexpr float BUF_SECS = AudioStretch::BUF_SECS;
   void FormatMode(int p, char* buf, size_t n) const override;
   StretchDevice() : Device(STRETCH_DEF) {}
@@ -5312,6 +5356,7 @@ FLASHMEM void StretchDevice::Apply(int p) {
       const float hp_hz = t > 0.0f ? 20.0f * powf(4000.0f / 20.0f, t) : 20.0f;
       fx.lp_a = 1.0f - expf(-2.0f * float(M_PI) * lp_hz / AUDIO_SAMPLE_RATE_EXACT);
       fx.hp_a = 1.0f - expf(-2.0f * float(M_PI) * hp_hz / AUDIO_SAMPLE_RATE_EXACT);
+      fx.diff = mode[TONE] * 0.05f;
       return;
     }
     default:
@@ -5323,9 +5368,9 @@ FLASHMEM void StretchDevice::Apply(int p) {
 
 // the spreads, as on SPRAY: OFF, then +-semitones (PITCH) or percent
 FLASHMEM void StretchDevice::FormatMode(int p, char* buf, size_t n) const {
-  if ((p == PITCH || p == SIZE || p == POS) && mode[p] == 0) snprintf(buf, n, "OFF");
+  if ((p == PITCH || p == SIZE || p == POS || p == TONE) && mode[p] == 0) snprintf(buf, n, "OFF");
   else if (p == PITCH) snprintf(buf, n, "+-%d", mode[p]);
-  else if (p == SIZE || p == POS) snprintf(buf, n, "%d%%", mode[p] * 5);
+  else if (p == SIZE || p == POS || p == TONE) snprintf(buf, n, "%d%%", mode[p] * 5);
   else Device::FormatMode(p, buf, n);
 }
 
