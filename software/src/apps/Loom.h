@@ -1626,6 +1626,17 @@ FLASHMEM void AppLoom::MainLoop() {
         ApplyBypass(t);
       }
       dirty = true;
+    } else if (g_heavy_request == 4) {
+      // USB 'E' (testing): every device on both tracks back to its defaults
+      g_heavy_request = 0;
+      for (Track& tr : tracks) {
+        Device* own[] = {tr.input, tr.reel, tr.player, tr.warp, tr.mix};
+        for (Device* d : own) if (d) d->Reset();
+        for (int s = SOURCE + 1; s < SLOT_COUNT; s++)
+          for (Device* d : tr.inst[s]) if (d) d->Reset();
+      }
+      dirty = true;
+      Serial.println("DEFAULTS: every device");
     } else if (g_heavy_request == 2) {
       g_heavy_request = 0;
       dirty = false;

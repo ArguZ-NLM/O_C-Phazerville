@@ -767,6 +767,9 @@ void FASTRUN loop() {
           case 'h':  // ... and back to the saved settings (not saving these)
             g_heavy_request = 2;
             break;
+          case 'E':  // Loom: every device back to its defaults (testing)
+            g_heavy_request = 4;
+            break;
           case 'W':  // Loom: the next 2 s of the output and the jacks, sent over USB in hex
             g_capture_request = 1;
             break;
