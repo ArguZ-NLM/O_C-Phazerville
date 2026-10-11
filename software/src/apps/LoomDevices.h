@@ -5290,6 +5290,9 @@ FASTRUN __attribute__((optimize("O2"))) void AudioStretch::update() {  // (O2: t
       for (int c = 0; c < 2; c++) fi[2 * n + c] = in[c] ? in[c]->data[n] * (1.0f / 32768.0f) : 0.0f;
     voice.Record(fi, AUDIO_BLOCK_SAMPLES);
     Level(fi);
+    // the picture shows the settings as they are (not the last ones heard)
+    tone_now = tone_s = tone;
+    diff_now = diff_s = diff;
     resting = true;
     for (auto b : in) if (b) release(b);
     return;
