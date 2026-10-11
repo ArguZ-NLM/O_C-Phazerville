@@ -5370,6 +5370,10 @@ public:
     fx.processorUsageMaxReset();
   }
 private:
+  // the window's variations as the picture shows them: following the new
+  // ones each window brings (every few ms) over ~0.2 s, so the box sways
+  // instead of flickering from one to the next
+  float v_pos = 0.0f, v_size = 0.0f, v_pitch = 0.0f, v_tone = 0.0f, v_diff = 0.0f;
   AudioStretch fx;
   Meter out_m;
   bool frozen = false;
@@ -5426,6 +5430,12 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
   const float pk = fx.peak;
   fx.peak = 0.0f;
   out_m.Hit(pk);
+  constexpr float k = 0.15f;  // per frame
+  v_pos += k * (fx.voice.DPos() - v_pos);
+  v_size += k * (fx.voice.DSize() - v_size);
+  v_pitch += k * (fx.voice.DPitch() - v_pitch);
+  v_tone += k * (float(fx.tone_now) - v_tone);
+  v_diff += k * (float(fx.diff_now) - v_diff);
   const int ww = w - 8, cy = y + h / 2, base = y + h - 1;
   constexpr int HIST = AudioStretch::HIST;
   const float head = fx.HeadPos();
@@ -5476,15 +5486,15 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
     for (int yy = std::max(y + 1, pyc - a); yy <= std::min(base - 1, pyc + a); yy += 2) gfxPixel(pos_x(pos), yy);
   }
   // the window playing now
-  const int px = pos_x(pos + fx.voice.DPos());
-  const float sz = constrain(cur[SIZE] * 0.01f + fx.voice.DSize(), 0.0f, 1.0f);
+  const int px = pos_x(pos + v_pos);
+  const float sz = constrain(cur[SIZE] * 0.01f + v_size, 0.0f, 1.0f);
   const int bw = 4 + int(sz * (ww / 4));
-  const int tn = int(fx.tone_now);
+  const int tn = int(v_tone);
   const int grow = abs(tn) * 10 / 50, bh = 7 + grow;
-  const int py = cy - int((cur[PITCH] + fx.voice.DPitch()) * semis_px);
+  const int py = cy - int((cur[PITCH] + v_pitch) * semis_px);
   const int bx = px - bw / 2;  // (may run over an edge: drawn round the loop)
   const int by = constrain(py - 3 - (tn > 0 ? grow : 0), y, base - bh + 1);
-  const int fill = 16 - int(fx.diff_now * 14.0f + 0.5f);  // 2 of 16 left at 100
+  const int fill = 16 - int(v_diff * 14.0f + 0.5f);  // 2 of 16 left at 100
   for (int i = -1; i <= bw; i++) {
     const int xx = wrap(bx + i);
     const int y0 = std::max(y, by - 1), y1 = std::min(base, by + bh);
