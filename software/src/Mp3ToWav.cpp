@@ -141,8 +141,26 @@ FLASHMEM Mp3ToWav::State Mp3ToWav::Step(uint32_t ms) {
     if (!k.ofill) return true;
     const size_t n = size_t(k.ofill) * 2;
     k.ofill = 0;
-    if (k.out.write(reinterpret_cast<uint8_t*>(k.obuf), n) != n) return false;
-    k.data_bytes += n;
+    const uint8_t* p = reinterpret_cast<uint8_t*>(k.obuf);
+    size_t done = 0;
+    // a write the card refuses (busy): again, from where it got to
+    for (int tries = 0; done < n && tries < 6; tries++) {
+      if (tries) {
+        Serial.printf("MP3: write at %lu stopped after %u of %u bytes (err %d), again\n",
+                      (unsigned long)(44 + k.data_bytes), unsigned(done), unsigned(n), k.out.getWriteError());
+        k.out.clearWriteError();
+        delay(20 << tries);
+        k.out.seek(44 + k.data_bytes + done);
+      }
+      const size_t r = k.out.write(p + done, n - done);
+      done += r;
+    }
+    k.data_bytes += done;
+    if (done < n) {
+      Serial.printf("MP3: the card takes no more (%llu MB free)\n",
+                    (unsigned long long)((SD.totalSize() - SD.usedSize()) >> 20));
+      return false;
+    }
     return true;
   };
   const uint32_t t0 = millis();
