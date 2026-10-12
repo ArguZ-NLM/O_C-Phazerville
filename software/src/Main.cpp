@@ -310,9 +310,25 @@ extern "C" __attribute__((used)) void xeno_fault_c(uint32_t* st) {
   xf_hex(o, "bfar ", SCB_BFAR); xf_hex(o, "mmfar ", SCB_MMFAR); xf_hex(o, "ipsr ", ipsr);
   xf_hex(o, "sp ", uint32_t(st));
   b[126] = '\n'; b[127] = '\n';
+  // and what lies on the stack behind it: among it, where the calls came from
+  // (the code addresses; addr2line them)
+  char st_b[128];
+  for (auto& c : st_b) c = ' ';
+  char* so = st_b;
+  for (const char* t = "STACK "; *t; ) *so++ = *t++;
+  int found = 0;
+  for (int k = 8; k < 200 && found < 10; k++) {
+    const uint32_t v = st[k];
+    if ((v & 1) && ((v < 0x00080000u) || (v >= 0x60000000u && v < 0x60800000u))) {  // Thumb code: ITCM or flash
+      xf_hex(so, "", v);
+      found++;
+    }
+  }
+  st_b[127] = '\n';
   for (uint32_t n = 0; n < 60000000u; n++) {
     usb_isr();
     if ((n & 0x3FFFF) == 0 && usb_seremu_write_buffer_free() >= 128) usb_seremu_write(b, 128);
+    if ((n & 0x3FFFF) == 0x20000 && usb_seremu_write_buffer_free() >= 128) usb_seremu_write(st_b, 128);
   }
   SRC_GPR5 = 0x0BAD00F1;
   SCB_AIRCR = 0x05FA0004;
