@@ -253,7 +253,9 @@ FLASHMEM void AppCard::Loop() {
     List();
   }
   if (conv.state() == Mp3ToWav::BUSY) {
-    if (conv.Step(5000) != Mp3ToWav::BUSY) Converted();  // TEST: 5 s blocks
+    // in turns of a quarter second: in short ones the card got slow (the
+    // computer asking in between?): 3:36 took 3.5 min, now ~15 s
+    if (conv.Step(250) != Mp3ToWav::BUSY) Converted();
   } else if (millis() - mp3_looked_at > 2000) {
     LookForMp3();
   }
