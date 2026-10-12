@@ -174,14 +174,19 @@ FLASHMEM Mp3ToWav::State Mp3ToWav::Step(uint32_t ms) {
       const uint32_t want = std::min<uint32_t>(IN_SIZE - k.fill, k.end - in_read);
       const int got = want ? k.in.read(k.buf + k.fill, want) : 0;
       if (got > 0) { k.fill += got; in_read += got; }
-      if (got <= 0 || in_read >= k.end) k.eof = true;
+      if (got <= 0 || in_read >= k.end) {
+        k.eof = true;
+        if (in_read < k.end)
+          Serial.printf("MP3: read at %lu of %lu gave %d (wanted %lu), pos %lu\n", (unsigned long)in_read,
+                        (unsigned long)k.end, got, (unsigned long)want, (unsigned long)uint32_t(k.in.position()));
+      }
     }
     const uint32_t avail = k.fill - k.pos;
-    if (!avail) { through = true; break; }
+    if (!avail) { through = true; Serial.printf("MP3: all read\n"); break; }
     mp3dec_frame_info_t info;
     const int n = mp3dec_decode_frame(&k.dec, k.buf + k.pos, int(avail), k.pcm, &info);
     if (!info.frame_bytes) {  // no frame in what is left
-      if (k.eof) { through = true; break; }
+      if (k.eof) { through = true; Serial.printf("MP3: no frame in the last %lu bytes\n", (unsigned long)avail); break; }
       k.pos = k.fill;  // not sound: on to what comes next
       continue;
     }
