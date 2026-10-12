@@ -383,7 +383,11 @@ private:
   uint32_t undone_at = 0;  // UNDO shown
   bool stop_held = false, stop_armed = false;  // A held to stop the PLAYER ...
   uint32_t stop_hold = 0;                      // ... since then
-  uint32_t spool_warn_at = 0;  // a SPOOL loop would go: the first turn away only warns
+  // a SPOOL loop would go (its lane turned to another source): asked first,
+  // A says yes. ask_at: since when (0: nothing asked; 4 s, then forgotten)
+  uint32_t ask_at = 0;
+  int ask_choice = 0, ask_track = 0;
+  bool Asking() const { return ask_at && millis() - ask_at < 4000; }
   bool tape_held = false;   // OUTPUT: A held 1 s starts / stops TAPE ...
   uint32_t tape_hold = 0;   // ... since then
   static constexpr uint32_t TAPE_HOLD_MS = 1000;
@@ -1817,6 +1821,17 @@ FLASHMEM void AppLoom::MainLoop() {
 FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
   using namespace loom;
   dirty = true;
+  // a SPOOL loop would go (its lane turned away): A says yes, any other
+  // button no; nothing else happens with the press
+  if (Asking() && view == CHAIN) {
+    if (event.type == UI::EVENT_BUTTON_PRESS) {
+      ask_at = 0;
+      if (event.control == OC::CONTROL_BUTTON_UP && view == CHAIN && col == SOURCE && track == ask_track)
+        SetChoiceLinked(SOURCE, ask_choice);
+    }
+    return;
+  }
+  ask_at = 0;
   // another button while L is held: a combination, so letting go of L
   // does not open the triggers page as well
   if (l_held && event.control != OC::CONTROL_BUTTON_L && event.type == UI::EVENT_BUTTON_DOWN) {
@@ -2187,18 +2202,22 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
       tracks[track].mix->Nudge(MixDevice::LEVEL, dir);
       Mirror(tracks[track].mix, MixDevice::LEVEL);
     } else if (col == SOURCE) {
-      // away from a SPOOL holding a loop: the loop would go. The first turn
-      // only says so; turned again within 2 s, it switches
+      // away from a SPOOL holding a loop: the loop would go. Only asked
+      // (A: yes, see OnButton); turning on picks where to, back to SPOOL
+      // forgets it
       bool loop_there = false;
       for (int t = 0; t < NUM_TRACKS; t++)
         if ((t == track || linked) && tracks[t].shown_choice(SOURCE) == 1 && tracks[t].reel &&
             tracks[t].reel->LoopState() != AudioEffectReel::EMPTY)
           loop_there = true;
-      if (loop_there && (!spool_warn_at || millis() - spool_warn_at > 2000)) {
-        spool_warn_at = millis() | 1;
+      if (loop_there) {
+        const int from = Asking() && ask_track == track ? ask_choice : tracks[track].shown_choice(col);
+        ask_choice = constrain(from + dir, 0, SLOT_DEFS[SOURCE].noptions - 1);
+        ask_track = track;
+        ask_at = ask_choice == 1 ? 0 : millis() | 1;
         return;
       }
-      spool_warn_at = 0;
+      ask_at = 0;
       SetChoiceLinked(col, tracks[track].shown_choice(col) + dir);  // INPUT / SPOOL ...
     } else {
       // the effect slots' devices only: no device (0) is not dialled in (B
@@ -2435,10 +2454,13 @@ FLASHMEM void AppLoom::DrawChain() const {
     gfxPrint(right - w, 56, buf);
     if (lite) gfxInvert(right - w - 2, 55, w + 3, 9);  // LITE: the engines run lighter
   }
-  // a SPOOL loop would go (see the SOURCE turn): over the whole line
-  if (spool_warn_at && millis() - spool_warn_at < 2000) {
+  // a SPOOL loop would go (see the SOURCE turn): asked over the whole line,
+  // with where to
+  if (Asking()) {
+    char t[24];
+    snprintf(t, sizeof(t), "%s? LOOP GOES A:YES", ask_choice == 0 ? "IN" : ask_choice == 2 ? "SHU" : "WARP");
     graphics.clearRect(0, 55, 128, 9);
-    gfxPrint(1, 56, PSTR("LOOP GOES: TURN AGAIN"));
+    gfxPrint(1, 56, t);
     gfxInvert(0, 55, 128, 9);
   }
 }
