@@ -19,13 +19,13 @@ char g_mp3_report[200] = "MP3: nothing yet";
 struct Mp3ToWav::Work {
   mp3dec_t dec;
   File in, out;
-  uint8_t buf[IN_SIZE];
+  alignas(32) uint8_t buf[IN_SIZE];
   uint32_t fill = 0, pos = 0;
   uint32_t end = 0;  // where the sound ends in the file (an ID3v1 tag after it)
   bool eof = false;
   mp3d_sample_t pcm[MINIMP3_MAX_SAMPLES_PER_FRAME];
   static constexpr int OUT = 8192;  // samples, written to the card in one go
-  int16_t obuf[OUT];
+  alignas(32) int16_t obuf[OUT];
   int ofill = 0;
   int chans = 0, hz = 0;
   bool started = false;
@@ -78,10 +78,14 @@ FLASHMEM static void PutLE(uint8_t* p, uint32_t v, int n) {
   for (int i = 0; i < n; i++) p[i] = uint8_t(v >> (8 * i));
 }
 
-// the 44 bytes in front of the samples
+// the 512 bytes in front of the samples: RIFF, fmt, a JUNK chunk to fill
+// (every reader skips it), data. The samples start on a card sector, so
+// the card takes them whole: block by block it was ten times slower.
+constexpr uint32_t HEADER = 512;
 FLASHMEM static void WavHeader(uint8_t* h, int chans, int hz, uint32_t data_bytes) {
+  memset(h, 0, HEADER);
   memcpy(h, "RIFF", 4);
-  PutLE(h + 4, 36 + data_bytes, 4);
+  PutLE(h + 4, HEADER - 8 + data_bytes, 4);
   memcpy(h + 8, "WAVEfmt ", 8);
   PutLE(h + 16, 16, 4);
   PutLE(h + 20, 1, 2);  // PCM
@@ -90,8 +94,10 @@ FLASHMEM static void WavHeader(uint8_t* h, int chans, int hz, uint32_t data_byte
   PutLE(h + 28, hz * chans * 2, 4);
   PutLE(h + 32, chans * 2, 2);
   PutLE(h + 34, 16, 2);
-  memcpy(h + 36, "data", 4);
-  PutLE(h + 40, data_bytes, 4);
+  memcpy(h + 36, "JUNK", 4);
+  PutLE(h + 40, HEADER - 36 - 8 - 8, 4);
+  memcpy(h + HEADER - 8, "data", 4);
+  PutLE(h + HEADER - 4, data_bytes, 4);
 }
 
 FLASHMEM bool Mp3ToWav::Start(const char* path) {
@@ -128,9 +134,9 @@ FLASHMEM bool Mp3ToWav::Start(const char* path) {
   SD.remove(tmp);
   w->out = SD.open(tmp, FILE_WRITE_BEGIN);
   if (!w->out) { Serial.printf("MP3: can't write %s\n", tmp); Finish(false); return false; }
-  uint8_t hdr[44];
+  uint8_t hdr[HEADER];
   WavHeader(hdr, 2, 44100, 0);  // for now; the real one at the end
-  if (w->out.write(hdr, 44) != 44) { Finish(false); return false; }
+  if (w->out.write(hdr, HEADER) != HEADER) { Finish(false); return false; }
   mp3dec_init(&w->dec);
   w->t_start = millis();
   st = BUSY;
@@ -151,10 +157,10 @@ FLASHMEM Mp3ToWav::State Mp3ToWav::Step(uint32_t ms) {
     for (int tries = 0; done < n && tries < 6; tries++) {
       if (tries) {
         Serial.printf("MP3: write at %lu stopped after %u of %u bytes (err %d), again\n",
-                      (unsigned long)(44 + k.data_bytes), unsigned(done), unsigned(n), k.out.getWriteError());
+                      (unsigned long)(HEADER + k.data_bytes), unsigned(done), unsigned(n), k.out.getWriteError());
         k.out.clearWriteError();
         delay(20 << tries);
-        k.out.seek(44 + k.data_bytes + done);
+        k.out.seek(HEADER + k.data_bytes + done);
       }
       const uint32_t us = micros();
       const size_t r = k.out.write(p + done, n - done);
@@ -181,10 +187,14 @@ FLASHMEM Mp3ToWav::State Mp3ToWav::Step(uint32_t ms) {
   while (!through && millis() - t0 < ms) {
     // keep the buffer at least half full
     if (!k.eof && k.fill - k.pos < IN_SIZE / 2) {
-      memmove(k.buf, k.buf + k.pos, k.fill - k.pos);
-      k.fill -= k.pos;
-      k.pos = 0;
-      const uint32_t want = std::min<uint32_t>(IN_SIZE - k.fill, k.end - in_read);
+      // what is left to the front, so that the read lands on a word in
+      // memory and ends on a card sector: then the card reads it whole
+      const uint32_t left = k.fill - k.pos, shift = (0u - left) & 3;
+      memmove(k.buf + shift, k.buf + k.pos, left);
+      k.pos = shift;
+      k.fill = shift + left;
+      uint32_t want = std::min<uint32_t>(IN_SIZE - k.fill, k.end - in_read);
+      if (in_read + want < k.end && want > 512) want -= (in_read + want) & 511;
       const uint32_t us = micros();
       int got = want ? k.in.read(k.buf + k.fill, want) : 0;
       k.us_read += micros() - us;
@@ -263,9 +273,9 @@ FLASHMEM Mp3ToWav::State Mp3ToWav::Step(uint32_t ms) {
 FLASHMEM void Mp3ToWav::Finish(bool ok) {
   if (w) {
     if (ok) {
-      uint8_t hdr[44];
+      uint8_t hdr[HEADER];
       WavHeader(hdr, w->chans, w->hz, w->data_bytes);
-      ok = w->out.seek(0) && w->out.write(hdr, 44) == 44;
+      ok = w->out.seek(0) && w->out.write(hdr, HEADER) == HEADER;
     }
     if (w->out) w->out.close();
     if (w->in) w->in.close();
