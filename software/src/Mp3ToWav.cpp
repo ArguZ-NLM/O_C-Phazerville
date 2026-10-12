@@ -32,6 +32,7 @@ struct Mp3ToWav::Work {
   // much), so loops stay seamless
   uint32_t skip = 0;
   uint64_t left = UINT64_MAX;
+  uint32_t t_start = 0, us_decode = 0;  // how long it took, for the USB report
 };
 
 // from minimp3_ex.h: the Xing / Info frame at the start of an MP3 (no
@@ -129,6 +130,7 @@ FLASHMEM bool Mp3ToWav::Start(const char* path) {
   WavHeader(hdr, 2, 44100, 0);  // for now; the real one at the end
   if (w->out.write(hdr, 44) != 44) { Finish(false); return false; }
   mp3dec_init(&w->dec);
+  w->t_start = millis();
   st = BUSY;
   return true;
 }
@@ -172,7 +174,14 @@ FLASHMEM Mp3ToWav::State Mp3ToWav::Step(uint32_t ms) {
       k.fill -= k.pos;
       k.pos = 0;
       const uint32_t want = std::min<uint32_t>(IN_SIZE - k.fill, k.end - in_read);
-      const int got = want ? k.in.read(k.buf + k.fill, want) : 0;
+      int got = want ? k.in.read(k.buf + k.fill, want) : 0;
+      // the card gives nothing now and then (busy): again, from there
+      for (int tries = 1; want && got <= 0 && tries < 6; tries++) {
+        Serial.printf("MP3: read at %lu gave %d, again\n", (unsigned long)in_read, got);
+        delay(20 << tries);
+        k.in.seek(in_read);
+        got = k.in.read(k.buf + k.fill, want);
+      }
       if (got > 0) { k.fill += got; in_read += got; }
       if (got <= 0 || in_read >= k.end) {
         k.eof = true;
@@ -184,7 +193,9 @@ FLASHMEM Mp3ToWav::State Mp3ToWav::Step(uint32_t ms) {
     const uint32_t avail = k.fill - k.pos;
     if (!avail) { through = true; Serial.printf("MP3: all read\n"); break; }
     mp3dec_frame_info_t info;
+    const uint32_t us = micros();
     const int n = mp3dec_decode_frame(&k.dec, k.buf + k.pos, int(avail), k.pcm, &info);
+    k.us_decode += micros() - us;
     if (!info.frame_bytes) {  // no frame in what is left
       if (k.eof) { through = true; Serial.printf("MP3: no frame in the last %lu bytes\n", (unsigned long)avail); break; }
       k.pos = k.fill;  // not sound: on to what comes next
@@ -244,7 +255,9 @@ FLASHMEM void Mp3ToWav::Finish(bool ok) {
     }
     if (w->out) w->out.close();
     if (w->in) w->in.close();
-    Serial.printf("MP3: %s, %d ch %d Hz, %lu bytes of sound\n", ok ? "ok" : "failed", w->chans, w->hz, (unsigned long)w->data_bytes);
+    Serial.printf("MP3: %s, %d ch %d Hz, %lu bytes of sound, %lu ms (decoding %lu ms)\n", ok ? "ok" : "failed",
+                  w->chans, w->hz, (unsigned long)w->data_bytes, (unsigned long)(millis() - w->t_start),
+                  (unsigned long)(w->us_decode / 1000));
     w->~Work();
     extmem_free(w);  // (also frees what came from malloc)
     w = nullptr;
