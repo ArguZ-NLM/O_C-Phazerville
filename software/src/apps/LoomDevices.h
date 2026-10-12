@@ -53,6 +53,8 @@ extern volatile bool g_notes_request;       // USB 'M' (Main.cpp)
 extern volatile bool g_tape_request;        // USB 'T' (Main.cpp)
 extern volatile bool g_midilog_request;     // USB 'J' (Main.cpp)
 
+extern char g_warp_report[200];  // what WARP loaded last (USB 'P', Main.cpp)
+
 namespace loom {
 // the longest SPOOL loop / PLAYER sample held in memory. They take only
 // what they hold (SPOOL: what is free when REC starts, then just the loop),
@@ -6241,8 +6243,12 @@ FLASHMEM void WarpDevice::ThrumIdle() {
   if (!strcmp(thrum, have_path)) return;
   // a saved SPOOL loop: its section and SPEED, as left there
   uint32_t a = 0, b = 0;
-  if (ReadSpoolMeta(thrum, a, b) && b > a) Begin(thrum, a, b - a, true);
+  const bool meta = ReadSpoolMeta(thrum, a, b) && b > a;
+  if (meta) Begin(thrum, a, b - a, true);
   else Begin(thrum, 0, 0xFFFFFFFFu, true);
+  snprintf(g_warp_report, sizeof(g_warp_report), "WARP file %s: %s %lu..%lu speed %.2f %s, %lu frames\n", thrum,
+           meta ? "section" : "whole", (unsigned long)a, (unsigned long)b, double(src_speed), src_rev ? "rev" : "fwd",
+           (unsigned long)frames);
   snprintf(have_path, sizeof(have_path), "%s", thrum);  // (tried once, worked or not)
 }
 
@@ -6399,6 +6405,8 @@ FLASHMEM void WarpDevice::SpoolBegin() {
   spool_sig[1] = spool->val[ReelDevice::END];
   spool_sig[2] = int16_t(sp);
   copy_from = std::min(a, whole);
+  snprintf(g_warp_report, sizeof(g_warp_report), "WARP spool: %lu..%lu of %lu speed %.2f %s\n", (unsigned long)a,
+           (unsigned long)b, (unsigned long)whole, double(src_speed), src_rev ? "rev" : "fwd");
   const uint32_t n = std::min<uint32_t>(std::min(b, whole) - copy_from, uint32_t(BigSecs() * AUDIO_SAMPLE_RATE_EXACT));
   auto take = [&] {
     nl = static_cast<int16_t*>(PsramAlloc(n * 2));

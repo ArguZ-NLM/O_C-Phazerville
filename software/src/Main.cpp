@@ -29,6 +29,7 @@
 #include "OC_core.h"
 #include "OC_app_switcher.h"
 #include "Mp3ToWav.h"
+char g_warp_report[200] = "WARP: nothing loaded yet\n";  // what WARP loaded last (USB 'P')
 #include "OC_apps.h"
 #include "OC_DAC.h"
 #include "OC_debug.h"
@@ -775,6 +776,7 @@ void FASTRUN loop() {
           case 'P':  // the MP3 converter: how far, where the time goes
             Serial.print(g_mp3_report);
             Serial.println();
+            Serial.print(g_warp_report);
             break;
 #endif
           case 'V':  // the version only (answered by the boot picture too, without ending it)
