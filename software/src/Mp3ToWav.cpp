@@ -32,7 +32,7 @@ struct Mp3ToWav::Work {
   // much), so loops stay seamless
   uint32_t skip = 0;
   uint64_t left = UINT64_MAX;
-  uint32_t t_start = 0, us_decode = 0;  // how long it took, for the USB report
+  uint32_t t_start = 0, us_decode = 0, us_read = 0, us_write = 0, frames = 0, steps = 0, said_at = 0;  // for the USB report
 };
 
 // from minimp3_ex.h: the Xing / Info frame at the start of an MP3 (no
@@ -154,7 +154,9 @@ FLASHMEM Mp3ToWav::State Mp3ToWav::Step(uint32_t ms) {
         delay(20 << tries);
         k.out.seek(44 + k.data_bytes + done);
       }
+      const uint32_t us = micros();
       const size_t r = k.out.write(p + done, n - done);
+      k.us_write += micros() - us;
       done += r;
     }
     k.data_bytes += done;
@@ -167,6 +169,13 @@ FLASHMEM Mp3ToWav::State Mp3ToWav::Step(uint32_t ms) {
   };
   const uint32_t t0 = millis();
   bool through = false;
+  k.steps++;
+  if (t0 - k.said_at >= 5000) {
+    k.said_at = t0;
+    Serial.printf("MP3: %d%% after %lu ms: %lu steps, %lu frames, decoding %lu ms, reading %lu ms, writing %lu ms\n",
+                  Percent(), (unsigned long)(t0 - k.t_start), (unsigned long)k.steps, (unsigned long)k.frames,
+                  (unsigned long)(k.us_decode / 1000), (unsigned long)(k.us_read / 1000), (unsigned long)(k.us_write / 1000));
+  }
   while (!through && millis() - t0 < ms) {
     // keep the buffer at least half full
     if (!k.eof && k.fill - k.pos < IN_SIZE / 2) {
@@ -174,7 +183,9 @@ FLASHMEM Mp3ToWav::State Mp3ToWav::Step(uint32_t ms) {
       k.fill -= k.pos;
       k.pos = 0;
       const uint32_t want = std::min<uint32_t>(IN_SIZE - k.fill, k.end - in_read);
+      const uint32_t us = micros();
       int got = want ? k.in.read(k.buf + k.fill, want) : 0;
+      k.us_read += micros() - us;
       // the card gives nothing now and then (busy): again, from there
       for (int tries = 1; want && got <= 0 && tries < 6; tries++) {
         Serial.printf("MP3: read at %lu gave %d, again\n", (unsigned long)in_read, got);
@@ -196,6 +207,7 @@ FLASHMEM Mp3ToWav::State Mp3ToWav::Step(uint32_t ms) {
     const uint32_t us = micros();
     const int n = mp3dec_decode_frame(&k.dec, k.buf + k.pos, int(avail), k.pcm, &info);
     k.us_decode += micros() - us;
+    k.frames++;
     if (!info.frame_bytes) {  // no frame in what is left
       if (k.eof) { through = true; Serial.printf("MP3: no frame in the last %lu bytes\n", (unsigned long)avail); break; }
       k.pos = k.fill;  // not sound: on to what comes next
