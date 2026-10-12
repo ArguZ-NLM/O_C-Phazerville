@@ -14,6 +14,8 @@
 #define MINIMP3_ROM PROGMEM
 #include "minimp3.h"
 
+char g_mp3_report[200] = "MP3: nothing yet";
+
 struct Mp3ToWav::Work {
   mp3dec_t dec;
   File in, out;
@@ -170,9 +172,9 @@ FLASHMEM Mp3ToWav::State Mp3ToWav::Step(uint32_t ms) {
   const uint32_t t0 = millis();
   bool through = false;
   k.steps++;
-  if (t0 - k.said_at >= 5000) {
+  if (t0 - k.said_at >= 1000) {
     k.said_at = t0;
-    Serial.printf("MP3: %d%% after %lu ms: %lu steps, %lu frames, decoding %lu ms, reading %lu ms, writing %lu ms\n",
+    snprintf(g_mp3_report, sizeof(g_mp3_report), "MP3: %d%% after %lu ms: %lu steps, %lu frames, decoding %lu ms, reading %lu ms, writing %lu ms\n",
                   Percent(), (unsigned long)(t0 - k.t_start), (unsigned long)k.steps, (unsigned long)k.frames,
                   (unsigned long)(k.us_decode / 1000), (unsigned long)(k.us_read / 1000), (unsigned long)(k.us_write / 1000));
   }
@@ -267,9 +269,12 @@ FLASHMEM void Mp3ToWav::Finish(bool ok) {
     }
     if (w->out) w->out.close();
     if (w->in) w->in.close();
-    Serial.printf("MP3: %s, %d ch %d Hz, %lu bytes of sound, %lu ms (decoding %lu ms)\n", ok ? "ok" : "failed",
-                  w->chans, w->hz, (unsigned long)w->data_bytes, (unsigned long)(millis() - w->t_start),
-                  (unsigned long)(w->us_decode / 1000));
+    snprintf(g_mp3_report, sizeof(g_mp3_report),
+             "MP3: %s, %d ch %d Hz, %lu bytes, %lu ms: %lu steps, %lu frames, decoding %lu ms, reading %lu ms, writing %lu ms\n",
+             ok ? "ok" : "failed", w->chans, w->hz, (unsigned long)w->data_bytes, (unsigned long)(millis() - w->t_start),
+             (unsigned long)w->steps, (unsigned long)w->frames, (unsigned long)(w->us_decode / 1000),
+             (unsigned long)(w->us_read / 1000), (unsigned long)(w->us_write / 1000));
+    Serial.print(g_mp3_report);
     w->~Work();
     extmem_free(w);  // (also frees what came from malloc)
     w = nullptr;

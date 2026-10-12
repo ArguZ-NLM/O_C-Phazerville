@@ -28,6 +28,7 @@
 
 #include "OC_core.h"
 #include "OC_app_switcher.h"
+#include "Mp3ToWav.h"
 #include "OC_apps.h"
 #include "OC_DAC.h"
 #include "OC_debug.h"
@@ -748,6 +749,12 @@ void FASTRUN loop() {
         int cmd = Serial.read();
         switch (cmd) {
 #if defined(__IMXRT1062__)
+#ifdef CARD_APP
+          case 'P':  // the MP3 converter: how far, where the time goes
+            Serial.print(g_mp3_report);
+            Serial.println();
+            break;
+#endif
           case 'V':  // the version only (answered by the boot picture too, without ending it)
             Serial.printf("Version (build %s%s) clock %lu\n", OC::Strings::VERSION, OC::Strings::BUILD_TAG, (unsigned long)rtc_get());
             break;
