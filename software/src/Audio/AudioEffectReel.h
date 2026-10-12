@@ -281,6 +281,11 @@ private:
   volatile float seam = 256.0f;
   volatile bool ping_ = false;
   float dir = 1.0f;  // PING: -1 on the way back
+  // PING with CROSS: at a turn the sound going in carries on past the edge
+  // (g_pos, in the recording, its own way) fading out while the turned one
+  // fades in
+  float g_pos = 0.0f, g_dir = 1.0f;
+  int g_left = 0, g_len = 0;
   volatile bool xfade_loop = false;
   size_t xh_l = 0, xf_l = 0;  // the crossfade plan in use (see update)
   size_t lt_ws = 0, lt_wl = 0;  // ... and the window it crosses into
@@ -317,6 +322,7 @@ private:
     xf = 0;
     dub_g = 0.0f;
     run_g = 0.0f;
+    g_left = 0;
     std::fill(hist, hist + HIST, 0);
   }
   void Mark(size_t pos, int16_t a, int16_t b) {
@@ -429,7 +435,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectReel::update() {  // (O2
     }
   }
   const bool ping = ping_;
-  if (!ping) dir = 1.0f;
+  if (!ping) { dir = 1.0f; g_left = 0; }
   const float sp = speed, g = level, m = mon, keep = keep_;
   constexpr float q = 1.0f / 32768.0f;
   // the crossfade seam (looping forward): over the last xl frames of the
@@ -464,8 +470,9 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectReel::update() {  // (O2
     const size_t i0 = (w0 + size_t(o)) % len, i1 = (i0 + 1) % len;
     const float fr = o - std::floor(o);
     const float fade = std::min(float(seam), wn * 0.25f);
-    // (PING: FADE dips into and out of each turn, as INOUT does at the seam)
-    const float e = xon && w0 == ws ? 1.0f : std::min(1.0f, std::min(o, wn - o) / fade);
+    // (PING: FADE dips into and out of each turn, as INOUT does at the seam;
+    // with CROSS the turn crossfades instead, see g_pos)
+    const float e = (xon || (ping && xfade_loop)) && w0 == ws ? 1.0f : std::min(1.0f, std::min(o, wn - o) / fade);
     l = (buf[0][i0] + fr * (buf[0][i1] - buf[0][i0])) * q * e;
     r = (buf[1][i0] + fr * (buf[1][i1] - buf[1][i0])) * q * e;
   };
@@ -509,6 +516,19 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectReel::update() {  // (O2
         yl = yl * go + il * gi;
         yr = yr * go + ir * gi;
       }
+      if (g_left > 0) {  // PING with CROSS: the sound going into the turn fading out
+        const float gp = std::fmod(std::fmod(g_pos, float(len)) + float(len), float(len));
+        const size_t i0 = size_t(gp) % len, i1 = (i0 + 1) % len;
+        const float fr = gp - std::floor(gp);
+        const float gl = (buf[0][i0] + fr * (buf[0][i1] - buf[0][i0])) * q;
+        const float gr = (buf[1][i0] + fr * (buf[1][i1] - buf[1][i0])) * q;
+        const float t = 1.0f - float(g_left) / float(g_len);
+        const float go = cosf(t * 1.5707963f), gi = sinf(t * 1.5707963f);
+        yl = yl * gi + gl * go;
+        yr = yr * gi + gr * go;
+        g_pos += sp * g_dir;
+        g_left--;
+      }
       if (xf > 0) {  // the old window fading out
         float ol, orr;
         read(o_ws, o_wl, o_off, ol, orr);
@@ -549,6 +569,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectReel::update() {  // (O2
           off = std::fmod((xh ? xhf : xff) + over, float(wl));
         }
       } else if (ping) {  // turning round at either end
+        const float was = off, dir_was = dir;
         off += sp * dir;
         const float top = float(wl) - 1.0f;
         went_round = false;
@@ -562,6 +583,11 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectReel::update() {  // (O2
           off = std::min(top, -off);
           dir = -dir;
           went_round = true;
+        }
+        if (went_round && xfade_loop && wl >= 2) {  // CROSS: the sound going in carries on, fading
+          g_pos = float(ws) + was + sp * dir_was;
+          g_dir = dir_was;
+          g_len = g_left = std::max(16, int(std::min(float(seam), wl * 0.25f)));
         }
         if (went_round && pend) {  // a new window from the turn on
           ws = p_ws; wl = p_wl; pend = false;
