@@ -103,10 +103,13 @@ FLASHMEM bool Mp3ToWav::Start(const char* path) {
   for (int k = 2; SD.exists(wav) && k < 100; k++) snprintf(wav, sizeof(wav), "%s-%d.wav", base, k);
   snprintf(tmp, sizeof(tmp), "%s.part", base);
 
-  w = new (std::nothrow) Work();
-  if (!w) { st = FAILED; return false; }
+  // 43 KB: in the PSRAM when there is one (Loom keeps the RAM for itself)
+  void* mem = extmem_malloc(sizeof(Work));
+  if (!mem) mem = malloc(sizeof(Work));
+  if (!mem) { Serial.printf("MP3: no memory for %s\n", mp3); st = FAILED; return false; }
+  w = new (mem) Work();
   w->in = SD.open(mp3, FILE_READ);
-  if (!w->in) { Finish(false); return false; }
+  if (!w->in) { Serial.printf("MP3: can't open %s\n", mp3); Finish(false); return false; }
   in_size = w->end = uint32_t(w->in.size());
   in_read = 0;
   // an ID3v2 tag at the start (names, pictures): skipped
@@ -121,7 +124,7 @@ FLASHMEM bool Mp3ToWav::Start(const char* path) {
   w->in.seek(in_read);
   SD.remove(tmp);
   w->out = SD.open(tmp, FILE_WRITE_BEGIN);
-  if (!w->out) { Finish(false); return false; }
+  if (!w->out) { Serial.printf("MP3: can't write %s\n", tmp); Finish(false); return false; }
   uint8_t hdr[44];
   WavHeader(hdr, 2, 44100, 0);  // for now; the real one at the end
   if (w->out.write(hdr, 44) != 44) { Finish(false); return false; }
@@ -218,7 +221,9 @@ FLASHMEM void Mp3ToWav::Finish(bool ok) {
     }
     if (w->out) w->out.close();
     if (w->in) w->in.close();
-    delete w;
+    Serial.printf("MP3: %s, %d ch %d Hz, %lu bytes of sound\n", ok ? "ok" : "failed", w->chans, w->hz, (unsigned long)w->data_bytes);
+    w->~Work();
+    extmem_free(w);  // (also frees what came from malloc)
     w = nullptr;
   }
   if (ok) ok = SD.rename(tmp, wav);

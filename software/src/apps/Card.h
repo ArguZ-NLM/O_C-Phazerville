@@ -160,6 +160,7 @@ FLASHMEM void AppCard::LookForMp3() {
   if (!SDcard_Ready || !FindMp3("/", 0, p, sizeof(p), sz)) { mp3_seen[0] = 0; return; }
   if (sz && sz == mp3_seen_size && !strcmp(p, mp3_seen)) {
     mp3_seen[0] = 0;
+    Serial.printf("CARD: converting %s\n", p);
     if (!conv.Start(p)) Converted();
   } else {
     snprintf(mp3_seen, sizeof(mp3_seen), "%s", p);
@@ -203,6 +204,7 @@ FLASHMEM void AppCard::HandleAppEvent(OC::AppEvent event) {
     sel = 0;
     List();
     mp3_seen[0] = 0;
+    nbad = 0;  // those that failed: tried again
     mp3_looked_at = millis() - 2000;  // MP3s put on the card elsewhere: now
 #ifdef CARD_LISTEN
     preview = loom::g_preview;  // Loom's (made at start-up)
