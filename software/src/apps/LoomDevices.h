@@ -1697,6 +1697,11 @@ public:
     fx.processorUsageMaxReset();
   }
   void ClearLoop() { fx.Clear(); cleared_at = millis() | 1; hold = 0.0f; }  // B held for 3 s
+  // its loop while the lane is on another source (see Deactivate): when it
+  // was kept (0: none), handed over to WARP, or let go
+  uint32_t kept_at = 0;
+  bool TakeKept(int16_t*& l, int16_t*& r, size_t& n);
+  void DropKept();
   void Idle() override;
   size_t HeldFrames() const { return fx.Capacity(); }
   uint32_t no_mem_at = 0;   // REC found no memory free (shown for a moment)
@@ -1768,6 +1773,14 @@ FLASHMEM void ReelDevice::FormatMode(int p, char* buf, size_t n) const {
 // called while the stream is not patched in
 FLASHMEM bool ReelDevice::Activate() {
   if (active) return fx.ready();
+  if (kept_at && fx.ready()) {  // its loop, kept while away: on with it (stopped)
+    kept_at = 0;
+    if (input) val[IN] = cur[IN] = input->val[0];
+    ApplyAll();
+    active = true;
+    return true;
+  }
+  kept_at = 0;
   fx.Begin();  // a small buffer: the big one comes with REC (see Action)
   // IN is the input's own choice: take it over rather than impose ours
   if (input) val[IN] = cur[IN] = input->val[0];
@@ -1778,8 +1791,26 @@ FLASHMEM bool ReelDevice::Activate() {
 
 FLASHMEM void ReelDevice::Deactivate() {
   if (!active) return;
-  fx.Release();
+  // a recorded loop stays (stopped) when the lane goes to another source:
+  // WARP there takes it over (TakeKept); anything else lets it go after a
+  // while (DropKept)
+  if (fx.Hold()) kept_at = millis() | 1;
+  else fx.Release();
   active = false;
+}
+
+FLASHMEM bool ReelDevice::TakeKept(int16_t*& l, int16_t*& r, size_t& n) {
+  if (!kept_at || active) return false;
+  kept_at = 0;
+  if (fx.Detach(l, r, n)) return true;
+  fx.Release();
+  return false;
+}
+
+FLASHMEM void ReelDevice::DropKept() {
+  if (!kept_at || active) return;
+  kept_at = 0;
+  fx.Release();
 }
 
 FLASHMEM void ReelDevice::Apply(int p) {
@@ -5863,10 +5894,11 @@ FLASHMEM void ChimeDevice::DrawMini(int x, int y, int w, int h) {
 PROGMEM static const DeviceDef WARP_DEF = {
   "WARP", "WRP", 8, {"TRIG", "STOP"},  // A: the root note, 60 (LOOP on: let go once in); B: every voice let go
   {
-    // mode (L): the other track's SPOOL or SHUTTLE, or a THRUM: a waveform
-    // from the card (/LOOM/THRUMS; a fresh WARP a random one). Value (R):
-    // the thrum, one of the WAVs in its folder (R push: the file list)
-    {"SRC", 0, 255, 0, UNI, 0, 3, 2, {}, {"SPL", "SHU", "THR"}},
+    // mode (L): this lane's SPOOL (the loop just recorded there, handed
+    // over when the lane switches to WARP), the other track's SPOOL or
+    // SHUTTLE, or a THRUM: a waveform from the card (/LOOM/THRUMS). Value
+    // (R): the thrum, one of the WAVs in its folder (R push: the file list)
+    {"SRC", 0, 255, 0, UNI, 0, 4, 0, {}, {"SPL", "SPL", "SHU", "THR"}},
     {"THRU", 0, 1, 1, LIST, 2, 0, 0, {"OFF", "ON"}},  // THREAD: A's output on under the notes
     {"VEL", 0, 100, 50, UNI},     // %: how much velocity sets a note's loudness
     // the vibrato's speed, as one wobble: 0.18 s (5.5 Hz, the fastest) .. 5 s;
@@ -5884,7 +5916,7 @@ PROGMEM static const DeviceDef WARP_DEF = {
 class WarpDevice : public Device {
 public:
   enum { SRC, THRU, VEL, WEFT, ATK, DECAY, SUS, REL };  // (DEC is taken by Print.h)
-  enum { SRC_SPOOL, SRC_PLAYER, SRC_THRUM };
+  enum { SRC_OWN, SRC_SPOOL, SRC_PLAYER, SRC_THRUM };
   static constexpr const char* THRUM_DIR = "/LOOM/THRUMS";  // (was WAVES on 2026-10-09)
   // THRUM: R push on SRC opens the file list
   int FileParam() const override { return Src() == SRC_THRUM ? SRC : -1; }
@@ -5938,7 +5970,10 @@ public:
   // sets them every loop; nullptr: not)
   const ReelDevice* spool = nullptr;
   const PlayerDevice* player = nullptr;
-  char other = 'A';
+  char other = 'A', self = 'A';  // the other track's letter, and this one's
+  // this lane's SPOOL loop, handed over (PSRAM, ours now)
+  void TakeLoop(int16_t* l, int16_t* r, uint32_t n);
+  void FormatMode(int p, char* buf, size_t n) const override;
   bool Thru() const { return cur[THRU]; }  // THREAD: A's output under the notes
   // THRU turned: the app patches A through again (or not)
   bool thru_changed = false;
@@ -6016,6 +6051,33 @@ FLASHMEM void WarpDevice::Deactivate() {
   fx.AllOff();
   Free();
   active = false;
+}
+
+// SRC's modes name the track: SPL A / SPL B (this lane's, the other's), SHU B
+FLASHMEM void WarpDevice::FormatMode(int p, char* buf, size_t n) const {
+  if (p == SRC && mode[p] != SRC_THRUM) {
+    snprintf(buf, n, "%s %c", mode[p] == SRC_PLAYER ? "SHU" : "SPL", mode[p] == SRC_OWN ? self : other);
+    return;
+  }
+  Device::FormatMode(p, buf, n);
+}
+
+FLASHMEM void WarpDevice::TakeLoop(int16_t* l, int16_t* r, uint32_t n) {
+  Free();
+  memset(over, 0, sizeof(over));
+  for (uint32_t i = 0; i < n; i++) {  // the overview picture
+    const int col = int(uint64_t(i) * 128 / n);
+    const int pk = std::max(abs(l[i]), abs(r[i]));
+    over[col] = std::max<uint8_t>(over[col], uint8_t(std::min(255, pk >> 7)));
+  }
+  fx.SetSample(l, r, n, false);
+  bl = l; br = r;
+  frames = n;
+  rate = 1.0f;
+  from_spool = true;
+  no_mem = false;
+  Trim();
+  ApplyAll();
 }
 
 FLASHMEM void WarpDevice::Free() {
@@ -6453,7 +6515,10 @@ FLASHMEM void WarpDevice::Apply(int p) {
 FLASHMEM void WarpDevice::Format(int p, char* buf, size_t n) const {
   switch (p) {
     case SRC:
-      if (Src() != SRC_THRUM) { snprintf(buf, n, "%s %c", Src() == SRC_PLAYER ? "SHU" : "SPL", other); break; }
+      if (Src() != SRC_THRUM) {
+        snprintf(buf, n, "%s %c", Src() == SRC_PLAYER ? "SHU" : "SPL", Src() == SRC_OWN ? self : other);
+        break;
+      }
       {  // the thrum, short: its name without '_' and ".wav", 5 letters (SAW07, TRI03)
         const char* nm = strrchr(thrum, '/');
         nm = nm ? nm + 1 : thrum;
@@ -6533,7 +6598,7 @@ FLASHMEM void WarpDevice::DrawViz(int x, int y, int w, int h) {
     const char* t = no_mem ? "NO MEMORY"
         : Src() == SRC_THRUM ? (thrum[0] ? "NOT A WAV" : "NO WAVES ON CARD")
         : Src() == SRC_PLAYER ? (player ? "NOT A WAV" : "SHUTTLE IS OFF")
-        : spool ? "RECORD IN SPOOL" : "SPOOL IS OFF";
+        : Src() == SRC_OWN || spool ? "RECORD IN SPOOL" : "SPOOL IS OFF";
     gfxPrint(x + 2, y + h / 2 - 4, t);
     return;
   }
