@@ -192,7 +192,7 @@ FLASHMEM void AppCard::LookForMp3() {
 // one done: the computer is told (the WAV in, the MP3 out), or it failed
 FLASHMEM void AppCard::Converted() {
   if (conv.state() == Mp3ToWav::DONE) {
-    MtpReplace(conv.Mp3Path(), conv.WavPath());
+    SD.remove(conv.Mp3Path());  // TEST: without telling the computer
   } else {
     if (nbad < MAX_BAD) snprintf(mp3_bad[nbad++], sizeof(mp3_bad[0]), "%s", conv.Mp3Path());
     const char* nm = strrchr(conv.Mp3Path(), '/');
