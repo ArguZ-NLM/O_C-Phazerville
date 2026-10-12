@@ -257,7 +257,9 @@ FLASHMEM void AppCard::Loop() {
   } else if (millis() - mp3_looked_at > 2000) {
     LookForMp3();
   }
-  if (millis() - listed_at > 2000) List();  // new files show up by themselves
+  // new files show up by themselves (not while converting: opening the
+  // files it reads and writes made the card refuse it, every 2 s)
+  if (conv.state() != Mp3ToWav::BUSY && millis() - listed_at > 2000) List();
 }
 
 // the top line: whether a program on the computer has the card open (an MTP
