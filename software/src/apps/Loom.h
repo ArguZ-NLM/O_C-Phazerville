@@ -1533,18 +1533,17 @@ FLASHMEM void AppLoom::MainLoop() {
       if (tr.player && tr.choice[SOURCE] == 2) tr.player->Idle();
       if (tr.warp && tr.choice[SOURCE] == 3) {
         const Track& o = tracks[1 - t];  // WARP plays the other track's SPOOL or PLAYER
-        tr.warp->spool = tr.warp->Src() == WarpDevice::SRC_SPOOL && o.reel && o.choice[SOURCE] == 1 ? o.reel : nullptr;
-        tr.warp->player = o.player && o.choice[SOURCE] == 2 ? o.player : nullptr;
-        tr.warp->other = char('A' + 1 - t);
-        tr.warp->self = char('A' + t);
-        tr.warp->Idle();
-        // (or this lane's SPOOL: the loop it kept when the lane switched
-        // over; after Idle, which drops the sound when SRC was just turned)
+        // (or this lane's SPOOL: the loop it kept when the lane switched over)
         if (tr.warp->Src() == WarpDevice::SRC_OWN && tr.reel && tr.reel->kept_at) {
           int16_t *l, *r;
           size_t n;
           if (tr.reel->TakeKept(l, r, n)) tr.warp->TakeLoop(l, r, uint32_t(n));
         }
+        tr.warp->spool = tr.warp->Src() == WarpDevice::SRC_SPOOL && o.reel && o.choice[SOURCE] == 1 ? o.reel : nullptr;
+        tr.warp->player = o.player && o.choice[SOURCE] == 2 ? o.player : nullptr;
+        tr.warp->other = char('A' + 1 - t);
+        tr.warp->self = char('A' + t);
+        tr.warp->Idle();
         if (tr.warp->thru_changed) { tr.warp->thru_changed = false; Repatch(t); }
       }
       if (tr.reel && tr.choice[SOURCE] == 1) tr.reel->Idle();
