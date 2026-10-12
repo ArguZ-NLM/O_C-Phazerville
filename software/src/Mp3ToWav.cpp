@@ -15,7 +15,7 @@ extern bool SDcard_Ready;
 #define MINIMP3_ROM PROGMEM
 #include "minimp3.h"
 
-char g_mp3_report[200] = "MP3: nothing yet";
+char g_mp3_report[800] = "MP3: nothing yet";
 
 struct Mp3ToWav::Work {
   mp3dec_t dec;
@@ -353,15 +353,23 @@ FLASHMEM void MtpReplace(const char* gone, const char* added) {
 
 // USB 'R': how fast the card is, written and read alone and the two by
 // turns (as the converter does), 8 MB each, in 16 KB pieces
+// (kept for USB 'P' too: printed during a long test, it got lost)
+template <typename... A> static void Say(const char* f, A... a) {
+  const size_t l = strlen(g_mp3_report);
+  snprintf(g_mp3_report + l, sizeof(g_mp3_report) - l, f, a...);
+  Serial.printf(f, a...);
+}
+
 FLASHMEM void CardSpeedTest() {
-  if (!SDcard_Ready) { Serial.println("SPEED: no card"); return; }
+  g_mp3_report[0] = 0;
+  if (!SDcard_Ready) { Say("SPEED: no card\n"); return; }
   constexpr uint32_t PIECE = 16384, TOTAL = 8u << 20;
   uint8_t* b = static_cast<uint8_t*>(malloc(PIECE));
-  if (!b) { Serial.println("SPEED: no memory"); return; }
+  if (!b) { Say("SPEED: no memory\n"); return; }
   for (uint32_t i = 0; i < PIECE; i++) b[i] = uint8_t(i);
-  auto report = [](const char* what, uint32_t t0, int errs) {
+  auto report = [&](const char* what, uint32_t t0, int errs) {
     const uint32_t ms = std::max<uint32_t>(1, millis() - t0);
-    Serial.printf("SPEED: %s %lu ms = %lu KB/s, %d errors\n", what, (unsigned long)ms, (unsigned long)(uint64_t(TOTAL) * 1000 / 1024 / ms), errs);
+    Say("SPEED: %s %lu ms = %lu KB/s, %d errors\n", what, (unsigned long)ms, (unsigned long)(uint64_t(TOTAL) * 1000 / 1024 / ms), errs);
   };
   int errs = 0;
   FsFile a = SD.sdfs.open("/speed_a.bin", O_RDWR | O_CREAT | O_TRUNC);
@@ -376,7 +384,7 @@ FLASHMEM void CardSpeedTest() {
   for (uint32_t n = 0; n < TOTAL; n += PIECE) errs += a.read(b, PIECE) != int(PIECE);
   report("read", t0, errs);
   a.close();
-  Serial.println("SPEED: by turns next");
+  Say("SPEED: by turns next\n");
   // by turns, each capped at 10 s (how far it got)
   auto turns = [&](const char* what, bool file_read, bool sync) {
     File r;
@@ -385,10 +393,10 @@ FLASHMEM void CardSpeedTest() {
     else rf = SD.sdfs.open("/speed_a.bin", O_RDONLY);
     uint32_t t1 = millis();
     FsFile c = SD.sdfs.open("/speed_c.bin", O_RDWR | O_CREAT | O_TRUNC);
-    Serial.printf("SPEED: opened in %lu ms\n", (unsigned long)(millis() - t1));
+    Say("SPEED: opened in %lu ms\n", (unsigned long)(millis() - t1));
     t1 = millis();
     const bool pre = c.preAllocate(TOTAL);
-    Serial.printf("SPEED: set aside (%d) in %lu ms\n", pre, (unsigned long)(millis() - t1));
+    Say("SPEED: set aside (%d) in %lu ms\n", pre, (unsigned long)(millis() - t1));
     int e = 0;
     uint32_t n = 0;
     const uint32_t t = millis();
@@ -397,10 +405,10 @@ FLASHMEM void CardSpeedTest() {
       const uint32_t tw = millis();
       e += c.write(b, PIECE) != PIECE;
       if (sync) SD.sdfs.card()->syncDevice();
-      if (millis() - tw > 300) Serial.printf("SPEED: a write took %lu ms\n", (unsigned long)(millis() - tw));
+      if (millis() - tw > 300) Say("SPEED: a write took %lu ms\n", (unsigned long)(millis() - tw));
     }
     const uint32_t ms = std::max<uint32_t>(1, millis() - t);
-    Serial.printf("SPEED: %s %lu KB in %lu ms = %lu KB/s, %d errors\n", what, (unsigned long)(n >> 10), (unsigned long)ms,
+    Say("SPEED: %s %lu KB in %lu ms = %lu KB/s, %d errors\n", what, (unsigned long)(n >> 10), (unsigned long)ms,
                   (unsigned long)(uint64_t(n) * 1000 / 1024 / ms), e);
     if (file_read) r.close(); else rf.close();
     c.close();
