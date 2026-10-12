@@ -253,7 +253,7 @@ FLASHMEM void AppCard::Loop() {
     List();
   }
   if (conv.state() == Mp3ToWav::BUSY) {
-    if (conv.Step(20) != Mp3ToWav::BUSY) Converted();
+    if (conv.Step(5000) != Mp3ToWav::BUSY) Converted();  // TEST: 5 s blocks
   } else if (millis() - mp3_looked_at > 2000) {
     LookForMp3();
   }
