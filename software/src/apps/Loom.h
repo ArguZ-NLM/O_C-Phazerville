@@ -1533,25 +1533,13 @@ FLASHMEM void AppLoom::MainLoop() {
       if (tr.player && tr.choice[SOURCE] == 2) tr.player->Idle();
       if (tr.warp && tr.choice[SOURCE] == 3) {
         const Track& o = tracks[1 - t];  // WARP plays the other track's SPOOL or PLAYER
-        // (or this lane's SPOOL: the loop it kept when the lane switched over)
-        if (tr.warp->Src() == WarpDevice::SRC_OWN && tr.reel && tr.reel->kept_at) {
-          int16_t *l, *r;
-          size_t n;
-          if (tr.reel->TakeKept(l, r, n)) tr.warp->TakeLoop(l, r, uint32_t(n));
-        }
-        tr.warp->spool = tr.warp->Src() == WarpDevice::SRC_SPOOL && o.reel && o.choice[SOURCE] == 1 ? o.reel : nullptr;
+        tr.warp->spool = o.reel && o.choice[SOURCE] == 1 ? o.reel : nullptr;
         tr.warp->player = o.player && o.choice[SOURCE] == 2 ? o.player : nullptr;
         tr.warp->other = char('A' + 1 - t);
-        tr.warp->self = char('A' + t);
         tr.warp->Idle();
         if (tr.warp->thru_changed) { tr.warp->thru_changed = false; Repatch(t); }
       }
       if (tr.reel && tr.choice[SOURCE] == 1) tr.reel->Idle();
-      // a loop SPOOL kept, the lane on neither SPOOL nor WARP for 2 s: let go
-      // (the memory is wanted elsewhere)
-      if (tr.reel && tr.reel->kept_at && tr.choice[SOURCE] != 1 && tr.choice[SOURCE] != 3 &&
-          millis() - tr.reel->kept_at > 2000)
-        tr.reel->DropKept();
       for (int s = SOURCE + 1; s < SLOT_COUNT; s++)  // devices with main-loop work (STRETCH)
         if (Device* d = tr.current(s)) d->Idle();
     }
@@ -2866,7 +2854,7 @@ namespace loom {
   // 14: DRAFT in FIBRE's order SPEED SIZE PITCH POS (was PITCH POS SIZE SPEED)
   // 15: DRAFT page 2 DIFF TONE SPRD MIX (was TONE FDBK SPRD MIX, TONE's mode
   //     the diffusion)
-  constexpr uint8_t SAVE_VERSION = 16;
+  constexpr uint8_t SAVE_VERSION = 15;
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -2934,8 +2922,6 @@ namespace loom {
     // before v15 its page 2 was TONE FDBK SPRD MIX (FDBK is gone; v14's
     // TONE mode was the diffusion, now DIFF)
     const bool str_page2 = use && !memcmp(tag, "STR", 4) && load_version < 15;
-    // before v16 WARP's SRC had no own lane's SPOOL in front (SPL SHU THR)
-    const bool warp_src = use && !memcmp(tag, "WRP", 4) && load_version < 16;
     int old_diff = -1;
     // before v6 the reverb's 6th was SIZE (now PRE: left at its default);
     // DECAY's value becomes ROOM, TONE's WALL (same places)
@@ -2999,7 +2985,6 @@ namespace loom {
         d->mod_amt2[p] = -d->mod_amt2[p];
       }
       if (flip_dir && p == PlayerDevice::SPEED) d->mode[p] = 1 - d->mode[p];
-      if (warp_src && p == WarpDevice::SRC) d->mode[p] = uint8_t(constrain(md + 1, 1, 3));
       if (start_len && p == ReelDevice::START) { d->val[p] = int16_t(constrain(v, 0, 100) * 100); d->mode[p] = 0; }
       if (start_len && p == ReelDevice::END) {
         d->val[p] = int16_t(std::min(10000, d->val[ReelDevice::START] + constrain(int(v), 1, 100) * 100));

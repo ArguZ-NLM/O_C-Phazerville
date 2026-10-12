@@ -96,27 +96,6 @@ public:
     cap = 0;
     Reset();
   }
-  // main loop, not patched in: a recorded loop kept, stopped (SPOOL switched
-  // away in its lane: WARP there takes it over)
-  bool Hold() {
-    if (!ready() || !len || (st != PLAY && st != STOPPED && st != DUB)) return false;  // (DUB: as it is)
-    st = STOPPED;
-    press = dub = stop = clear = retrig = false;
-    run_g = dub_g = 0.0f;
-    xf = 0;
-    off = 0.0f;
-    return true;
-  }
-  // main loop, not patched in: the loop's memory handed over (to WARP, who
-  // frees it with PsramFree); empty afterwards
-  bool Detach(int16_t*& l, int16_t*& r, size_t& n) {
-    if (!ready() || !len || (st != PLAY && st != STOPPED && st != DUB)) return false;  // (DUB: as it is)
-    l = buf[0]; r = buf[1]; n = len;
-    buf[0] = buf[1] = nullptr;
-    cap = 0;
-    Reset();
-    return true;
-  }
   bool ready() const { return buf[0] && buf[1]; }
   void Debug(char* buf_, size_t n) const {
     snprintf(buf_, n, "MEM st %d win %u+%u set %u+%u pend %d %u+%u into %u+%u h %u f %u off %d",
