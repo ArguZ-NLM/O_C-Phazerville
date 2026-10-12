@@ -375,18 +375,31 @@ FLASHMEM void CardSpeedTest() {
   t0 = millis();
   for (uint32_t n = 0; n < TOTAL; n += PIECE) errs += a.read(b, PIECE) != int(PIECE);
   report("read", t0, errs);
-  errs = 0;
-  a.seekSet(0);
-  File r = SD.open("/speed_a.bin", FILE_READ);  // (the converter reads through File)
-  FsFile c = SD.sdfs.open("/speed_c.bin", O_RDWR | O_CREAT | O_TRUNC);
-  c.preAllocate(TOTAL);
-  t0 = millis();
-  for (uint32_t n = 0; n < TOTAL; n += PIECE) {
-    errs += r.read(b, PIECE) != int(PIECE);
-    errs += c.write(b, PIECE) != PIECE;
-  }
-  report("read+write by turns", t0, errs);
-  a.close(); r.close(); c.close();
+  a.close();
+  // by turns, each capped at 10 s (how far it got)
+  auto turns = [&](const char* what, bool file_read) {
+    File r;
+    FsFile rf;
+    if (file_read) r = SD.open("/speed_a.bin", FILE_READ);
+    else rf = SD.sdfs.open("/speed_a.bin", O_RDONLY);
+    FsFile c = SD.sdfs.open("/speed_c.bin", O_RDWR | O_CREAT | O_TRUNC);
+    c.preAllocate(TOTAL);
+    int e = 0;
+    uint32_t n = 0;
+    const uint32_t t = millis();
+    for (; n < TOTAL && millis() - t < 10000; n += PIECE) {
+      e += (file_read ? r.read(b, PIECE) : rf.read(b, PIECE)) != int(PIECE);
+      e += c.write(b, PIECE) != PIECE;
+    }
+    const uint32_t ms = std::max<uint32_t>(1, millis() - t);
+    Serial.printf("SPEED: %s %lu KB in %lu ms = %lu KB/s, %d errors\n", what, (unsigned long)(n >> 10), (unsigned long)ms,
+                  (unsigned long)(uint64_t(n) * 1000 / 1024 / ms), e);
+    if (file_read) r.close(); else rf.close();
+    c.close();
+    SD.remove("/speed_c.bin");
+  };
+  turns("SdFat read + write by turns", false);
+  turns("File read + SdFat write by turns", true);
   SD.remove("/speed_a.bin");
   SD.remove("/speed_c.bin");
   free(b);
