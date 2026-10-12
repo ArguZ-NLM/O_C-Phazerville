@@ -8,9 +8,12 @@
 // arriving; R enc scrolls, R push opens a folder, Y goes up, X held for 2 s
 // deletes the selected file. B listens to a WAV (as in PLAYER's file list:
 // once through, straight from the card), B held: AUTO, every file the
-// cursor rests on plays.
+// cursor rests on plays. An MP3 copied anywhere onto the card becomes a WAV
+// of the same name (the MP3 goes once that worked); the top line shows how
+// far it is.
 
 #include <MTP_Teensy.h>
+#include "../Mp3ToWav.h"
 
 // the quick listen is Loom's (Loom is paused while CARD is open)
 #if defined(ENABLE_APP_LOOM) && defined(ARDUINO_TEENSY41)
@@ -36,6 +39,19 @@ private:
   bool del_held = false;
   uint32_t del_since = 0, deleted_at = 0;
   void List();
+  // MP3s on the card become WAVs, one at a time: an MP3 is taken once its
+  // size stayed the same between two looks (copied in full)
+  Mp3ToWav conv;
+  char mp3_seen[160] = {};
+  uint32_t mp3_seen_size = 0, mp3_looked_at = 0;
+  static constexpr int MAX_BAD = 16;
+  char mp3_bad[MAX_BAD][48] = {};  // couldn't be converted: not tried again
+  int nbad = 0;
+  uint32_t failed_at = 0;  // shown in the top line for a while
+  char failed_name[24] = {};
+  bool FindMp3(const char* dir, int depth, char* out, size_t n, uint32_t& size) const;
+  void LookForMp3();
+  void Converted();
   bool IsWav(int i) const {
     const size_t l = strlen(names[i]);
     return i < count && !folder[i] && l > 4 && !strcasecmp(names[i] + l - 4, ".WAV");
@@ -106,6 +122,66 @@ FLASHMEM void AppCard::List() {
   sel = constrain(keep, 0, std::max(0, count - 1));
 }
 
+// the first MP3 on the card (folders up to 4 deep), not one that failed
+FLASHMEM bool AppCard::FindMp3(const char* dir, int depth, char* out, size_t n, uint32_t& size) const {
+  File d = SD.open(dir);
+  if (!d) return false;
+  bool found = false;
+  while (!found) {
+    File e = d.openNextFile();
+    if (!e) break;
+    const char* nm = e.name();
+    const size_t l = strlen(nm);
+    char path[160];
+    if (nm[0] != '.' && strcmp(nm, "System Volume Information") &&
+        snprintf(path, sizeof(path), "%s/%s", strcmp(dir, "/") ? dir : "", nm) < int(sizeof(path))) {
+      if (e.isDirectory()) {
+        if (depth < 4) found = FindMp3(path, depth + 1, out, n, size);
+      } else if (l > 4 && !strcasecmp(nm + l - 4, ".MP3")) {
+        bool bad = false;
+        for (int i = 0; i < nbad; i++) bad |= !strncmp(mp3_bad[i], path, sizeof(mp3_bad[i]) - 1);
+        if (!bad) {
+          snprintf(out, n, "%s", path);
+          size = uint32_t(e.size());
+          found = true;
+        }
+      }
+    }
+    e.close();
+  }
+  d.close();
+  return found;
+}
+
+FLASHMEM void AppCard::LookForMp3() {
+  mp3_looked_at = millis();
+  char p[160];
+  uint32_t sz = 0;
+  if (!SDcard_Ready || !FindMp3("/", 0, p, sizeof(p), sz)) { mp3_seen[0] = 0; return; }
+  if (sz && sz == mp3_seen_size && !strcmp(p, mp3_seen)) {
+    mp3_seen[0] = 0;
+    if (!conv.Start(p)) Converted();
+  } else {
+    snprintf(mp3_seen, sizeof(mp3_seen), "%s", p);
+    mp3_seen_size = sz;
+  }
+}
+
+// one done: the computer is told (the WAV in, the MP3 out), or it failed
+FLASHMEM void AppCard::Converted() {
+  if (conv.state() == Mp3ToWav::DONE) {
+    MtpReplace(conv.Mp3Path(), conv.WavPath());
+  } else {
+    if (nbad < MAX_BAD) snprintf(mp3_bad[nbad++], sizeof(mp3_bad[0]), "%s", conv.Mp3Path());
+    const char* nm = strrchr(conv.Mp3Path(), '/');
+    snprintf(failed_name, sizeof(failed_name), "%s", nm ? nm + 1 : conv.Mp3Path());
+    failed_at = millis() | 1;
+  }
+  Serial.printf("CARD: %s %s\n", conv.state() == Mp3ToWav::DONE ? "converted" : "could not convert", conv.Mp3Path());
+  List();
+  mp3_looked_at = millis() - 2000;  // more of them: the next one straight away
+}
+
 FLASHMEM void AppCard::HandleAppEvent(OC::AppEvent event) {
   if (event == OC::APP_EVENT_RESUME) {
     if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
@@ -126,6 +202,8 @@ FLASHMEM void AppCard::HandleAppEvent(OC::AppEvent event) {
       SD.rename("/LOOM/WAVES", "/LOOM/THRUMS");
     sel = 0;
     List();
+    mp3_seen[0] = 0;
+    mp3_looked_at = millis() - 2000;  // MP3s put on the card elsewhere: now
 #ifdef CARD_LISTEN
     preview = loom::g_preview;  // Loom's (made at start-up)
     if (preview) {
@@ -141,6 +219,7 @@ FLASHMEM void AppCard::HandleAppEvent(OC::AppEvent event) {
     USB1_USBCMD |= USB_USBCMD_RS;
   } else if (event == OC::APP_EVENT_SUSPEND) {
     serving = false;
+    conv.Cancel();  // (its MP3 stays: done next time)
 #ifdef CARD_LISTEN
     autoplay = false;
     if (preview) { preview->Halt(); preview->level = 1.0f; }
@@ -171,6 +250,11 @@ FLASHMEM void AppCard::Loop() {
     }
     List();
   }
+  if (conv.state() == Mp3ToWav::BUSY) {
+    if (conv.Step(20) != Mp3ToWav::BUSY) Converted();
+  } else if (millis() - mp3_looked_at > 2000) {
+    LookForMp3();
+  }
   if (millis() - listed_at > 2000) List();  // new files show up by themselves
 }
 
@@ -181,8 +265,24 @@ FLASHMEM void AppCard::DrawMenu() const {
   // not asleep - pulling the cable doesn't end the session by itself
   const bool line = (USB1_OTGSC & (1u << 11)) && !(USB1_PORTSC1 & USB_PORTSC1_SUSP);  // OTGSC bit 11: B-session valid
   const bool on = serving && line && static_cast<bool>(MTP);
-  gfxPrint(0, 1, !SDcard_Ready ? "CARD  no SD card" : on ? "CARD  connected" : "CARD  waiting...");
-  if (on) gfxInvert(0, 0, 128, 9);
+  if (conv.state() == Mp3ToWav::BUSY) {
+    // an MP3 being converted: its name, and the line fills up as it goes
+    const char* p = strrchr(conv.Mp3Path(), '/');
+    p = p ? p + 1 : conv.Mp3Path();
+    const int nl = std::max(0, int(strlen(p)) - 4);  // without .mp3
+    char t[24];
+    snprintf(t, sizeof(t), "MP3>WAV %3d%% %.*s", conv.Percent(), std::min(nl, 8), p);
+    gfxPrint(0, 1, t);
+    gfxInvert(0, 0, 128 * conv.Percent() / 100, 9);
+  } else if (failed_at && millis() - failed_at < 4000) {
+    char t[24];
+    snprintf(t, sizeof(t), "MP3 FAILED %.10s", failed_name);
+    gfxPrint(0, 1, t);
+    gfxInvert(0, 0, 128, 9);
+  } else {
+    gfxPrint(0, 1, !SDcard_Ready ? "CARD  no SD card" : on ? "CARD  connected" : "CARD  waiting...");
+    if (on) gfxInvert(0, 0, 128, 9);
+  }
   gfxLine(0, 10, 127, 10);
   if (!SDcard_Ready) return;
   if (!on) {  // waiting: how to connect, instead of the list
