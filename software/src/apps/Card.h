@@ -9,8 +9,8 @@
 // deletes the selected file. B listens to a WAV (as in PLAYER's file list:
 // once through, straight from the card), B held: AUTO, every file the
 // cursor rests on plays. An MP3 copied anywhere onto the card becomes a WAV
-// of the same name (the MP3 goes once that worked); the top line shows how
-// far it is.
+// of the same name once the computer has let go of the card (the MP3 goes
+// once that worked); the top line shows how far it is.
 
 #include <MTP_Teensy.h>
 #include "../Mp3ToWav.h"
@@ -48,7 +48,14 @@ private:
   char mp3_bad[MAX_BAD][48] = {};  // couldn't be converted: not tried again
   int nbad = 0;
   uint32_t failed_at = 0;  // shown in the top line for a while
-  uint32_t mtp_at = 0;  // the computer last answered (while converting)
+  bool mp3_waiting = false;  // an MP3 there, for when the computer lets go
+  // a program on the computer has the card open (an MTP session), and the
+  // USB line is really there: cable in (VBUS), the bus not asleep - pulling
+  // the cable doesn't end the session by itself (OTGSC bit 11: B-session valid)
+  bool Connected() const {
+    const bool line = (USB1_OTGSC & (1u << 11)) && !(USB1_PORTSC1 & USB_PORTSC1_SUSP);
+    return serving && line && static_cast<bool>(MTP);
+  }
   char failed_name[24] = {};
   bool FindMp3(const char* dir, int depth, char* out, size_t n, uint32_t& size) const;
   void LookForMp3();
@@ -158,8 +165,12 @@ FLASHMEM void AppCard::LookForMp3() {
   mp3_looked_at = millis();
   char p[160];
   uint32_t sz = 0;
-  if (!SDcard_Ready || !FindMp3("/", 0, p, sizeof(p), sz)) { mp3_seen[0] = 0; return; }
+  if (!SDcard_Ready || !FindMp3("/", 0, p, sizeof(p), sz)) { mp3_seen[0] = 0; mp3_waiting = false; return; }
   if (sz && sz == mp3_seen_size && !strcmp(p, mp3_seen)) {
+    // the computer still connected: later (answering it while converting
+    // slowed the card down ~15 times: a 3:36 song took 3.5 min, else 14 s)
+    mp3_waiting = Connected();
+    if (mp3_waiting) return;
     mp3_seen[0] = 0;
     Serial.printf("CARD: converting %s\n", p);
     if (!conv.Start(p)) Converted();
@@ -233,13 +244,8 @@ FLASHMEM void AppCard::HandleAppEvent(OC::AppEvent event) {
 
 FLASHMEM void AppCard::Loop() {
   if (!serving) return;
-  // while an MP3 is converted, the computer is answered once a second only:
-  // answering it all the time slowed the card down ~15 times (3:36 took
-  // 3.5 min instead of 14 s)
-  if (conv.state() != Mp3ToWav::BUSY || millis() - mtp_at >= 1000) {
-    mtp_at = millis();
-    MTP.loop();
-  }
+  // (a computer connecting while an MP3 is converted waits for it)
+  if (conv.state() != Mp3ToWav::BUSY) MTP.loop();
 #ifdef CARD_LISTEN
   if (autoplay && auto_due && millis() - auto_at >= 100) { auto_due = false; Listen(sel); }
   if (preview) preview->Idle(true);
@@ -272,10 +278,7 @@ FLASHMEM void AppCard::Loop() {
 // the top line: whether a program on the computer has the card open (an MTP
 // session; it can't tell which program - macOS's photo import counts too)
 FLASHMEM void AppCard::DrawMenu() const {
-  // a session open, and the USB line really there: cable in (VBUS), the bus
-  // not asleep - pulling the cable doesn't end the session by itself
-  const bool line = (USB1_OTGSC & (1u << 11)) && !(USB1_PORTSC1 & USB_PORTSC1_SUSP);  // OTGSC bit 11: B-session valid
-  const bool on = serving && line && static_cast<bool>(MTP);
+  const bool on = Connected();
   if (conv.state() == Mp3ToWav::BUSY) {
     // an MP3 being converted: its name, and the line fills up as it goes
     const char* p = strrchr(conv.Mp3Path(), '/');
@@ -289,6 +292,9 @@ FLASHMEM void AppCard::DrawMenu() const {
     char t[24];
     snprintf(t, sizeof(t), "MP3 FAILED %.10s", failed_name);
     gfxPrint(0, 1, t);
+    gfxInvert(0, 0, 128, 9);
+  } else if (on && mp3_waiting) {  // converted once the computer lets go
+    gfxPrint(0, 1, "MP3 waits: disconnect");
     gfxInvert(0, 0, 128, 9);
   } else {
     gfxPrint(0, 1, !SDcard_Ready ? "CARD  no SD card" : on ? "CARD  connected" : "CARD  waiting...");
