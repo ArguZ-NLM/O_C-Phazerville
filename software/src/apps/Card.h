@@ -232,7 +232,7 @@ FLASHMEM void AppCard::HandleAppEvent(OC::AppEvent event) {
 
 FLASHMEM void AppCard::Loop() {
   if (!serving) return;
-  MTP.loop();
+  if (conv.state() != Mp3ToWav::BUSY) MTP.loop();  // TEST
 #ifdef CARD_LISTEN
   if (autoplay && auto_due && millis() - auto_at >= 100) { auto_due = false; Listen(sel); }
   if (preview) preview->Idle(true);
@@ -255,7 +255,7 @@ FLASHMEM void AppCard::Loop() {
   if (conv.state() == Mp3ToWav::BUSY) {
     // in turns of a quarter second: in short ones the card got slow (the
     // computer asking in between?): 3:36 took 3.5 min, now ~15 s
-    if (conv.Step(250) != Mp3ToWav::BUSY) Converted();
+    if (conv.Step(20) != Mp3ToWav::BUSY) Converted();
   } else if (millis() - mp3_looked_at > 2000) {
     LookForMp3();
   }
