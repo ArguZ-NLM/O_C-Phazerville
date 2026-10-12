@@ -48,6 +48,7 @@ private:
   char mp3_bad[MAX_BAD][48] = {};  // couldn't be converted: not tried again
   int nbad = 0;
   uint32_t failed_at = 0;  // shown in the top line for a while
+  uint32_t mtp_at = 0;  // the computer last answered (while converting)
   char failed_name[24] = {};
   bool FindMp3(const char* dir, int depth, char* out, size_t n, uint32_t& size) const;
   void LookForMp3();
@@ -232,7 +233,13 @@ FLASHMEM void AppCard::HandleAppEvent(OC::AppEvent event) {
 
 FLASHMEM void AppCard::Loop() {
   if (!serving) return;
-  if (conv.state() != Mp3ToWav::BUSY) MTP.loop();  // TEST
+  // while an MP3 is converted, the computer is answered once a second only:
+  // answering it all the time slowed the card down ~15 times (3:36 took
+  // 3.5 min instead of 14 s)
+  if (conv.state() != Mp3ToWav::BUSY || millis() - mtp_at >= 1000) {
+    mtp_at = millis();
+    MTP.loop();
+  }
 #ifdef CARD_LISTEN
   if (autoplay && auto_due && millis() - auto_at >= 100) { auto_due = false; Listen(sel); }
   if (preview) preview->Idle(true);
@@ -253,8 +260,6 @@ FLASHMEM void AppCard::Loop() {
     List();
   }
   if (conv.state() == Mp3ToWav::BUSY) {
-    // in turns of a quarter second: in short ones the card got slow (the
-    // computer asking in between?): 3:36 took 3.5 min, now ~15 s
     if (conv.Step(20) != Mp3ToWav::BUSY) Converted();
   } else if (millis() - mp3_looked_at > 2000) {
     LookForMp3();
