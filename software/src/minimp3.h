@@ -10,7 +10,9 @@
 
 /* XENO: MINIMP3_CODE / MINIMP3_ROM mark the functions and the tables, so a
    Teensy 4 can keep them in flash (else they take its fast RAM); empty
-   unless set before including this. Nothing else is changed. */
+   unless set before including this. MINIMP3_SCRATCH, if set, points to
+   the 16 KB mp3dec_decode_frame works in (else it is on the stack). Nothing
+   else is changed. */
 #ifndef MINIMP3_CODE
 #define MINIMP3_CODE
 #endif
@@ -1725,7 +1727,11 @@ MINIMP3_CODE int mp3dec_decode_frame(mp3dec_t *dec, const uint8_t *mp3, int mp3_
     int i = 0, igr, frame_size = 0, success = 1;
     const uint8_t *hdr;
     bs_t bs_frame[1];
+#ifdef MINIMP3_SCRATCH
+    mp3dec_scratch_t &scratch = *(mp3dec_scratch_t *)(MINIMP3_SCRATCH);
+#else
     mp3dec_scratch_t scratch;
+#endif
 
     if (mp3_bytes > 4 && dec->header[0] == 0xff && hdr_compare(dec->header, mp3))
     {

@@ -13,6 +13,10 @@ extern bool SDcard_Ready;
 #define MINIMP3_NO_SIMD
 #define MINIMP3_CODE FLASHMEM  // in flash: RAM1 is Loom's
 #define MINIMP3_ROM PROGMEM
+// the decoder's 16 KB to work in: in Work, not on the stack (so deep, it may
+// have run into what the card reader keeps in the RAM)
+static void* g_scratch = nullptr;
+#define MINIMP3_SCRATCH g_scratch
 #include "minimp3.h"
 
 char g_mp3_report[800] = "MP3: nothing yet";
@@ -22,6 +26,7 @@ struct Mp3ToWav::Work {
   File in;
   FsFile out;  // (SdFat's own: it can set the space aside beforehand)
   alignas(32) uint8_t buf[IN_SIZE];
+  alignas(8) uint8_t scratch[sizeof(mp3dec_scratch_t)];
   uint32_t fill = 0, pos = 0;
   uint32_t end = 0;  // where the sound ends in the file (an ID3v1 tag after it)
   bool eof = false;
@@ -114,13 +119,14 @@ FLASHMEM bool Mp3ToWav::Start(const char* path) {
   for (int k = 2; SD.exists(wav) && k < 100; k++) snprintf(wav, sizeof(wav), "%s-%d.wav", base, k);
   snprintf(tmp, sizeof(tmp), "%s.part", base);
 
-  // 43 KB: in the RAM if there is room (the card reads and writes from the
+  // 60 KB: in the RAM if there is room (the card reads and writes from the
   // PSRAM failed now and then), else in the PSRAM
   void* mem = malloc(sizeof(Work));
   in_psram = !mem;
   if (!mem) mem = extmem_malloc(sizeof(Work));
   if (!mem) { Serial.printf("MP3: no memory for %s\n", mp3); st = FAILED; return false; }
   w = new (mem) Work();
+  g_scratch = w->scratch;
   w->in = SD.open(mp3, FILE_READ);
   if (!w->in) { Serial.printf("MP3: can't open %s\n", mp3); Finish(false); return false; }
   in_size = w->end = uint32_t(w->in.size());
