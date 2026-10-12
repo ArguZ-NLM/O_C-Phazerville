@@ -378,7 +378,7 @@ FLASHMEM void CardSpeedTest() {
   a.close();
   Serial.println("SPEED: by turns next");
   // by turns, each capped at 10 s (how far it got)
-  auto turns = [&](const char* what, bool file_read) {
+  auto turns = [&](const char* what, bool file_read, bool sync) {
     File r;
     FsFile rf;
     if (file_read) r = SD.open("/speed_a.bin", FILE_READ);
@@ -394,7 +394,10 @@ FLASHMEM void CardSpeedTest() {
     const uint32_t t = millis();
     for (; n < TOTAL && millis() - t < 10000; n += PIECE) {
       e += (file_read ? r.read(b, PIECE) : rf.read(b, PIECE)) != int(PIECE);
+      const uint32_t tw = millis();
       e += c.write(b, PIECE) != PIECE;
+      if (sync) SD.sdfs.card()->syncDevice();
+      if (millis() - tw > 300) Serial.printf("SPEED: a write took %lu ms\n", (unsigned long)(millis() - tw));
     }
     const uint32_t ms = std::max<uint32_t>(1, millis() - t);
     Serial.printf("SPEED: %s %lu KB in %lu ms = %lu KB/s, %d errors\n", what, (unsigned long)(n >> 10), (unsigned long)ms,
@@ -403,8 +406,8 @@ FLASHMEM void CardSpeedTest() {
     c.close();
     SD.remove("/speed_c.bin");
   };
-  turns("SdFat read + write by turns", false);
-  turns("File read + SdFat write by turns", true);
+  turns("by turns, card synced after each write", false, true);
+  turns("by turns", false, false);
   SD.remove("/speed_a.bin");
   SD.remove("/speed_c.bin");
   free(b);
