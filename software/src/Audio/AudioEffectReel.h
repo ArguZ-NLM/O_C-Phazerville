@@ -464,8 +464,8 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectReel::update() {  // (O2
     const size_t i0 = (w0 + size_t(o)) % len, i1 = (i0 + 1) % len;
     const float fr = o - std::floor(o);
     const float fade = std::min(float(seam), wn * 0.25f);
-    // (PING turns round on the same sample: no fade needed there)
-    const float e = (xon || ping) && w0 == ws ? 1.0f : std::min(1.0f, std::min(o, wn - o) / fade);
+    // (PING: FADE dips into and out of each turn, as INOUT does at the seam)
+    const float e = xon && w0 == ws ? 1.0f : std::min(1.0f, std::min(o, wn - o) / fade);
     l = (buf[0][i0] + fr * (buf[0][i1] - buf[0][i0])) * q * e;
     r = (buf[1][i0] + fr * (buf[1][i1] - buf[1][i0])) * q * e;
   };
