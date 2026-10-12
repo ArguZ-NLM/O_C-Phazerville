@@ -6,6 +6,7 @@
 #include <new>
 #include <MTP_Teensy.h>
 #include "Mp3ToWav.h"
+extern bool SDcard_Ready;
 
 #define MINIMP3_IMPLEMENTATION
 #define MINIMP3_ONLY_MP3
@@ -348,6 +349,47 @@ FLASHMEM void MtpReplace(const char* gone, const char* added) {
     SD.remove(gone);
   }
   (MTP.*MtpAdd())(0, added);
+}
+
+// USB 'R': how fast the card is, written and read alone and the two by
+// turns (as the converter does), 8 MB each, in 16 KB pieces
+FLASHMEM void CardSpeedTest() {
+  if (!SDcard_Ready) { Serial.println("SPEED: no card"); return; }
+  constexpr uint32_t PIECE = 16384, TOTAL = 8u << 20;
+  uint8_t* b = static_cast<uint8_t*>(malloc(PIECE));
+  if (!b) { Serial.println("SPEED: no memory"); return; }
+  for (uint32_t i = 0; i < PIECE; i++) b[i] = uint8_t(i);
+  auto report = [](const char* what, uint32_t t0, int errs) {
+    const uint32_t ms = std::max<uint32_t>(1, millis() - t0);
+    Serial.printf("SPEED: %s %lu ms = %lu KB/s, %d errors\n", what, (unsigned long)ms, (unsigned long)(uint64_t(TOTAL) * 1000 / 1024 / ms), errs);
+  };
+  int errs = 0;
+  FsFile a = SD.sdfs.open("/speed_a.bin", O_RDWR | O_CREAT | O_TRUNC);
+  a.preAllocate(TOTAL);
+  uint32_t t0 = millis();
+  for (uint32_t n = 0; n < TOTAL; n += PIECE) errs += a.write(b, PIECE) != PIECE;
+  a.close();
+  report("write", t0, errs);
+  errs = 0;
+  a = SD.sdfs.open("/speed_a.bin", O_RDONLY);
+  t0 = millis();
+  for (uint32_t n = 0; n < TOTAL; n += PIECE) errs += a.read(b, PIECE) != int(PIECE);
+  report("read", t0, errs);
+  errs = 0;
+  a.seekSet(0);
+  File r = SD.open("/speed_a.bin", FILE_READ);  // (the converter reads through File)
+  FsFile c = SD.sdfs.open("/speed_c.bin", O_RDWR | O_CREAT | O_TRUNC);
+  c.preAllocate(TOTAL);
+  t0 = millis();
+  for (uint32_t n = 0; n < TOTAL; n += PIECE) {
+    errs += r.read(b, PIECE) != int(PIECE);
+    errs += c.write(b, PIECE) != PIECE;
+  }
+  report("read+write by turns", t0, errs);
+  a.close(); r.close(); c.close();
+  SD.remove("/speed_a.bin");
+  SD.remove("/speed_c.bin");
+  free(b);
 }
 
 #endif  // CARD_APP

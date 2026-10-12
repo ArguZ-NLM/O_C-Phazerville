@@ -750,6 +750,9 @@ void FASTRUN loop() {
         switch (cmd) {
 #if defined(__IMXRT1062__)
 #ifdef CARD_APP
+          case 'R':  // the card's speed
+            CardSpeedTest();
+            break;
           case 'P':  // the MP3 converter: how far, where the time goes
             Serial.print(g_mp3_report);
             Serial.println();

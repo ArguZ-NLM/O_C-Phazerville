@@ -40,3 +40,6 @@ void MtpReplace(const char* gone, const char* added);
 
 // what the converter did last (USB 'P')
 extern char g_mp3_report[200];
+
+// USB 'R': the card's speed, written, read, and both by turns
+void CardSpeedTest();
