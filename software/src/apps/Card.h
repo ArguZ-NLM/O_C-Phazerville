@@ -51,6 +51,7 @@ private:
   uint32_t failed_at = 0;  // shown in the top line for a while
   bool mp3_waiting = false;  // an MP3 there, for when the computer is quiet
   uint32_t mtp_heard_at = 0;  // the computer last asked something
+  bool converted = false;  // an MP3 converted since CARD opened: the list shows, connected or not
   // a program on the computer has the card open (an MTP session), and the
   // USB line is really there: cable in (VBUS), the bus not asleep - pulling
   // the cable doesn't end the session by itself (OTGSC bit 11: B-session valid)
@@ -208,6 +209,7 @@ FLASHMEM void AppCard::Converted() {
   if (conv.state() == Mp3ToWav::DONE && slash && size_t(slash - wav) < sizeof(dir)) {
     if (slash == wav) snprintf(dir, sizeof(dir), "/");
     else snprintf(dir, sizeof(dir), "%.*s", int(slash - wav), wav);
+    converted = true;
     List();
     for (int i = 0; i < count; i++)
       if (!folder[i] && !strcmp(names[i], slash + 1)) { sel = i; Moved(); break; }
@@ -239,6 +241,7 @@ FLASHMEM void AppCard::HandleAppEvent(OC::AppEvent event) {
     List();
     mp3_seen[0] = 0;
     nbad = 0;  // those that failed: tried again
+    converted = false;
     mp3_looked_at = millis() - 2000;  // MP3s put on the card elsewhere: now
 #ifdef CARD_LISTEN
     preview = loom::g_preview;  // Loom's (made at start-up)
@@ -327,7 +330,7 @@ FLASHMEM void AppCard::DrawMenu() const {
   }
   gfxLine(0, 10, 127, 10);
   if (!SDcard_Ready) return;
-  if (!on) {  // waiting: how to connect, instead of the list
+  if (!on && !converted) {  // waiting: how to connect, instead of the list
     gfxPrint(0, 16, "Open the card on the");
     gfxPrint(0, 25, "computer (Mac: in");
     gfxPrint(0, 34, "OpenMTP).");
