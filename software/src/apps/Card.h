@@ -202,7 +202,18 @@ FLASHMEM void AppCard::Converted() {
     failed_at = millis() | 1;
   }
   Serial.printf("CARD: %s %s\n", conv.state() == Mp3ToWav::DONE ? "converted" : "could not convert", conv.Mp3Path());
-  List();
+  // the list shows the new WAV, under the cursor, to be listened to (B)
+  const char* wav = conv.WavPath();
+  const char* slash = strrchr(wav, '/');
+  if (conv.state() == Mp3ToWav::DONE && slash && size_t(slash - wav) < sizeof(dir)) {
+    if (slash == wav) snprintf(dir, sizeof(dir), "/");
+    else snprintf(dir, sizeof(dir), "%.*s", int(slash - wav), wav);
+    List();
+    for (int i = 0; i < count; i++)
+      if (!folder[i] && !strcmp(names[i], slash + 1)) { sel = i; Moved(); break; }
+  } else {
+    List();
+  }
   mp3_looked_at = millis() - 2000;  // more of them: the next one straight away
 }
 
