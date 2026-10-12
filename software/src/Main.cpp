@@ -317,11 +317,14 @@ extern "C" __attribute__((used)) void xeno_fault_c(uint32_t* st) {
   char* so = st_b;
   for (const char* t = "STACK "; *t; ) *so++ = *t++;
   int found = 0;
-  for (int k = 8; k < 200 && found < 10; k++) {
+  uint32_t seen[12];
+  for (int k = 8; k < 600 && found < 12 && uint32_t(st + k) < 0x20080000u; k++) {
     const uint32_t v = st[k];
-    if ((v & 1) && ((v < 0x00080000u) || (v >= 0x60000000u && v < 0x60800000u))) {  // Thumb code: ITCM or flash
+    bool again = false;
+    for (int q = 0; q < found; q++) again |= seen[q] == v;
+    if (!again && (v & 1) && ((v < 0x00080000u) || (v >= 0x60000000u && v < 0x60800000u))) {  // Thumb code: ITCM or flash
       xf_hex(so, "", v);
-      found++;
+      seen[found++] = v;
     }
   }
   st_b[127] = '\n';
