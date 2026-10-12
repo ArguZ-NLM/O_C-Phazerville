@@ -5959,6 +5959,16 @@ private:
   uint8_t over_new[128] = {};
   uint8_t spool_was = 0;  // its state last time (a recording that ended: copied again)
   uint32_t copy_n = 0;
+  // a SPOOL's loop as it was left there: its START..END (copy_from: where
+  // that begins), its SPEED for the root note (rev: backwards); from the
+  // other track's SPOOL, or a saved one's .loom next to its WAV
+  uint32_t copy_from = 0;
+  float src_speed = 1.0f;
+  bool src_rev = false;
+  int16_t spool_sig[3] = {-1, -1, -1};  // START, END, SPEED copied
+  uint32_t sig_moved_at = 0;
+  bool ReadSpoolMeta(const char* wav, uint32_t& a, uint32_t& b);
+  void Reversed();  // the sound turned round (rev), once it is in
   void SpoolBegin();
   void SpoolStep();
   // PLAYER: its file and loop section (in the file's frames), read in once
@@ -6142,6 +6152,7 @@ FLASHMEM void WarpDevice::LoadStep() {
   if (got >= frames) {
     lf.close();
     loading = false;
+    Reversed();
     Trim();
     if (frames >= 64) fx.SetSample(bl, br, frames, old_l != nullptr);  // (kept: the notes go on in it)
     else if (old_l) fx.SetSample(nullptr, nullptr, 0);
@@ -6178,6 +6189,14 @@ FLASHMEM void WarpDevice::Idle() {
   if (!rec && spool && spool->LoopLength() >= 64 && (!from_spool || spool_was != st) &&
       (spool_was == 0 || spool_was == AudioEffectReel::REC || spool_was == AudioEffectReel::DUB))
     SpoolBegin();
+  // its START / END / SPEED changed there: copied again once they rest 0.3 s
+  if (!rec && spool && from_spool && !copying && spool->LoopLength() >= 64) {
+    const bool moved = spool->val[ReelDevice::START] != spool_sig[0] || spool->val[ReelDevice::END] != spool_sig[1] ||
+                       spool->val[ReelDevice::SPEED] != spool_sig[2];
+    if (!moved) sig_moved_at = 0;
+    else if (!sig_moved_at) sig_moved_at = millis() | 1;
+    else if (millis() - sig_moved_at > 300) { sig_moved_at = 0; SpoolBegin(); }
+  }
   if (copying) SpoolStep();
   spool_was = spool ? st : 0;
 }
@@ -6199,6 +6218,8 @@ FLASHMEM void WarpDevice::PlayerIdle() {
   const bool have = !strcmp(want_path, have_path) && want_a == have_a && want_b == have_b;
   if (have || !want_at || millis() - want_at < 500) return;
   want_at = 0;
+  src_speed = 1.0f;  // (SHUTTLE's section as it is)
+  src_rev = false;
   Begin(want_path, want_a, want_b > want_a ? want_b - want_a : 0);
   snprintf(have_path, sizeof(have_path), "%s", want_path);  // (tried once, worked or not)
   have_a = want_a; have_b = want_b;
@@ -6218,8 +6239,48 @@ FLASHMEM void WarpDevice::ThrumIdle() {
   if (!thrum[0] && !PickRandomThrum()) return;
   ThrumList();
   if (!strcmp(thrum, have_path)) return;
-  Begin(thrum, 0, 0xFFFFFFFFu, true);
+  // a saved SPOOL loop: its section and SPEED, as left there
+  uint32_t a = 0, b = 0;
+  if (ReadSpoolMeta(thrum, a, b) && b > a) Begin(thrum, a, b - a, true);
+  else Begin(thrum, 0, 0xFFFFFFFFu, true);
   snprintf(have_path, sizeof(have_path), "%s", thrum);  // (tried once, worked or not)
+}
+
+// <name>.loom next to a WAV (a SPOOL saved it): EDGES (frames) and SPEED
+// (value, 1 forwards / 0 backwards). None: the whole file, as it is
+FLASHMEM bool WarpDevice::ReadSpoolMeta(const char* wav, uint32_t& a, uint32_t& b) {
+  src_speed = 1.0f;
+  src_rev = false;
+  char path[200];
+  snprintf(path, sizeof(path), "%s", wav);
+  if (char* dot = strrchr(path, '.')) *dot = 0;
+  strlcat(path, ".loom", sizeof(path));
+  File f = SD.open(path, FILE_READ);
+  if (!f) return false;
+  char line[48];
+  bool edges = false;
+  while (f.available()) {
+    int k = 0;
+    while (f.available() && k < int(sizeof(line)) - 1) {
+      const int c = f.read();
+      if (c == '\n') break;
+      line[k++] = char(c);
+    }
+    line[k] = 0;
+    unsigned long x = 0, y = 0;
+    int v = 0, d = 1;
+    if (sscanf(line, "EDGES %lu %lu", &x, &y) == 2) { a = x; b = y; edges = true; }
+    else if (sscanf(line, "SPEED %d %d", &v, &d) == 2) { src_speed = std::max(0.05f, v * 0.01f); src_rev = d == 0; }
+  }
+  f.close();
+  return edges;
+}
+
+FLASHMEM void WarpDevice::Reversed() {
+  if (!src_rev || !bl || frames < 2) return;
+  std::reverse(bl, bl + frames);
+  if (br) std::reverse(br, br + frames);
+  std::reverse(over, over + 128);
 }
 
 // a random WAV from a random folder of /LOOM/WAVES (or WAVES itself)
@@ -6327,7 +6388,18 @@ FLASHMEM void WarpDevice::ThrumList() {
 }
 
 FLASHMEM void WarpDevice::SpoolBegin() {
-  const uint32_t n = std::min<uint32_t>(spool->LoopLength(), uint32_t(BigSecs() * AUDIO_SAMPLE_RATE_EXACT));
+  // its START..END, at its SPEED (backwards when below 0)
+  const uint32_t whole = uint32_t(spool->LoopLength());
+  const uint32_t a = uint32_t(uint64_t(whole) * uint32_t(std::max<int>(0, spool->val[ReelDevice::START])) / 10000);
+  const uint32_t b = std::max(a + 1, uint32_t(uint64_t(whole) * uint32_t(std::max<int>(0, spool->val[ReelDevice::END])) / 10000));
+  const int sp = spool->val[ReelDevice::SPEED];
+  src_speed = std::max(0.05f, std::abs(sp) * 0.01f);
+  src_rev = sp < 0;
+  spool_sig[0] = spool->val[ReelDevice::START];
+  spool_sig[1] = spool->val[ReelDevice::END];
+  spool_sig[2] = int16_t(sp);
+  copy_from = std::min(a, whole);
+  const uint32_t n = std::min<uint32_t>(std::min(b, whole) - copy_from, uint32_t(BigSecs() * AUDIO_SAMPLE_RATE_EXACT));
   auto take = [&] {
     nl = static_cast<int16_t*>(PsramAlloc(n * 2));
     nr = nl ? static_cast<int16_t*>(PsramAlloc(n * 2)) : nullptr;
@@ -6350,7 +6422,7 @@ FLASHMEM void WarpDevice::SpoolBegin() {
 // a slice at a time (the loop is in PSRAM too); started over if it changes
 FLASHMEM void WarpDevice::SpoolStep() {
   const AudioEffectReel::State st = spool ? spool->LoopState() : AudioEffectReel::EMPTY;
-  if (!spool || spool->LoopLength() < copy_n || st == AudioEffectReel::REC || st == AudioEffectReel::DUB) {
+  if (!spool || spool->LoopLength() < copy_from + copy_n || st == AudioEffectReel::REC || st == AudioEffectReel::DUB) {
     // gone or being recorded over: dropped (copied again once it is done)
     if (nl) PsramFree(nl);
     if (nr) PsramFree(nr);
@@ -6360,8 +6432,8 @@ FLASHMEM void WarpDevice::SpoolStep() {
     spool_was = 0;
     return;
   }
-  const int16_t* l = spool->LoopData(0);
-  const int16_t* r = spool->LoopData(1);
+  const int16_t* l = spool->LoopData(0) + copy_from;
+  const int16_t* r = spool->LoopData(1) + copy_from;
   const uint32_t t0 = millis();
   while (got < copy_n && millis() - t0 < 3) {
     const uint32_t k = std::min<uint32_t>(copy_n - got, 4096);
@@ -6386,6 +6458,7 @@ FLASHMEM void WarpDevice::SpoolStep() {
     rate = 1.0f;
     memcpy(over, over_new, sizeof(over));
     copying = false;
+    Reversed();
     Trim();
     ApplyAll();
   }
@@ -6446,7 +6519,7 @@ FLASHMEM void WarpDevice::Apply(int p) {
   a.vib_hz = 1.0f / VibPeriod(cur[WEFT]);
   a.weft = mode[WEFT];
   a.root = ROOT;
-  a.rate = Cycle() ? frames * 261.6256f / AUDIO_SAMPLE_RATE_EXACT : rate;  // MIDI 60 = C4
+  a.rate = Cycle() ? frames * 261.6256f / AUDIO_SAMPLE_RATE_EXACT : rate * src_speed;  // MIDI 60 = C4
   fx.Set(a);
 }
 
