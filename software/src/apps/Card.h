@@ -189,10 +189,12 @@ FLASHMEM void AppCard::LookForMp3() {
   }
 }
 
-// one done: the computer is told (the WAV in, the MP3 out), or it failed
+// one done: the MP3 goes; or it failed
 FLASHMEM void AppCard::Converted() {
   if (conv.state() == Mp3ToWav::DONE) {
-    SD.remove(conv.Mp3Path());  // TEST: without telling the computer
+    // (the computer isn't told: it has been quiet, and its MTP library
+    // crashed the module when it was; it sees the change on reconnecting)
+    SD.remove(conv.Mp3Path());
   } else {
     if (nbad < MAX_BAD) snprintf(mp3_bad[nbad++], sizeof(mp3_bad[0]), "%s", conv.Mp3Path());
     const char* nm = strrchr(conv.Mp3Path(), '/');

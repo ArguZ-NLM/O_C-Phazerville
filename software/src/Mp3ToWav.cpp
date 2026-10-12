@@ -4,7 +4,6 @@
 #include <Arduino.h>
 #include <SD.h>
 #include <new>
-#include <MTP_Teensy.h>
 #include "Mp3ToWav.h"
 extern bool SDcard_Ready;
 
@@ -314,7 +313,7 @@ FLASHMEM void Mp3ToWav::Finish(bool ok) {
   }
   if (ok) ok = SD.rename(tmp, wav);
   if (ok) {
-    st = DONE;  // (the MP3 goes in MtpReplace)
+    st = DONE;  // (the CARD app deletes the MP3)
   } else {
     SD.remove(tmp);
     st = FAILED;
@@ -324,37 +323,6 @@ FLASHMEM void Mp3ToWav::Finish(bool ok) {
 FLASHMEM void Mp3ToWav::Cancel() {
   if (st == BUSY) Finish(false);
   st = IDLE;
-}
-
-// MTP_Teensy keeps the messages to the computer (a file added / removed)
-// and its list of the card private; an explicit instantiation may name
-// private members, so this reaches them
-using MtpPathEvent = bool (MTP_class::*)(uint32_t, const char*);
-using MtpIdEvent = int (MTP_class::*)(uint32_t);
-using MtpStore = MTPStorage MTP_class::*;
-template <MtpPathEvent ADD, MtpIdEvent REMOVED, MtpStore STORE>
-struct MtpInside {
-  friend MtpPathEvent MtpAdd() { return ADD; }
-  friend MtpIdEvent MtpRemoved() { return REMOVED; }
-  friend MtpStore MtpStorage() { return STORE; }
-};
-MtpPathEvent MtpAdd();
-MtpIdEvent MtpRemoved();
-MtpStore MtpStorage();
-template struct MtpInside<&MTP_class::send_addObjectEvent, &MTP_class::send_removeObjectEvent, &MTP_class::storage_>;
-
-FLASHMEM void MtpReplace(const char* gone, const char* added) {
-  if (!static_cast<bool>(MTP)) { SD.remove(gone); return; }  // nobody connected
-  MTPStorage& st = MTP.*MtpStorage();
-  // the SD card is MTP's first (and only) store
-  const uint32_t h = st.MapFileNameToIndex(0, gone, false, nullptr);
-  if (h != 0xFFFFFFFFUL) {  // the computer knows it: deleted as if it had done it
-    st.DeleteObject(h);
-    (MTP.*MtpRemoved())(h);
-  } else {
-    SD.remove(gone);
-  }
-  (MTP.*MtpAdd())(0, added);
 }
 
 // USB 'R': how fast the card is, written and read alone and the two by

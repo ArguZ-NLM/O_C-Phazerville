@@ -34,9 +34,6 @@ private:
   void Finish(bool ok);
 };
 
-// the MP3 gone, the WAV there: deletes `gone` and tells the computer, if
-// one is connected over MTP, about both, so they show without reconnecting
-void MtpReplace(const char* gone, const char* added);
 
 // what the converter did last (USB 'P')
 extern char g_mp3_report[800];
