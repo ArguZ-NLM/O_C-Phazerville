@@ -30,6 +30,7 @@ private:
   struct Work;  // the decoder and its buffers, only while busy
   Work* w = nullptr;
   uint32_t in_size = 0, in_read = 0;
+  bool in_psram = false;
   void Finish(bool ok);
 };
 

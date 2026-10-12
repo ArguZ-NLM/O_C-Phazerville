@@ -25,7 +25,7 @@ struct Mp3ToWav::Work {
   uint32_t end = 0;  // where the sound ends in the file (an ID3v1 tag after it)
   bool eof = false;
   mp3d_sample_t pcm[MINIMP3_MAX_SAMPLES_PER_FRAME];
-  static constexpr int OUT = 65536;  // samples (128 KB), written to the card in one go
+  static constexpr int OUT = 8192;  // samples (16 KB), written to the card in one go
   alignas(32) int16_t obuf[OUT];
   int ofill = 0;
   int chans = 0, hz = 0;
@@ -113,9 +113,11 @@ FLASHMEM bool Mp3ToWav::Start(const char* path) {
   for (int k = 2; SD.exists(wav) && k < 100; k++) snprintf(wav, sizeof(wav), "%s-%d.wav", base, k);
   snprintf(tmp, sizeof(tmp), "%s.part", base);
 
-  // 43 KB: in the PSRAM when there is one (Loom keeps the RAM for itself)
-  void* mem = extmem_malloc(sizeof(Work));
-  if (!mem) mem = malloc(sizeof(Work));
+  // 43 KB: in the RAM if there is room (the card reads and writes from the
+  // PSRAM failed now and then), else in the PSRAM
+  void* mem = malloc(sizeof(Work));
+  in_psram = !mem;
+  if (!mem) mem = extmem_malloc(sizeof(Work));
   if (!mem) { Serial.printf("MP3: no memory for %s\n", mp3); st = FAILED; return false; }
   w = new (mem) Work();
   w->in = SD.open(mp3, FILE_READ);
@@ -180,7 +182,8 @@ FLASHMEM Mp3ToWav::State Mp3ToWav::Step(uint32_t ms) {
   k.steps++;
   if (t0 - k.said_at >= 1000) {
     k.said_at = t0;
-    snprintf(g_mp3_report, sizeof(g_mp3_report), "MP3: %d%% after %lu ms: %lu steps, %lu frames, decoding %lu ms, reading %lu ms, writing %lu ms\n",
+    snprintf(g_mp3_report, sizeof(g_mp3_report), in_psram ? "(PSRAM) " : "(RAM) ");
+    snprintf(g_mp3_report + strlen(g_mp3_report), sizeof(g_mp3_report) - strlen(g_mp3_report), "MP3: %d%% after %lu ms: %lu steps, %lu frames, decoding %lu ms, reading %lu ms, writing %lu ms\n",
                   Percent(), (unsigned long)(t0 - k.t_start), (unsigned long)k.steps, (unsigned long)k.frames,
                   (unsigned long)(k.us_decode / 1000), (unsigned long)(k.us_read / 1000), (unsigned long)(k.us_write / 1000));
   }
