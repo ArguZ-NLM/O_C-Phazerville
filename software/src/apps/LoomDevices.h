@@ -1630,7 +1630,8 @@ FLASHMEM void InputDevice::DrawMini(int x, int y, int w, int h) {
 PROGMEM static const DeviceDef SPOOL_DEF = {
   "SPOOL", "REL", 8, {"REC", "PLAY"},  // tag REL kept for saved files (was REEL); A: REC / DUB, B: PLAY / STOP
   {
-    {"SPEED", -200, 200, 100, BI},
+    // mode (L): LOOP (round and round) or PING (back and forth)
+    {"SPEED", -200, 200, 100, BI, 0, 2, 0, {}, {"LOOP", "PING"}},
     // the loop's edges, as PLAYER's: 0..10000 of the recording; mode (L):
     // the picture zooms in on the edge (SPOOL_ZOOM_MS)
     {"START", 0, 10000, 0, UNI, 0, 8, 0},
@@ -1787,7 +1788,10 @@ FLASHMEM void ReelDevice::Apply(int p) {
     case IN:
       if (input) { input->val[0] = cur[IN]; input->Refresh(0); }
       break;
-    case SPEED: fx.SetSpeed(v); break;
+    case SPEED:
+      fx.SetSpeed(v);
+      fx.SetPingPong(mode[SPEED] == 1);
+      break;
     case START: case END:
       fx.SetWindow(cur[START] * 0.0001f, std::max(0.005f, (cur[END] - cur[START]) * 0.0001f));
       break;

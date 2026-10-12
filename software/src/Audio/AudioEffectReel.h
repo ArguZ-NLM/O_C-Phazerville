@@ -120,6 +120,9 @@ public:
   void Retrigger() { retrig = true; }  // back to the start, crossfaded
   void SetLoop(bool l) { loop_ = l; }  // off: play once and stop
   void SetSpeed(float s) { speed = s; }
+  // SPOOL's PING: the head turns round at the loop's ends instead of
+  // jumping back to the start
+  void SetPingPong(bool p) { ping_ = p; }
   void SetWindow(float start, float len) { start_ = start; len_ = len; exact = false; }
   // the window in whole samples (the player sets its edges exactly)
   void SetWindowSamples(size_t start, size_t length) { ex_ws = start; ex_wl = length; exact = true; }
@@ -255,6 +258,8 @@ private:
   volatile int in_peak[2] = {};
   volatile float speed = 1.0f, start_ = 0.0f, len_ = 1.0f, keep_ = 0.8f, mon = 1.0f, level = 1.0f;
   volatile float seam = 256.0f;
+  volatile bool ping_ = false;
+  float dir = 1.0f;  // PING: -1 on the way back
   volatile bool xfade_loop = false;
   size_t xh_l = 0, xf_l = 0;  // the crossfade plan in use (see update)
   size_t lt_ws = 0, lt_wl = 0;  // ... and the window it crosses into
@@ -402,12 +407,14 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectReel::update() {  // (O2
       xf = sounding ? XFADE : 0;
     }
   }
+  const bool ping = ping_;
+  if (!ping) dir = 1.0f;
   const float sp = speed, g = level, m = mon, keep = keep_;
   constexpr float q = 1.0f / 32768.0f;
   // the crossfade seam (looping forward): over the last xl frames of the
   // window the loop's end fades out while the frames leading into START
   // (or the loop's own beginning) fade in, equal power
-  const bool xon = xfade_loop && loop_ && sp > 0.0f && len && st != REC;
+  const bool xon = xfade_loop && loop_ && sp > 0.0f && len && st != REC && !ping;
   // the plan only changes outside the crossfade (a new FADE / window in the
   // middle of one would jump)
   if (xon) {
@@ -436,7 +443,8 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectReel::update() {  // (O2
     const size_t i0 = (w0 + size_t(o)) % len, i1 = (i0 + 1) % len;
     const float fr = o - std::floor(o);
     const float fade = std::min(float(seam), wn * 0.25f);
-    const float e = xon && w0 == ws ? 1.0f : std::min(1.0f, std::min(o, wn - o) / fade);
+    // (PING turns round on the same sample: no fade needed there)
+    const float e = (xon || ping) && w0 == ws ? 1.0f : std::min(1.0f, std::min(o, wn - o) / fade);
     l = (buf[0][i0] + fr * (buf[0][i1] - buf[0][i0])) * q * e;
     r = (buf[1][i0] + fr * (buf[1][i1] - buf[1][i0])) * q * e;
   };
@@ -518,6 +526,25 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectReel::update() {  // (O2
           wrapped = true;
           if (pend && p_ws == ws && p_wl == wl) pend = false;
           off = std::fmod((xh ? xhf : xff) + over, float(wl));
+        }
+      } else if (ping) {  // turning round at either end
+        off += sp * dir;
+        const float top = float(wl) - 1.0f;
+        went_round = false;
+        if (wl < 2) {
+          off = 0.0f;
+        } else if (off > top) {
+          off = std::max(0.0f, 2.0f * top - off);
+          dir = -dir;
+          went_round = true;
+        } else if (off < 0.0f) {
+          off = std::min(top, -off);
+          dir = -dir;
+          went_round = true;
+        }
+        if (went_round && pend) {  // a new window from the turn on
+          ws = p_ws; wl = p_wl; pend = false;
+          off = std::min(off, float(wl) - 1.0f);
         }
       } else {
         went_round = step(off, wl);
