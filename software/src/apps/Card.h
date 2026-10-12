@@ -9,8 +9,8 @@
 // deletes the selected file. B listens to a WAV (as in PLAYER's file list:
 // once through, straight from the card), B held: AUTO, every file the
 // cursor rests on plays. An MP3 copied anywhere onto the card becomes a WAV
-// of the same name once the computer has been quiet for 3 s, or at once with
-// A (the MP3 goes once that worked); the top line shows how far it is.
+// of the same name once the computer has been quiet for 3 s (the MP3 goes
+// once that worked); the top line shows how far it is.
 
 #include <MTP_Teensy.h>
 #include <usb_mtp.h>
@@ -50,7 +50,6 @@ private:
   int nbad = 0;
   uint32_t failed_at = 0;  // shown in the top line for a while
   bool mp3_waiting = false;  // an MP3 there, for when the computer is quiet
-  bool convert_now = false;  // A: no waiting
   uint32_t mtp_heard_at = 0;  // the computer last asked something
   // a program on the computer has the card open (an MTP session), and the
   // USB line is really there: cable in (VBUS), the bus not asleep - pulling
@@ -172,14 +171,14 @@ FLASHMEM void AppCard::LookForMp3() {
   uint32_t sz = 0;
   if (!SDcard_Ready || !FindMp3("/", 0, p, sizeof(p), sz)) {
     mp3_seen[0] = 0;
-    mp3_waiting = convert_now = false;
+    mp3_waiting = false;
     return;
   }
   if (sz && sz == mp3_seen_size && !strcmp(p, mp3_seen)) {
     // the computer still busy with the card: later (answering it while
     // converting slowed the card down ~15 times: a 3:36 song took 3.5 min,
     // else 14 s). (Its session can't tell: OpenMTP quits without ending it.)
-    mp3_waiting = !convert_now && Connected() && millis() - mtp_heard_at < 3000;
+    mp3_waiting = Connected() && millis() - mtp_heard_at < 3000;
     if (mp3_waiting) return;
     mp3_seen[0] = 0;
     Serial.printf("CARD: converting %s\n", p);
@@ -307,7 +306,7 @@ FLASHMEM void AppCard::DrawMenu() const {
     gfxPrint(0, 1, t);
     gfxInvert(0, 0, 128, 9);
   } else if (on && mp3_waiting) {  // converted once the computer lets go
-    gfxPrint(0, 1, "MP3 waits  A: convert");
+    gfxPrint(0, 1, "MP3 waiting...");
     gfxInvert(0, 0, 128, 9);
   } else {
     gfxPrint(0, 1, !SDcard_Ready ? "CARD  no SD card" : on ? "CARD  connected" : "CARD  waiting...");
@@ -413,15 +412,8 @@ FLASHMEM void AppCard::HandleEncoderEvent(const UI::Event& event) {
 }
 
 // R push: open the folder; Y: up; B: listen (held: AUTO); X held: delete
-// the file; A: the MP3s waiting converted now
+// the file
 FLASHMEM void AppCard::HandleButtonEvent(const UI::Event& event) {
-  if (event.control == OC::CONTROL_BUTTON_A) {
-    if (event.type == UI::EVENT_BUTTON_PRESS && mp3_waiting) {
-      convert_now = true;
-      mp3_looked_at = millis() - 2000;  // straight away
-    }
-    return;
-  }
 #ifdef CARD_LISTEN
   if (event.control == OC::CONTROL_BUTTON_B) {
     if (event.type == UI::EVENT_BUTTON_LONG_PRESS) {
