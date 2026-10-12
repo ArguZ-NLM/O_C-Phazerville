@@ -383,6 +383,7 @@ private:
   uint32_t undone_at = 0;  // UNDO shown
   bool stop_held = false, stop_armed = false;  // A held to stop the PLAYER ...
   uint32_t stop_hold = 0;                      // ... since then
+  uint32_t spool_warn_at = 0;  // a SPOOL loop would go: the first turn away only warns
   bool tape_held = false;   // OUTPUT: A held 1 s starts / stops TAPE ...
   uint32_t tape_hold = 0;   // ... since then
   static constexpr uint32_t TAPE_HOLD_MS = 1000;
@@ -2186,6 +2187,18 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
       tracks[track].mix->Nudge(MixDevice::LEVEL, dir);
       Mirror(tracks[track].mix, MixDevice::LEVEL);
     } else if (col == SOURCE) {
+      // away from a SPOOL holding a loop: the loop would go. The first turn
+      // only says so; turned again within 2 s, it switches
+      bool loop_there = false;
+      for (int t = 0; t < NUM_TRACKS; t++)
+        if ((t == track || linked) && tracks[t].shown_choice(SOURCE) == 1 && tracks[t].reel &&
+            tracks[t].reel->LoopState() != AudioEffectReel::EMPTY)
+          loop_there = true;
+      if (loop_there && (!spool_warn_at || millis() - spool_warn_at > 2000)) {
+        spool_warn_at = millis() | 1;
+        return;
+      }
+      spool_warn_at = 0;
       SetChoiceLinked(col, tracks[track].shown_choice(col) + dir);  // INPUT / SPOOL ...
     } else {
       // the effect slots' devices only: no device (0) is not dialled in (B
@@ -2421,6 +2434,12 @@ FLASHMEM void AppLoom::DrawChain() const {
     const int w = 6 * int(strlen(buf));
     gfxPrint(right - w, 56, buf);
     if (lite) gfxInvert(right - w - 2, 55, w + 3, 9);  // LITE: the engines run lighter
+  }
+  // a SPOOL loop would go (see the SOURCE turn): over the whole line
+  if (spool_warn_at && millis() - spool_warn_at < 2000) {
+    graphics.clearRect(0, 55, 128, 9);
+    gfxPrint(1, 56, PSTR("LOOP GOES: TURN AGAIN"));
+    gfxInvert(0, 55, 128, 9);
   }
 }
 
@@ -2854,7 +2873,7 @@ namespace loom {
   // 14: DRAFT in FIBRE's order SPEED SIZE PITCH POS (was PITCH POS SIZE SPEED)
   // 15: DRAFT page 2 DIFF TONE SPRD MIX (was TONE FDBK SPRD MIX, TONE's mode
   //     the diffusion)
-  constexpr uint8_t SAVE_VERSION = 15;
+  constexpr uint8_t SAVE_VERSION = 17;
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -2922,6 +2941,9 @@ namespace loom {
     // before v15 its page 2 was TONE FDBK SPRD MIX (FDBK is gone; v14's
     // TONE mode was the diffusion, now DIFF)
     const bool str_page2 = use && !memcmp(tag, "STR", 4) && load_version < 15;
+    // v16 (one day only) had this lane's SPOOL in front of WARP's SRC modes:
+    // back one (that one becomes the other track's SPOOL)
+    const bool warp_src16 = use && !memcmp(tag, "WRP", 4) && load_version == 16;
     int old_diff = -1;
     // before v6 the reverb's 6th was SIZE (now PRE: left at its default);
     // DECAY's value becomes ROOM, TONE's WALL (same places)
@@ -2985,6 +3007,7 @@ namespace loom {
         d->mod_amt2[p] = -d->mod_amt2[p];
       }
       if (flip_dir && p == PlayerDevice::SPEED) d->mode[p] = 1 - d->mode[p];
+      if (warp_src16 && p == WarpDevice::SRC) d->mode[p] = uint8_t(constrain(md - 1, 0, 2));
       if (start_len && p == ReelDevice::START) { d->val[p] = int16_t(constrain(v, 0, 100) * 100); d->mode[p] = 0; }
       if (start_len && p == ReelDevice::END) {
         d->val[p] = int16_t(std::min(10000, d->val[ReelDevice::START] + constrain(int(v), 1, 100) * 100));
