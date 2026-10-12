@@ -18,13 +18,14 @@ char g_mp3_report[200] = "MP3: nothing yet";
 
 struct Mp3ToWav::Work {
   mp3dec_t dec;
-  File in, out;
+  File in;
+  FsFile out;  // (SdFat's own: it can set the space aside beforehand)
   alignas(32) uint8_t buf[IN_SIZE];
   uint32_t fill = 0, pos = 0;
   uint32_t end = 0;  // where the sound ends in the file (an ID3v1 tag after it)
   bool eof = false;
   mp3d_sample_t pcm[MINIMP3_MAX_SAMPLES_PER_FRAME];
-  static constexpr int OUT = 8192;  // samples, written to the card in one go
+  static constexpr int OUT = 65536;  // samples (128 KB), written to the card in one go
   alignas(32) int16_t obuf[OUT];
   int ofill = 0;
   int chans = 0, hz = 0;
@@ -132,11 +133,9 @@ FLASHMEM bool Mp3ToWav::Start(const char* path) {
     w->end = in_size - 128;
   w->in.seek(in_read);
   SD.remove(tmp);
-  w->out = SD.open(tmp, FILE_WRITE_BEGIN);
-  if (!w->out) { Serial.printf("MP3: can't write %s\n", tmp); Finish(false); return false; }
-  uint8_t hdr[HEADER];
-  WavHeader(hdr, 2, 44100, 0);  // for now; the real one at the end
-  if (w->out.write(hdr, HEADER) != HEADER) { Finish(false); return false; }
+  w->out = SD.sdfs.open(tmp, O_RDWR | O_CREAT | O_TRUNC);
+  if (!w->out.isOpen()) { Serial.printf("MP3: can't write %s\n", tmp); Finish(false); return false; }
+  // (the header follows with the first frame, when the size is known)
   mp3dec_init(&w->dec);
   w->t_start = millis();
   st = BUSY;
@@ -160,10 +159,11 @@ FLASHMEM Mp3ToWav::State Mp3ToWav::Step(uint32_t ms) {
                       (unsigned long)(HEADER + k.data_bytes), unsigned(done), unsigned(n), k.out.getWriteError());
         k.out.clearWriteError();
         delay(20 << tries);
-        k.out.seek(HEADER + k.data_bytes + done);
+        k.out.seekSet(HEADER + k.data_bytes + done);
       }
       const uint32_t us = micros();
-      const size_t r = k.out.write(p + done, n - done);
+      size_t r = k.out.write(p + done, n - done);
+      if (r > n - done) r = 0;  // (-1: an error)
       k.us_write += micros() - us;
       done += r;
     }
@@ -235,15 +235,27 @@ FLASHMEM Mp3ToWav::State Mp3ToWav::Step(uint32_t ms) {
       k.hz = info.hz;
       uint32_t frames = 0;
       int delay = 0, padding = 0;
-      if (CheckVbrTag(frame, frame_size, &frames, &delay, &padding) > 0) {
+      const bool tag = CheckVbrTag(frame, frame_size, &frames, &delay, &padding) > 0;
+      if (tag) {
         // the tag frame is no sound
         k.skip = uint32_t(std::max(delay, 0));
         uint64_t total = uint64_t(frames) * n;
         total = total > k.skip ? total - k.skip : 0;
         if (padding > 0) total = total > uint64_t(padding) ? total - padding : 0;
         if (frames) k.left = total;
-        continue;
       }
+      // the WAV's whole size set aside on the card in one piece, so the
+      // card isn't searched for room at every step: ten times faster.
+      // (Known from the tag, or from the bitrate with some to spare; what
+      // isn't used is given back at the end.)
+      const uint64_t secs_x1000 = info.bitrate_kbps ? uint64_t(k.end - in_read) * 8 / info.bitrate_kbps : 0;
+      uint64_t sz = k.left != UINT64_MAX ? k.left : secs_x1000 * k.hz / 1000 * 5 / 4;
+      sz = sz * k.chans * 2 + HEADER;
+      if (sz < (1ull << 32) && !k.out.preAllocate(sz)) Serial.printf("MP3: no room set aside (%llu)\n", (unsigned long long)sz);
+      uint8_t hdr[HEADER];
+      WavHeader(hdr, k.chans, k.hz, 0);  // for now; the real one at the end
+      if (k.out.write(hdr, HEADER) != HEADER) { Finish(false); return st; }
+      if (tag) continue;  // the tag frame is no sound
     }
     // n frames (samples per channel); the first ones may be the encoder's
     // delay, the last ones its padding
@@ -275,9 +287,10 @@ FLASHMEM void Mp3ToWav::Finish(bool ok) {
     if (ok) {
       uint8_t hdr[HEADER];
       WavHeader(hdr, w->chans, w->hz, w->data_bytes);
-      ok = w->out.seek(0) && w->out.write(hdr, HEADER) == HEADER;
+      ok = w->out.truncate(HEADER + uint64_t(w->data_bytes)) &&  // (what was set aside and not used)
+           w->out.seekSet(0) && w->out.write(hdr, HEADER) == HEADER;
     }
-    if (w->out) w->out.close();
+    if (w->out.isOpen()) w->out.close();
     if (w->in) w->in.close();
     snprintf(g_mp3_report, sizeof(g_mp3_report),
              "MP3: %s, %d ch %d Hz, %lu bytes, %lu ms: %lu steps, %lu frames, decoding %lu ms, reading %lu ms, writing %lu ms\n",
