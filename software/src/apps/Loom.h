@@ -2504,10 +2504,13 @@ FLASHMEM void AppLoom::DrawDevice() const {
     const int lw = 6 * int(strlen(label)) + 2;
     if (!byp && d->ActionLit(a)) gfxInvert(x - 1, 0, lw, 9);
   }
-  // INPUT / SPOOL: the input clipping (at the jack or at GAIN), as in the
-  // chain view, CLIP where MUTE goes
+  // INPUT / SPOOL: as in the chain view, the jack's level in dB left of the
+  // clock mark, or CLIP (where MUTE goes) when the input clips (at the jack
+  // or at GAIN)
+  const bool takes_input = !focus_mod && !mod_mode && col == SOURCE && tracks[track].input &&
+                           tracks[track].choice[SOURCE] < 2;
   bool clip = false;
-  if (!focus_mod && !mod_mode && col == SOURCE)
+  if (takes_input)
     for (int t = 0; t < NUM_TRACKS; t++)
       if ((t == track || linked) && tracks[t].input && tracks[t].choice[SOURCE] < 2 && tracks[t].input->Clipping())
         clip = true;
@@ -2531,6 +2534,13 @@ FLASHMEM void AppLoom::DrawDevice() const {
     gfxPrint(82, 1, PSTR("MUTE"));
     gfxInvert(81, 0, 26, 9);
   } else {
+    if (takes_input) {
+      char buf[8];
+      const int v = int(lrintf(tracks[track].input->JackDb()));
+      if (v <= -60) snprintf(buf, sizeof(buf), "<-60dB");
+      else snprintf(buf, sizeof(buf), "-%02ddB", -v);  // -08dB: always two digits
+      gfxPrint(102 - 6 * int(strlen(buf)), 1, buf);
+    }
     DrawClockMark(103, 2);
   }
   if (n > 4) {
