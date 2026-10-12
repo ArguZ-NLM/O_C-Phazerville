@@ -1556,7 +1556,6 @@ FLASHMEM float InputDevice::JackDb() {
 
 FLASHMEM void InputDevice::DrawViz(int x, int y, int w, int h) {
   Poll();
-  const int clip = Clipping();
   const float l = meters[0].v, r = meters[1].v;
 
   const int cy = y + h / 2, ww = std::min(w - 22, 128);
@@ -1591,14 +1590,6 @@ FLASHMEM void InputDevice::DrawViz(int x, int y, int w, int h) {
   } else if (cur[0] != OFF) {
     gfxFrame(x + w - 18, y, 17, h);
     DrawVMeter(x + w - 17, y + 1, 15, h - 2, std::max(l, r));
-  }
-  // clipping: where, in a box over the picture's top left
-  if (clip) {
-    const char* t = clip == 1 ? "IN CLIP" : "GAIN CLIP";
-    const int tw = 6 * int(strlen(t)) + 3;
-    graphics.clearRect(x, y, tw, 11);
-    gfxPrint(x + 2, y + 2, t);
-    gfxInvert(x, y, tw, 11);
   }
 }
 
