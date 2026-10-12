@@ -376,14 +376,19 @@ FLASHMEM void CardSpeedTest() {
   for (uint32_t n = 0; n < TOTAL; n += PIECE) errs += a.read(b, PIECE) != int(PIECE);
   report("read", t0, errs);
   a.close();
+  Serial.println("SPEED: by turns next");
   // by turns, each capped at 10 s (how far it got)
   auto turns = [&](const char* what, bool file_read) {
     File r;
     FsFile rf;
     if (file_read) r = SD.open("/speed_a.bin", FILE_READ);
     else rf = SD.sdfs.open("/speed_a.bin", O_RDONLY);
+    uint32_t t1 = millis();
     FsFile c = SD.sdfs.open("/speed_c.bin", O_RDWR | O_CREAT | O_TRUNC);
-    c.preAllocate(TOTAL);
+    Serial.printf("SPEED: opened in %lu ms\n", (unsigned long)(millis() - t1));
+    t1 = millis();
+    const bool pre = c.preAllocate(TOTAL);
+    Serial.printf("SPEED: set aside (%d) in %lu ms\n", pre, (unsigned long)(millis() - t1));
     int e = 0;
     uint32_t n = 0;
     const uint32_t t = millis();
