@@ -3618,8 +3618,13 @@ FLASHMEM void AppLoom::View() const {
   else if (view == MODS) DrawMods();
   else DrawChain();
   // driven from the computer: a sticky note (USB, folded corner) in the
-  // bottom right for 4 s after the last remote key, so the knobs are left alone
-  if (g_remote_at && millis() - g_remote_at < 4000) {
+  // bottom right and a frame round the screen, blinking, for 10 s after the
+  // last remote key, so the knobs are left alone meanwhile
+  if (g_remote_at && millis() - g_remote_at < 10000) {
+    if ((millis() / 250) % 2) {
+      gfxFrame(0, 0, 128, 64);
+      gfxFrame(1, 1, 126, 62);
+    }
     constexpr int x = 104, y = 52, w = 24, h = 12;
     graphics.clearRect(x - 1, y - 1, w + 1, h + 1);
     gfxLine(x, y, x + w - 5, y);              // the outline, its top right
