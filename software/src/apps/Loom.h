@@ -2465,7 +2465,9 @@ FLASHMEM void AppLoom::DoubleClick(loom::Device* d, int p) {
     if (d->mode[p] < 2) d->mode[p] ^= 1;  // REV <-> FWD (SYNC stays)
   } else {
     const bool fade = src && ((d == tr.reel && p == ReelDevice::XFADE) || (d == tr.player && p == PlayerDevice::XFADE));
-    const int16_t target = fade ? 0 : pd.def;
+    // RANDOM's VARI to 0: the pattern frozen as it is
+    const bool freeze = focus_mod && !memcmp(d->def.tag, "RND", 4) && p == RandomMod::P_VARI;
+    const int16_t target = fade || freeze ? 0 : pd.def;
     if (v != target) { dc_dev = d; dc_p = p; dc_prev = v; v = target; }
     else if (dc_dev == d && dc_p == p) v = dc_prev;  // back to where it was
     else return;

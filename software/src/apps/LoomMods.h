@@ -264,7 +264,10 @@ private:
   float steps[16];
   uint8_t pos = 0;
   float target = 0.5f, smooth = 0.5f, t = 0.0f;
+  uint32_t step_at = 0;
+  float step_s = 0.5f;  // the time between the last two steps (the picture's glides)
   float Hz() const { return RateHz(P_RATE, 0.05f, 30.0f); }
+  float GlideTau() const { const float s = cur[P_SMTH] * 0.01f; return 0.0005f + s * s * 1.0f; }
   void Step();
   float Shaped(float s) const;
   float Quantized(float v) const;
@@ -330,6 +333,9 @@ FLASHMEM float RandomMod::Quantized(float v) const {
 }
 
 FLASHMEM void RandomMod::Step() {
+  const uint32_t now = millis();
+  if (step_at && now - step_at < 20000) step_s = std::max(0.005f, (now - step_at) * 0.001f);
+  step_at = now;
   const int len = cur[P_LEN];
   if (len == 0) {
     target = random(1000) * 0.001f;
@@ -355,8 +361,7 @@ FLASHMEM void RandomMod::Tick(const ModCtx& ctx) {
     if (t >= 1.0f) { t -= floorf(t); Step(); }
   }
   // P_SMTH glides between steps (between the notes when quantized)
-  const float s = cur[P_SMTH] * 0.01f;
-  const float tau = 0.0005f + s * s * 1.0f;
+  const float tau = GlideTau();
   smooth += (Shaped(target) - smooth) * std::min(1.0f, ctx.dt / tau);
   out = smooth;
 }
@@ -370,10 +375,34 @@ FLASHMEM void RandomMod::DrawViz(int x, int y, int w, int h) {
   const int len = cur[P_LEN];
   if (len > 0) {
     const int bw = ww / len;
+    const int bottom = top + hh;
+    // SMTH: each block's top glides up / down from the step before, over
+    // as much of the step as the glide takes
+    const float tau = GlideTau();
+    const bool glide = cur[P_SMTH] > 0 && tau * 3.0f > step_s * 0.05f;
     for (int i = 0; i < len; i++) {
-      const int bx = x + i * bw, by = yy(val(steps[i]));
-      if (i == pos) gfxRect(bx + 1, by, std::max(1, bw - 2), top + hh - by + 1);
-      else gfxFrame(bx + 1, by, std::max(1, bw - 2), top + hh - by + 1);
+      const int bx = x + i * bw + 1, w1 = std::max(1, bw - 2);
+      const float to = val(steps[i]), from = val(steps[(i + len - 1) % len]);
+      if (!glide) {
+        const int by = yy(to);
+        if (i == pos) gfxRect(bx, by, w1, bottom - by + 1);
+        else gfxFrame(bx, by, w1, bottom - by + 1);
+        continue;
+      }
+      int py = -1;
+      for (int c = 0; c < w1; c++) {
+        const float tt = (c + 0.5f) / w1 * step_s;
+        const int cy = yy(from + (to - from) * (1.0f - expf(-tt / tau)));
+        if (i == pos) gfxLine(bx + c, cy, bx + c, bottom);
+        else {
+          if (py >= 0 && py != cy) gfxLine(bx + c, py, bx + c, cy);
+          else gfxPixel(bx + c, cy);
+          if (c == 0) gfxLine(bx, cy, bx, bottom);
+          if (c == w1 - 1) gfxLine(bx + c, cy, bx + c, bottom);
+        }
+        py = cy;
+      }
+      if (i != pos) gfxLine(bx, bottom, bx + w1 - 1, bottom);
     }
   } else {
     // the history (~1 s across) as one stepped line
