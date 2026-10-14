@@ -4067,6 +4067,10 @@ public:
   void Apply(int p) override;
   int Step(int p, int v, int dir) const override;
   void Format(int p, char* buf, size_t n) const override;
+  // the LEVELs are named by their mode: SEND or MIX
+  const char* Name(int p) const override {
+    return p == DELAY || p == REVERB ? param(p).modes[mode[p] & 1] : param(p).name;
+  }
   void Action(int a) override;
   bool ActionLit(int a) const override;
   void DrawViz(int x, int y, int w, int h) override;
