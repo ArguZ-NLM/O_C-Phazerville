@@ -4529,7 +4529,7 @@ public:
                               : 0.05f * powf(40000.0f, abs(v) * 0.01f);
     return v < 0 ? -r : r;
   }
-  int Stages() const { return 4 + constrain(int(cur[SIDE]), 0, 16); }
+  int Stages() const { return 4 + 2 * constrain(int(cur[SIDE]), 0, 8); }  // 4, 6 .. 20
   const char* Name(int p) const override {
     if (Phasing() && p == SIDE) return "STAGE";
     if (Phasing() && p == HFDBK) return "RESO";
@@ -4538,7 +4538,7 @@ public:
   int8_t was_phase = -1;  // (switching SHIFT <-> PHASE: SIDE / STAGE start sensible)
   void TempoChanged() override { if (OnClk()) Apply(SHIFT); }
   int Step(int p, int v, int dir) const override {
-    if (p == SIDE) return constrain(v + dir, 0, Phasing() ? 16 : 2);
+    if (p == SIDE) return constrain(v + dir, 0, Phasing() ? 8 : 2);
     if (p != SHIFT || !OnClk()) return v + dir;
     // on the clock: one note value a turn (the longest next to the middle)
     const int s = v > 0 ? 1 : v < 0 ? -1 : 0;
@@ -4611,7 +4611,7 @@ FLASHMEM void DirtDevice::Apply(int p) {
     case WET:    fx.wet(v); break;
     case SHIFT: case SIDE: case HFDBK: case HMIX:
       if (was_phase != int8_t(Phasing())) {  // SIDE <-> STAGE: from where it makes sense
-        if (was_phase >= 0) val[SIDE] = cur[SIDE] = Phasing() ? 8 : 0;  // 12 stages / UP
+        if (was_phase >= 0) val[SIDE] = cur[SIDE] = Phasing() ? 4 : 0;  // 12 stages / UP
         was_phase = int8_t(Phasing());
       }
       if (Phasing()) fx.phase(ShiftHz(cur[SHIFT]), Stages(), cur[HFDBK] * 0.009f, cur[HMIX] * 0.01f);
@@ -4631,7 +4631,7 @@ FLASHMEM void DirtDevice::Format(int p, char* buf, size_t n) const {
     else snprintf(buf, n, "%dk%d", hz / 1000, (hz % 1000) / 100);
   } else if (p == SIDE) {  // SHIFT: the side; PHASE: the stages
     static const char* const sides[3] = {"UP", "DOWN", "BOTH"};
-    if (Phasing()) snprintf(buf, n, "%d", 4 + constrain(int(val[SIDE]), 0, 16));
+    if (Phasing()) snprintf(buf, n, "%d", 4 + 2 * constrain(int(val[SIDE]), 0, 8));
     else snprintf(buf, n, "%s", sides[constrain(int(val[SIDE]), 0, 2)]);
   } else if (p == SHIFT && Phasing() && !OnClk()) {  // octaves a second
     const float r = fabsf(ShiftHz(val[SHIFT]));

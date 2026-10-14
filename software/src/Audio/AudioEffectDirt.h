@@ -199,6 +199,30 @@ private:
   }
 };
 
+// one phaser of N first-order all-passes over a block, added into acc by
+// w; its state held in registers (N known at build time)
+template <int N>
+FASTRUN __attribute__((optimize("O2"))) static void PhaseChain(const float* in, float* acc, float a, float w,
+                                                              float fbk, float* zs, float& fb) {
+  float z[N];
+  for (int j = 0; j < N; j++) z[j] = zs[j];
+  float f = fb;
+  for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+    float v = in[n] + fbk * f;
+    v = v / (1.0f + fabsf(v) * 0.25f);  // (RESO can't run away)
+#pragma GCC unroll 20
+    for (int j = 0; j < N; j++) {  // y = a x + z, z = x - a y
+      const float y = a * v + z[j];
+      z[j] = v - a * y;
+      v = y;
+    }
+    f = v;
+    acc[n] += w * v;
+  }
+  for (int j = 0; j < N; j++) zs[j] = z[j];
+  fb = f;
+}
+
 // Runs from RAM1 (ITCM) like the other Loom engines.
 FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2: the build is -Os)
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
@@ -356,56 +380,36 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
     }
   }
   if (shifting && ph) {
-    // PHASE: all six phasers (three a side) side by side, stage by stage:
-    // each all-pass waits for the one before it, so six at once keep the
-    // FPU busy (one at a time cost ~12 % of the CPU)
-    constexpr int Q = 2 * PH_STREAMS;
-    float z[PH_MAX][Q];
-    float fb[Q], aq[Q], wq[Q];
-    for (int c = 0; c < 2; c++)
+    // PHASE: a phaser at a time over the block; its stage count fixed at
+    // build time (even, 4 .. 20) so the whole chain stays in registers
+    for (int c = 0; c < 2; c++) {
+      float yw[AUDIO_BLOCK_SAMPLES] = {};
       for (int k = 0; k < PH_STREAMS; k++) {
-        const int q = c * PH_STREAMS + k;
-        for (int j = 0; j < ph_n; j++) z[j][q] = ph_z[c][k][j];
-        fb[q] = ph_y[c][k];
-        aq[q] = ph_a[k];
-        wq[q] = ph_w[k];
-      }
-    float mn = mix_now;
-    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
-      float v[Q];
-      for (int q = 0; q < Q; q++) {
-        const float u = pre[q / PH_STREAMS][n] + sh_fb * fb[q];
-        v[q] = u / (1.0f + fabsf(u) * 0.25f);  // (RESO can't run away)
-      }
-      for (int j = 0; j < ph_n; j++) {
-        float* zj = z[j];
-        for (int q = 0; q < Q; q++) {  // first-order all-pass: y = a x + z, z = x - a y
-          const float y = aq[q] * v[q] + zj[q];
-          zj[q] = v[q] - aq[q] * y;
-          v[q] = y;
+        float& fbk = ph_y[c][k];
+        float* zs = ph_z[c][k];
+        const float a = ph_a[k], wk = ph_w[k];
+        switch (ph_n) {
+          case 4:  PhaseChain<4>(pre[c], yw, a, wk, sh_fb, zs, fbk); break;
+          case 6:  PhaseChain<6>(pre[c], yw, a, wk, sh_fb, zs, fbk); break;
+          case 8:  PhaseChain<8>(pre[c], yw, a, wk, sh_fb, zs, fbk); break;
+          case 10: PhaseChain<10>(pre[c], yw, a, wk, sh_fb, zs, fbk); break;
+          case 12: PhaseChain<12>(pre[c], yw, a, wk, sh_fb, zs, fbk); break;
+          case 14: PhaseChain<14>(pre[c], yw, a, wk, sh_fb, zs, fbk); break;
+          case 16: PhaseChain<16>(pre[c], yw, a, wk, sh_fb, zs, fbk); break;
+          case 18: PhaseChain<18>(pre[c], yw, a, wk, sh_fb, zs, fbk); break;
+          default: PhaseChain<20>(pre[c], yw, a, wk, sh_fb, zs, fbk); break;
         }
       }
-      mn += 0.002f * (sh_mix_to - mn);
-      for (int c = 0; c < 2; c++) {
-        float yw = 0.0f;
-        for (int k = 0; k < PH_STREAMS; k++) {
-          const int q = c * PH_STREAMS + k;
-          fb[q] = v[q];
-          yw += wq[q] * v[q];
-        }
+      float mn = mix_now;
+      for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+        mn += 0.002f * (sh_mix_to - mn);
         // the notches: the sound and its phased copy half and half at the deepest
-        const float o = pre[c][n] + mn * 0.5f * (yw - pre[c][n]);
+        const float o = pre[c][n] + mn * 0.5f * (yw[n] - pre[c][n]);
         peak_out = std::max(peak_out, fabsf(o));
         out[c]->data[n] = ToSample16(o);
       }
+      if (c == 1) mix_now = mn;
     }
-    mix_now = mn;
-    for (int c = 0; c < 2; c++)
-      for (int k = 0; k < PH_STREAMS; k++) {
-        const int q = c * PH_STREAMS + k;
-        for (int j = 0; j < ph_n; j++) ph_z[c][k][j] = z[j][q];
-        ph_y[c][k] = fb[q];
-      }
   }
   if (shifting) {  // keep the oscillator on the circle
     const float m = 1.0f / sqrtf(osc_c * osc_c + osc_s * osc_s);
