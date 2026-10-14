@@ -3761,8 +3761,8 @@ FLASHMEM void PlayerDevice::Format(int p, char* buf, size_t n) const {
     if (!fr) { snprintf(buf, n, "%d%%", val[p] / 100); return; }
     const uint32_t ms = uint32_t(uint64_t(EdgeAt(p)) * 1000 / uint64_t(AUDIO_SAMPLE_RATE_EXACT * rate));
     FormatSeconds(ms, buf, n);
-  } else if (p == SPEED) {
-    snprintf(buf, n, "%d%%", val[p]);
+  } else if (p == SPEED) {  // SYNC: as it really plays (the file's tempo to the clock's)
+    snprintf(buf, n, "%d%%", int(val[p] * SyncRatio() + 0.5f));
   } else {
     Device::Format(p, buf, n);
   }
@@ -3997,7 +3997,7 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
 }
 
 // the header: playing, the head's place in the whole file (m:ss.t);
-// stopped, the tempo in BPM as heard (with SPEED; ... while it is worked
+// stopped, the file's own tempo in BPM (SPEED shows how it plays; ... while it is worked
 // out, - when there is none)
 FLASHMEM bool PlayerDevice::HeaderInfo(char* buf, size_t n) const {
   if (!active || !Frames() || loading || analysing) return false;
@@ -4007,11 +4007,8 @@ FLASHMEM bool PlayerDevice::HeaderInfo(char* buf, size_t n) const {
   } else if (bpm_got >= 0) {
     snprintf(buf, n, "...");
   } else if (bpm > 0.0f) {
-    const int tb = int(bpm * SyncRatio() * cur[SPEED] + 5.0f) / 10;  // tenths
-    const int own = int(bpm + 0.5f);
-    // played at another tempo (SYNC, SPEED): the file's own, then as heard
-    if (abs(tb - int(bpm * 10.0f + 0.5f)) >= 5) snprintf(buf, n, "%d>%d", own, (tb + 5) / 10);
-    else snprintf(buf, n, "%d.%d", tb / 10, tb % 10);
+    const int tb = int(bpm * 10.0f + 0.5f);  // the file's own, in tenths (SPEED shows how it plays)
+    snprintf(buf, n, "%d.%d", tb / 10, tb % 10);
   } else {
     snprintf(buf, n, "-");
   }
