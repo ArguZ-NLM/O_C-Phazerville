@@ -50,6 +50,7 @@ public:
       if (pre) std::fill(pre, pre + 2 * PRE_H, 0.0f);
     }
     if (!rv) rv = TakeLines();
+    if (!sh) sh = static_cast<int16_t*>(malloc(2 * SH_LEN * sizeof(int16_t)));
     for (auto& b : dbuf) {
       if (!b) b = static_cast<int16_t*>(PsramAlloc(dlen * sizeof(int16_t)));
     }
@@ -64,13 +65,15 @@ public:
     pre = nullptr;
     GiveLines(rv);
     rv = nullptr;
+    free(sh);
+    sh = nullptr;
     for (auto& b : dbuf) {
       if (b) PsramFree(b);
       b = nullptr;
     }
   }
 
-  bool ready() const { return mem && rv && pre && dbuf[0] && dbuf[1]; }
+  bool ready() const { return mem && rv && pre && sh && dbuf[0] && dbuf[1]; }
 
   void Reset() {
     if (mem) std::fill(mem, mem + MEM_TOTAL, 0.0f);
@@ -81,6 +84,9 @@ public:
     for (auto& z : rv_lp) z = 0.0f;
     rv_hp_z[0] = rv_hp_z[1] = 0.0f;
     rv_t[0] = rv_t[1] = 0.0f;
+    if (sh) memset(sh, 0, 2 * SH_LEN * sizeof(int16_t));
+    for (auto& t : sh_tail) for (auto& v : t) v = 0.0f;
+    sh_lp[0] = sh_lp[1] = sh_env = 0.0f;
     for (auto b : dbuf) if (b) memset(b, 0, dlen * sizeof(int16_t));
     for (auto& i : ix) i = 0;
     for (int c = 0; c < 2; c++) lp_z[c] = hp_z[c] = 0.0f;
@@ -98,6 +104,13 @@ public:
   // the reverb are added on top (MIX crossfades them against it)
   void delay_send(bool s) { dsend = s; }
   void reverb_send(bool s) { rsend = s; }
+  // SHIMMER: the reverb's tail pitched and fed back into it, so it climbs
+  // with every pass. amount 0..1 (0: off); interval: SHIM_* below
+  enum { SHIM_OCT, SHIM_FIFTH, SHIM_OCT5, SHIM_FOURTH, SHIM_DOWN, SHIM_OCT_FIFTH, SHIM_INTERVALS };
+  void shimmer(float amount, int interval) {
+    sh_amt_target = constrain(amount, 0.0f, 1.0f);
+    sh_mode = uint8_t(constrain(interval, 0, SHIM_INTERVALS - 1));
+  }
   // a part switched off: its input closes, the dry passes whole and what
   // it holds rings out
   void delay_open(bool o) { d_open = o; }
@@ -204,6 +217,17 @@ private:
   float rv_lp[RL] = {};
   float rv_hi = 1.0f;       // lines 4..7's share: 1 = all 8 lines, 0 = 4 (lite)
   float rv_t[2] = {};  // half rate: the last step's tail
+  // SHIMMER: a pitch shifter at half the rate (two read heads crossfading
+  // over a WIN window, per voice), fed with the last block's tail
+  static constexpr int SH_LEN = 2048, SH_WIN = 1536;
+  int16_t* sh = nullptr;       // 2 x SH_LEN: the tail as it came, a ring a side
+  int sh_w = 0;
+  float sh_d[2] = {2.0f, 2.0f};  // each voice's delay (its first head), samples
+  float sh_tail[2][AUDIO_BLOCK_SAMPLES / 2] = {};
+  float sh_lp[2] = {}, sh_env = 0.0f;
+  volatile float sh_amt_target = 0.0f;
+  float sh_amt = 0.0f;
+  volatile uint8_t sh_mode = SHIM_OCT;
   bool rv_hi_cold = false;  // lines 4..7 were left out: cleared before they come back
   float rv_hp_z[2] = {};
   const float rv_hp_a = OnePoleCoeff(180.0f);  // 90 Hz at half the rate: the low cut at the input
@@ -590,6 +614,52 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
     // --- REVERB: 8-line FDN fed by the delay stage, at half the rate: a
     // step takes two samples (their average)
     float rin[2][HALF];
+    // SHIMMER: the last block's tail, darkened a little, pitched by one or
+    // two voices and turned down as the tail gets loud (no runaway)
+    float shim[2][HALF];
+    sh_amt += 0.1f * (sh_amt_target - sh_amt);
+    if (sh_amt_target <= 0.0f && sh_amt < 1e-3f) sh_amt = 0.0f;
+    const bool shim_on = sh && sh_amt > 0.0f;
+    if (shim_on) {
+      static const float RATIO[SHIM_INTERVALS][2] = {
+        {2.0f, 0.0f}, {1.4983071f, 0.0f}, {2.9966142f, 0.0f}, {1.3348399f, 0.0f}, {0.5f, 0.0f}, {2.0f, 1.4983071f}};
+      const float* ra = RATIO[sh_mode];
+      const int nv = ra[1] > 0.0f ? 2 : 1;
+      const float g = sh_amt * 0.55f / (1.0f + 3.0f * sh_env) * (nv == 2 ? 0.7f : 1.0f);
+      float pk = 0.0f;
+      for (int k = 0; k < HALF; k++) {
+        for (int c = 0; c < 2; c++) {
+          sh_lp[c] += 0.55f * (sh_tail[c][k] - sh_lp[c]);  // ~ 6 kHz at the half rate
+          sh[c * SH_LEN + sh_w] = int16_t(constrain(sh_lp[c] * RV_Q, -32767.0f, 32767.0f));
+          pk = std::max(pk, fabsf(sh_tail[c][k]));
+        }
+        float o[2] = {0.0f, 0.0f};
+        for (int v = 0; v < nv; v++) {
+          float& d = sh_d[v];
+          d += 1.0f - ra[v];  // up: the heads catch up with the writing
+          if (d < 2.0f) d += SH_WIN;
+          if (d >= 2.0f + SH_WIN) d -= SH_WIN;
+          for (int hd = 0; hd < 2; hd++) {
+            float dd = d + hd * (SH_WIN * 0.5f);
+            if (dd >= 2.0f + SH_WIN) dd -= SH_WIN;
+            const float ph = (dd - 2.0f) * (1.0f / SH_WIN);
+            const float wgt = sinf(float(M_PI) * ph);  // the two heads: equal power
+            float rp = float(sh_w) - dd;
+            if (rp < 0.0f) rp += SH_LEN;
+            const int i0 = int(rp), i1 = i0 + 1 < SH_LEN ? i0 + 1 : 0;
+            const float fr = rp - i0;
+            for (int c = 0; c < 2; c++) {
+              const int16_t* b = sh + c * SH_LEN;
+              o[c] += wgt * (b[i0] + fr * (b[i1] - b[i0])) * (1.0f / RV_Q);
+            }
+          }
+        }
+        if (++sh_w >= SH_LEN) sh_w = 0;
+        shim[0][k] = g * o[0];
+        shim[1][k] = g * o[1];
+      }
+      sh_env = pk > sh_env ? pk : sh_env * 0.995f;
+    }
     {
       float* pb0 = pre;
       float* pb1 = pre + PRE_H;
@@ -633,6 +703,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
         h1 += rv_hp_a * (x1 - h1);
         x0 -= h0;
         x1 -= h1;
+        if (shim_on) { x0 += shim[0][k]; x1 += shim[1][k]; }
         for (int j = 0; j < 4; j++) {
           x0 = ap(x0, j, gj[j]);
           x1 = ap(x1, 4 + j, gj[j]);
@@ -702,6 +773,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
     }
     rv_t[0] = t0;
     rv_t[1] = t1;
+    for (int k = 0; k < HALF; k++) { sh_tail[0][k] = tb[0][k]; sh_tail[1][k] = tb[1][k]; }
   }
   if (rv_xf) {
     rv_xf -= AUDIO_BLOCK_SAMPLES;

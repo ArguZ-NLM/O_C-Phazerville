@@ -4159,8 +4159,8 @@ PROGMEM static const DeviceDef ECHO_DEF = {
     // (size and decay together), walls (soft: dark and dense .. hard:
     // bright with audible reflections; also the delay's tone)
     {"LEVEL", 0, 100, 30, UNI, 0, 2, 1, {}, {"MIX", "SEND"}},
-    {"PRE", 0, 150, 20, UNI},
-    {"ROOM", 0, 100, 50, UNI},
+    {"PRE", 0, 150, 20, UNI, 0, 6, 0},   // mode: SHIMMER's interval (see ROOM)
+    {"ROOM", 0, 100, 50, UNI, 0, 21, 0}, // mode: SHIMMER, the tail pitched back into itself, off .. 100 %
     {"WALL", -50, 50, -10, BI},
   },
   {"DELAY", "REVRB"},
@@ -4184,6 +4184,7 @@ public:
   void Apply(int p) override;
   int Step(int p, int v, int dir) const override;
   void Format(int p, char* buf, size_t n) const override;
+  void FormatMode(int p, char* buf, size_t n) const override;
   // the LEVELs are named by their mode: SEND or MIX
   const char* Name(int p) const override {
     return p == DELAY || p == REVERB ? param(p).modes[mode[p] & 1] : param(p).name;
@@ -4245,7 +4246,7 @@ FLASHMEM uint32_t Device::TailMs() const { return 40; }
 // the reverb's decay plus a few rounds of echoes; frozen: never
 FLASHMEM uint32_t EchoDevice::TailMs() const {
   if (echo.frozen()) return UINT32_MAX;
-  const float decay = DecaySecs() + cur[PRE] * 0.001f;
+  const float decay = DecaySecs() * (1.0f + mode[ROOM] * 0.1f) + cur[PRE] * 0.001f;  // (SHIMMER rings on)
   const float echoes = tap_secs[0][TAPS - 1] * (1.0f + 8.0f * cur[FEEDBACK] * 0.01f);
   return uint32_t((decay + echoes) * 1000.0f) + 200;
 }
@@ -4276,8 +4277,8 @@ FLASHMEM void EchoDevice::Apply(int p) {
     case DELAY:    echo.delay_mix(v); echo.delay_send(mode[DELAY] == 1); break;
     case TIME:     SetTimes(); break;
     case REVERB:   echo.reverb_mix(v); echo.reverb_send(mode[REVERB] == 1); break;
-    case PRE:      echo.pre_delay(cur[PRE]); break;
-    case ROOM:     echo.size(v); echo.decay(DecaySecs()); break;
+    case PRE:      echo.pre_delay(cur[PRE]); echo.shimmer(mode[ROOM] * 0.05f, mode[PRE]); break;
+    case ROOM:     echo.size(v); echo.decay(DecaySecs()); echo.shimmer(mode[ROOM] * 0.05f, mode[PRE]); break;
     case FEEDBACK: echo.feedback(v); break;
     case SPREAD:
       echo.pingpong(mode[SPREAD] == PING ? v : 0.0f);
@@ -4313,6 +4314,14 @@ FLASHMEM void EchoDevice::Format(int p, char* buf, size_t n) const {
   } else {
     Device::Format(p, buf, n);
   }
+}
+
+// PRE's mode: SHIMMER's interval; ROOM's: how much of it
+FLASHMEM void EchoDevice::FormatMode(int p, char* buf, size_t n) const {
+  static const char* const iv[6] = {"+12", "+7", "+19", "+5", "-12", "12+7"};
+  if (p == PRE) snprintf(buf, n, "%s", iv[constrain(int(mode[PRE]), 0, 5)]);
+  else if (p == ROOM) snprintf(buf, n, mode[ROOM] ? "SH%d" : "SH off", mode[ROOM] * 5);
+  else Device::FormatMode(p, buf, n);
 }
 
 FLASHMEM void EchoDevice::Action(int a) {
