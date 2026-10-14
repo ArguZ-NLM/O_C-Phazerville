@@ -98,6 +98,10 @@ public:
   // the reverb are added on top (MIX crossfades them against it)
   void delay_send(bool s) { dsend = s; }
   void reverb_send(bool s) { rsend = s; }
+  // a part switched off: its input closes, the dry passes whole and what
+  // it holds rings out
+  void delay_open(bool o) { d_open = o; }
+  void reverb_open(bool o) { r_open = o; }
   void pingpong(float s) { spread_target = constrain(s, 0.0f, 1.0f); }
   void diffuse(float d) { ap_g = 0.7f * constrain(d, 0.0f, 1.0f); }
   void set_freeze(bool f) { freeze = f; }
@@ -209,6 +213,8 @@ private:
   volatile float spread_target = 0.0f, ap_g = 0.0f;
   volatile float lp_a = 1.0f, hp_a = 0.0f;
   volatile bool freeze = false;
+  volatile bool d_open = true, r_open = true;
+  float dopen = 1.0f, ropen = 1.0f;
   volatile float decay_secs = 3.0f;
 
   float fb = 0.0f, dmix = 0.4f, rmix = 0.3f, spread_ = 0.0f, freeze_amt = 0.0f;
@@ -320,6 +326,8 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
   rmix += k * (rmix_target - rmix);
   spread_ += k * (spread_target - spread_);
   freeze_amt += 0.06f * ((freeze ? 1.0f : 0.0f) - freeze_amt);
+  dopen += k * ((d_open ? 1.0f : 0.0f) - dopen);
+  ropen += k * ((r_open ? 1.0f : 0.0f) - ropen);
 
   const float frz = freeze_amt;
   const float live = 1.0f - frz;
@@ -502,7 +510,8 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
   // DELAY's crossfade dry -> echoes (x1, what the reverb is fed)
   float x1b[2][AUDIO_BLOCK_SAMPLES];
   const float dm = dmix;
-  const float dsub = dsend ? 0.0f : 1.0f;
+  const float dsub = dsend ? 0.0f : dopen;  // (off: the dry whole)
+  const float dlive = live * dopen;          // (off: nothing new in)
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
     const int16_t d0 = dry_in[0][n], d1 = dry_in[1][n];
     peak_in = std::max(peak_in, std::max(abs(d0), abs(d1)));
@@ -511,8 +520,8 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
     for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
       const float dry0 = dry_in[0][n] * q, dry1 = dry_in[1][n] * q;
       const float mono = 0.5f * (dry0 + dry1);
-      wr[0][n] = ToQ15(live * (dry0 + s * (mono - dry0)));
-      wr[1][n] = ToQ15(live * (dry1 * (1.0f - s)));
+      wr[0][n] = ToQ15(dlive * (dry0 + s * (mono - dry0)));
+      wr[1][n] = ToQ15(dlive * (dry1 * (1.0f - s)));
       x1b[0][n] = dry0;
       x1b[1][n] = dry1;
     }
@@ -538,8 +547,8 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
         const float l0 = last[0][n] * q, l1 = last[1][n] * q;
         // ping-pong 0 = straight stereo, 1 = mono into L, L<->R in the loop
         const float mono = 0.5f * (dry0 + dry1);
-        const float inj0 = live * (dry0 + s * (mono - dry0));
-        const float inj1 = live * (dry1 * (1.0f - s));
+        const float inj0 = dlive * (dry0 + s * (mono - dry0));
+        const float inj1 = dlive * (dry1 * (1.0f - s));
         const float f0 = l0 + s * (l1 - l0);
         const float f1 = l1 + s * (l0 - l1);
         float x0 = f0 * fb, y0 = f1 * fb;
@@ -603,8 +612,8 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
       };
       for (int k = 0; k < HALF; k++) {
         const int n = 2 * k + 1;
-        float x0 = live * 0.25f * (x1b[0][n - 1] + x1b[0][n]);  // (0.5 x their average)
-        float x1 = live * 0.25f * (x1b[1][n - 1] + x1b[1][n]);
+        float x0 = live * ropen * 0.25f * (x1b[0][n - 1] + x1b[0][n]);  // (0.5 x their average)
+        float x1 = live * ropen * 0.25f * (x1b[1][n - 1] + x1b[1][n]);
         // pre-delay (a ring a side)
         pb0[pw] = x0;
         pb1[pw] = x1;
@@ -670,7 +679,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
 
     // the tail out is the last step's, halfway to the new one on odd samples
     const float rm = rmix;
-    const float rsub = rsend ? 0.0f : 1.0f;
+    const float rsub = rsend ? 0.0f : ropen;
     float t0 = rv_t[0], t1 = rv_t[1];
     for (int k = 0; k < HALF; k++) {
       for (int h = 0; h < 2; h++) {

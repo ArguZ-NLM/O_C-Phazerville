@@ -4006,14 +4006,14 @@ PROGMEM static const DeviceDef ECHO_DEF = {
   "REPEAT", "ECO", 8, {"FRZ", "CLR"},  // (was ECHO; the tags stay: saved files use them)
   {
     // page 1: the delay, page 2: the reverb and TONE
-    {"LEVEL", 0, 100, 40, UNI, 0, 2, 0, {}, {"MIX", "SEND"}},  // the delay's; mode: crossfade / added
+    {"LEVEL", 0, 100, 40, UNI, 0, 2, 1, {}, {"MIX", "SEND"}},  // the delay's; mode: crossfade / added (SEND first)
     {"TIME", 20, 6000, 450, UNI, 0, 4, 0, {}, {"FREE", "STR", "TRI", "DOT"}},
     {"FDBK", 0, 100, 45, UNI},
     {"SPRD", 0, 100, 40, UNI, 0, 3, 1, {}, {"PHASE", "PING", "DIFF"}},
     // the reverb, after the Tegeler Raummaschine: mix, pre-delay, room
     // (size and decay together), walls (soft: dark and dense .. hard:
     // bright with audible reflections; also the delay's tone)
-    {"LEVEL", 0, 100, 30, UNI, 0, 2, 0, {}, {"MIX", "SEND"}},
+    {"LEVEL", 0, 100, 30, UNI, 0, 2, 1, {}, {"MIX", "SEND"}},
     {"PRE", 0, 150, 20, UNI},
     {"ROOM", 0, 100, 50, UNI},
     {"WALL", -50, 50, -10, BI},
@@ -4047,6 +4047,14 @@ public:
   void TempoChanged() override { if (mode[TIME] != SYNC_FREE) SetTimes(); }
   uint32_t TailMs() const override;
   void Parked() override { if (mem_ok) echo.Reset(); }  // no old tail on return
+  // a part switched off on its own page (B): bit 0 the delay, bit 1 the
+  // reverb; the slot's bypass (chain view) leaves these as they are
+  uint8_t off = 0;
+  void SetOff(uint8_t o) {
+    off = o & 3;
+    echo.delay_open(!(off & 1));
+    echo.reverb_open(!(off & 2));
+  }
 
 private:
   AudioEffectEcho echo;

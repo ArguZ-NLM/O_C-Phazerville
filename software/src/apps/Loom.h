@@ -456,6 +456,9 @@ private:
   void DrawChain() const;
   bool Muted() const;
   bool BypassKey() const;
+  static loom::EchoDevice* Repeat(int t);  // track t's REPEAT, when it is the one in its slot
+  bool PartOff() const;                    // REPEAT: the part on this page is off
+  void TogglePart();
   void DrawDevice() const;
   void DrawClockPage() const;
   void DrawMidiMaps() const;
@@ -941,6 +944,8 @@ FLASHMEM void AppLoom::ToggleBypass(int s) {
       tr.park_at[s < SLOT_COUNT ? s : 0] = millis() + (d ? d->TailMs() : 0);
     } else {
       tr.bypass &= ~bit;
+      // REPEAT back with what was on before; nothing was: both parts
+      if (s == ECHO && Repeat(t) && Repeat(t)->off == 3) Repeat(t)->SetOff(0);
       if (tr.parked & bit) {  // back in the chain before it fades in
         tr.parked &= ~bit;
         Repatch(t);
@@ -1168,6 +1173,7 @@ FLASHMEM void AppLoom::LinkCopy() {
       to->CopyFrom(*from);
     }
   }
+  if (Repeat(master) && Repeat(1 - master)) Repeat(1 - master)->SetOff(Repeat(master)->off);  // (not a setting)
   memcpy(b.order, a.order, sizeof(b.order));  // the same effect order
   b.bypass = a.bypass;
   b.parked = 0;
@@ -2149,7 +2155,8 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
         // or changes by a stray press here. SHUTTLE keeps A = PLAY (and
         // held, stop)
       } else if (d && event.control == OC::CONTROL_BUTTON_DOWN && BypassKey()) {
-        ToggleBypass(col);
+        if (col == ECHO && Repeat(track)) TogglePart();  // its delay / reverb alone
+        else ToggleBypass(col);
       } else if (d) {
         const int a = event.control == OC::CONTROL_BUTTON_UP ? 0 : 1;
         if (a == 0 && stop_armed) break;  // held to stop (see above)
@@ -2361,6 +2368,37 @@ FLASHMEM bool AppLoom::BypassKey() const {
   return Focused() != nullptr;
 }
 
+FLASHMEM loom::EchoDevice* AppLoom::Repeat(int t) {
+  using namespace loom;
+  Device* d = tracks[t].current(ECHO);
+  return d && !memcmp(d->def.tag, "ECO", 4) ? static_cast<EchoDevice*>(d) : nullptr;
+}
+
+FLASHMEM bool AppLoom::PartOff() const {
+  using namespace loom;
+  const EchoDevice* e = BypassKey() && col == ECHO ? Repeat(track) : nullptr;
+  return e && (e->off >> (cursor / 4) & 1);
+}
+
+// REPEAT's B on the DELAY / REVRB page: that part off or on again; with
+// the slot bypassed (chain view) it comes back with this part on
+FLASHMEM void AppLoom::TogglePart() {
+  using namespace loom;
+  const uint8_t bit = 1 << (cursor / 4);
+  if (tracks[track].bypassed(ECHO)) {
+    ToggleBypass(ECHO);
+    if (tracks[track].bypassed(ECHO)) return;  // no room for it (CPU)
+    for (int t = 0; t < NUM_TRACKS; t++)
+      if ((t == track || linked) && Repeat(t)) Repeat(t)->SetOff(Repeat(t)->off & ~bit);
+    return;
+  }
+  EchoDevice* e = Repeat(track);
+  if (!e) return;
+  const uint8_t o = e->off ^ bit;
+  for (int t = 0; t < NUM_TRACKS; t++)
+    if ((t == track || linked) && Repeat(t)) Repeat(t)->SetOff(o);
+}
+
 FLASHMEM void AppLoom::DrawChain() const {
   using namespace loom;
   // boxes are drawn one pixel wider than the spacing so neighbours share a
@@ -2540,7 +2578,7 @@ FLASHMEM void AppLoom::DrawDevice() const {
     // BYP or MUTE label that is showing
     const char* sub = d->def.page_title[cursor / 4];
     const int sx = name_x + 6 * int(strlen(name)) + 6;
-    const bool busy = (BypassKey() && (tracks[track].bypass >> col & 1)) || Muted();
+    const bool busy = (BypassKey() && (tracks[track].bypass >> col & 1)) || PartOff() || Muted();
     if (!mod_mode && sub[0] && (sx + 6 * int(strlen(sub)) <= 81 || !busy)) gfxPrint(sx, 1, sub);
   }
   if (mod_mode) {
@@ -2562,7 +2600,7 @@ FLASHMEM void AppLoom::DrawDevice() const {
     }
     gfxPrint(4, 33, PSTR("L: top   R: bottom"));
   }  // BYP shows only while the slot is bypassed
-  const bool byp_on = BypassKey() && (tracks[track].bypass >> col & 1);
+  const bool byp_on = (BypassKey() && (tracks[track].bypass >> col & 1)) || PartOff();
   const bool mute_turn = !mod_mode && Muted()
       && (!((focus_mod && d->def.actions[1][0]) || byp_on) || (millis() / 600) % 2);
   for (int a = 0; a < 2 && !mod_mode; a++) {
@@ -3234,6 +3272,13 @@ FLASHMEM void AppLoom::SaveFile() const {
   f.write("J", 1);
   const uint8_t jump[2] = {uint8_t(last_mod), uint8_t(last_bi)};
   f.write(jump, 2);
+  // ... and REPEAT's parts switched off on their pages
+  f.write("E", 1);
+  for (auto& tr : tracks) {
+    const Device* e = tr.inst[ECHO][1];
+    const uint8_t o = e ? static_cast<const EchoDevice*>(e)->off : 0;
+    f.write(&o, 1);
+  }
   f.close();
   fs.remove(SAVE_FILE);
   fs.rename(SAVE_TMP, SAVE_FILE);
@@ -3247,6 +3292,8 @@ FLASHMEM void AppLoom::LoadFile() {
   thread_in = -1;  // (the file has it, when B was THREADed)
   thread_spool_in = 0;
   using namespace loom;
+  for (auto& tr : tracks)
+    if (tr.inst[ECHO][1]) static_cast<EchoDevice*>(tr.inst[ECHO][1])->SetOff(0);
   File f = PhzConfig::myfs.open(SAVE_FILE, FILE_READ);
   if (!f) f = PhzConfig::myfs.open("SCULPT.BIN", FILE_READ);  // from before the rename
   if (!f) return;
@@ -3379,6 +3426,12 @@ FLASHMEM void AppLoom::LoadFile() {
           if (got_mark && mark == 'J' && f.read(jump, 2) == 2) {
             last_mod = jump[0] < MOD_BUSES ? int8_t(jump[0]) : -1;
             last_bi = jump[1] != 0;
+            got_mark = f.read(&mark, 1) == 1;
+          } else got_mark = false;
+          uint8_t eo[2];
+          if (got_mark && mark == 'E' && f.read(eo, 2) == 2) {
+            for (int t = 0; t < NUM_TRACKS; t++)
+              if (tracks[t].inst[ECHO][1]) static_cast<EchoDevice*>(tracks[t].inst[ECHO][1])->SetOff(eo[t]);
           }
         }
       }
