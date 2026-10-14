@@ -4008,7 +4008,10 @@ FLASHMEM bool PlayerDevice::HeaderInfo(char* buf, size_t n) const {
     snprintf(buf, n, "...");
   } else if (bpm > 0.0f) {
     const int tb = int(bpm * SyncRatio() * cur[SPEED] + 5.0f) / 10;  // tenths
-    snprintf(buf, n, "%d.%d", tb / 10, tb % 10);
+    const int own = int(bpm + 0.5f);
+    // played at another tempo (SYNC, SPEED): the file's own, then as heard
+    if (abs(tb - int(bpm * 10.0f + 0.5f)) >= 5) snprintf(buf, n, "%d>%d", own, (tb + 5) / 10);
+    else snprintf(buf, n, "%d.%d", tb / 10, tb % 10);
   } else {
     snprintf(buf, n, "-");
   }
