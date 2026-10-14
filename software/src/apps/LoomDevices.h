@@ -4673,13 +4673,11 @@ FLASHMEM void DirtDevice::DrawViz(int x, int y, int w, int h) {
     const float dt = pole_at ? std::min(0.1f, (now - pole_at) * 0.001f) : 0.0f;
     pole_at = now;
     const float hz = ShiftHz(cur[SHIFT]);
-    // px a second, at most ~12: calm, no jumps (fast settings still move clearly)
-    const float raw = Phasing() ? hz * 10.0f  // (octaves a second)
-                                : (hz < 0.0f ? -1.0f : 1.0f) * 3.0f * log2f(1.0f + fabsf(hz) * 4.0f);
-    const float speed = constrain(raw, -12.0f, 12.0f);
+    const float speed = Phasing() ? hz * 10.0f  // (octaves a second)
+                                  : (hz < 0.0f ? -1.0f : 1.0f) * 6.0f * log2f(1.0f + fabsf(hz) * 4.0f);  // px a second
     pole += speed * dt;
     pole -= 16.0f * floorf(pole / 16.0f);
-    const int sw = 1 + cur[HFDBK] * 3 / 100;  // thin lines (1 .. 4 px), not bands
+    const int sw = 2 + cur[HFDBK] * 5 / 100;
     static const uint8_t bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
     const int fill = 1 + cur[HMIX] * 15 / 100;  // 1 .. 16 of 16
     for (int px = 0; px < w; px++) {
