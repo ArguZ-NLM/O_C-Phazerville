@@ -75,6 +75,7 @@ private:
   volatile float thresh_db[BANDS] = {-6.0f, -6.0f, -6.0f}, slope[BANDS] = {};
   volatile bool flat = true, bypass = false;
   float mixw = 1.0f;  // processed share, fades with bypass
+  float lim_g = 1.0f; // the limiter's gain now
 
   float lo_l[2] = {}, lo_b[2] = {}, hi_l[2] = {}, hi_b[2] = {};
   float env[BANDS] = {}, cgain[BANDS] = {1.0f, 1.0f, 1.0f}, target[BANDS] = {1.0f, 1.0f, 1.0f};
@@ -129,6 +130,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectBandz::update() {  // (O
   }
 
   const float g[BANDS] = {gain[0], gain[1], gain[2]};
+  float yb[2][AUDIO_BLOCK_SAMPLES];  // the result, before the limiter
   const float fl = f_lo, fh = f_hi;
   float th[BANDS], sl[BANDS];
   bool comp[BANDS];
@@ -178,7 +180,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectBandz::update() {  // (O
         pk[1] = std::max(pk[1], fabsf(w1));
         pk[2] = std::max(pk[2], fabsf(w2));
         const float y = w0 + w1 + w2;
-        out[c]->data[n] = ToSample16(x + mixw * (y - x));
+        yb[c][n] = x + mixw * (y - x);
       }
       lo_l[c] = ll; lo_b[c] = lb; hi_l[c] = hl; hi_b[c] = hb;
       for (int b = 0; b < BANDS; b++) peak[b] = std::max(peak[b], pk[b]);
@@ -228,7 +230,28 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectBandz::update() {  // (O
         peak[b] = std::max(peak[b], fabsf(w));
       }
       const float x = in[c] ? in[c]->data[n] * q : 0.0f;
-      out[c]->data[n] = ToSample16(x + mixw * (y - x));
+      yb[c][n] = x + mixw * (y - x);
+    }
+  }
+  // a limiter (both sides together): band boosts can't push the track
+  // into the soft clip (its knee is 90 %); down at once within 32 samples,
+  // back up over ~150 ms
+  {
+    constexpr float TH = 0.9f;
+    float pk = 0.0f;
+    for (int c = 0; c < 2; c++)
+      for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) pk = std::max(pk, fabsf(yb[c][n]));
+    const float need = pk > TH ? TH / pk : 1.0f;
+    const float from = lim_g;
+    lim_g = need < lim_g ? need : std::min(need, lim_g + (1.0f - lim_g) * 0.02f);
+    const int ramp = need < from ? 32 : AUDIO_BLOCK_SAMPLES;
+    const float step = (lim_g - from) / ramp;
+    for (int c = 0; c < 2; c++) {
+      float gg = from;
+      for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+        if (n < ramp) gg += step;
+        out[c]->data[n] = ToSample16(yb[c][n] * gg);
+      }
     }
   }
 

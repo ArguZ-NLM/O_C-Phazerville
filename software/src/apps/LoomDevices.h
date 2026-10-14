@@ -950,11 +950,12 @@ FASTRUN __attribute__((optimize("O2"))) void LoomMixer::update() {  // (O2: the 
       const float from = lim_g;
       lim_g = need < lim_g ? need : std::min(need, lim_g + (1.0f - lim_g) * 0.02f);
       if (from < 1.0f || lim_g < 1.0f) {
-        const float step = (lim_g - from) / AUDIO_BLOCK_SAMPLES;
+        const int ramp = need < from ? 32 : AUDIO_BLOCK_SAMPLES;  // down within 32 samples
+        const float step = (lim_g - from) / ramp;
         for (int c = 0; c < 2; c++) {
           float gg = from;
           for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
-            gg += step;
+            if (n < ramp) gg += step;
             acc[c][n] = int32_t(lrintf(acc[c][n] * gg));
           }
         }
