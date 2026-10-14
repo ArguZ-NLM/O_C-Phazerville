@@ -2564,13 +2564,12 @@ FLASHMEM void AppLoom::SetByText(bool want_mode, const char* text) {
     for (int m = 0; m < pd.nmodes; m++) { d->mode[p] = uint8_t(m); d->FormatMode(p, buf, sizeof(buf)); consider(m, buf); }
     d->mode[p] = was;
   } else {
+    // every value, not only the knob's steps from one end (a value turned
+    // to by hand can sit between them)
     const int16_t was = d->val[p];
-    int v = pd.min;
-    for (int guard = 0; guard < 4000; guard++) {
+    for (int v = pd.min; v <= pd.max; v++) {
       d->val[p] = int16_t(v); d->Format(p, buf, sizeof(buf)); consider(v, buf);
-      const int nv = d->Step(p, v, 1);
-      if (v >= pd.max || nv <= v) break;
-      v = std::min<int>(nv, pd.max);
+      if (best_d < 0.0f) break;
     }
     d->val[p] = was;
   }
@@ -2584,6 +2583,13 @@ FLASHMEM void AppLoom::SetByText(bool want_mode, const char* text) {
       Mirror(d, p);
       const int after = want_mode ? d->mode[p] : d->val[p];
       if (after == now || (target > now && after > target) || (target < now && after < target)) break;
+    }
+    // the last bit when the knob's steps jump over it
+    if (!want_mode && d->val[p] != target) {
+      d->last_delta[p] = int16_t(target - d->val[p]);
+      d->val[p] = int16_t(target);
+      d->Refresh(p);
+      Mirror(d, p);
     }
   };
   const int start = want_mode ? d->mode[p] : d->val[p];
