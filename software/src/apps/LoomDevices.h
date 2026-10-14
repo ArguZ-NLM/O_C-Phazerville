@@ -1787,8 +1787,9 @@ FLASHMEM void ReelDevice::Deactivate() {
 FLASHMEM void ReelDevice::Apply(int p) {
   const float v = cur[p] * 0.01f;
   switch (p) {
-    case IN:
-      if (input) { input->val[0] = cur[IN]; input->Refresh(0); }
+    case IN:  // only while SPOOL is the source (else its IN is an old copy: loading
+              // the settings put it over INPUT's own choice)
+      if (input && active) { input->val[0] = cur[IN]; input->Refresh(0); }
       break;
     case SPEED:
       fx.SetSpeed(v);
