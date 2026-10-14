@@ -2928,6 +2928,8 @@ public:
   enum { FILE_, LOOP, LEVEL, SPEED, START, END, XFADE, SNAP };
   enum { SNAP_OFF, SNAP_ZERO, SNAP_BEAT };
   enum { DIR_REV, DIR_FWD, DIR_SYNC };  // SPEED's modes
+  // FILE's number row already says STRM / MEM (the file's name is above)
+  const char* Name(int p) const override { return p == FILE_ ? "MODE" : Device::Name(p); }
   static float MaxSecs() { return BigSecs(); }
   static constexpr size_t MIN_BUF = 11025;  // 0.25 s: the buffer before a file
   // FILE mode MEM on a long file: the section in memory, in file frames
