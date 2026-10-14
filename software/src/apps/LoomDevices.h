@@ -4673,8 +4673,10 @@ FLASHMEM void DirtDevice::DrawViz(int x, int y, int w, int h) {
     const float dt = pole_at ? std::min(0.1f, (now - pole_at) * 0.001f) : 0.0f;
     pole_at = now;
     const float hz = ShiftHz(cur[SHIFT]);
-    const float speed = Phasing() ? hz * 10.0f  // (octaves a second)
-                                  : (hz < 0.0f ? -1.0f : 1.0f) * 6.0f * log2f(1.0f + fabsf(hz) * 4.0f);  // px a second
+    // px a second: lively, up to ~60 (the page is drawn ~500 times a second)
+    const float raw = Phasing() ? hz * 24.0f  // (octaves a second)
+                                : (hz < 0.0f ? -1.0f : 1.0f) * 12.0f * log2f(1.0f + fabsf(hz) * 4.0f);
+    const float speed = constrain(raw, -60.0f, 60.0f);
     pole += speed * dt;
     pole -= 16.0f * floorf(pole / 16.0f);
     const int sw = 2 + cur[HFDBK] * 5 / 100;
@@ -4683,11 +4685,16 @@ FLASHMEM void DirtDevice::DrawViz(int x, int y, int w, int h) {
     for (int px = 0; px < w; px++) {
       const bool down = !Phasing() && (cur[SIDE] == 1 || (cur[SIDE] == 2 && px >= w / 2));
       for (int py = 0; py < h; py++) {
-        int ph = (px + (down ? -py : py) + int(down ? -pole : pole)) % 16;
-        if (ph < 0) ph += 16;
+        // where this pixel is across the stripes, in fractions of a pixel:
+        // the edges are lit by how much of them the stripe covers (shaded
+        // with the dither), so the stripes glide instead of stepping
+        float u = px + (down ? -py : py) + (down ? -pole : pole);
+        u -= 16.0f * floorf(u / 16.0f);
+        const float cover = std::min(1.0f, std::max(0.0f, std::min(u + 1.0f, float(sw) - u)));
+        if (cover <= 0.0f) continue;
         // (the dither travels with its stripe: no dots blinking at the edges)
-        const int dx = px + int(down ? -pole : pole);
-        if (ph < sw && bayer[py & 3][dx & 3] < fill) gfxPixel(x + px, y + py);
+        const int dx = px + int(floorf(down ? -pole : pole));
+        if (bayer[py & 3][dx & 3] < int(fill * cover + 0.5f)) gfxPixel(x + px, y + py);
       }
     }
     if (!Phasing() && cur[SIDE] == 2) gfxLine(x + w / 2, y, x + w / 2, y + h - 1);
