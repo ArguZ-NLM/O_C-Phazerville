@@ -50,6 +50,8 @@ extern volatile bool g_noise_request;  // USB 'N' (Main.cpp)
 extern volatile uint8_t g_heavy_request;  // USB 'H' / 'h' (Main.cpp)
 extern volatile uint8_t g_capture_request;  // USB 'W' (1) / 'U' (2) (Main.cpp)
 extern volatile uint8_t g_notes_request;    // USB 'M' / 'm' (Main.cpp)
+extern volatile char g_set_request;         // USB '=' / ':' (Main.cpp)
+extern char g_set_text[24];
 extern volatile bool g_tape_request;        // USB 'T' (Main.cpp)
 extern volatile bool g_midilog_request;     // USB 'J' (Main.cpp)
 extern volatile bool g_droplog_request;     // USB 'O' (Main.cpp)

@@ -106,6 +106,8 @@ volatile uint8_t g_capture_request = 0;  // Loom's output capture (USB 'W' / 'U'
 volatile int8_t g_move_request = 0;    // Loom: move the effect under the cursor (USB 'Y' right, 'Z' left; testing)
 volatile uint32_t g_remote_at = 0;      // the last remote-panel key over USB (Loom shows a note)
 volatile uint8_t g_notes_request = 0;    // Loom: test notes, captured (USB 'M'; 'm' both tracks)
+volatile char g_set_request = 0;        // Loom: '=' a value / ':' a mode by its shown text (USB, testing)
+char g_set_text[24] = "";
 volatile bool g_tape_request = false;    // Loom: TAPE on / off (USB 'T')
 volatile bool g_midilog_request = false; // Loom: the MIDI log (USB 'J')
 volatile bool g_droplog_request = false; // Loom: the dropout log (USB 'O')
@@ -773,7 +775,7 @@ void FASTRUN loop() {
         int cmd = Serial.read();
         // the remote panel (keys sent from the computer): Loom shows a
         // sticky note meanwhile, so nobody turns a knob at the same time
-        if (cmd > 0 && strchr("+-uy*[],.<>&!%~", cmd)) g_remote_at = millis() | 1;
+        if (cmd > 0 && strchr("+-uy*[],.<>&!%~=:", cmd)) g_remote_at = millis() | 1;
         switch (cmd) {
 #if defined(__IMXRT1062__)
 #ifdef CARD_APP
@@ -996,6 +998,15 @@ void FASTRUN loop() {
             OC::ui.Inject(UI::EVENT_BUTTON_PRESS, OC::CONTROL_BUTTON_L, 0, 0);
             break;
 #ifdef ENABLE_APP_LOOM
+          case '=': case ':': {
+            // the setting under the cursor straight to a value ('=') or mode
+            // (':') given as the screen shows it: "=P20", "=3s", ":SHIFT"
+            int n = 0;
+            while (Serial.available() > 0 && Serial.peek() > ' ' && n < int(sizeof(g_set_text)) - 1)
+              g_set_text[n++] = char(Serial.read());
+            g_set_text[n] = 0;
+            g_set_request = char(cmd);
+          } break;
           case '~': {  // link mode straight to FREE (no TIGHT copy on the way)
             extern void (*g_loom_unlink)();
             if (g_loom_unlink) g_loom_unlink();

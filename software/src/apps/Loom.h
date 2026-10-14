@@ -429,6 +429,7 @@ private:
   uint32_t reset_hold = 0;  // ... since then
   loom::PlayerDevice* meta_page = nullptr;  // the PLAYER whose page is open
   void Mirror(loom::Device* d, int p) const;
+  void SetByText(bool want_mode, const char* text);
   void Repatch(int t);
   void ApplyBypass(int t);
   void ParkBypassed(int t);
@@ -1824,6 +1825,11 @@ FLASHMEM void AppLoom::MainLoop() {
       if (!g_capture->Start(b_side, -1, ab)) Serial.println("CAPTURE: no PSRAM");
     }
     if (g_capture) g_capture->Idle();
+    if (g_set_request) {
+      const bool m = g_set_request == ':';
+      g_set_request = 0;
+      SetByText(m, g_set_text);
+    }
     // test notes (USB 'M'), as if from a keyboard, while 'U' captures:
     // middle C, the G above, a C major chord, the C above (ms, note, vel)
     {
@@ -2512,6 +2518,86 @@ FLASHMEM bool AppLoom::Muted() const {
   for (int t = 0; t < NUM_TRACKS; t++)
     if ((t == track || linked) && tracks[t].mix && tracks[t].mix->Muted()) return true;
   return false;
+}
+
+// USB '=' / ':' (testing): the setting under the cursor on a device page
+// straight to the value ('=') or mode (':') whose shown text matches, e.g.
+// "=P20", "=3s", ":SHIFT". Without an exact match: the nearest number with
+// the same letters around it ("=3s" finds 2.97s). It gets there in knob
+// steps, so a LINKED twin and the CPU check follow as they do for the knobs
+FLASHMEM void AppLoom::SetByText(bool want_mode, const char* text) {
+  using namespace loom;
+  Device* d = view == DEVICE && !mod_mode && !trig_mode ? Focused() : nullptr;
+  if (!d) { Serial.println("SET: open a device page first"); return; }
+  const int p = cursor;
+  const ParamDef& pd = d->param(p);
+  // upper case, no spaces; letters = all but the number, number = its value
+  auto norm = [](const char* in, char* out, size_t n) {
+    size_t k = 0;
+    for (; *in && k + 1 < n; in++) if (*in != ' ') out[k++] = char(toupper(*in));
+    out[k] = 0;
+  };
+  auto split = [](const char* t, char* letters, float& num) {
+    int k = 0; bool have = false; num = 0.0f;
+    for (const char* c = t; *c; c++) {
+      if (!have && (isdigit(*c) || ((*c == '-' || *c == '+' || *c == '.') && isdigit(c[1])))) {
+        num = strtof(c, nullptr); have = true;
+        while (c[1] && (isdigit(c[1]) || c[1] == '.')) c++;
+      } else if (k < 15) letters[k++] = *c;
+    }
+    letters[k] = 0;
+    return have;
+  };
+  char want[24], wl[16], buf[16], got[16], gl[16];
+  norm(text, want, sizeof(want));
+  float wn, gn;
+  const bool wnum = split(want, wl, wn);
+  int best = -1; float best_d = 1e9f;
+  auto consider = [&](int v, const char* shown) {
+    norm(shown, got, sizeof(got));
+    if (!strcmp(got, want)) { best = v; best_d = -1.0f; return; }
+    if (best_d < 0.0f || !wnum || !split(got, gl, gn) || strcmp(gl, wl)) return;
+    if (fabsf(gn - wn) < best_d) { best_d = fabsf(gn - wn); best = v; }
+  };
+  if (want_mode) {
+    const uint8_t was = d->mode[p];
+    for (int m = 0; m < pd.nmodes; m++) { d->mode[p] = uint8_t(m); d->FormatMode(p, buf, sizeof(buf)); consider(m, buf); }
+    d->mode[p] = was;
+  } else {
+    const int16_t was = d->val[p];
+    int v = pd.min;
+    for (int guard = 0; guard < 4000; guard++) {
+      d->val[p] = int16_t(v); d->Format(p, buf, sizeof(buf)); consider(v, buf);
+      const int nv = d->Step(p, v, 1);
+      if (v >= pd.max || nv <= v) break;
+      v = std::min<int>(nv, pd.max);
+    }
+    d->val[p] = was;
+  }
+  if (best < 0) { Serial.printf("SET %s: nothing shows \"%s\"\n", pd.name, text); return; }
+  // in knob steps (a stuck step ends it)
+  auto walk = [&](int target) {
+    for (int guard = 0; guard < 4000; guard++) {
+      const int now = want_mode ? d->mode[p] : d->val[p];
+      if (now == target) break;
+      if (want_mode) d->NudgeMode(p, target > now ? 1 : -1); else d->Nudge(p, target > now ? 1 : -1);
+      Mirror(d, p);
+      const int after = want_mode ? d->mode[p] : d->val[p];
+      if (after == now || (target > now && after > target) || (target < now && after < target)) break;
+    }
+  };
+  const int start = want_mode ? d->mode[p] : d->val[p];
+  const float before = WorstCost(d);
+  walk(best);
+  // a costlier setting only with room for it (as with the knobs)
+  const float more = (WorstCost(d) - before) * (linked ? 2.0f : 1.0f);
+  if (more > 0.0f && !focus_mod && col > SOURCE && col < SLOT_COUNT && !(tracks[track].bypass >> col & 1) && !Admit(more)) {
+    walk(start);
+    Serial.println("SET: not enough CPU, left as it was");
+    return;
+  }
+  if (want_mode) d->FormatMode(p, buf, sizeof(buf)); else d->Format(p, buf, sizeof(buf));
+  Serial.printf("SET %s %s %s\n", pd.name, want_mode ? "mode" : "=", buf);
 }
 
 // on an effect slot's page B (DOWN) bypasses the slot (ECHO's CLR stays
