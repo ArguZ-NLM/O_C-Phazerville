@@ -4249,23 +4249,19 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
     // edges, and between them a wedge fading out from the middle to both
     // sides, as tall as LEVEL and reaching towards the walls with ROOM,
     // falling off like a real tail (quickly first, then a long low end);
-    // PRE leaves a gap in the middle. WALL fills it in: sparse when soft,
-    // solid when hard; and it makes the walls crisp (hard) or diffuse (soft).
-    static const uint8_t bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
+    // PRE leaves a gap in the middle. WALL makes the walls crisp (hard) or
+    // diffuse (soft); the tail stays solid.
     const int cx = x + w / 2, hw = w / 2 - 1;
     const int wall = hw * (30 + 70 * cur[ROOM] / 100) / 100;
     const int gap = (wall - 2) * cur[PRE] / 150 / 4;  // the pre-delay, at most a quarter of the way to each wall
     const int th = int((h - 2) * sqrtf(cur[REVERB] * 0.01f));  // shows more early on (50% = 70% high)
     const int len = std::max(2, (wall - 1 - gap) * (20 + 80 * cur[ROOM] / 100) / 100);
-    const int fill = 3 + (cur[WALL] + 50) * 13 / 100;  // 3..16 of 16
     for (int i = gap; i < gap + len; i++) {
       constexpr float k = 4.0f, end = 0.0183156f;  // e^-4
       const int hh = int(th * (expf(-k * (i - gap) / len) - end) / (1.0f - end) + 0.5f);
-      for (int py = base - hh + 1; py <= base; py++) {
-        const bool edge = py == base - hh + 1;  // keep the outline readable
-        if (edge || bayer[py & 3][(cx + i) & 3] < fill) gfxPixel(cx + i, py);
-        if (i && (edge || bayer[py & 3][(cx - i) & 3] < fill)) gfxPixel(cx - i, py);
-      }
+      if (hh <= 0) continue;
+      gfxLine(cx + i, base - hh + 1, cx + i, base);
+      if (i) gfxLine(cx - i, base - hh + 1, cx - i, base);
     }
     // the walls: hard (WALL +50) a crisp line; softer, it spreads up to 2
     // pixels each side, thinning out from the middle - a diffuse surface.

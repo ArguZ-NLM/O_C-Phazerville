@@ -3193,6 +3193,7 @@ FLASHMEM void AppLoom::ForEachDevice(F f) const {
 
 FLASHMEM void AppLoom::SaveFile() const {
   using namespace loom;
+  const uint32_t save_t0 = millis();
   auto& fs = PhzConfig::myfs;
   for (auto& tr : tracks) if (tr.player) tr.player->WriteMeta();  // each file's own (SD card)
   File f = fs.open(SAVE_TMP, FILE_WRITE_BEGIN);
@@ -3283,7 +3284,7 @@ FLASHMEM void AppLoom::SaveFile() const {
   fs.remove(SAVE_FILE);
   fs.rename(SAVE_TMP, SAVE_FILE);
   dirty = false;
-  Serial.println("Loom: settings saved");
+  Serial.printf("Loom: settings saved (%lu ms)\n", (unsigned long)(millis() - save_t0));
 }
 
 FLASHMEM void AppLoom::LoadFile() {
