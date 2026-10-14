@@ -168,13 +168,32 @@ uint8_t clock_starts = 0;  // counts starts; each modulator notices a new one
 inline void ClockStart() { clock_running = true; clock_starts++; }
 inline void ClockStop() { clock_running = false; }
 
-// note values for synced times, in beats (quarter notes)
-constexpr int NUM_DIVS = 9;
-PROGMEM static const float DIV_BEATS[NUM_DIVS] = {0.125f, 0.25f, 0.5f, 1, 2, 4, 8, 16, 32};
-PROGMEM static const char DIV_NAMES[NUM_DIVS][5] = {"1/32", "1/16", "1/8", "1/4", "1/2", "1", "2", "4", "8"};
-enum SyncMode : uint8_t { SYNC_FREE, SYNC_STRAIGHT, SYNC_TRIPLET, SYNC_DOTTED };
-
-// map a setting's value range onto the note values (so CV can pick them)
+// a setting on the clock (mode CLK): one of NUM_DIVS note values, 8 bars
+// .. 1/64, each straight, dotted (D), triplet (T) and quintuplet (Q: five
+// in the time of four), sorted from the longest; in beats (quarter = 1)
+constexpr int NUM_DIVS = 40;
+enum SyncMode : uint8_t { SYNC_FREE, SYNC_CLOCK };
+FLASHMEM static void ClockDiv(int i, float* beats, char* name = nullptr, size_t n = 0) {
+  static const char* const base[10] = {"8", "4", "2", "1", "1/2", "1/4", "1/8", "1/16", "1/32", "1/64"};
+  static const float mult[4] = {1.5f, 1.0f, 0.8f, 2.0f / 3.0f};
+  static const char suf[4] = {'D', 0, 'Q', 'T'};
+  static float b[NUM_DIVS];
+  static uint8_t order[NUM_DIVS];
+  static bool made = false;
+  if (!made) {  // all of them, sorted from the longest
+    for (int k = 0; k < NUM_DIVS; k++) { b[k] = 32.0f / float(1 << (k / 4)) * mult[k % 4]; order[k] = uint8_t(k); }
+    std::sort(order, order + NUM_DIVS, [](uint8_t x, uint8_t y) { return b[x] > b[y]; });
+    made = true;
+  }
+  const int k = order[constrain(i, 0, NUM_DIVS - 1)];
+  if (beats) *beats = b[k];
+  if (name) {
+    if (suf[k % 4]) snprintf(name, n, "%s%c", base[k / 4], suf[k % 4]);
+    else snprintf(name, n, "%s", base[k / 4]);
+  }
+}
+// map a setting's value range onto the note values, the longest at lo (so
+// CV can pick them); a value in the middle of each one's stretch
 FLASHMEM static int DivIndex(int v, int lo, int hi) {
   return constrain((v - lo) * NUM_DIVS / (hi - lo + 1), 0, NUM_DIVS - 1);
 }
@@ -182,16 +201,9 @@ FLASHMEM static int DivValue(int idx, int lo, int hi) {
   idx = constrain(idx, 0, NUM_DIVS - 1);
   return lo + ((hi - lo + 1) * (2 * idx + 1)) / (2 * NUM_DIVS);
 }
-FLASHMEM static float DivSeconds(int idx, uint8_t mode) {
-  float beats = DIV_BEATS[constrain(idx, 0, NUM_DIVS - 1)];
-  if (mode == SYNC_TRIPLET) beats *= 2.0f / 3.0f;
-  if (mode == SYNC_DOTTED) beats *= 1.5f;
-  return beats * 60.0f / tempo_bpm;
-}
-FLASHMEM static void FormatDiv(int idx, uint8_t mode, char* buf, size_t n) {
-  snprintf(buf, n, "%s%s", DIV_NAMES[constrain(idx, 0, NUM_DIVS - 1)],
-           mode == SYNC_TRIPLET ? "T" : mode == SYNC_DOTTED ? "D" : "");
-}
+FLASHMEM static float DivBeats(int idx) { float b; ClockDiv(idx, &b); return b; }
+FLASHMEM static float DivSeconds(int idx) { return DivBeats(idx) * 60.0f / tempo_bpm; }
+FLASHMEM static void FormatDiv(int idx, char* buf, size_t n) { ClockDiv(idx, nullptr, buf, n); }
 
 // trigger source numbering: 0 off, 1-4 gate in, 5-12 CV in, 13+ MIDI map
 constexpr int TRIG_SOURCES = 1 + 4 + 8 + MIDIMAP_MAX;
@@ -4114,7 +4126,7 @@ PROGMEM static const DeviceDef ECHO_DEF = {
   {
     // page 1: the delay, page 2: the reverb and TONE
     {"LEVEL", 0, 100, 40, UNI, 0, 2, 1, {}, {"MIX", "SEND"}},  // the delay's; mode: crossfade / added (SEND first)
-    {"TIME", 20, 6000, 450, UNI, 0, 4, 0, {}, {"FREE", "STR", "TRI", "DOT"}},
+    {"TIME", 20, 6000, 450, UNI, 0, 2, 0, {}, {"FREE", "CLK"}},
     {"FDBK", 0, 100, 45, UNI},
     {"SPRD", 0, 100, 40, UNI, 0, 3, 1, {}, {"PHASE", "PING", "DIFF"}},
     // the reverb, after the Tegeler Raummaschine: mix, pre-delay, room
@@ -4220,7 +4232,7 @@ FLASHMEM void EchoDevice::CpuMax(float parts[2]) {
 
 FLASHMEM void EchoDevice::SetTimes() {
   const float secs = mode[TIME] == SYNC_FREE ? cur[TIME] * 0.001f
-    : DivSeconds(DivIndex(cur[TIME], 20, 6000), mode[TIME]);
+    : DivSeconds(NUM_DIVS - 1 - DivIndex(cur[TIME], 20, 6000));  // (the longest at the top)
   const float phase = mode[SPREAD] == PHASE ? 1.0f + 0.3f * cur[SPREAD] * 0.01f : 1.0f;
   for (int c = 0; c < 2; c++) {
     for (int t = 0; t < TAPS; t++) {
@@ -4262,7 +4274,7 @@ FLASHMEM int EchoDevice::Step(int p, int v, int dir) const {
 
 FLASHMEM void EchoDevice::Format(int p, char* buf, size_t n) const {
   if (p == TIME && mode[TIME] != SYNC_FREE) {
-    FormatDiv(DivIndex(val[TIME], 20, 6000), mode[TIME], buf, n);
+    FormatDiv(NUM_DIVS - 1 - DivIndex(val[TIME], 20, 6000), buf, n);
   } else if (p == TIME) {
     const int ms = val[TIME];
     if (ms < 1000) snprintf(buf, n, "%dms", ms);
@@ -4873,7 +4885,7 @@ PROGMEM static const DeviceDef SPRAY_DEF = {
   "FIBRE", "SPR", 8, {"FRZ", "GRN"},  // (was SPRAY)  // B: one grain by hand (RATE 0: only these)
   {
     // left of the middle: P (periodic), right: R (random), middle: no grains;
-    // mode: FREE, or CLK: P on the clock, 40 divisions (see GrainDiv)
+    // mode: FREE, or CLK: P on the clock's note values (see ClockDiv)
     {"RATE", -100, 100, 55, BI, 0, 2, 0, {}, {"FREE", "CLK"}},
     {"SIZE", 0, 100, 50, UNI, 0, 21, 0},   // mode: size spread, 0..100% in 5% steps
     {"PITCH", -24, 24, 0, BI, 0, 25, 0},  // mode: pitch spread, 0..24 semitones
@@ -4920,13 +4932,12 @@ private:
   bool frozen = false;
   // 0.5 .. 40 Hz either side of the middle, 0 in it
   static float RateHz(int v) { return v ? 0.5f * powf(80.0f, (abs(v) - 1) / 99.0f) : 0.0f; }
-  // P on the clock (RATE's mode CLK): one of GDIVS divisions, slowest first
-  static constexpr int GDIVS = 40;
-  static void GrainDiv(int i, float* beats, char* name, size_t n);
-  bool OnClock() const { return mode[RATE] != 0 && cur[RATE] < 0; }
-  static int DivOf(int v) { return constrain((abs(v) - 1) * GDIVS / 100, 0, GDIVS - 1); }
-  static int DivVal(int i) { return -(1 + (constrain(i, 0, GDIVS - 1) * 100 + 50) / GDIVS); }
-  float DivBeats() const { float b; GrainDiv(DivOf(cur[RATE]), &b, nullptr, 0); return b; }
+  // P on the clock (RATE's mode CLK): one of the clock's note values (the
+  // longest next to the middle)
+  bool OnClock() const { return mode[RATE] != SYNC_FREE && cur[RATE] < 0; }
+  static int DivOf(int v) { return DivIndex(abs(v), 1, 100); }
+  static int DivVal(int i) { return -DivValue(i, 1, 100); }
+  float DivBeats() const { return loom::DivBeats(DivOf(cur[RATE])); }
   int Step(int p, int v, int dir) const override;
   void Clocked() override;
   void TempoChanged() override { Apply(RATE); }
@@ -4986,29 +4997,6 @@ FLASHMEM void SprayDevice::FormatMode(int p, char* buf, size_t n) const {
   else Device::FormatMode(p, buf, n);
 }
 
-// RATE's divisions on the clock: 8 bars .. 1/64, each straight, dotted
-// (D), triplet (T) and quintuplet (Q: five in the time of four), slowest
-// first; in beats (a quarter note = 1)
-FLASHMEM void SprayDevice::GrainDiv(int i, float* beats, char* name, size_t n) {
-  static const char* const base[10] = {"8", "4", "2", "1", "1/2", "1/4", "1/8", "1/16", "1/32", "1/64"};
-  static const float mult[4] = {1.5f, 1.0f, 0.8f, 2.0f / 3.0f};
-  static const char suf[4] = {'D', 0, 'Q', 'T'};
-  static float b[GDIVS];
-  static uint8_t order[GDIVS];
-  static bool made = false;
-  if (!made) {  // all 40, sorted from the longest
-    for (int k = 0; k < GDIVS; k++) { b[k] = 32.0f / float(1 << (k / 4)) * mult[k % 4]; order[k] = uint8_t(k); }
-    std::sort(order, order + GDIVS, [](uint8_t x, uint8_t y) { return b[x] > b[y]; });
-    made = true;
-  }
-  const int k = order[constrain(i, 0, GDIVS - 1)];
-  if (beats) *beats = b[k];
-  if (name) {
-    if (suf[k % 4]) snprintf(name, n, "%s%c", base[k / 4], suf[k % 4]);
-    else snprintf(name, n, "%s", base[k / 4]);
-  }
-}
-
 // RATE on the clock: P steps through the divisions (one turn each), on to
 // OFF and the R side as before
 FLASHMEM int SprayDevice::Step(int p, int v, int dir) const {
@@ -5035,7 +5023,7 @@ FLASHMEM void SprayDevice::Clocked() {
 
 FLASHMEM void SprayDevice::Format(int p, char* buf, size_t n) const {
   if (p == RATE && OnClock()) {
-    GrainDiv(DivOf(val[RATE]), nullptr, buf, n);
+    FormatDiv(DivOf(val[RATE]), buf, n);
   } else if (p == RATE) {
     // P periodic / R random, in grains per second
     const float hz = RateHz(val[RATE]);

@@ -77,17 +77,17 @@ FLASHMEM float Modulator::Seconds(int v, float lo, float hi) const {
 
 FLASHMEM float Modulator::RateHz(int p, float lo, float hi) const {
   if (mode[p] == SYNC_FREE) return Seconds(cur[p], lo, hi);
-  return 1.0f / DivSeconds(NUM_DIVS - 1 - DivIndex(cur[p], 0, 100), mode[p]);
+  return 1.0f / DivSeconds(DivIndex(cur[p], 0, 100));  // (higher: shorter)
 }
 
 FLASHMEM int Modulator::Step(int p, int v, int dir) const {
-  if (param(p).nmodes == 4 && mode[p] != SYNC_FREE) // synced RATE: whole notes
+  if (!strcmp(param(p).modes[1], "CLK") && mode[p] != SYNC_FREE) // RATE on the clock: note values
     return DivValue(DivIndex(v, 0, 100) + dir, 0, 100);
   return v + dir;
 }
 
 FLASHMEM void Modulator::FormatRate(int p, float hz, char* buf, size_t n) const {
-  if (mode[p] != SYNC_FREE) FormatDiv(NUM_DIVS - 1 - DivIndex(val[p], 0, 100), mode[p], buf, n);
+  if (mode[p] != SYNC_FREE) FormatDiv(DivIndex(val[p], 0, 100), buf, n);
   else if (hz < 1.0f) snprintf(buf, n, "%ds", int(1.0f / hz + 0.5f));
   else snprintf(buf, n, "%dHz", int(hz + 0.5f));
 }
@@ -150,7 +150,7 @@ FLASHMEM void Modulator::DrawMini(int x, int y, int w, int h) {
 PROGMEM static const DeviceDef WAVE_DEF = {
   "WAVE", "WAV", 7, {"RST", ""},
   {
-    {"RATE", 0, 100, 40, UNI, 0, 4, 0, {}, {"FREE", "STR", "TRI", "DOT"}},
+    {"RATE", 0, 100, 40, UNI, 0, 2, 0, {}, {"FREE", "CLK"}},
     {"AMNT", 0, 100, 100, UNI},
     {"PHASE", 0, 100, 0, UNI},
     {"OFFS", -50, 50, 0, BI},
@@ -240,7 +240,7 @@ PROGMEM static const DeviceDef RANDOM_DEF = {
     {"VARI", 0, 100, 20, UNI},
     {"OFFS", -50, 50, 0, BI},
     {"CLOCK", 0, TRIG_SOURCES - 1, 0, UNI},
-    {"RATE", 0, 100, 45, UNI, 0, 4, 0, {}, {"FREE", "STR", "TRI", "DOT"}},
+    {"RATE", 0, 100, 45, UNI, 0, 2, 0, {}, {"FREE", "CLK"}},
     {"SMTH", 0, 100, 0, UNI},
     // the scale the output snaps to (off, then as TWILL's, with BLUES);
     // mode: its root note, C .. B
@@ -363,7 +363,7 @@ FLASHMEM void RandomMod::Tick(const ModCtx& ctx) {
     if (Edge(cur[P_CLOCK], ctx, 0)) Step();
   } else if (synced && clock_running) {
     // on the clock's grid (as FIBRE's grains on the clock count it)
-    const int64_t g = ClockGrid(1.0f / Hz() * tempo_bpm / 60.0f);
+    const int64_t g = ClockGrid(DivBeats(DivIndex(cur[P_RATE], 0, 100)));
     if (g != grid_at) { if (grid_at >= 0) Step(); grid_at = g; }
   } else if (!synced) {
     t += Hz() * ctx.dt;
