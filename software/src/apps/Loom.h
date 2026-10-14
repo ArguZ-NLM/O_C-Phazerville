@@ -3230,6 +3230,10 @@ FLASHMEM void AppLoom::SaveFile() const {
   f.write("T", 1);
   const int16_t th_in[2] = {thread_in, thread_spool_in};
   f.write(reinterpret_cast<const uint8_t*>(th_in), 4);
+  // ... and the modulator a new source jumps to, with its u / b
+  f.write("J", 1);
+  const uint8_t jump[2] = {uint8_t(last_mod), uint8_t(last_bi)};
+  f.write(jump, 2);
   f.close();
   fs.remove(SAVE_FILE);
   fs.rename(SAVE_TMP, SAVE_FILE);
@@ -3369,6 +3373,12 @@ FLASHMEM void AppLoom::LoadFile() {
           if (got_mark && mark == 'T' && f.read(reinterpret_cast<uint8_t*>(th_in), 4) == 4) {
             thread_in = th_in[0] >= -1 && th_in[0] <= InputDevice::OFF ? th_in[0] : -1;
             thread_spool_in = th_in[1] >= 0 && th_in[1] <= InputDevice::OFF ? th_in[1] : 0;
+            got_mark = f.read(&mark, 1) == 1;
+          } else got_mark = false;
+          uint8_t jump[2];
+          if (got_mark && mark == 'J' && f.read(jump, 2) == 2) {
+            last_mod = jump[0] < MOD_BUSES ? int8_t(jump[0]) : -1;
+            last_bi = jump[1] != 0;
           }
         }
       }
