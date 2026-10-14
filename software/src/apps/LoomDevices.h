@@ -151,6 +151,12 @@ float tempo_bpm = 120.0f;
 // starting on the next beat
 float clock_beat_ph = 0.0f;
 uint32_t clock_beat_us = 0;
+uint32_t clock_beat_n = 0;  // whole beats since the clock (re)started: with clock_beat_ph, where it is
+// which division of div_beats the clock is in: modulators and devices on
+// the clock count the same way, so their steps fall on the same tick
+inline int64_t ClockGrid(float div_beats) {
+  return int64_t(floorf((clock_beat_n + clock_beat_ph) / div_beats + 1e-4f));
+}
 // Z starts and stops the clock (so does MIDI start/stop when the clock
 // follows MIDI): synced modulators hold while stopped and begin again from
 // the top on start
@@ -265,6 +271,7 @@ public:
   virtual void DrawViz(int x, int y, int w, int h) {}
   virtual void DrawMini(int x, int y, int w, int h) {}
   virtual void Idle() {}  // main loop, while the device is in use
+  virtual void Clocked() {}  // each modulation tick, after the modulators and this device's settings
   // peak CPU % of this device's audio streams since the last call: parts[0]
   // is the device's own stream, parts[1] anything it owns (e.g. delay lines)
   virtual void CpuMax(float parts[2]) { parts[0] = parts[1] = 0.0f; }
@@ -4832,8 +4839,9 @@ FLASHMEM void ResonatorDevice::DrawMini(int x, int y, int w, int h) {
 PROGMEM static const DeviceDef SPRAY_DEF = {
   "FIBRE", "SPR", 8, {"FRZ", "GRN"},  // (was SPRAY)  // B: one grain by hand (RATE 0: only these)
   {
-    // left of the middle: P (periodic), right: R (random), middle: no grains
-    {"RATE", -100, 100, 55, BI},
+    // left of the middle: P (periodic), right: R (random), middle: no grains;
+    // mode: FREE, or P on the clock's divisions (straight, triplet, dotted)
+    {"RATE", -100, 100, 55, BI, 0, 4, 0, {}, {"FREE", "STR", "TRI", "DOT"}},
     {"SIZE", 0, 100, 50, UNI, 0, 21, 0},   // mode: size spread, 0..100% in 5% steps
     {"PITCH", -24, 24, 0, BI, 0, 25, 0},  // mode: pitch spread, 0..24 semitones
     // 0 = the oldest audio (left on the picture), 100 = now (right); mode:
@@ -4879,6 +4887,15 @@ private:
   bool frozen = false;
   // 0.5 .. 40 Hz either side of the middle, 0 in it
   static float RateHz(int v) { return v ? 0.5f * powf(80.0f, (abs(v) - 1) / 99.0f) : 0.0f; }
+  // P on the clock (RATE's mode STR / TRI / DOT): which division, 0 = 1/32
+  bool OnClock() const { return mode[RATE] != SYNC_FREE && cur[RATE] < 0; }
+  int DivOf(int v) const { return NUM_DIVS - 1 - DivIndex(abs(v), 1, 100); }
+  float DivBeats() const { return DivSeconds(DivOf(cur[RATE]), mode[RATE]) * tempo_bpm / 60.0f; }
+  int Step(int p, int v, int dir) const override;
+  void Clocked() override;
+  void TempoChanged() override { Apply(RATE); }
+  bool clock_was = false;
+  int64_t grid_at = -1;  // the last division a grain was fired on
   int SpreadSemis() const { return mode[PITCH]; }
   float SizeSpread() const { return mode[SIZE] * 0.05f; }
   float PosVariation() const { return mode[POS] * 0.025f; }  // up to half the buffer either way
@@ -4908,7 +4925,10 @@ FLASHMEM void SprayDevice::Deactivate() {
 FLASHMEM void SprayDevice::Apply(int p) {
   const float v = cur[p] * 0.01f;
   switch (p) {
-    case RATE:  fx.setDensity(cur[RATE] < 0 ? -RateHz(cur[RATE]) : RateHz(cur[RATE])); break; // neg = periodic
+    case RATE:  // neg = periodic; on the clock while it runs the grains are fired in Idle
+      if (OnClock()) fx.setDensity(clock_running ? 0.0f : -60.0f / (DivBeats() * 60.0f / tempo_bpm) / 60.0f);
+      else fx.setDensity(cur[RATE] < 0 ? -RateHz(cur[RATE]) : RateHz(cur[RATE]));
+      break;
     case SIZE:  fx.setSize(SizeSecs()); fx.setSizeSpread(SizeSpread()); break;
     case PITCH:
       fx.setPitch(powf(2.0f, cur[PITCH] / 12.0f));
@@ -4930,8 +4950,34 @@ FLASHMEM void SprayDevice::FormatMode(int p, char* buf, size_t n) const {
   else Device::FormatMode(p, buf, n);
 }
 
+// RATE on the clock: P steps through the divisions (one turn each), on to
+// OFF and the R side as before
+FLASHMEM int SprayDevice::Step(int p, int v, int dir) const {
+  if (p != RATE || mode[RATE] == SYNC_FREE || v + dir > 0 || (v > 0)) return v + dir;
+  if (v == 0) return -DivValue(0, 1, 100);  // OFF -> the slowest division
+  const int idx = DivIndex(-v, 1, 100) - dir;  // turning left (dir < 0): faster
+  if (idx < 0) return 0;
+  return -DivValue(idx, 1, 100);
+}
+
+// RATE on the clock and the clock running: a grain on each division, on
+// the same tick a modulator on the same division steps (after it, so a
+// grain gets the new step)
+FLASHMEM void SprayDevice::Clocked() {
+  if (clock_was != clock_running) { clock_was = clock_running; grid_at = -1; Apply(RATE); }
+  if (!OnClock() || !clock_running || !active) { grid_at = -1; return; }
+  const int64_t g = ClockGrid(DivBeats());
+  if (g != grid_at) {
+    // (switched on half way into a division: wait for the next)
+    if (grid_at >= 0 || (clock_beat_n == 0 && clock_beat_ph < 0.01f)) fx.triggerGrain();
+    grid_at = g;
+  }
+}
+
 FLASHMEM void SprayDevice::Format(int p, char* buf, size_t n) const {
-  if (p == RATE) {
+  if (p == RATE && OnClock()) {
+    FormatDiv(DivOf(val[RATE]), mode[RATE], buf, n);
+  } else if (p == RATE) {
     // P periodic / R random, in grains per second
     const float hz = RateHz(val[RATE]);
     const char side = val[RATE] < 0 ? 'P' : 'R';

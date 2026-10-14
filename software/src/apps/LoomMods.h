@@ -268,6 +268,7 @@ private:
   uint8_t pos = 0;
   float target = 0.5f, smooth = 0.5f, t = 0.0f;
   uint32_t step_at = 0;
+  int64_t grid_at = -1;  // on the clock: the division it last stepped on
   float step_s = 0.5f;  // the time between steps, averaged (the picture's glides when CLOCK steps it)
   float Hz() const { return RateHz(P_RATE, 0.05f, 30.0f); }
   float GlideTau() const { const float s = cur[P_SMTH] * 0.01f; return 0.0005f + s * s * 1.0f; }
@@ -355,11 +356,16 @@ FLASHMEM void RandomMod::Tick(const ModCtx& ctx) {
   if (Restarted() && synced) {
     // start: back to the first step
     t = 0.0f;
+    grid_at = 0;
     pos = cur[P_LEN] > 0 ? cur[P_LEN] - 1 : 0;
     Step();
   } else if (cur[P_CLOCK]) {
     if (Edge(cur[P_CLOCK], ctx, 0)) Step();
-  } else if (!synced || clock_running) {
+  } else if (synced && clock_running) {
+    // on the clock's grid (as FIBRE's grains on the clock count it)
+    const int64_t g = ClockGrid(1.0f / Hz() * tempo_bpm / 60.0f);
+    if (g != grid_at) { if (grid_at >= 0) Step(); grid_at = g; }
+  } else if (!synced) {
     t += Hz() * ctx.dt;
     if (t >= 1.0f) { t -= floorf(t); Step(); }
   }
@@ -696,9 +702,9 @@ FLASHMEM void ClockDevice::Tick(const ModCtx& ctx) {
   tempo_bpm = (src && have_measure) ? measured : float(cur[P_BPM]);
 
   // beat blink for the picture, and a 0..1 ramp per beat as output
-  if (Restarted()) { beat_ph = 0.0f; beat = 0; flash = 0.08f; }
+  if (Restarted()) { beat_ph = 0.0f; beat = 0; flash = 0.08f; clock_beat_n = 0; }
   if (clock_running) beat_ph += ctx.dt * tempo_bpm / 60.0f;
-  if (beat_ph >= 1.0f) { beat_ph -= floorf(beat_ph); beat = (beat + 1) % 4; flash = 0.08f; }
+  if (beat_ph >= 1.0f) { beat_ph -= floorf(beat_ph); beat = (beat + 1) % 4; flash = 0.08f; clock_beat_n++; }
   out = beat_ph;
   clock_beat_ph = beat_ph;  // for a PLAYER starting on the next beat
   clock_beat_us = micros();

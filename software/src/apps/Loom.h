@@ -1556,6 +1556,7 @@ FLASHMEM void AppLoom::ModulateAll() {
     for (int s = SOURCE; s < SLOT_COUNT; s++) {
       if (Device* d = tr.current(s)) {
         d->Modulate();
+        d->Clocked();
         d->RunTriggers(ctx.edges);
       }
     }
