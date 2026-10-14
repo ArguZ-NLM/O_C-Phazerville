@@ -2360,6 +2360,8 @@ FLASHMEM static void StampName(const char* dir, const char* prefix, char* name, 
   }
 }
 
+// WavWriter's interleaving buffer (RAM2: RAM1 is short, the stack needs it)
+DMAMEM static int16_t wav_tmp[IO_CHUNK * 2];
 struct WavWriter {
   File f;
   const int16_t* src[2] = {};
@@ -2393,7 +2395,7 @@ struct WavWriter {
   // returns true when finished
   FLASHMEM bool Step() {
     if (!busy) return true;
-    static int16_t tmp[IO_CHUNK * 2];
+    int16_t* const tmp = wav_tmp;
     const size_t k = std::min(IO_CHUNK, n - done);
     for (size_t i = 0; i < k; i++) {
       tmp[2 * i] = src[0][done + i];
@@ -3549,7 +3551,7 @@ FLASHMEM int16_t PlayerDevice::Sample(const uint8_t* p) const { return WavSample
 // up to n frames from the file's current position; the first two channels
 // (mono: both)
 FLASHMEM size_t PlayerDevice::ReadFrames(int16_t* l, int16_t* r, size_t n) {
-  static uint8_t raw[IO_CHUNK * 8];
+  DMAMEM static uint8_t raw[IO_CHUNK * 8];  // (RAM2: RAM1 is short, the stack needs it)
   const size_t frame = size_t(bytes) * chans;
   const size_t k = std::min(n, sizeof(raw) / frame);
   const int got = lf.read(raw, k * frame);  // -1 on an error: nothing
@@ -3570,7 +3572,7 @@ FLASHMEM void PlayerDevice::Idle() {
   if (mode[SPEED] == DIR_SYNC && (synced_at != tempo_bpm || synced_bpm != bpm)) Refresh(SPEED);
   if (!nfiles && millis() - scanned_at > 3000) Scan();  // card / files may come later
   if ((loaded != cur[FILE_] || loaded_mode != mode[FILE_]) && !loading && !analysing) Load(cur[FILE_]);
-  static int16_t tl[IO_CHUNK], tr[IO_CHUNK];
+  DMAMEM static int16_t tl[IO_CHUNK], tr[IO_CHUNK];  // (RAM2)
   if (loading) {  // short file: all of it into fx
     const size_t rd = ReadFrames(fx.Data(0) + got, fx.Data(1) + got, std::min(IO_CHUNK, frames - got));
     fx.MarkRange(got, got + rd);
