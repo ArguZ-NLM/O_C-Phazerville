@@ -625,7 +625,9 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
         {2.0f, 0.0f}, {1.4983071f, 0.0f}, {2.9966142f, 0.0f}, {1.3348399f, 0.0f}, {0.5f, 0.0f}, {2.0f, 1.4983071f}};
       const float* ra = RATIO[sh_mode];
       const int nv = ra[1] > 0.0f ? 2 : 1;
-      const float g = sh_amt * 0.55f / (1.0f + 3.0f * sh_env) * (nv == 2 ? 0.7f : 1.0f);
+      // (the guard only once the tail is loud: past 0.3 it holds it there)
+      const float guard = sh_env > 0.3f ? 0.3f / sh_env : 1.0f;
+      const float g = sh_amt * 1.4f * guard * (nv == 2 ? 0.7f : 1.0f);
       float pk = 0.0f;
       for (int k = 0; k < HALF; k++) {
         for (int c = 0; c < 2; c++) {
