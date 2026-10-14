@@ -468,6 +468,8 @@ private:
   void RouteStereo(bool on);
   void SetPans(int l, int r);
   void MoveEffect(int dir);
+  uint32_t repatch_at[2] = {};  // a moved effect waits for its track to fade out
+  void RepatchQuiet();
   int16_t unlinked_pan[2] = {INT16_MIN, 0};  // the tracks' own PAN from before the link
   void UpdateMixLevels() const;
   void DrawChain() const;
@@ -1230,9 +1232,28 @@ FLASHMEM void AppLoom::MoveEffect(int dir) {
     const int to = constrain(from + (dir > 0 ? 1 : -1), 0, SLOT_COUNT - 2);
     if (to == from) continue;
     std::swap(tr.order[from], tr.order[to]);
-    Repatch(t);
+    // the new cords once the track has faded out (MainLoop), then back in
+    if (active && mixer) {
+      mixer->duck_to[t] = 0.0f;
+      repatch_at[t] = millis() | 1;
+    } else {
+      Repatch(t);
+    }
   }
   dirty = true;
+}
+
+// a moved effect: the track's cords change once it is quiet, then it fades
+// back in (at the latest after 60 ms)
+FLASHMEM void AppLoom::RepatchQuiet() {
+  using namespace loom;
+  for (int t = 0; t < NUM_TRACKS; t++) {
+    if (!repatch_at[t] || !mixer) continue;
+    if (mixer->duck[t] > 0.001f && millis() - repatch_at[t] < 60) continue;
+    Repatch(t);
+    repatch_at[t] = 0;
+    mixer->duck_to[t] = 1.0f;
+  }
 }
 
 FLASHMEM void AppLoom::SetPans(int l, int r) {
@@ -1856,6 +1877,7 @@ FLASHMEM void AppLoom::MainLoop() {
       DropNote(DROP_MUTE, 0, 1, who);
     }
     mixer->mute = mute_now;
+    RepatchQuiet();
     DropCheck();
     FollowLoad();
     if (loop_save_held && ms >= 2000) loop_save_held = false;

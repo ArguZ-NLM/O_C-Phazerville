@@ -919,6 +919,10 @@ public:
   float peak[2][2] = {};  // held until read, [track][L/R]
   volatile bool mute = false;   // the whole output, fading over ~15 ms
   float mute_g = 1.0f;
+  // a track faded out (~5 ms) and back, so its cords can change in the
+  // quiet (an effect moved along the chain clicked)
+  volatile float duck_to[2] = {1.0f, 1.0f};
+  volatile float duck[2] = {1.0f, 1.0f};
   // short gaps: a track sent nothing for 1..8 blocks between sound (the
   // dropout log); miss: blocks missed in a row so far
   volatile uint32_t gaps[2] = {};
@@ -960,10 +964,22 @@ FASTRUN __attribute__((optimize("O2"))) void LoomMixer::update() {  // (O2: the 
         const int to = rt ? rt - 1 : c;
         const int sh = rt ? 16 : 15;
         int32_t pk = 0;
-        for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
-          const int32_t v = (b->data[n] * g + (1 << (sh - 1))) >> sh;  // rounded
-          acc[to][n] += v;
-          pk = std::max<int32_t>(pk, abs(v));
+        if (duck[t] >= 1.0f && duck_to[t] >= 1.0f) {
+          for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+            const int32_t v = (b->data[n] * g + (1 << (sh - 1))) >> sh;  // rounded
+            acc[to][n] += v;
+            pk = std::max<int32_t>(pk, abs(v));
+          }
+        } else {  // fading (both channels the same way: the duck moves once per track, below)
+          float dk = duck[t];
+          const float step = 1.0f / (0.005f * AUDIO_SAMPLE_RATE_EXACT), aim = duck_to[t];
+          for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+            dk = aim > dk ? std::min(aim, dk + step) : std::max(aim, dk - step);
+            const int32_t v = int32_t(((b->data[n] * g + (1 << (sh - 1))) >> sh) * dk);
+            acc[to][n] += v;
+            pk = std::max<int32_t>(pk, abs(v));
+          }
+          if (c == 1 || !in[t * 2 + 1]) duck[t] = dk;
         }
         peak[t][c] = std::max(peak[t][c], pk * (1.0f / 32768.0f));
         blk[t] = std::max(blk[t], pk * (1.0f / 32768.0f));
