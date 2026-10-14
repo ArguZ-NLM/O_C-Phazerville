@@ -3092,6 +3092,8 @@ private:
   // slice at a time from Idle() once the file is in
   static constexpr int BPM_BINS = 6000;  // ~32 s at 48 kHz
   float bpm = 0.0f;           // the file's tempo at SPEED 100 (0: none found)
+  float bpm_keep = 0.0f;      // the same file again (STRM <-> MEM): its tempo, not measured again
+  double phase_keep = 0.0;    // ... and where its beats fall, in frames of the whole file
   int bpm_got = -1;           // levels read so far (-1: no analysis running)
   int bpm_n = 0;
   bool bpm_loop = false;      // the loop in memory, read round and round (a short one works too)
@@ -3253,8 +3255,20 @@ FLASHMEM void PlayerDevice::WriteMeta() {
 
 FLASHMEM void PlayerDevice::BpmStart() {
   if (bpm_env) { free(bpm_env); bpm_env = nullptr; }
-  bpm = 0.0f;
   bpm_got = -1;
+  // the same file in the other mode: memory and the card measure a
+  // different stretch, so a new measure would come out a little apart
+  // (on SYNC: another speed, another pitch)
+  if (bpm_keep > 0.0f) {
+    bpm = bpm_keep;
+    bpm_keep = 0.0f;
+    bpm_phase = phase_keep - (clipped ? double(sec_off) : 0.0);
+    Window();  // SNAP can use the beats
+    Serial.printf("BPM: kept %d.%d for the same file\n", int(bpm), int(bpm * 10) % 10);
+    if (mode[SPEED] == DIR_SYNC) Refresh(SPEED);
+    return;
+  }
+  bpm = 0.0f;
   const size_t n = Frames();
   // in memory (MEM): the loop, START to END, as a loop: it comes round, so
   // ~1.5 s of it is enough. Streamed: ~32 s from START (or the beginning)
@@ -3407,6 +3421,8 @@ FLASHMEM void PlayerDevice::Load(int i) {
   stream.CancelPlay();
   if (bpm_env) { free(bpm_env); bpm_env = nullptr; }
   bpm_got = -1;
+  bpm_keep = bpm;  // (dropped below if it is another file)
+  phase_keep = bpm_phase + (clipped ? double(sec_off) : 0.0);  // (MEM on a long file: a section of it)
   bpm = 0.0f;
   if (loading || streaming || analysing) lf.close();
   loading = streaming = analysing = false;
@@ -3428,6 +3444,7 @@ FLASHMEM void PlayerDevice::Load(int i) {
   if (char* dot = strrchr(mp, '.')) *dot = 0;
   strlcat(mp, ".loom", sizeof(mp));
   if (strcmp(mp, meta_path)) {  // another file (not just STRM / MEM)
+    bpm_keep = 0.0f;
     snprintf(meta_path, sizeof(meta_path), "%s", mp);
     meta_known = false;
     if (!restoring && ReadMeta()) {
