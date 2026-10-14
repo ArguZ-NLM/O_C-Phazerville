@@ -262,6 +262,7 @@ private:
   mutable elapsedMillis mode_shown;
   bool mod_mode = false;  // device view: L enc amount, R enc source
   uint8_t mod_slot = 0;   // ... of the first or the second source
+  int8_t last_mod = -1;   // the modulator (A-H) adjusted last: an off source turned on starts there
   // the MOD view opened from a device page (X): where Y / X go back to
   struct { bool on; bool focus_mod; int8_t mod_cursor, cursor; } back = {};
   // the clock page opened by holding Z: where Y goes back to
@@ -274,6 +275,14 @@ private:
     auto source = [&](int s) { if (mod_slot) d->ChangeModSource2(p, s); else d->ChangeModSource(p, s); };
     for (int n = 0; n < abs(dir); n++) {
       if (dir > 0) {
+        if (!on() && last_mod >= 0) {
+          // off: straight to the modulator just adjusted (a fast turn stops there)
+          if (mod_slot) d->mod_bus2[p] = last_mod + 1;
+          else d->mod_bus_sel[p] = last_mod + 1;
+          bi &= ~bit;
+          d->Refresh(p);
+          break;
+        }
         if (on() && !(bi & bit)) bi |= bit;
         else {
           const auto was = std::make_pair(d->mod_in[p].Pack(), mod_slot ? d->mod_bus2[p] : d->mod_bus_sel[p]);
@@ -2147,6 +2156,8 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
     g_browser->Move(dir);  // either knob scrolls the file list
     return;
   }
+  // a modulator's own page, or its type on the MODULATORS page: the one to offer next
+  if (mod_cursor < CLK_CURSOR && ((view == DEVICE && focus_mod) || (view == MODS && left))) last_mod = mod_cursor;
   if (view == MODS && mod_cursor >= MIDI_CURSOR && map_field >= 0) {
     // the map's editor: R moves through the fields; grabbed, it changes one
     if (left) return;
