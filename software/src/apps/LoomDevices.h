@@ -4668,7 +4668,7 @@ FLASHMEM void DirtDevice::DrawViz(int x, int y, int w, int h) {
   if (view_page == 2) {
     // HEDDLE: a barber pole. Its stripes roll up (shifted up) or down,
     // faster the further SHIFT goes; BOTH: up on the left, down on the
-    // right. FDBK / RESO thickens them; MIX fills them in, a dither as
+    // right. SHIFT / SHCLK: level stripes, PHASE / PHCLK: slanting ones. FDBK / RESO thickens them; MIX fills them in, a dither as
     // FIBRE's wave (0: a faint trace, 100: solid)
     const uint32_t now = millis();
     const float dt = pole_at ? std::min(0.1f, (now - pole_at) * 0.001f) : 0.0f;
@@ -4683,19 +4683,22 @@ FLASHMEM void DirtDevice::DrawViz(int x, int y, int w, int h) {
     const int sw = 2 + cur[HFDBK] * 5 / 100;
     static const uint8_t bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
     const int fill = 1 + cur[HMIX] * 15 / 100;  // 1 .. 16 of 16
+    const bool level = !Phasing();
     for (int px = 0; px < w; px++) {
       const bool down = !Phasing() && (cur[SIDE] == 1 || (cur[SIDE] == 2 && px >= w / 2));
       for (int py = 0; py < h; py++) {
         // where this pixel is across the stripes, in fractions of a pixel:
         // the edges are lit by how much of them the stripe covers (shaded
         // with the dither), so the stripes glide instead of stepping
-        float u = px + (down ? -py : py) + (down ? -pole : pole);
+        float u = level ? py + (down ? -pole : pole)
+                        : px + (down ? -py : py) + (down ? -pole : pole);
         u -= 16.0f * floorf(u / 16.0f);
         const float cover = std::min(1.0f, std::max(0.0f, std::min(u + 1.0f, float(sw) - u)));
         if (cover <= 0.0f) continue;
         // (the dither travels with its stripe: no dots blinking at the edges)
-        const int dx = px + int(floorf(down ? -pole : pole));
-        if (bayer[py & 3][dx & 3] < int(fill * cover + 0.5f)) gfxPixel(x + px, y + py);
+        const int moved = int(floorf(down ? -pole : pole));
+        const int d = level ? bayer[(py + moved) & 3][px & 3] : bayer[py & 3][(px + moved) & 3];
+        if (d < int(fill * cover + 0.5f)) gfxPixel(x + px, y + py);
       }
     }
     if (!Phasing() && cur[SIDE] == 2) gfxLine(x + w / 2, y, x + w / 2, y + h - 1);

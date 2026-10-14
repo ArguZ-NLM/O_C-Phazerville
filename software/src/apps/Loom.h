@@ -3027,11 +3027,13 @@ FLASHMEM void AppLoom::DrawLinkLabel(int x, int y) const {
   gfxPrint(x + 12, y, PSTR("B"));
 }
 
-// the clock in the top line: a play triangle while it runs, a square when
-// stopped (Z), 5 x 5 px from x, y
+// the clock in the top line: a play triangle while it runs, blinking with
+// the beats (lit for the first half of each), a square when stopped (Z),
+// 5 x 5 px from x, y
 FLASHMEM void AppLoom::DrawClockMark(int x, int y) {
   if (loom::clock_running) {
-    for (int i = 0; i < 3; i++) gfxLine(x + i, y + i, x + i, y + 4 - i);
+    if (loom::clock_beat_ph < 0.5f)
+      for (int i = 0; i < 3; i++) gfxLine(x + i, y + i, x + i, y + 4 - i);
   } else {
     gfxRect(x, y, 5, 5);
   }
