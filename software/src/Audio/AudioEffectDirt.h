@@ -208,8 +208,9 @@ FASTRUN __attribute__((optimize("O2"))) static void PhaseChain(const float* in, 
   for (int j = 0; j < N; j++) z[j] = zs[j];
   float f = fb;
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
-    float v = in[n] + fbk * f;
-    v = v / (1.0f + fabsf(v) * 0.25f);  // (RESO can't run away)
+    // (RESO stays under 0.9 with an all-pass gain of 1: it can't run away;
+    // the clamp only guards against a stray value)
+    float v = constrain(in[n] + fbk * f, -4.0f, 4.0f);
 #pragma GCC unroll 20
     for (int j = 0; j < N; j++) {  // y = a x + z, z = x - a y
       const float y = a * v + z[j];
