@@ -263,6 +263,7 @@ private:
   bool mod_mode = false;  // device view: L enc amount, R enc source
   uint8_t mod_slot = 0;   // ... of the first or the second source
   int8_t last_mod = -1;   // the modulator (A-H) adjusted last: an off source turned on starts there
+  bool last_bi = false;   // ... as u or b, whichever was picked last
   // the MOD view opened from a device page (X): where Y / X go back to
   struct { bool on; bool focus_mod; int8_t mod_cursor, cursor; } back = {};
   // the clock page opened by holding Z: where Y goes back to
@@ -279,7 +280,7 @@ private:
           // off: straight to the modulator just adjusted (a fast turn stops there)
           if (mod_slot) d->mod_bus2[p] = last_mod + 1;
           else d->mod_bus_sel[p] = last_mod + 1;
-          bi &= ~bit;
+          if (last_bi) bi |= bit; else bi &= ~bit;
           d->Refresh(p);
           break;
         }
@@ -296,6 +297,8 @@ private:
         else { source(-1); if (on()) bi |= bit; else bi &= ~bit; }
       }
     }
+    // a MOD picked: its u / b is the one the next jump takes
+    if (mod_slot ? d->mod_bus2[p] : d->mod_bus_sel[p]) last_bi = bi & bit;
   }
   void BackToDevice() {
     view = DEVICE;
