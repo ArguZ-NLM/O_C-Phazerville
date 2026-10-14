@@ -670,6 +670,7 @@ FLASHMEM static void SaveFromUSB() {
   Serial.printf("Saving global settings + app data... (build %s%s)\n",
                 OC::Strings::VERSION, OC::Strings::BUILD_TAG);
   OC::SaveAppData();
+  Serial.println("Save done");  // flash.sh waits for this before flashing
 }
 
 void FASTRUN loop() {
