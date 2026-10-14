@@ -170,6 +170,7 @@ namespace loom {
 
   Track tracks[NUM_TRACKS];
   LoomMixer* mixer = nullptr;
+  void DropNote(uint8_t kind, uint8_t track, uint32_t n, uint16_t detail = 0);  // the dropout log
   LoomPreview* preview = nullptr;  // PLAYER's file list: B listens
   ClockDevice* tempo_clock = nullptr;
   Patch* patch = nullptr;
@@ -547,6 +548,7 @@ FLASHMEM void AppLoom::Start() {
 FLASHMEM void AppLoom::Repatch(int t) {
   using namespace loom;
   if (!active) return;
+  DropNote(DROP_PATCH, uint8_t(t), 1);  // (the cords change with the audio held)
   Track& tr = tracks[t];
   auto& link = patch->link[t];
   AudioNoInterrupts();
@@ -1278,6 +1280,71 @@ volatile uint32_t audio_skips = 0;  // updates left out (status print)
 volatile float audio_load = 0.0f;
 volatile float audio_peak = 0.0f;  // the busiest single update since the last status print
 volatile uint32_t audio_lost = 0;   // blocks that came while the last was still being made (lost: a click)
+
+// the dropout log (USB 'O'): what interrupted the sound and when. The
+// same kind again within 2 s adds to the last entry
+struct DropEvent { uint32_t at, until; uint8_t kind; uint8_t track; uint32_t n; uint16_t detail; };
+enum DropKind : uint8_t { DROP_LOST, DROP_SKIP, DROP_SAVE, DROP_MUTE, DROP_GAP, DROP_PATCH };
+constexpr int DROP_LOG = 48;
+DropEvent drop_log[DROP_LOG];
+uint32_t drop_n = 0;
+FLASHMEM void DropNote(uint8_t kind, uint8_t track, uint32_t n, uint16_t detail) {
+  const uint32_t now = millis();
+  if (drop_n) {
+    DropEvent& e = drop_log[(drop_n - 1) % DROP_LOG];
+    if (e.kind == kind && e.track == track && now - e.until < 2000) {
+      e.until = now;
+      e.n += n;
+      e.detail = std::max(e.detail, detail);
+      return;
+    }
+  }
+  drop_log[drop_n++ % DROP_LOG] = {now, now, kind, track, n, detail};
+}
+
+// main loop: the counters that went up since the last look
+FLASHMEM void DropCheck() {
+  static uint32_t lost = 0, skips = 0, gaps[2] = {};
+  const uint32_t l = audio_lost, k = audio_skips;
+  // (with the busiest update's CPU %, since the last status print)
+  if (l > lost) DropNote(DROP_LOST, 0, l - lost, uint16_t(audio_peak * 100.0f + 0.5f));
+  if (k > skips) DropNote(DROP_SKIP, 0, k - skips);
+  lost = l;
+  skips = k;
+  if (!mixer) return;
+  for (int t = 0; t < 2; t++) {
+    const uint32_t g = mixer->gaps[t];
+    if (g > gaps[t]) DropNote(DROP_GAP, uint8_t(t), g - gaps[t]);
+    gaps[t] = g;
+  }
+}
+
+FLASHMEM void DropLogPrint() {
+  const uint32_t now = millis();
+  const uint32_t first = drop_n > DROP_LOG ? drop_n - DROP_LOG : 0;
+  Serial.printf("DROPOUT LOG: %lu entries (now %lu s since power-up)\n", (unsigned long)(drop_n - first),
+                (unsigned long)(now / 1000));
+  for (uint32_t i = first; i < drop_n; i++) {
+    const DropEvent& e = drop_log[i % DROP_LOG];
+    char what[64];
+    switch (e.kind) {
+      case DROP_LOST: snprintf(what, sizeof(what), "CPU: %lu blocks lost (busiest %d%%)", (unsigned long)e.n, e.detail); break;
+      case DROP_SKIP: snprintf(what, sizeof(what), "CPU overload: %lu updates skipped", (unsigned long)e.n); break;
+      case DROP_SAVE: snprintf(what, sizeof(what), "save x%lu (longest %d ms)", (unsigned long)e.n, e.detail); break;
+      case DROP_MUTE:
+        snprintf(what, sizeof(what), "output muted x%lu:%s%s%s", (unsigned long)e.n, e.detail & 1 ? " A reading a file" : "",
+                 e.detail & 2 ? " B reading a file" : "", e.detail & 4 ? " noise test" : "");
+        break;
+      case DROP_GAP: snprintf(what, sizeof(what), "track %c: %lu short gaps", 'A' + e.track, (unsigned long)e.n); break;
+      default: snprintf(what, sizeof(what), "track %c re-patched x%lu", 'A' + e.track, (unsigned long)e.n); break;
+    }
+    const uint32_t ago = (now - e.at) / 100, span = (e.until - e.at) / 100;
+    if (span) Serial.printf("  %lu.%lu s ago (for %lu.%lu s): %s\n", (unsigned long)(ago / 10), (unsigned long)(ago % 10),
+                            (unsigned long)(span / 10), (unsigned long)(span % 10), what);
+    else Serial.printf("  %lu.%lu s ago: %s\n", (unsigned long)(ago / 10), (unsigned long)(ago % 10), what);
+  }
+  Serial.println("--- end ---");
+}
 FASTRUN static void AudioIsrGuard() {
   static uint32_t last_end = 0, last_start = 0;
   static uint8_t hot = 0;
@@ -1610,6 +1677,7 @@ FLASHMEM void AppLoom::MainLoop() {
     }
     if (g_tape_request) { g_tape_request = false; g_tape->Toggle(); }  // USB 'T'
     if (g_midilog_request) { g_midilog_request = false; MidiLogPrint(); }  // USB 'J'
+    if (g_droplog_request) { g_droplog_request = false; DropLogPrint(); }  // USB 'O'
     g_tape->Idle();
     // stress test (USB 'H'): both tracks, every effect on, every setting and
     // numeric mode at its maximum (switches left alone); each 'H' takes the
@@ -1759,7 +1827,19 @@ FLASHMEM void AppLoom::MainLoop() {
     bool busy = false;
     for (auto& tr : tracks) busy |= tr.player && tr.choice[SOURCE] == 2 && tr.player->Busy();
     for (auto& tr : tracks) busy |= tr.warp && tr.choice[SOURCE] == 3 && tr.warp->Busy();
-    mixer->mute = busy || (g_noise && g_noise->Running());
+    const bool mute_now = busy || (g_noise && g_noise->Running());
+    if (mute_now && !mixer->mute) {  // who: bit per track (PLAYER / WARP reading), 4: the noise test
+      uint16_t who = 0;
+      for (int t = 0; t < NUM_TRACKS; t++) {
+        const Track& tr = tracks[t];
+        if ((tr.player && tr.choice[SOURCE] == 2 && tr.player->Busy()) || (tr.warp && tr.choice[SOURCE] == 3 && tr.warp->Busy()))
+          who |= 1 << t;
+      }
+      if (g_noise && g_noise->Running()) who |= 4;
+      DropNote(DROP_MUTE, 0, 1, who);
+    }
+    mixer->mute = mute_now;
+    DropCheck();
     FollowLoad();
     if (loop_save_held && ms >= 2000) loop_save_held = false;
   }
@@ -3315,6 +3395,7 @@ FLASHMEM void AppLoom::SaveFile() const {
   fs.rename(SAVE_TMP, SAVE_FILE);
   dirty = false;
   Serial.printf("Loom: settings saved (%lu ms)\n", (unsigned long)(millis() - save_t0));
+  DropNote(DROP_SAVE, 0, 1, uint16_t(std::min<uint32_t>(65535, millis() - save_t0)));
 }
 
 FLASHMEM void AppLoom::LoadFile() {

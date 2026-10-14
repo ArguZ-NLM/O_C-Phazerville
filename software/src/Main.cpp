@@ -106,6 +106,7 @@ volatile uint8_t g_capture_request = 0;  // Loom's output capture (USB 'W' / 'U'
 volatile uint8_t g_notes_request = 0;    // Loom: test notes, captured (USB 'M'; 'm' both tracks)
 volatile bool g_tape_request = false;    // Loom: TAPE on / off (USB 'T')
 volatile bool g_midilog_request = false; // Loom: the MIDI log (USB 'J')
+volatile bool g_droplog_request = false; // Loom: the dropout log (USB 'O')
 static OC::UiMode ui_mode = OC::UI_MODE_MENU;
 static OC::IOFrame io_frame;
 
@@ -821,6 +822,9 @@ void FASTRUN loop() {
             break;
           case 'T':  // Loom: start / stop a TAPE take (as holding A on OUTPUT)
             g_tape_request = true;
+            break;
+          case 'O':  // Loom: the dropout log (what interrupted the sound, and when)
+            g_droplog_request = true;
             break;
           case 'M':  // a few MIDI notes played in, with 'U's capture (WARP, from the Mac)
             g_notes_request = 1;

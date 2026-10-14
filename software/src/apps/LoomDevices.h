@@ -52,6 +52,7 @@ extern volatile uint8_t g_capture_request;  // USB 'W' (1) / 'U' (2) (Main.cpp)
 extern volatile uint8_t g_notes_request;    // USB 'M' / 'm' (Main.cpp)
 extern volatile bool g_tape_request;        // USB 'T' (Main.cpp)
 extern volatile bool g_midilog_request;     // USB 'J' (Main.cpp)
+extern volatile bool g_droplog_request;     // USB 'O' (Main.cpp)
 
 extern char g_warp_report[200];  // what WARP loaded last (USB 'P', Main.cpp)
 
@@ -854,6 +855,10 @@ public:
   float peak[2][2] = {};  // held until read, [track][L/R]
   volatile bool mute = false;   // the whole output, fading over ~15 ms
   float mute_g = 1.0f;
+  // short gaps: a track sent nothing for 1..8 blocks between sound (the
+  // dropout log); miss: blocks missed in a row so far
+  volatile uint32_t gaps[2] = {};
+  uint8_t miss[2] = {};
   void update() override;
   void ReadPeaks(float out[2][2]) {
     AudioNoInterrupts();
@@ -875,6 +880,10 @@ FASTRUN __attribute__((optimize("O2"))) void LoomMixer::update() {  // (O2: the 
   if (out[0] && out[1]) {
     int32_t acc[2][AUDIO_BLOCK_SAMPLES] = {};
     float blk[2] = {};
+    for (int t = 0; t < 2; t++) {
+      if (!in[t * 2]) { if (miss[t] < 255) miss[t]++; }
+      else { if (miss[t] >= 1 && miss[t] <= 8) gaps[t]++; miss[t] = 0; }
+    }
     for (int t = 0; t < 2; t++) {
       for (int c = 0; c < 2; c++) {
         const audio_block_t* b = in[t * 2 + c];
