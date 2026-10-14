@@ -4665,57 +4665,32 @@ FLASHMEM void DirtDevice::Poll() {
 FLASHMEM void DirtDevice::DrawViz(int x, int y, int w, int h) {
   Poll();
   if (view_page == 2) {
-    // HEDDLE: a barber pole in 3D, like the screensaver's mesh: a cylinder
-    // seen a little from above, helix strands wound round it and turning
-    // smoothly (rising: shifted up / PHASE rising; falling: down). BOTH:
-    // two poles, the left rising, the right falling. FDBK / RESO: more
-    // strands; MIX: how strongly they are drawn (front solid, back faint)
+    // HEDDLE: a barber pole. Its stripes roll up (shifted up) or down,
+    // faster the further SHIFT goes; BOTH: up on the left, down on the
+    // right. FDBK / RESO thickens them; MIX fills them in, a dither as
+    // FIBRE's wave (0: a faint trace, 100: solid)
     const uint32_t now = millis();
     const float dt = pole_at ? std::min(0.1f, (now - pole_at) * 0.001f) : 0.0f;
     pole_at = now;
     const float hz = ShiftHz(cur[SHIFT]);
-    // turns a second: the octaves a second (PHASE), or a gentle log of the Hz
-    const float turns = Phasing() ? hz * 0.5f : (hz < 0.0f ? -1.0f : 1.0f) * 0.25f * log2f(1.0f + fabsf(hz) * 4.0f);
-    pole += turns * dt;
-    pole -= floorf(pole);
+    const float speed = Phasing() ? hz * 10.0f  // (octaves a second)
+                                  : (hz < 0.0f ? -1.0f : 1.0f) * 6.0f * log2f(1.0f + fabsf(hz) * 4.0f);  // px a second
+    pole += speed * dt;
+    pole -= 16.0f * floorf(pole / 16.0f);
+    const int sw = 2 + cur[HFDBK] * 5 / 100;
     static const uint8_t bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
-    const int fill_front = 2 + cur[HMIX] * 14 / 100;  // 2 .. 16 of 16
-    const int fill_back = 1 + cur[HMIX] * 4 / 100;    // faint behind
-    const int strands = 3 + cur[HFDBK] * 5 / 100;     // 3 .. 8
-    const bool both = !Phasing() && cur[SIDE] == 2;
-    const int poles = both ? 2 : 1;
-    const float R = both ? 14.0f : 18.0f, E = R * 0.28f;  // radius, and the rims' ellipse height
-    const float top = y + E + 1.0f, bot = y + h - E - 2.0f;
-    for (int pi = 0; pi < poles; pi++) {
-      const float cx = x + (both ? (pi ? 0.73f : 0.27f) : 0.5f) * w;
-      const bool down = !Phasing() ? (cur[SIDE] == 1 || (both && pi == 1)) : false;
-      const float ph = (down ? -pole : pole) * 2.0f * float(M_PI) * (turns < 0.0f && Phasing() ? -1.0f : 1.0f);
-      // the rims and the sides
-      for (int k = 0; k < 48; k++) {
-        const float a = k * (2.0f * float(M_PI) / 48.0f);
-        const float ex = cx + R * sinf(a), ey = E * cosf(a);
-        gfxPixel(int(ex + 0.5f), int(top - ey + 0.5f));
-        if (ey < 0.0f || (k & 1)) gfxPixel(int(ex + 0.5f), int(bot - ey + 0.5f));  // the bottom's back half dotted
-      }
-      gfxLine(int(cx - R + 0.5f), int(top), int(cx - R + 0.5f), int(bot));
-      gfxLine(int(cx + R + 0.5f), int(top), int(cx + R + 0.5f), int(bot));
-      // the strands: 1.5 turns over the height, one sample a pixel row
-      for (int st = 0; st < strands; st++) {
-        const float off = st * (2.0f * float(M_PI) / strands);
-        for (int r = int(top); r <= int(bot); r++) {
-          const float hy = (bot - r) / (bot - top);  // 0 at the bottom .. 1 at the top
-          for (int sub = 0; sub < 3; sub++) {  // three points a row: no gaps where it runs flat
-            const float a = off + ph + (hy + sub / (3.0f * (bot - top))) * 3.0f * float(M_PI);
-            const float sx = cx + R * sinf(a) * 0.96f;
-            const float sy = r - E * cosf(a) * 0.9f;
-            const bool front = cosf(a) > 0.0f;
-            const int px = int(sx + 0.5f), py = int(sy + 0.5f);
-            if (py <= y || py >= y + h - 1) continue;
-            if (bayer[py & 3][px & 3] < (front ? fill_front : fill_back)) gfxPixel(px, py);
-          }
-        }
+    const int fill = 1 + cur[HMIX] * 15 / 100;  // 1 .. 16 of 16
+    for (int px = 0; px < w; px++) {
+      const bool down = !Phasing() && (cur[SIDE] == 1 || (cur[SIDE] == 2 && px >= w / 2));
+      for (int py = 0; py < h; py++) {
+        int ph = (px + (down ? -py : py) + int(down ? -pole : pole)) % 16;
+        if (ph < 0) ph += 16;
+        // (the dither travels with its stripe: no dots blinking at the edges)
+        const int dx = px + int(down ? -pole : pole);
+        if (ph < sw && bayer[py & 3][dx & 3] < fill) gfxPixel(x + px, y + py);
       }
     }
+    if (!Phasing() && cur[SIDE] == 2) gfxLine(x + w / 2, y, x + w / 2, y + h - 1);
     return;
   }
   // only the section of the setting under the cursor gets an outline
