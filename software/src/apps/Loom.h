@@ -3098,7 +3098,7 @@ namespace loom {
   // 14: DRAFT in FIBRE's order SPEED SIZE PITCH POS (was PITCH POS SIZE SPEED)
   // 15: DRAFT page 2 DIFF TONE SPRD MIX (was TONE FDBK SPRD MIX, TONE's mode
   //     the diffusion)
-  constexpr uint8_t SAVE_VERSION = 18;
+  constexpr uint8_t SAVE_VERSION = 19;
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -3196,6 +3196,8 @@ namespace loom {
     // before v18 CLOTH's LOW / MID / HIGH were the compressor (value) with
     // the band's level as the mode (12 = 0 dB): now the other way round
     const bool band_swap = use && !memcmp(tag, "MIX", 4) && load_version >= 13 && load_version < 18;
+    // before v19 RANDOM's VARI had no mode: a changing step got any value
+    const bool vari_any = use && !memcmp(tag, "RND", 4) && load_version < 19;
     uint8_t ob_m[4] = {1, 0, 1, 0};
     for (int p = 0; p < n; p++) {
       int16_t v; uint8_t md; int8_t amt; uint16_t src; uint8_t bus;
@@ -3244,6 +3246,7 @@ namespace loom {
         d->mod_amt2[p] = -d->mod_amt2[p];
       }
       if (flip_dir && p == PlayerDevice::SPEED) d->mode[p] = 1 - d->mode[p];
+      if (vari_any && p == RandomMod::P_VARI) d->mode[p] = 20;
       if (warp_src16 && p == WarpDevice::SRC) d->mode[p] = uint8_t(constrain(md - 1, 0, 2));
       if (start_len && p == ReelDevice::START) { d->val[p] = int16_t(constrain(v, 0, 100) * 100); d->mode[p] = 0; }
       if (start_len && p == ReelDevice::END) {

@@ -237,7 +237,9 @@ PROGMEM static const DeviceDef RANDOM_DEF = {
   {
     {"AMNT", 0, 100, 100, UNI},
     {"LEN", 0, 16, 0, UNI},
-    {"VARI", 0, 100, 20, UNI},
+    // how often a step of the pattern changes (%); mode: how far it may
+    // move, 5 .. 100 % (100: anything, a new value)
+    {"VARI", 0, 100, 20, UNI, 0, 21, 20},
     {"OFFS", -50, 50, 0, BI},
     {"CLOCK", 0, TRIG_SOURCES - 1, 0, UNI},
     {"RATE", 0, 100, 45, UNI, 0, 2, 0, {}, {"FREE", "CLK"}},
@@ -345,7 +347,16 @@ FLASHMEM void RandomMod::Step() {
     target = random(1000) * 0.001f;
   } else {
     pos = (pos + 1) % len;
-    if (random(100) < cur[P_VARI]) steps[pos] = random(1000) * 0.001f;
+    if (random(100) < cur[P_VARI]) {
+      const float amount = mode[P_VARI] * 0.05f;
+      if (amount >= 1.0f) steps[pos] = random(1000) * 0.001f;  // anything
+      else {  // up or down by up to amount, folded back at the ends
+        float v = steps[pos] + (random(2001) * 0.001f - 1.0f) * amount;
+        if (v < 0.0f) v = -v;
+        if (v > 1.0f) v = 2.0f - v;
+        steps[pos] = constrain(v, 0.0f, 1.0f);
+      }
+    }
     target = steps[pos];
   }
   flash = 0.05f;
@@ -453,6 +464,7 @@ FLASHMEM void RandomMod::Format(int p, char* buf, size_t n) const {
 FLASHMEM void RandomMod::FormatMode(int p, char* buf, size_t n) const {
   static const char* const names[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
   if (p == P_QUANT) snprintf(buf, n, "%s", names[mode[P_QUANT] % 12]);
+  else if (p == P_VARI) snprintf(buf, n, mode[P_VARI] >= 20 ? "ANY" : "%d%%", mode[P_VARI] * 5);
   else Modulator::FormatMode(p, buf, n);
 }
 
