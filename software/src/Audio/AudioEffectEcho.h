@@ -86,7 +86,7 @@ public:
     rv_t[0] = rv_t[1] = 0.0f;
     if (sh) memset(sh, 0, 2 * SH_LEN * sizeof(int16_t));
     for (auto& t : sh_tail) for (auto& v : t) v = 0.0f;
-    sh_lp[0] = sh_lp[1] = sh_env = 0.0f;
+    sh_lp[0] = sh_lp[1] = sh_dc[0] = sh_dc[1] = sh_env = 0.0f;
     for (auto b : dbuf) if (b) memset(b, 0, dlen * sizeof(int16_t));
     for (auto& i : ix) i = 0;
     for (int c = 0; c < 2; c++) lp_z[c] = hp_z[c] = 0.0f;
@@ -224,7 +224,7 @@ private:
   int sh_w = 0;
   float sh_d[2] = {2.0f, 2.0f};  // each voice's delay (its first head), samples
   float sh_tail[2][AUDIO_BLOCK_SAMPLES / 2] = {};
-  float sh_lp[2] = {}, sh_env = 0.0f;
+  float sh_lp[2] = {}, sh_dc[2] = {}, sh_env = 0.0f;
   volatile float sh_amt_target = 0.0f;
   float sh_amt = 0.0f;
   volatile uint8_t sh_mode = SHIM_OCT;
@@ -632,7 +632,8 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
       for (int k = 0; k < HALF; k++) {
         for (int c = 0; c < 2; c++) {
           sh_lp[c] += 0.55f * (sh_tail[c][k] - sh_lp[c]);  // ~ 6 kHz at the half rate
-          sh[c * SH_LEN + sh_w] = int16_t(constrain(sh_lp[c] * RV_Q, -32767.0f, 32767.0f));
+          sh_dc[c] += 0.002f * (sh_lp[c] - sh_dc[c]);       // and no DC (~8 Hz)
+          sh[c * SH_LEN + sh_w] = int16_t(constrain((sh_lp[c] - sh_dc[c]) * RV_Q, -32767.0f, 32767.0f));
           pk = std::max(pk, fabsf(sh_tail[c][k]));
         }
         float o[2] = {0.0f, 0.0f};
@@ -701,11 +702,11 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
           x1 += wgt * (pb1[rn] - x1);
         }
         if (++pw >= PRE_H) pw = 0;
+        if (shim_on) { x0 += shim[0][k]; x1 += shim[1][k]; }  // (before the low cut: no DC builds up)
         h0 += rv_hp_a * (x0 - h0);  // low cut (no mud)
         h1 += rv_hp_a * (x1 - h1);
         x0 -= h0;
         x1 -= h1;
-        if (shim_on) { x0 += shim[0][k]; x1 += shim[1][k]; }
         for (int j = 0; j < 4; j++) {
           x0 = ap(x0, j, gj[j]);
           x1 = ap(x1, 4 + j, gj[j]);
