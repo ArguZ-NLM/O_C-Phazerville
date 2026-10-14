@@ -1433,6 +1433,10 @@ FLASHMEM void InputDevice::Apply(int p) {
   }
 }
 
+// USB 'o' test: a steady 440 Hz sine (-12 dB) in place of track B's
+// jacks, so any chopping on its way shows
+inline volatile bool g_b_tone = false;
+
 FASTRUN __attribute__((optimize("O2"))) void InputDevice::update() {  // (O2: the build is -Os)
   audio_block_t* in[4];
   for (int i = 0; i < 4; i++) in[i] = receiveReadOnly(i);
@@ -1448,6 +1452,16 @@ FASTRUN __attribute__((optimize("O2"))) void InputDevice::update() {  // (O2: th
     const int16_t* a = in[base] ? in[base]->data : silence;
     const int16_t* b = in[base + 1] ? in[base + 1]->data : silence;
     if (!from_a && g_noise && g_noise->Running()) a = b = g_noise->Tone();  // the noise test
+    static int16_t b_tone[AUDIO_BLOCK_SAMPLES];
+    if (!from_a && chained && g_b_tone) {
+      static float ph = 0.0f;
+      for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+        b_tone[n] = int16_t(lrintf(8192.0f * sinf(ph)));
+        ph += 2.0f * float(M_PI) * 440.0f / AUDIO_SAMPLE_RATE_EXACT;
+        if (ph > 2.0f * float(M_PI)) ph -= 2.0f * float(M_PI);
+      }
+      a = b = b_tone;
+    }
     if (!chained && g_capture && !g_capture->track_b) g_capture->Push(1, a, b);  // the jacks as they come in (USB 'W')
     const int32_t g = static_cast<int32_t>(gain * 16384.0f);   // Q14, up to 2.0
     const int32_t wd = static_cast<int32_t>(width * 16384.0f); // Q14

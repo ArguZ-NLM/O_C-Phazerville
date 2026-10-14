@@ -1720,6 +1720,11 @@ FLASHMEM void AppLoom::MainLoop() {
         if (!g_capture) g_capture = new OutCapture;
         if (g_capture->Start(true, 2)) { notes_at = millis(); notes_i = 0; }  // track B L
         else Serial.println("CAPTURE: no PSRAM");
+      } else if (g_notes_request == 4) {
+        g_notes_request = 0;
+        if (tracks[1].choice[SOURCE] != 0) SetChoice(1, SOURCE, 0);
+        g_b_tone = true;
+        both_at = millis() | 1;
       } else if (g_notes_request >= 2) {
         const bool saw = g_notes_request == 3;
         g_notes_request = 0;
@@ -1737,12 +1742,13 @@ FLASHMEM void AppLoom::MainLoop() {
           && !(tracks[0].warp && tracks[0].warp->Busy()) && !(tracks[1].warp && tracks[1].warp->Busy())) {
         both_at = 0;
         for (int t = 0; t < NUM_TRACKS; t++)
-          Serial.printf("BOTH: track %c WARP '%s'%s\n", 'A' + t, tracks[t].warp ? tracks[t].warp->thrum : "-",
-                        tracks[t].choice[SOURCE] == 3 ? "" : " (not on WARP)");
+          Serial.printf("BOTH: track %c source %d, WARP '%s'%s\n", 'A' + t, tracks[t].choice[SOURCE],
+                        tracks[t].warp ? tracks[t].warp->thrum : "-", g_b_tone && t ? " (INPUT: 440 Hz test tone)" : "");
         if (!g_capture) g_capture = new OutCapture;
         if (g_capture->Start(false, -1, true)) { notes_at = millis(); notes_i = 0; }
         else Serial.println("CAPTURE: no PSRAM");
       }
+      if (g_b_tone && !both_at && g_capture && !g_capture->Recording() && millis() - notes_at > 2500) g_b_tone = false;
       while (notes_i >= 0 && notes_i < int(sizeof(seq) / sizeof(seq[0])) && millis() - notes_at >= seq[notes_i][0]) {
         NoteEvent(1, seq[notes_i][1], seq[notes_i][2]);
         notes_i++;
