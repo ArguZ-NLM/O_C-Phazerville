@@ -4667,7 +4667,8 @@ FLASHMEM void DirtDevice::DrawViz(int x, int y, int w, int h) {
   if (view_page == 2) {
     // HEDDLE: a barber pole. Its stripes roll up (shifted up) or down,
     // faster the further SHIFT goes; BOTH: up on the left, down on the
-    // right. FDBK thickens them; MIX at 0: dotted only
+    // right. FDBK / RESO thickens them; MIX fills them in, a dither as
+    // FIBRE's wave (0: a faint trace, 100: solid)
     const uint32_t now = millis();
     const float dt = pole_at ? std::min(0.1f, (now - pole_at) * 0.001f) : 0.0f;
     pole_at = now;
@@ -4677,13 +4678,14 @@ FLASHMEM void DirtDevice::DrawViz(int x, int y, int w, int h) {
     pole += speed * dt;
     pole -= 16.0f * floorf(pole / 16.0f);
     const int sw = 2 + cur[HFDBK] * 5 / 100;
-    const bool solid = cur[HMIX] > 0;
+    static const uint8_t bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
+    const int fill = 1 + cur[HMIX] * 15 / 100;  // 1 .. 16 of 16
     for (int px = 0; px < w; px++) {
       const bool down = !Phasing() && (cur[SIDE] == 1 || (cur[SIDE] == 2 && px >= w / 2));
       for (int py = 0; py < h; py++) {
         int ph = (px + (down ? -py : py) + int(down ? -pole : pole)) % 16;
         if (ph < 0) ph += 16;
-        if (ph < sw && (solid || ((px + py) & 1))) gfxPixel(x + px, y + py);
+        if (ph < sw && bayer[py & 3][px & 3] < fill) gfxPixel(x + px, y + py);
       }
     }
     if (!Phasing() && cur[SIDE] == 2) gfxLine(x + w / 2, y, x + w / 2, y + h - 1);
