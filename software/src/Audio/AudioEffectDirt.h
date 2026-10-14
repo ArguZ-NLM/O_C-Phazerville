@@ -356,39 +356,56 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
     }
   }
   if (shifting && ph) {
-    // PHASE, a phaser at a time over the block, its all-passes' state held
-    // close (far quicker than reaching into it every sample)
-    for (int c = 0; c < 2; c++) {
-      float yw[AUDIO_BLOCK_SAMPLES] = {};
+    // PHASE: all six phasers (three a side) side by side, stage by stage:
+    // each all-pass waits for the one before it, so six at once keep the
+    // FPU busy (one at a time cost ~12 % of the CPU)
+    constexpr int Q = 2 * PH_STREAMS;
+    float z[PH_MAX][Q];
+    float fb[Q], aq[Q], wq[Q];
+    for (int c = 0; c < 2; c++)
       for (int k = 0; k < PH_STREAMS; k++) {
-        const float a = ph_a[k], wk = ph_w[k];
-        float z[PH_MAX];
-        for (int j = 0; j < ph_n; j++) z[j] = ph_z[c][k][j];
-        float fb = ph_y[c][k];
-        for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
-          float v = pre[c][n] + sh_fb * fb;
-          v = v / (1.0f + fabsf(v) * 0.25f);  // (RESO can't run away)
-          for (int j = 0; j < ph_n; j++) {  // first-order all-pass: y = a x + z, z = x - a y
-            const float y = a * v + z[j];
-            z[j] = v - a * y;
-            v = y;
-          }
-          fb = v;
-          yw[n] += wk * v;
-        }
-        for (int j = 0; j < ph_n; j++) ph_z[c][k][j] = z[j];
-        ph_y[c][k] = fb;
+        const int q = c * PH_STREAMS + k;
+        for (int j = 0; j < ph_n; j++) z[j][q] = ph_z[c][k][j];
+        fb[q] = ph_y[c][k];
+        aq[q] = ph_a[k];
+        wq[q] = ph_w[k];
       }
-      float mn = mix_now;
-      for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
-        mn += 0.002f * (sh_mix_to - mn);
+    float mn = mix_now;
+    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+      float v[Q];
+      for (int q = 0; q < Q; q++) {
+        const float u = pre[q / PH_STREAMS][n] + sh_fb * fb[q];
+        v[q] = u / (1.0f + fabsf(u) * 0.25f);  // (RESO can't run away)
+      }
+      for (int j = 0; j < ph_n; j++) {
+        float* zj = z[j];
+        for (int q = 0; q < Q; q++) {  // first-order all-pass: y = a x + z, z = x - a y
+          const float y = aq[q] * v[q] + zj[q];
+          zj[q] = v[q] - aq[q] * y;
+          v[q] = y;
+        }
+      }
+      mn += 0.002f * (sh_mix_to - mn);
+      for (int c = 0; c < 2; c++) {
+        float yw = 0.0f;
+        for (int k = 0; k < PH_STREAMS; k++) {
+          const int q = c * PH_STREAMS + k;
+          fb[q] = v[q];
+          yw += wq[q] * v[q];
+        }
         // the notches: the sound and its phased copy half and half at the deepest
-        const float o = pre[c][n] + mn * 0.5f * (yw[n] - pre[c][n]);
+        const float o = pre[c][n] + mn * 0.5f * (yw - pre[c][n]);
         peak_out = std::max(peak_out, fabsf(o));
         out[c]->data[n] = ToSample16(o);
       }
-      if (c == 1) mix_now = mn;
     }
+    mix_now = mn;
+    for (int c = 0; c < 2; c++)
+      for (int k = 0; k < PH_STREAMS; k++) {
+        const int q = c * PH_STREAMS + k;
+        for (int j = 0; j < ph_n; j++) ph_z[c][k][j] = z[j][q];
+        ph_y[c][k] = fb[q];
+      }
   }
   if (shifting) {  // keep the oscillator on the circle
     const float m = 1.0f / sqrtf(osc_c * osc_c + osc_s * osc_s);
