@@ -4641,7 +4641,8 @@ FLASHMEM void DirtDevice::Format(int p, char* buf, size_t n) const {
   } else if (p == SHIFT && OnClk() && val[SHIFT]) {
     char d[8];
     FormatDiv(DivIndex(abs(val[SHIFT]), 1, 100), d, sizeof(d));
-    snprintf(buf, n, "%c%s", val[SHIFT] < 0 ? '-' : '+', d);
+    // with its sign: a 1/x note value without the 1 (+/16Q), so it fits
+    snprintf(buf, n, "%c%s", val[SHIFT] < 0 ? '-' : '+', d[0] == '1' && d[1] == '/' ? d + 1 : d);
   } else if (p == SHIFT) {  // Hz, finer near 0
     const float hz = fabsf(ShiftHz(val[SHIFT]));
     const char sg = val[SHIFT] < 0 ? '-' : val[SHIFT] > 0 ? '+' : ' ';
