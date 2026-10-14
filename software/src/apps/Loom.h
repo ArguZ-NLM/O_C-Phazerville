@@ -174,6 +174,7 @@ namespace loom {
 
   Track tracks[NUM_TRACKS];
   LoomMixer* mixer = nullptr;
+  inline uint32_t view_frames = 0;  // pages drawn (status print: a second)
   enum DropKind : uint8_t { DROP_LOST, DROP_SKIP, DROP_SAVE, DROP_MUTE, DROP_GAP, DROP_PATCH };
   void DropNote(uint8_t kind, uint8_t track, uint32_t n, uint16_t detail = 0);  // the dropout log
   LoomPreview* preview = nullptr;  // PLAYER's file list: B listens
@@ -1968,7 +1969,8 @@ FLASHMEM void AppLoom::MainLoop() {
   AudioProcessorUsageMaxReset();
   AudioMemoryUsageMaxReset();
   Serial.printf("  load:%s\n", loom::load_note);
-  Serial.printf("  main loop: longest gap %lu us\n", (unsigned long)loop_gap_max);
+  Serial.printf("  main loop: longest gap %lu us, %lu frames a second\n", (unsigned long)loop_gap_max, (unsigned long)loom::view_frames);
+  loom::view_frames = 0;
   Serial.printf("  MIDI: notes %lu, aftertouch %lu (channel now %d)\n", (unsigned long)loom::note_ev_n,
                 (unsigned long)loom::at_seen, int(loom::chan_at));
   loop_gap_max = 0;
@@ -3666,6 +3668,7 @@ FLASHMEM void AppLoom::LoadFile() {
 }
 
 FLASHMEM void AppLoom::View() const {
+  loom::view_frames++;
   UpdateMixLevels();
   if (view == DEVICE && Focused()) DrawDevice();
   else if (view == MODS) DrawMods();
@@ -3788,7 +3791,7 @@ struct Drift {
 };
 }
 
-FLASHMEM void AppLoom::DrawScreensaver() const { loom::DrawWave(); }
+FLASHMEM void AppLoom::DrawScreensaver() const { loom::view_frames++; loom::DrawWave(); }
 
 // a big LOOM in the middle, on a black box (boot picture)
 FLASHMEM void loom::DrawTitle() {
