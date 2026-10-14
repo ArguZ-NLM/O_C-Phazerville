@@ -1720,10 +1720,17 @@ FLASHMEM void AppLoom::MainLoop() {
         if (!g_capture) g_capture = new OutCapture;
         if (g_capture->Start(true, 2)) { notes_at = millis(); notes_i = 0; }  // track B L
         else Serial.println("CAPTURE: no PSRAM");
-      } else if (g_notes_request == 2) {
+      } else if (g_notes_request >= 2) {
+        const bool saw = g_notes_request == 3;
         g_notes_request = 0;
-        for (int t = 0; t < NUM_TRACKS; t++)
+        for (int t = 0; t < NUM_TRACKS; t++) {
           if (tracks[t].choice[SOURCE] != 3) SetChoice(t, SOURCE, 3);
+          if (saw && tracks[t].warp) {
+            tracks[t].warp->mode[WarpDevice::SRC] = 2;  // THR
+            tracks[t].warp->Picked("/LOOM/THRUMS/BASIC", "BASIC_01.wav");
+            tracks[t].warp->Refresh(WarpDevice::SRC);
+          }
+        }
         both_at = millis() | 1;
       }
       if (both_at && millis() - both_at > 1500

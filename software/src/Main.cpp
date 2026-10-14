@@ -825,6 +825,9 @@ void FASTRUN loop() {
           case 'm':  // ... both tracks on WARP: the output, track A and track B captured
             g_notes_request = 2;
             break;
+          case 'n':  // ... the same with the plain saw (THRUMS/BASIC/BASIC_01) in both WARPs
+            g_notes_request = 3;
+            break;
 #endif
           case 'K':  // the crash log the firmware keeps after a crash
             for (const char* fn : {"BOOT.LOG", "CRASH.LOG"}) {
