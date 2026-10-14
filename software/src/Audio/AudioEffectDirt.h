@@ -90,11 +90,27 @@ public:
   // one side, their difference the other.
   enum { SIDE_UP, SIDE_DOWN, SIDE_BOTH };  // BOTH: up on the left, down on the right
   void shift(float hz, int side, float fdbk, float mix) {
+    phasing = false;
     shift_hz = hz;
     shift_side = uint8_t(side);
     shift_fb = constrain(fdbk, 0.0f, 0.95f);
     shift_mix = constrain(mix, 0.0f, 1.0f);
   }
+  // ... or PHASE: an endless phaser (as the Buchla 297's barber pole). Three
+  // phasers of `stages` all-passes glide through 8 octaves (40 Hz .. 10
+  // kHz), a third of the way apart, each fading in at the bottom and out
+  // at the top: the notches rise (or fall) for ever, without a jump.
+  // rate: octaves a second (signed); reso: feedback; depth 0..1 (1: the
+  // deepest notches)
+  static constexpr int PH_MAX = 20, PH_STREAMS = 3;
+  void phase(float oct_per_s, int stages, float reso, float depth) {
+    phasing = true;
+    ph_rate = oct_per_s;
+    ph_stages = uint8_t(constrain(stages, 2, PH_MAX));
+    shift_fb = constrain(reso, 0.0f, 0.9f);
+    shift_mix = constrain(depth, 0.0f, 1.0f);
+  }
+  float PhasePos() const { return ph_pos; }  // (the picture)
 
   // fold curve, shared with the picture: sin() of the boosted signal folds
   // it back from the edges; crossfaded in so 0 is clean
@@ -141,6 +157,12 @@ private:
 
   volatile float shift_hz = 0.0f, shift_fb = 0.0f, shift_mix = 0.0f;
   volatile uint8_t shift_side = SIDE_UP;
+  volatile bool phasing = false;
+  volatile float ph_rate = 0.0f;
+  volatile uint8_t ph_stages = 12;
+  float ph_pos = 0.0f;                       // 0..1 through the 8 octaves (the first phaser)
+  float ph_z[2][PH_STREAMS][PH_MAX] = {};    // the all-passes' state
+  float ph_y[2][PH_STREAMS] = {};            // each phaser's last output (RESO)
   // HEDDLE's state: the oscillator (cos, sin), the all-passes (per side,
   // 4 + 4 sections of x[n-1], x[n-2], y[n-1], y[n-2]), the one-sample delay
   // of the first chain, the last output (feedback)
@@ -211,6 +233,27 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
   const float sh_fb = shift_fb, sh_mix_to = shift_mix;
   const uint8_t sh_side = shift_side;
   const bool shifting = sh_mix_to > 0.0f || mix_now > 1e-4f;
+  // PHASE: this block's all-pass coefficient and level per phaser
+  const bool ph = phasing;
+  float ph_a[PH_STREAMS] = {}, ph_w[PH_STREAMS] = {};
+  const int ph_n = ph_stages;
+  if (ph && shifting) {
+    constexpr float PH_OCTS = 8.0f, F_LO = 40.0f;
+    ph_pos += ph_rate / PH_OCTS * (AUDIO_BLOCK_SAMPLES / AUDIO_SAMPLE_RATE_EXACT);
+    ph_pos -= floorf(ph_pos);
+    float wsum = 0.0f;
+    for (int k = 0; k < PH_STREAMS; k++) {
+      float u = ph_pos + float(k) / PH_STREAMS;
+      u -= floorf(u);
+      const float f = F_LO * exp2f(PH_OCTS * u);
+      const float t = tanf(float(M_PI) * std::min(f, 0.45f * AUDIO_SAMPLE_RATE_EXACT) / AUDIO_SAMPLE_RATE_EXACT);
+      ph_a[k] = (t - 1.0f) / (t + 1.0f);
+      const float sw = sinf(float(M_PI) * u);  // in at the bottom, out at the top
+      ph_w[k] = sw * sw;
+      wsum += ph_w[k];
+    }
+    for (auto& v : ph_w) v /= wsum;
+  }
 
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
     float x[2] = {in[0] ? in[0]->data[n] * q : 0.0f, in[1] ? in[1]->data[n] * q : 0.0f};
@@ -275,7 +318,28 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
 
     float o2[2];
     for (int c = 0; c < 2; c++) o2[c] = dry[c] + w * (x[c] - dry[c]);
-    if (shifting) {
+    if (shifting && ph) {
+      mix_now += 0.002f * (sh_mix_to - mix_now);
+      for (int c = 0; c < 2; c++) {
+        const float xin = o2[c];
+        float yw = 0.0f;
+        for (int k = 0; k < PH_STREAMS; k++) {
+          const float a = ph_a[k];
+          float v = xin + sh_fb * ph_y[c][k];
+          v = v / (1.0f + fabsf(v) * 0.25f);  // (RESO can't run away)
+          float* z = ph_z[c][k];
+          for (int j = 0; j < ph_n; j++) {  // first-order all-pass: y = a x + z, z = x - a y
+            const float y = a * v + z[j];
+            z[j] = v - a * y;
+            v = y;
+          }
+          ph_y[c][k] = v;
+          yw += ph_w[k] * v;
+        }
+        // the notches: the sound and its phased copy half and half at the deepest
+        o2[c] = xin + mix_now * 0.5f * (yw - xin);
+      }
+    } else if (shifting) {
       mix_now += 0.002f * (sh_mix_to - mix_now);
       const float oc = osc_c * rc - osc_s * rs;  // the oscillator a step on
       osc_s = osc_c * rs + osc_s * rc;

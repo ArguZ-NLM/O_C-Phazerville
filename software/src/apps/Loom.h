@@ -1832,10 +1832,10 @@ FLASHMEM void AppLoom::MainLoop() {
         if (!g_capture) g_capture = new OutCapture;
         if (g_capture->Start(true, 2)) { notes_at = millis(); notes_i = 0; }  // track B L
         else Serial.println("CAPTURE: no PSRAM");
-      } else if (g_notes_request == 4) {
+      } else if (g_notes_request == 4 || g_notes_request == 5) {
+        g_b_tone = g_notes_request == 5 ? 2 : 1;
         g_notes_request = 0;
         if (tracks[1].choice[SOURCE] != 0) SetChoice(1, SOURCE, 0);
-        g_b_tone = true;
         both_at = millis() | 1;
       } else if (g_notes_request >= 2) {
         const bool saw = g_notes_request == 3;
@@ -1860,7 +1860,7 @@ FLASHMEM void AppLoom::MainLoop() {
         if (g_capture->Start(false, -1, true)) { notes_at = millis(); notes_i = 0; }
         else Serial.println("CAPTURE: no PSRAM");
       }
-      if (g_b_tone && !both_at && g_capture && !g_capture->Recording() && millis() - notes_at > 2500) g_b_tone = false;
+      if (g_b_tone && !both_at && g_capture && !g_capture->Recording() && millis() - notes_at > 2500) g_b_tone = 0;
       while (notes_i >= 0 && notes_i < int(sizeof(seq) / sizeof(seq[0])) && millis() - notes_at >= seq[notes_i][0]) {
         NoteEvent(1, seq[notes_i][1], seq[notes_i][2]);
         notes_i++;

@@ -1551,7 +1551,7 @@ FLASHMEM void InputDevice::Apply(int p) {
 
 // USB 'o' test: a steady 440 Hz sine (-12 dB) in place of track B's
 // jacks, so any chopping on its way shows
-inline volatile bool g_b_tone = false;
+inline volatile uint8_t g_b_tone = 0;  // 1: the tone, 2: white noise (USB 'q')
 
 FASTRUN __attribute__((optimize("O2"))) void InputDevice::update() {  // (O2: the build is -Os)
   audio_block_t* in[4];
@@ -1571,7 +1571,10 @@ FASTRUN __attribute__((optimize("O2"))) void InputDevice::update() {  // (O2: th
     static int16_t b_tone[AUDIO_BLOCK_SAMPLES];
     if (!from_a && chained && g_b_tone) {
       static float ph = 0.0f;
+      static uint32_t rn = 22222;
       for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+        rn ^= rn << 13; rn ^= rn >> 17; rn ^= rn << 5;
+        if (g_b_tone == 2) { b_tone[n] = int16_t(int32_t(rn) >> 19); continue; }  // white, about -12 dB
         b_tone[n] = int16_t(lrintf(8192.0f * sinf(ph)));
         ph += 2.0f * float(M_PI) * 440.0f / AUDIO_SAMPLE_RATE_EXACT;
         if (ph > 2.0f * float(M_PI)) ph -= 2.0f * float(M_PI);
@@ -4496,12 +4499,14 @@ PROGMEM static const DeviceDef DIRT_DEF = {
     {"N.DCY", 0, 100, 40, UNI},
     {"N.TON", 0, 100, 50, UNI},
     {"WET", 0, 100, 100, UNI},
-    // page 3, HEDDLE: a frequency shifter (as Bode's). SHIFT in Hz, down
-    // left of the middle, up right (0: none); mode: FREE, or CLK: one turn
-    // of the barber pole a clock note value. SIDE: which way the sound goes
-    // (BOTH: up left, down right)
-    {"SHIFT", -100, 100, 0, BI, 0, 2, 0, {}, {"FREE", "CLOCK"}},
-    {"SIDE", 0, 2, 0, LIST, 3, 0, 0, {"UP", "DOWN", "BOTH"}},
+    // page 3, HEDDLE. Mode: SHIFT, a frequency shifter (as Bode's): in Hz,
+    // down left of the middle, up right; or PHASE, an endless phaser (as
+    // the Buchla 297): its notches rise (right) or fall (left) for ever, in
+    // octaves a second; SHCLK / PHCLK: the same on the clock (a turn / an
+    // octave a note value). SHIFT: SIDE, which way the sound goes (BOTH: up
+    // left, down right); PHASE: STAGE, 4 .. 20 all-passes, and RESO
+    {"SHIFT", -100, 100, 0, BI, 0, 4, 0, {}, {"SHIFT", "SHCLK", "PHASE", "PHCLK"}},
+    {"SIDE", 0, 16, 0, UNI},
     {"FDBK", 0, 100, 0, UNI},
     {"MIX", 0, 100, 0, UNI},
   },
@@ -4512,16 +4517,29 @@ class DirtDevice : public Device {
 public:
   enum { DRIVE, FOLD, CRUSH, TILT, NOISE, NDECAY, NTONE, WET, SHIFT, SIDE, HFDBK, HMIX };
   DirtDevice() : Device(DIRT_DEF) {}
-  // HEDDLE's SHIFT in Hz: 0.05 .. 2000, either way (CLK: a turn a note value)
+  // HEDDLE: SHIFT or PHASE, each free or on the clock
+  bool Phasing() const { return mode[SHIFT] >= 2; }
+  bool OnClk() const { return mode[SHIFT] & 1; }
+  // SHIFT in Hz: 0.05 .. 2000, either way; PHASE in octaves a second,
+  // 0.01 .. 2.5 (the clock: a turn / an octave a note value)
   float ShiftHz(int v) const {
     if (!v) return 0.0f;
-    const float hz = mode[SHIFT] != SYNC_FREE ? 1.0f / DivSeconds(DivIndex(abs(v), 1, 100))
-                                              : 0.05f * powf(40000.0f, abs(v) * 0.01f);
-    return v < 0 ? -hz : hz;
+    const float r = OnClk() ? 1.0f / DivSeconds(DivIndex(abs(v), 1, 100))
+                  : Phasing() ? 0.01f * powf(250.0f, (abs(v) - 1) / 99.0f)
+                              : 0.05f * powf(40000.0f, abs(v) * 0.01f);
+    return v < 0 ? -r : r;
   }
-  void TempoChanged() override { if (mode[SHIFT] != SYNC_FREE) Apply(SHIFT); }
+  int Stages() const { return 4 + constrain(int(cur[SIDE]), 0, 16); }
+  const char* Name(int p) const override {
+    if (Phasing() && p == SIDE) return "STAGE";
+    if (Phasing() && p == HFDBK) return "RESO";
+    return Device::Name(p);
+  }
+  int8_t was_phase = -1;  // (switching SHIFT <-> PHASE: SIDE / STAGE start sensible)
+  void TempoChanged() override { if (OnClk()) Apply(SHIFT); }
   int Step(int p, int v, int dir) const override {
-    if (p != SHIFT || mode[SHIFT] == SYNC_FREE) return v + dir;
+    if (p == SIDE) return constrain(v + dir, 0, Phasing() ? 16 : 2);
+    if (p != SHIFT || !OnClk()) return v + dir;
     // on the clock: one note value a turn (the longest next to the middle)
     const int s = v > 0 ? 1 : v < 0 ? -1 : 0;
     if (!s) return dir > 0 ? DivValue(0, 1, 100) : -DivValue(0, 1, 100);
@@ -4592,7 +4610,12 @@ FLASHMEM void DirtDevice::Apply(int p) {
     case NTONE:  fx.noise_tone(v); break;
     case WET:    fx.wet(v); break;
     case SHIFT: case SIDE: case HFDBK: case HMIX:
-      fx.shift(ShiftHz(cur[SHIFT]), cur[SIDE], cur[HFDBK] * 0.0095f, cur[HMIX] * 0.01f);
+      if (was_phase != int8_t(Phasing())) {  // SIDE <-> STAGE: from where it makes sense
+        if (was_phase >= 0) val[SIDE] = cur[SIDE] = Phasing() ? 8 : 0;  // 12 stages / UP
+        was_phase = int8_t(Phasing());
+      }
+      if (Phasing()) fx.phase(ShiftHz(cur[SHIFT]), Stages(), cur[HFDBK] * 0.009f, cur[HMIX] * 0.01f);
+      else fx.shift(ShiftHz(cur[SHIFT]), std::min<int>(cur[SIDE], 2), cur[HFDBK] * 0.0095f, cur[HMIX] * 0.01f);
       break;
   }
 }
@@ -4606,7 +4629,16 @@ FLASHMEM void DirtDevice::Format(int p, char* buf, size_t n) const {
     const int hz = int(100.0f * powf(100.0f, val[NTONE] * 0.01f));
     if (hz < 1000) snprintf(buf, n, "%dHz", hz);
     else snprintf(buf, n, "%dk%d", hz / 1000, (hz % 1000) / 100);
-  } else if (p == SHIFT && mode[SHIFT] != SYNC_FREE && val[SHIFT]) {
+  } else if (p == SIDE) {  // SHIFT: the side; PHASE: the stages
+    static const char* const sides[3] = {"UP", "DOWN", "BOTH"};
+    if (Phasing()) snprintf(buf, n, "%d", 4 + constrain(int(val[SIDE]), 0, 16));
+    else snprintf(buf, n, "%s", sides[constrain(int(val[SIDE]), 0, 2)]);
+  } else if (p == SHIFT && Phasing() && !OnClk()) {  // octaves a second
+    const float r = fabsf(ShiftHz(val[SHIFT]));
+    const char sg = val[SHIFT] < 0 ? '-' : val[SHIFT] > 0 ? '+' : ' ';
+    if (!val[SHIFT]) snprintf(buf, n, "0");
+    else snprintf(buf, n, "%c%d.%02d", sg, int(r), int(r * 100.0f + 0.5f) % 100);
+  } else if (p == SHIFT && OnClk() && val[SHIFT]) {
     char d[8];
     FormatDiv(DivIndex(abs(val[SHIFT]), 1, 100), d, sizeof(d));
     snprintf(buf, n, "%c%s", val[SHIFT] < 0 ? '-' : '+', d);
@@ -4640,20 +4672,21 @@ FLASHMEM void DirtDevice::DrawViz(int x, int y, int w, int h) {
     const float dt = pole_at ? std::min(0.1f, (now - pole_at) * 0.001f) : 0.0f;
     pole_at = now;
     const float hz = ShiftHz(cur[SHIFT]);
-    const float speed = (hz < 0.0f ? -1.0f : 1.0f) * 6.0f * log2f(1.0f + fabsf(hz) * 4.0f);  // px a second
+    const float speed = Phasing() ? hz * 10.0f  // (octaves a second)
+                                  : (hz < 0.0f ? -1.0f : 1.0f) * 6.0f * log2f(1.0f + fabsf(hz) * 4.0f);  // px a second
     pole += speed * dt;
     pole -= 16.0f * floorf(pole / 16.0f);
     const int sw = 2 + cur[HFDBK] * 5 / 100;
     const bool solid = cur[HMIX] > 0;
     for (int px = 0; px < w; px++) {
-      const bool down = cur[SIDE] == 1 || (cur[SIDE] == 2 && px >= w / 2);
+      const bool down = !Phasing() && (cur[SIDE] == 1 || (cur[SIDE] == 2 && px >= w / 2));
       for (int py = 0; py < h; py++) {
         int ph = (px + (down ? -py : py) + int(down ? -pole : pole)) % 16;
         if (ph < 0) ph += 16;
         if (ph < sw && (solid || ((px + py) & 1))) gfxPixel(x + px, y + py);
       }
     }
-    if (cur[SIDE] == 2) gfxLine(x + w / 2, y, x + w / 2, y + h - 1);
+    if (!Phasing() && cur[SIDE] == 2) gfxLine(x + w / 2, y, x + w / 2, y + h - 1);
     return;
   }
   // only the section of the setting under the cursor gets an outline
