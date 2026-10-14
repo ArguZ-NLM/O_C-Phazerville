@@ -45,6 +45,9 @@ public:
   explicit Modulator(const DeviceDef& d);
   void Apply(int) override {}  // settings are read live in Tick()
   virtual void Tick(const ModCtx& ctx) = 0;
+  // out is on notes, 4 octaves across: a CV output gives it as pitch (the
+  // module's own octave: 1.2 V on the 2X0, 1 V on the SX0)
+  virtual bool Pitched() const { return false; }
   void Run(const ModCtx& ctx);
   void DrawViz(int x, int y, int w, int h) override;
   void DrawMini(int x, int y, int w, int h) override;
@@ -256,6 +259,7 @@ public:
   void FormatMode(int p, char* buf, size_t n) const override;
   void Action(int a) override { if (a == 0) Step(); }
   void DrawViz(int x, int y, int w, int h) override;
+  bool Pitched() const override { return cur[P_QUANT] != 0; }
 private:
   float steps[16];
   uint8_t pos = 0;

@@ -369,6 +369,7 @@ private:
   static void DrawClockMark(int x, int y);
   void DrawLinkLabel(int x, int y) const;  // L, two squares (filled: SPLIT), R
   float OutLevel(int o) const;
+  const loom::Modulator* OutMod(int o) const;
   void WriteOutputs();
   void SetChoice(int t, int s, int option);
   void SetChoiceLinked(int s, int option);
@@ -1504,9 +1505,26 @@ FLASHMEM float AppLoom::OutLevel(int o) const {
   return constrain(v, 0.0f, 1.0f);  // empty slot (-1) or off: 0 V
 }
 
+// the modulator an output plays (none: the clock, an empty slot)
+FLASHMEM const loom::Modulator* AppLoom::OutMod(int o) const {
+  using namespace loom;
+  const int s = cv_out_src[o];
+  if (s < OUT_L || s >= OUT_CLOCK) return nullptr;
+  if (s >= OUT_SHARED) return ModAt(0, NUM_MODS + s - OUT_SHARED);
+  if (s >= OUT_R) return ModAt(1, s - OUT_R);
+  return ModAt(0, s - OUT_L);
+}
+
 FLASHMEM void AppLoom::WriteOutputs() {
-  for (int o = 0; o < loom::NUM_CV_OUTS && o < DAC_CHANNEL_COUNT; o++)
-    HS::frame.Out(DAC_CHANNEL(o), int(OutLevel(o) * 8.5f * ONE_OCTAVE));  // measured: 8.5 "volts" give 10 V at the jack
+  for (int o = 0; o < loom::NUM_CV_OUTS && o < DAC_CHANNEL_COUNT; o++) {
+    const loom::Modulator* m = OutMod(o);
+    // on notes: 4 octaves of the module's pitch (calibrated: 1.2 V per
+    // octave on the 2X0, 1 V on the SX0), so a semitone is a semitone
+    if (m && m->Pitched() && !(loom::cv_out_bypass & (1 << o)))
+      HS::frame.Out(DAC_CHANNEL(o), int(OutLevel(o) * 4.0f * ONE_OCTAVE + 0.5f));
+    else
+      HS::frame.Out(DAC_CHANNEL(o), int(OutLevel(o) * 8.5f * ONE_OCTAVE));  // measured: 8.5 "volts" give 10 V at the jack
+  }
 }
 
 FLASHMEM void AppLoom::MainLoop() {
