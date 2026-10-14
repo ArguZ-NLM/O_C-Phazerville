@@ -2246,6 +2246,7 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
       }
       break;
     case OC::CONTROL_BUTTON_Y:
+      if (view == DEVICE && Focused() && !mod_mode && !trig_mode) Focused()->ui_cursor = int8_t(cursor);  // (opens there again)
       if (view == MODS && out_editing) out_editing = false;
       else if (view == DEVICE && trig_mode) trig_mode = false;
       else if (view == DEVICE && clock_back.on && focus_mod && mod_cursor == CLK_CURSOR) {
