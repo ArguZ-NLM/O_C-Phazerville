@@ -1698,10 +1698,10 @@ FLASHMEM void AppLoom::MainLoop() {
     if (g_noise && g_noise->Done()) g_noise->Report();
     // the output capture (USB 'W')
     if (g_capture_request) {
-      const bool b_side = g_capture_request == 2;
+      const bool b_side = g_capture_request == 2, ab = g_capture_request == 3;
       g_capture_request = 0;
       if (!g_capture) g_capture = new OutCapture;
-      if (!g_capture->Start(b_side)) Serial.println("CAPTURE: no PSRAM");
+      if (!g_capture->Start(b_side, -1, ab)) Serial.println("CAPTURE: no PSRAM");
     }
     if (g_capture) g_capture->Idle();
     // test notes (USB 'M'), as if from a keyboard, while 'U' captures:

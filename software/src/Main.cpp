@@ -808,6 +808,9 @@ void FASTRUN loop() {
           case 'U':  // ... the output and track B before the mixer
             g_capture_request = 2;
             break;
+          case 'X':  // ... the output, track A L and track B L before the mixer (the patch as it is)
+            g_capture_request = 3;
+            break;
           case 'A': {  // what holds the PSRAM (with PSRAM_TRACE)
             extern void PsramTraceReport();
             PsramTraceReport();
