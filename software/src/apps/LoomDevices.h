@@ -49,7 +49,7 @@ extern "C" uint8_t external_psram_size;  // MB of PSRAM found at start (Teensy c
 extern volatile bool g_noise_request;  // USB 'N' (Main.cpp)
 extern volatile uint8_t g_heavy_request;  // USB 'H' / 'h' (Main.cpp)
 extern volatile uint8_t g_capture_request;  // USB 'W' (1) / 'U' (2) (Main.cpp)
-extern volatile bool g_notes_request;       // USB 'M' (Main.cpp)
+extern volatile uint8_t g_notes_request;    // USB 'M' / 'm' (Main.cpp)
 extern volatile bool g_tape_request;        // USB 'T' (Main.cpp)
 extern volatile bool g_midilog_request;     // USB 'J' (Main.cpp)
 
@@ -703,10 +703,16 @@ public:
   static constexpr uint32_t FRAMES = 2 * 48000;
   static constexpr int CH = 4;
   bool track_b = false;  // USB 'U': track B on its way into the mixer instead of the jacks
+  bool track_ab = false; // USB 'm': ... track A L and track B L instead
+  // blocks a track did not deliver to the mixer while capturing (that
+  // track silent for 2.7 ms)
+  volatile uint32_t gaps[2] = {};
   // only: -1 all four; else that one channel (0 out L .. 3 in 2 / track B
   // R): a quarter of the memory, for when the PSRAM is full (USB 'M')
-  bool Start(bool b_side = false, int only = -1) {
-    track_b = b_side;
+  bool Start(bool b_side = false, int only = -1, bool ab = false) {
+    track_b = b_side || ab;
+    track_ab = ab;
+    gaps[0] = gaps[1] = 0;
     const int nch = only < 0 ? CH : 1;
     if (buf && nch != chans) { PsramFree(buf); buf = nullptr; }
     chans = nch;
@@ -734,12 +740,14 @@ public:
     wr[part] = w;
     if (wr[0] >= FRAMES && wr[1] >= FRAMES) on = false;
   }
+  bool Recording() const { return on; }
   // main loop: send what is captured, a few lines at a time
   void Idle() {
     if (!buf || on || sent >= FRAMES) return;
     if (sent == 0) {
-      if (one < 0) Serial.printf("CAPTURE %lu frames 48000 Hz: out L, out R, %s\n", (unsigned long)FRAMES,
-                                 track_b ? "track B L, R" : "in 1, in 2");
+      if (one < 0) Serial.printf("CAPTURE %lu frames 48000 Hz: out L, out R, %s (gaps A %lu B %lu)\n", (unsigned long)FRAMES,
+                                 track_ab ? "track A L, track B L" : track_b ? "track B L, R" : "in 1, in 2",
+                                 (unsigned long)gaps[0], (unsigned long)gaps[1]);
       else Serial.printf("CAPTURE %lu frames 48000 Hz, 1 channel: %d\n", (unsigned long)FRAMES, one);
     }
     char line[2 + 16 * CH * 4 + 2];
@@ -893,9 +901,14 @@ FASTRUN __attribute__((optimize("O2"))) void LoomMixer::update() {  // (O2: the 
       g_noise->Tap(NoiseTest::B_TO_MIX, in[2]);
       g_noise->Measure(acc[0], acc[1]);
     }
-    if (g_capture && g_capture->track_b) {  // USB 'U': track B as it comes in
+    if (g_capture && g_capture->track_b) {  // USB 'U': track B as it comes in ('m': A and B)
       static const int16_t zero[AUDIO_BLOCK_SAMPLES] = {};
-      g_capture->Push(1, in[2] ? in[2]->data : zero, in[3] ? in[3]->data : zero);
+      if (g_capture->track_ab) {
+        g_capture->Push(1, in[0] ? in[0]->data : zero, in[2] ? in[2]->data : zero);
+        for (int t = 0; t < 2; t++) if (!in[t * 2] && g_capture->Recording()) g_capture->gaps[t]++;
+      } else {
+        g_capture->Push(1, in[2] ? in[2]->data : zero, in[3] ? in[3]->data : zero);
+      }
     }  // (before the mute: it mutes the output)
     float g[AUDIO_BLOCK_SAMPLES];  // the mute fade, for the quick listen too
     if (mute || mute_g < 1.0f) {  // fade the sum out / back in

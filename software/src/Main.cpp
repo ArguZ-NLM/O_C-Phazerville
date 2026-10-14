@@ -103,7 +103,7 @@ volatile uint32_t loop_counter = 0;
 volatile bool g_noise_request = false;  // Loom's noise test (USB 'N')
 volatile uint8_t g_heavy_request = 0;   // Loom: stress test (USB 'H' everything on and up, 'h' back)
 volatile uint8_t g_capture_request = 0;  // Loom's output capture (USB 'W' / 'U')
-volatile bool g_notes_request = false;   // Loom: test notes, captured (USB 'M')
+volatile uint8_t g_notes_request = 0;    // Loom: test notes, captured (USB 'M'; 'm' both tracks)
 volatile bool g_tape_request = false;    // Loom: TAPE on / off (USB 'T')
 volatile bool g_midilog_request = false; // Loom: the MIDI log (USB 'J')
 static OC::UiMode ui_mode = OC::UI_MODE_MENU;
@@ -820,7 +820,10 @@ void FASTRUN loop() {
             g_tape_request = true;
             break;
           case 'M':  // a few MIDI notes played in, with 'U's capture (WARP, from the Mac)
-            g_notes_request = true;
+            g_notes_request = 1;
+            break;
+          case 'm':  // ... both tracks on WARP: the output, track A and track B captured
+            g_notes_request = 2;
             break;
 #endif
           case 'K':  // the crash log the firmware keeps after a crash

@@ -1714,10 +1714,26 @@ FLASHMEM void AppLoom::MainLoop() {
       };
       static uint32_t notes_at = 0;
       static int notes_i = -1;
-      if (g_notes_request) {
-        g_notes_request = false;
+      static uint32_t both_at = 0;  // 'm': both tracks put on WARP, playing once they have read their files
+      if (g_notes_request == 1) {
+        g_notes_request = 0;
         if (!g_capture) g_capture = new OutCapture;
         if (g_capture->Start(true, 2)) { notes_at = millis(); notes_i = 0; }  // track B L
+        else Serial.println("CAPTURE: no PSRAM");
+      } else if (g_notes_request == 2) {
+        g_notes_request = 0;
+        for (int t = 0; t < NUM_TRACKS; t++)
+          if (tracks[t].choice[SOURCE] != 3) SetChoice(t, SOURCE, 3);
+        both_at = millis() | 1;
+      }
+      if (both_at && millis() - both_at > 1500
+          && !(tracks[0].warp && tracks[0].warp->Busy()) && !(tracks[1].warp && tracks[1].warp->Busy())) {
+        both_at = 0;
+        for (int t = 0; t < NUM_TRACKS; t++)
+          Serial.printf("BOTH: track %c WARP '%s'%s\n", 'A' + t, tracks[t].warp ? tracks[t].warp->thrum : "-",
+                        tracks[t].choice[SOURCE] == 3 ? "" : " (not on WARP)");
+        if (!g_capture) g_capture = new OutCapture;
+        if (g_capture->Start(false, -1, true)) { notes_at = millis(); notes_i = 0; }
         else Serial.println("CAPTURE: no PSRAM");
       }
       while (notes_i >= 0 && notes_i < int(sizeof(seq) / sizeof(seq[0])) && millis() - notes_at >= seq[notes_i][0]) {
