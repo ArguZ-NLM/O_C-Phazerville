@@ -1250,6 +1250,8 @@ FLASHMEM void AppLoom::RepatchQuiet() {
   for (int t = 0; t < NUM_TRACKS; t++) {
     if (!repatch_at[t] || !mixer) continue;
     if (mixer->duck[t] > 0.001f && millis() - repatch_at[t] < 60) continue;
+    Serial.printf("MOVE: track %c re-patched after %lu ms, faded to %d%%\n", 'A' + t,
+                  (unsigned long)(millis() - repatch_at[t]), int(mixer->duck[t] * 100.0f + 0.5f));
     Repatch(t);
     repatch_at[t] = 0;
     mixer->duck_to[t] = 1.0f;
