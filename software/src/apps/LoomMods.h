@@ -234,7 +234,7 @@ PROGMEM static const DeviceDef RANDOM_DEF = {
   "RANDOM", "RND", 8, {"STP", ""},
   {
     {"AMNT", 0, 100, 100, UNI},
-    {"LEN", 0, 16, 0, UNI},  // free, then 2 .. 16 (one step would just hold)
+    {"LEN", 0, 16, 0, UNI},
     {"VARI", 0, 100, 20, UNI},
     {"OFFS", -50, 50, 0, BI},
     {"CLOCK", 0, TRIG_SOURCES - 1, 0, UNI},
@@ -260,11 +260,6 @@ public:
   void Action(int a) override { if (a == 0) Step(); }
   void DrawViz(int x, int y, int w, int h) override;
   bool Pitched() const override { return cur[P_QUANT] != 0; }
-  int Step(int p, int v, int dir) const override {
-    if (p != P_LEN) return Modulator::Step(p, v, dir);
-    const int r = v + dir;
-    return r == 1 ? (dir > 0 ? 2 : 0) : r;  // LEN skips 1
-  }
 private:
   float steps[16];
   uint8_t pos = 0;
@@ -272,7 +267,6 @@ private:
   uint32_t step_at = 0;
   float step_s = 0.5f;  // the time between steps, averaged (the picture's glides when CLOCK steps it)
   float Hz() const { return RateHz(P_RATE, 0.05f, 30.0f); }
-  int Len() const { return cur[P_LEN] == 1 ? 2 : cur[P_LEN]; }  // (1 from a modulated LEN: 2)
   float GlideTau() const { const float s = cur[P_SMTH] * 0.01f; return 0.0005f + s * s * 1.0f; }
   void Step();
   float Shaped(float s) const;
@@ -342,7 +336,7 @@ FLASHMEM void RandomMod::Step() {
   const uint32_t now = millis();
   if (step_at && now - step_at < 20000) step_s += 0.25f * (std::max(0.005f, (now - step_at) * 0.001f) - step_s);
   step_at = now;
-  const int len = Len();
+  const int len = cur[P_LEN];
   if (len == 0) {
     target = random(1000) * 0.001f;
   } else {
@@ -358,7 +352,7 @@ FLASHMEM void RandomMod::Tick(const ModCtx& ctx) {
   if (Restarted() && synced) {
     // start: back to the first step
     t = 0.0f;
-    pos = Len() > 0 ? Len() - 1 : 0;
+    pos = cur[P_LEN] > 0 ? cur[P_LEN] - 1 : 0;
     Step();
   } else if (cur[P_CLOCK]) {
     if (Edge(cur[P_CLOCK], ctx, 0)) Step();
@@ -378,7 +372,7 @@ FLASHMEM void RandomMod::DrawViz(int x, int y, int w, int h) {
   const int ww = w - 8, top = y + 1, hh = h - 3;
   auto val = [&](float s) { return Shaped(s); };
   auto yy = [&](float v) { return top + hh - int(v * hh + 0.5f); };
-  const int len = Len();
+  const int len = cur[P_LEN];
   if (len > 0) {
     const int bw = ww / len;
     const int bottom = top + hh;
@@ -434,7 +428,7 @@ FLASHMEM void RandomMod::Format(int p, char* buf, size_t n) const {
     FormatRate(p, Hz(), buf, n);
   } else if (p == P_LEN) {
     if (val[P_LEN] == 0) snprintf(buf, n, "free");
-    else snprintf(buf, n, "%d", val[P_LEN] == 1 ? 2 : val[P_LEN]);
+    else snprintf(buf, n, "%d", val[P_LEN]);
   } else if (p == P_CLOCK) {
     if (val[P_CLOCK] == 0) snprintf(buf, n, "rate");
     else FormatTrig(val[P_CLOCK], buf, n);
