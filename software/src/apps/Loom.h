@@ -972,9 +972,9 @@ FLASHMEM void AppLoom::ToggleLink() {
     // B's own source again, then LOOSE: B keeps its own values; A's changes
     // move them by as much
     Track& b = tracks[1];
-    b.input->val[0] = thread_in >= 0 ? thread_in : 0;
+    b.input->val[0] = thread_in >= 0 ? thread_in : InputDevice::IN2;  // (not known: B's own default, R)
     b.input->ApplyAll();
-    if (b.reel) { b.reel->val[ReelDevice::IN] = thread_in >= 0 ? thread_spool_in : 0; b.reel->ApplyAll(); }
+    if (b.reel) { b.reel->val[ReelDevice::IN] = thread_in >= 0 ? thread_spool_in : InputDevice::IN2; b.reel->ApplyAll(); }
     thread_in = -1;
     threaded = false;
     unlinked_pan[0] = tracks[0].mix->val[MixDevice::PAN];
@@ -1004,9 +1004,9 @@ FLASHMEM void AppLoom::UnlinkNow() {
   using namespace loom;
   if (threaded) {
     Track& b = tracks[1];
-    b.input->val[0] = thread_in >= 0 ? thread_in : 0;
+    b.input->val[0] = thread_in >= 0 ? thread_in : InputDevice::IN2;  // (not known: B's own default, R)
     b.input->ApplyAll();
-    if (b.reel) { b.reel->val[ReelDevice::IN] = thread_in >= 0 ? thread_spool_in : 0; b.reel->ApplyAll(); }
+    if (b.reel) { b.reel->val[ReelDevice::IN] = thread_in >= 0 ? thread_spool_in : InputDevice::IN2; b.reel->ApplyAll(); }
     thread_in = -1;
     threaded = false;
     Repatch(1);  // WARP on B: no more A through it
@@ -3223,6 +3223,10 @@ FLASHMEM void AppLoom::SaveFile() const {
     f.write(&b, 1);
     f.write(th, b);
   }
+  // ... and B's own sources while it is THREADed (they come back after)
+  f.write("T", 1);
+  const int16_t th_in[2] = {thread_in, thread_spool_in};
+  f.write(reinterpret_cast<const uint8_t*>(th_in), 4);
   f.close();
   fs.remove(SAVE_FILE);
   fs.rename(SAVE_TMP, SAVE_FILE);
@@ -3233,6 +3237,8 @@ FLASHMEM void AppLoom::SaveFile() const {
 FLASHMEM void AppLoom::LoadFile() {
   delete b_own;  // a loaded state has nothing to go back to
   b_own = nullptr;
+  thread_in = -1;  // (the file has it, when B was THREADed)
+  thread_spool_in = 0;
   using namespace loom;
   File f = PhzConfig::myfs.open(SAVE_FILE, FILE_READ);
   if (!f) f = PhzConfig::myfs.open("SCULPT.BIN", FILE_READ);  // from before the rename
@@ -3354,6 +3360,12 @@ FLASHMEM void AppLoom::LoadFile() {
               if (f.read(&b, 1) != 1 || f.read(fn, b) != b) break;  // its THRUM's file
               if (tr.warp && b < sizeof(tr.warp->thrum)) snprintf(tr.warp->thrum, sizeof(tr.warp->thrum), "%s", fn);
             }
+            got_mark = f.read(&mark, 1) == 1;
+          }
+          int16_t th_in[2];
+          if (got_mark && mark == 'T' && f.read(reinterpret_cast<uint8_t*>(th_in), 4) == 4) {
+            thread_in = th_in[0] >= -1 && th_in[0] <= InputDevice::OFF ? th_in[0] : -1;
+            thread_spool_in = th_in[1] >= 0 && th_in[1] <= InputDevice::OFF ? th_in[1] : 0;
           }
         }
       }
