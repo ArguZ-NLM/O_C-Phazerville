@@ -1877,6 +1877,11 @@ FLASHMEM void AppLoom::MainLoop() {
       DropNote(DROP_MUTE, 0, 1, who);
     }
     mixer->mute = mute_now;
+    if (g_move_request) {  // (testing: as R held and turned in the chain view)
+      const int dir = g_move_request;
+      g_move_request = 0;
+      if (view == CHAIN && col > SOURCE && col != MIX_COL) MoveEffect(dir);
+    }
     RepatchQuiet();
     DropCheck();
     FollowLoad();
