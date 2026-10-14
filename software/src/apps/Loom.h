@@ -2711,6 +2711,7 @@ FLASHMEM void AppLoom::DrawChain() const {
                       : c == RESONATOR && tr.choice[c] == 2 ? PSTR("BTR")  // BEATER
                       : c == RESONATOR && tr.choice[c] == 3 ? PSTR("TWL")  // TWILL
                       : c == SPRAY && tr.choice[c] == 2 ? PSTR("DFT")      // DRAFT
+                      : c == TEXTURE && tr.choice[c] == 2 ? PSTR("HDL")    // HEDDLE
                       : SLOT_DEFS[c].tag;
       if (strlen(tag) <= 3) {
         gfxPrint(x + 1 + (bw - 1 - 6 * int(strlen(tag))) / 2, y + 3, tag);
@@ -2773,7 +2774,7 @@ FLASHMEM void AppLoom::DrawChain() const {
   } else {
     // the slot name; SOURCE names its source (INPUT, SPOOL or PLAYER)
     gfxPrint(8, 56, col == MIX_COL ? PSTR("CLOTH")
-                    : (col == SOURCE || col == RESONATOR || col == SPRAY) && d ? d->def.name : SLOT_DEFS[col].name);
+                    : (col == SOURCE || col == RESONATOR || col == SPRAY || col == TEXTURE) && d ? d->def.name : SLOT_DEFS[col].name);
   }
   // bypass (when on) at the right end; the CPU load always left of its place
   const bool bp = !d || tr.shown_bypassed(col);
