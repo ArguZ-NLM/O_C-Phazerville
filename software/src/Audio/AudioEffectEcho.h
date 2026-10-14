@@ -104,7 +104,7 @@ public:
   // the reverb are added on top (MIX crossfades them against it)
   void delay_send(bool s) { dsend = s; }
   void reverb_send(bool s) { rsend = s; }
-  // SHIMMER: the reverb's tail pitched and fed back into it, so it climbs
+  // GLINT (a shimmer): the reverb's tail pitched and fed back into it, so it climbs
   // with every pass. amount 0..1 (0: off); interval: SHIM_* below
   enum { SHIM_OCT, SHIM_FIFTH, SHIM_OCT5, SHIM_FOURTH, SHIM_DOWN, SHIM_OCT_FIFTH, SHIM_INTERVALS };
   void shimmer(float amount, int interval) {

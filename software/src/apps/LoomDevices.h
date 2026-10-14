@@ -248,6 +248,7 @@ public:
   // 40 % of MOD A plus 20 % of MOD G); only the modulators
   int8_t mod_amt2[MAX_PARAMS] = {};
   uint8_t mod_bus2[MAX_PARAMS] = {};    // 0 = off, 1..8 = MOD A-H
+  int8_t ui_cursor = 0;  // the setting its page was left on (opens there again)
   uint8_t act_trig[2] = {};              // trigger sources for the 2 actions
   bool act_prev[2] = {};
   const float* mod_bus = nullptr;        // the track's modulator outputs
@@ -4159,8 +4160,8 @@ PROGMEM static const DeviceDef ECHO_DEF = {
     // (size and decay together), walls (soft: dark and dense .. hard:
     // bright with audible reflections; also the delay's tone)
     {"LEVEL", 0, 100, 30, UNI, 0, 2, 1, {}, {"MIX", "SEND"}},
-    {"PRE", 0, 150, 20, UNI, 0, 6, 0},   // mode: SHIMMER's interval (see ROOM)
-    {"ROOM", 0, 100, 50, UNI, 0, 21, 0}, // mode: SHIMMER, the tail pitched back into itself, off .. 100 %
+    {"PRE", 0, 150, 20, UNI, 0, 6, 0},   // mode: GLINT's interval (see ROOM)
+    {"ROOM", 0, 100, 50, UNI, 0, 21, 0}, // mode: GLINT (a shimmer), the tail pitched back into itself, off .. 100 %
     {"WALL", -50, 50, -10, BI},
   },
   {"DELAY", "REVRB"},
@@ -4246,7 +4247,7 @@ FLASHMEM uint32_t Device::TailMs() const { return 40; }
 // the reverb's decay plus a few rounds of echoes; frozen: never
 FLASHMEM uint32_t EchoDevice::TailMs() const {
   if (echo.frozen()) return UINT32_MAX;
-  const float decay = DecaySecs() * (1.0f + mode[ROOM] * 0.1f) + cur[PRE] * 0.001f;  // (SHIMMER rings on)
+  const float decay = DecaySecs() * (1.0f + mode[ROOM] * 0.1f) + cur[PRE] * 0.001f;  // (GLINT rings on)
   const float echoes = tap_secs[0][TAPS - 1] * (1.0f + 8.0f * cur[FEEDBACK] * 0.01f);
   return uint32_t((decay + echoes) * 1000.0f) + 200;
 }
@@ -4316,11 +4317,11 @@ FLASHMEM void EchoDevice::Format(int p, char* buf, size_t n) const {
   }
 }
 
-// PRE's mode: SHIMMER's interval; ROOM's: how much of it
+// PRE's mode: GLINT's interval; ROOM's: how much of it
 FLASHMEM void EchoDevice::FormatMode(int p, char* buf, size_t n) const {
   static const char* const iv[6] = {"+12", "+7", "+19", "+5", "-12", "12+7"};
   if (p == PRE) snprintf(buf, n, "%s", iv[constrain(int(mode[PRE]), 0, 5)]);
-  else if (p == ROOM) snprintf(buf, n, mode[ROOM] ? "SH%d" : "SH off", mode[ROOM] * 5);
+  else if (p == ROOM) snprintf(buf, n, mode[ROOM] ? "GL%d" : "GL off", mode[ROOM] * 5);
   else Device::FormatMode(p, buf, n);
 }
 

@@ -2208,16 +2208,16 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
         out_editing = !out_editing;
       } else if (view == MODS) {
         focus_mod = true;
-        if (Focused()) {
+        if (Device* o = Focused()) {
           view = DEVICE;
-          cursor = 0;
+          cursor = constrain(int(o->ui_cursor), 0, o->num_params() - 1);  // where it was left
           editing = mod_mode = trig_mode = false;
         }
       } else if (view == CHAIN) {
         focus_mod = false;
-        if (Focused()) {
+        if (Device* o = Focused()) {
           view = DEVICE;
-          cursor = 0;
+          cursor = constrain(int(o->ui_cursor), 0, o->num_params() - 1);  // where it was left (REPEAT: its reverb page)
           editing = mod_mode = trig_mode = false;
         }
       } else if (d && mod_mode) {
@@ -2422,6 +2422,7 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
     }
   } else if (!editing) {
     cursor = constrain(cursor + dir, 0, d->num_params() - 1);
+    d->ui_cursor = int8_t(cursor);  // (it opens there again)
   } else if (l_held && d->param(cursor).nmodes) {
     d->NudgeMode(cursor, dir);
     Mirror(d, cursor);
