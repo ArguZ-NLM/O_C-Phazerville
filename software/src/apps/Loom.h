@@ -3622,13 +3622,14 @@ FLASHMEM void AppLoom::View() const {
   if (g_remote_at && millis() - g_remote_at < 4000) {
     constexpr int x = 104, y = 52, w = 24, h = 12;
     graphics.clearRect(x - 1, y - 1, w + 1, h + 1);
-    gfxRect(x, y, w, h);
-    graphics.clearRect(x + w - 4, y, 4, 1);  // the corner folded down
-    graphics.clearRect(x + w - 3, y + 1, 3, 1);
-    graphics.clearRect(x + w - 2, y + 2, 2, 1);
-    graphics.clearRect(x + w - 1, y + 3, 1, 1);
-    gfxPrint(x + 3, y + 3, PSTR("USB"));
-    gfxInvert(x + 3, y + 3, 18, 7);
+    gfxLine(x, y, x + w - 5, y);              // the outline, its top right
+    gfxLine(x, y, x, y + h - 1);              // corner folded down
+    gfxLine(x, y + h - 1, x + w - 1, y + h - 1);
+    gfxLine(x + w - 1, y + 4, x + w - 1, y + h - 1);
+    gfxLine(x + w - 5, y, x + w - 1, y + 4);
+    gfxLine(x + w - 5, y, x + w - 5, y + 4);
+    gfxLine(x + w - 5, y + 4, x + w - 1, y + 4);
+    gfxPrint(x + 2, y + 3, PSTR("USB"));
   }
   // the link mode, for a moment after it changed: in a box with a double
   // outline (like the boot picture's LOOM, smaller)
