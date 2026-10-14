@@ -4685,7 +4685,9 @@ FLASHMEM void DirtDevice::DrawViz(int x, int y, int w, int h) {
       for (int py = 0; py < h; py++) {
         int ph = (px + (down ? -py : py) + int(down ? -pole : pole)) % 16;
         if (ph < 0) ph += 16;
-        if (ph < sw && bayer[py & 3][px & 3] < fill) gfxPixel(x + px, y + py);
+        // (the dither travels with its stripe: no dots blinking at the edges)
+        const int dx = px + int(down ? -pole : pole);
+        if (ph < sw && bayer[py & 3][dx & 3] < fill) gfxPixel(x + px, y + py);
       }
     }
     if (!Phasing() && cur[SIDE] == 2) gfxLine(x + w / 2, y, x + w / 2, y + h - 1);
