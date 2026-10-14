@@ -277,7 +277,13 @@ public:
   // device (e.g. a number)
   virtual void FormatMode(int p, char* buf, size_t n) const;
   // the name shown above a setting (some name themselves after their mode)
-  virtual const char* Name(int p) const { return param(p).name; }
+  // the upper row: a setting with named modes shows the one it is on
+  // (SPEED: FWD / REV / SYNC), so it is seen before turning; else its name
+  virtual const char* Name(int p) const {
+    const ParamDef& d = param(p);
+    if (d.nmodes && d.nmodes <= 4 && mode[p] < 4 && d.modes[mode[p]][0]) return d.modes[mode[p]];
+    return d.name;
+  }
   // a setting taken once per event (a grain's PITCH): it follows a
   // modulator's step, not its glide
   virtual bool Sampled(int p) const { return false; }
