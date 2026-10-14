@@ -1904,6 +1904,10 @@ FLASHMEM void AppLoom::MainLoop() {
     int(usage), int(usage * 10) % 10, AudioMemoryUsageMax(), OC::AudioIO::AUDIO_MEMORY, external_psram_size,
     int(loom::audio_load * 100.0f + 0.5f), int(loom::audio_peak * 100.0f + 0.5f), (unsigned long)loom::audio_skips, (unsigned long)loom::audio_lost);
   loom::audio_peak = 0.0f;
+  if (loom::mixer && loom::mixer->lim_low < 0.99f) {  // the output limiter at work: by how much (dB)
+    Serial.printf("  limiter: down %d dB\n", int(-20.0f * log10f(std::max(1e-4f, float(loom::mixer->lim_low))) + 0.5f));
+  }
+  if (loom::mixer) loom::mixer->lim_low = 1.0f;
   AudioProcessorUsageMaxReset();
   AudioMemoryUsageMaxReset();
   Serial.printf("  load:%s\n", loom::load_note);
@@ -3075,7 +3079,7 @@ namespace loom {
   // 14: DRAFT in FIBRE's order SPEED SIZE PITCH POS (was PITCH POS SIZE SPEED)
   // 15: DRAFT page 2 DIFF TONE SPRD MIX (was TONE FDBK SPRD MIX, TONE's mode
   //     the diffusion)
-  constexpr uint8_t SAVE_VERSION = 17;
+  constexpr uint8_t SAVE_VERSION = 18;
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -3170,6 +3174,9 @@ namespace loom {
     // their levels, the low split SPLIT
     const bool old_bands = use && !memcmp(tag, "MIX", 4) && load_version < 13;
     int16_t ob_v[4] = {0, 0, 0, 0};
+    // before v18 CLOTH's LOW / MID / HIGH were the compressor (value) with
+    // the band's level as the mode (12 = 0 dB): now the other way round
+    const bool band_swap = use && !memcmp(tag, "MIX", 4) && load_version >= 13 && load_version < 18;
     uint8_t ob_m[4] = {1, 0, 1, 0};
     for (int p = 0; p < n; p++) {
       int16_t v; uint8_t md; int8_t amt; uint16_t src; uint8_t bus;
@@ -3199,6 +3206,11 @@ namespace loom {
         p = SPOOL_MAP[q];
       }
       if (old_bands && p >= 4) { ob_v[p - 4] = v; ob_m[p - 4] = md; }
+      if (band_swap && p >= MixDevice::B_LOW && p <= MixDevice::B_HIGH) {
+        const int16_t comp = v;
+        v = int16_t(md) - 12;
+        md = uint8_t(constrain((comp + 2) / 5, 0, 20));
+      }
       d->mod_amt2[p] = constrain(amt2, -100, 100);
       d->mod_bus2[p] = bus2 <= MOD_BUSES ? bus2 : 0;
       const ParamDef& pd = d->param(p);
@@ -3227,8 +3239,8 @@ namespace loom {
     if (old_bands) {
       for (int b = 0; b < 3; b++) {
         const int v = ob_v[b];
-        d->val[MixDevice::B_LOW + b] = int16_t(constrain(int(ob_v[3]), 0, 100));
-        d->mode[MixDevice::B_LOW + b] = uint8_t(constrain((v + (v > 0 ? 1 : v < 0 ? -1 : 0)) / 2 + 12, 0, 24));
+        d->mode[MixDevice::B_LOW + b] = uint8_t(constrain((int(ob_v[3]) + 2) / 5, 0, 20));
+        d->val[MixDevice::B_LOW + b] = int16_t(constrain((v + (v > 0 ? 1 : v < 0 ? -1 : 0)) / 2, -12, 12));
       }
       static constexpr int16_t SPLIT_OF[3] = {0, 2, 4};  // 120 / 250 / 500 Hz
       d->val[MixDevice::SPLIT] = SPLIT_OF[ob_m[0] % 3];

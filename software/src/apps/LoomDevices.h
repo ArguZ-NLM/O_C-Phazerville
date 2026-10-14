@@ -859,6 +859,8 @@ public:
   // dropout log); miss: blocks missed in a row so far
   volatile uint32_t gaps[2] = {};
   uint8_t miss[2] = {};
+  float lim_g = 1.0f;          // the output limiter's gain now
+  volatile float lim_low = 1.0f; // ... its lowest since the status print took it
   void update() override;
   void ReadPeaks(float out[2][2]) {
     AudioNoInterrupts();
@@ -936,6 +938,29 @@ FASTRUN __attribute__((optimize("O2"))) void LoomMixer::update() {  // (O2: the 
     for (int c = 0; c < 2; c++)
       if (const audio_block_t* b = in[4 + c])
         for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) acc[c][n] += int32_t(((b->data[n] * 26214) >> 15) * g[n]);
+    // limiter (both sides together): turned down at once (across the
+    // block) when the sum would go past the soft clip's knee (90 %), back
+    // up over ~150 ms; CLOTH's LEVEL can go to 200 and stay clean
+    {
+      constexpr float TH = 29490.0f;
+      int32_t pk = 0;
+      for (int c = 0; c < 2; c++)
+        for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) pk = std::max<int32_t>(pk, abs(acc[c][n]));
+      const float need = pk > TH ? TH / float(pk) : 1.0f;
+      const float from = lim_g;
+      lim_g = need < lim_g ? need : std::min(need, lim_g + (1.0f - lim_g) * 0.02f);
+      if (from < 1.0f || lim_g < 1.0f) {
+        const float step = (lim_g - from) / AUDIO_BLOCK_SAMPLES;
+        for (int c = 0; c < 2; c++) {
+          float gg = from;
+          for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+            gg += step;
+            acc[c][n] = int32_t(lrintf(acc[c][n] * gg));
+          }
+        }
+      }
+      if (lim_g < lim_low) lim_low = lim_g;
+    }
     for (int c = 0; c < 2; c++)
       for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) out[c]->data[n] = SoftClip16(acc[c][n]);
     if (g_capture) g_capture->Push(0, out[0]->data, out[1]->data);
@@ -1041,14 +1066,14 @@ PROGMEM static const DeviceDef MIX_DEF = {
     // the chain against the track's source as it came in (0 = only the
     // source, 100 = only the chain): all the effects dialled back at once
     {"MIX", 0, 100, 100, UNI},
-    {"LEVEL", 0, 100, 80, UNI},
+    {"LEVEL", 0, 200, 80, UNI},  // 100: as it comes, 200: twice (a limiter on the output keeps it clean)
     {"PAN", -50, 50, 0, BI},
     {"MUTE", 0, 1, 0, LIST, 2, 0, 0, {"off", "ON"}},
-    // three compressors, one per band: how hard it squashes (0: off); mode:
-    // the band's level after it, -12 .. +12 dB
-    {"LOW", 0, 100, 0, UNI, 0, 25, 12},
-    {"MID", 0, 100, 0, UNI, 0, 25, 12},
-    {"HIGH", 0, 100, 0, UNI, 0, 25, 12},
+    // three bands: the band's level, -12 .. +12 dB; mode: its compressor,
+    // how hard it squashes (off, 5 .. 100 %)
+    {"LOW", -12, 12, 0, BI, 0, 21, 0},
+    {"MID", -12, 12, 0, BI, 0, 21, 0},
+    {"HIGH", -12, 12, 0, BI, 0, 21, 0},
     {"SPLIT", 0, 4, 2, UNI},  // where the bands divide: 120 / 1.5k .. 500 / 6k
   }
 };
@@ -1135,8 +1160,8 @@ FLASHMEM void MixDevice::Apply(int p) {
       }
       return;
     case B_LOW: case B_MID: case B_HIGH:
-      bandz.compress(p - B_LOW, cur[p] * 0.01f);
-      bandz.band_gain(p - B_LOW, mode[p] - 12.0f);
+      bandz.compress(p - B_LOW, mode[p] * 0.05f);
+      bandz.band_gain(p - B_LOW, float(cur[p]));
       return;
     case SPLIT:
       bandz.split_low(LO_HZ[constrain(cur[SPLIT], 0, 4)]);
@@ -1157,15 +1182,15 @@ FLASHMEM void MixDevice::Apply(int p) {
 // SPLIT shows where the low band ends (the picture above shows both)
 FLASHMEM void MixDevice::Format(int p, char* buf, size_t n) const {
   if (p == SPLIT) snprintf(buf, n, "%d", int(LO_HZ[constrain(val[SPLIT], 0, 4)]));
-  else if (p >= B_LOW && p <= B_HIGH && !val[p]) snprintf(buf, n, "off");
+  else if (p >= B_LOW && p <= B_HIGH) snprintf(buf, n, val[p] > 0 ? "+%ddB" : "%ddB", val[p]);
   else Device::Format(p, buf, n);
 }
 
-// a band's level after its compressor, in dB
+// a band's compressor: how hard it squashes
 FLASHMEM void MixDevice::FormatMode(int p, char* buf, size_t n) const {
   if (p >= B_LOW && p <= B_HIGH) {
-    const int db = mode[p] - 12;
-    snprintf(buf, n, db > 0 ? "+%ddB" : "%ddB", db);
+    if (mode[p]) snprintf(buf, n, "C%d%%", mode[p] * 5);
+    else snprintf(buf, n, "C off");
   } else {
     Device::FormatMode(p, buf, n);
   }
@@ -1189,13 +1214,13 @@ FLASHMEM void MixDevice::DrawViz(int x, int y, int w, int h) {
   const int cy = y + h / 2;
   // page 1: spectrum of the track's output; page 2: the three bands sit
   // above their LOW / MID / HIGH settings (columns of 32 px): the level
-  // (L knob) as a bar from the centre line, and beside it how much the
+  // (R knob) as a bar from the centre line, and beside it how much the
   // band is squashed right now, filling a framed column from the top down
   // (full = 18 dB)
   if (view_page == 0) DrawSpectrum(x, y, 94, h);
   for (int b = 0; b < 3 && view_page == 1; b++) {
     const int bx = x + b * 32;  // above LOW / MID / HIGH
-    const int gain = (mode[B_LOW + b] - 12) * (h / 2 - 1) / 12;
+    const int gain = cur[B_LOW + b] * (h / 2 - 1) / 12;
     gfxDottedLine(bx + 3, cy, bx + 28, cy, 2);
     if (gain > 0) gfxRect(bx + 10, cy - gain, 8, gain);
     else if (gain < 0) gfxRect(bx + 10, cy, 8, -gain);
