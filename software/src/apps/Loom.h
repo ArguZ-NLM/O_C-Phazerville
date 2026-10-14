@@ -170,6 +170,7 @@ namespace loom {
 
   Track tracks[NUM_TRACKS];
   LoomMixer* mixer = nullptr;
+  enum DropKind : uint8_t { DROP_LOST, DROP_SKIP, DROP_SAVE, DROP_MUTE, DROP_GAP, DROP_PATCH };
   void DropNote(uint8_t kind, uint8_t track, uint32_t n, uint16_t detail = 0);  // the dropout log
   LoomPreview* preview = nullptr;  // PLAYER's file list: B listens
   ClockDevice* tempo_clock = nullptr;
@@ -1284,7 +1285,6 @@ volatile uint32_t audio_lost = 0;   // blocks that came while the last was still
 // the dropout log (USB 'O'): what interrupted the sound and when. The
 // same kind again within 2 s adds to the last entry
 struct DropEvent { uint32_t at, until; uint8_t kind; uint8_t track; uint32_t n; uint16_t detail; };
-enum DropKind : uint8_t { DROP_LOST, DROP_SKIP, DROP_SAVE, DROP_MUTE, DROP_GAP, DROP_PATCH };
 constexpr int DROP_LOG = 48;
 DropEvent drop_log[DROP_LOG];
 uint32_t drop_n = 0;
