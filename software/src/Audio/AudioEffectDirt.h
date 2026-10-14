@@ -297,7 +297,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
         const float red = hb_d[c];  // the first chain a sample later
         hb_d[c] = re;
         const bool up = sh_side == SIDE_UP || (sh_side == SIDE_BOTH && c == 0);
-        const float sh = up ? red * osc_c - im * osc_s : red * osc_c + im * osc_s;
+        const float sh = up ? red * osc_c + im * osc_s : red * osc_c - im * osc_s;  // (measured: + is up)
         hb_fb[c] = sh;
         o2[c] += mix_now * (sh - o2[c]);
       }
