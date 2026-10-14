@@ -247,7 +247,7 @@ private:
   bool r_held = false, r_moved = false;  // chain view: R held + turned moves an effect
   bool loop_save_held = false;  // SPOOL: A is down (held 2 s saves the loop) ...
   uint32_t loop_save_hold = 0;  // ... since then
-  bool save_held = false;   // chain view: Y is down (held 2 s saves) ...
+  bool save_held = false;   // Y is down (held 2 s saves, any page) ...
   uint32_t save_hold = 0, saved_at = 0;  // ... since then; when the save happened
   bool clear_held = false;  // SPOOL: B is down on the SPOOL page ...
   uint32_t clear_hold = 0;  // ... since then
@@ -1966,10 +1966,11 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
       tape_held = false;
     }
   }
-  // chain view: Y held for 2 s saves the settings (see MainLoop)
+  // Y held for 2 s saves the settings, on any page (see MainLoop); not in
+  // the file list, where Y goes up a folder
   if (event.control == OC::CONTROL_BUTTON_Y) {
     if (event.type == UI::EVENT_BUTTON_DOWN) {
-      save_held = view == CHAIN;
+      save_held = !Listing();
       save_hold = millis();
     } else if (event.type == UI::EVENT_BUTTON_PRESS || event.type == UI::EVENT_BUTTON_LONG_RELEASE) {
       save_held = false;
@@ -3520,7 +3521,7 @@ FLASHMEM void AppLoom::View() const {
     gfxFrame(36, 22, 56, 15);
     gfxPrint(49, 26, PSTR("SAVED"));
     gfxInvert(37, 23, 54, 13);
-  } else if (save_held && view == CHAIN && millis() - save_hold > 250) {
+  } else if (save_held && millis() - save_hold > 250) {
     const int fill = std::min<int>(52, (millis() - save_hold) * 52 / 2000);
     graphics.clearRect(36, 22, 56, 15);
     gfxFrame(36, 22, 56, 15);
