@@ -4852,9 +4852,10 @@ public:
   enum { RATE, SIZE, PITCH, POS, SHAPE, FDBK, SPREAD, LEVEL };
   static constexpr float BUF_SECS = 4.0f;
   SprayDevice();
-  // each grain takes PITCH once as it starts: the modulator's step, never
-  // half a glide (a grain fired with the step would get the old note)
-  bool Sampled(int p) const override { return p == PITCH; }
+  // each grain takes PITCH, SIZE and POS once as it starts: the
+  // modulator's step, never half a glide (a grain fired with the step
+  // would get the old note)
+  bool Sampled(int p) const override { return p == PITCH || p == SIZE || p == POS; }
   void Rest(bool on) override { fx.rest = on; }
   bool FeedsWhileParked() const override { return true; }
   AudioStream* in() override { return &fx; }
