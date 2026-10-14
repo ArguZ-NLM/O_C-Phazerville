@@ -257,6 +257,9 @@ public:
   virtual void FormatMode(int p, char* buf, size_t n) const;
   // the name shown above a setting (some name themselves after their mode)
   virtual const char* Name(int p) const { return param(p).name; }
+  // a setting taken once per event (a grain's PITCH): it follows a
+  // modulator's step, not its glide
+  virtual bool Sampled(int p) const { return false; }
   virtual void Action(int a) {}
   virtual bool ActionLit(int a) const { return false; }
   virtual void DrawViz(int x, int y, int w, int h) {}
@@ -375,13 +378,14 @@ FLASHMEM int Device::Modulated(int p) const {
   // the two sources add up, each by its own amount
   float sum = 0.0f;
   if (one) {
-    float c = (mod_bus_sel[p] && mod_bus) ? mod_bus[mod_bus_sel[p] - 1]
+    const int at = Sampled(p) ? MOD_BUSES - 1 : -1;  // (the steps follow the outputs)
+    float c = (mod_bus_sel[p] && mod_bus) ? mod_bus[mod_bus_sel[p] + at]
                                           : constrain(mod_in[p].InF(), -1.0f, 1.0f);
     if (Bipolar(p)) c = 2.0f * c - 1.0f;
     sum += mod_amt[p] * c;
   }
   if (two) {
-    float c = mod_bus[mod_bus2[p] - 1];
+    float c = mod_bus[mod_bus2[p] + (Sampled(p) ? MOD_BUSES - 1 : -1)];
     if (Bipolar2(p)) c = 2.0f * c - 1.0f;
     sum += mod_amt2[p] * c;
   }
@@ -4848,6 +4852,9 @@ public:
   enum { RATE, SIZE, PITCH, POS, SHAPE, FDBK, SPREAD, LEVEL };
   static constexpr float BUF_SECS = 4.0f;
   SprayDevice();
+  // each grain takes PITCH once as it starts: the modulator's step, never
+  // half a glide (a grain fired with the step would get the old note)
+  bool Sampled(int p) const override { return p == PITCH; }
   void Rest(bool on) override { fx.rest = on; }
   bool FeedsWhileParked() const override { return true; }
   AudioStream* in() override { return &fx; }

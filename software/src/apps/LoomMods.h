@@ -48,6 +48,8 @@ public:
   // out is on notes, 4 octaves across: a CV output gives it as pitch (the
   // module's own octave: 1.2 V on the 2X0, 1 V on the SX0)
   virtual bool Pitched() const { return false; }
+  // the value without a glide (RANDOM: its step as it is)
+  virtual float Stepped() const { return out; }
   void Run(const ModCtx& ctx);
   void DrawViz(int x, int y, int w, int h) override;
   void DrawMini(int x, int y, int w, int h) override;
@@ -260,6 +262,7 @@ public:
   void Action(int a) override { if (a == 0) Step(); }
   void DrawViz(int x, int y, int w, int h) override;
   bool Pitched() const override { return cur[P_QUANT] != 0; }
+  float Stepped() const override { return Shaped(target); }
 private:
   float steps[16];
   uint8_t pos = 0;

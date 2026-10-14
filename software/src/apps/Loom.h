@@ -103,6 +103,10 @@ namespace loom {
     uint8_t mod_type[NUM_MODS] = {};
     // MOD A-D, then a copy of the shared E-H; -1 = no modulator there
     float mod_out[MOD_BUSES] = {-1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f};
+    // ... each one's step without its glide (RANDOM's SMTH), for settings
+    // taken once per event (a grain's PITCH); right after mod_out: a
+    // device reads it at mod_bus[MOD_BUSES + i]
+    float mod_step[MOD_BUSES] = {-1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f};
 
     Modulator* mod(int i) const { return mods[i][mod_type[i]]; }
 
@@ -782,8 +786,8 @@ FLASHMEM void AppLoom::SetModType(int t, int i, int type) {
   }
   ModType(t, i) = type;
   if (!type) {
-    if (i < NUM_MODS) tracks[t].mod_out[i] = -1.0f;  // a setting listening to it stays put
-    else for (auto& tr : tracks) tr.mod_out[i] = -1.0f;
+    if (i < NUM_MODS) tracks[t].mod_out[i] = tracks[t].mod_step[i] = -1.0f;  // a setting listening to it stays put
+    else for (auto& tr : tracks) tr.mod_out[i] = tr.mod_step[i] = -1.0f;
   }
 }
 
@@ -1534,7 +1538,7 @@ FLASHMEM void AppLoom::ModulateAll() {
     Modulator* m = shared_mods[i][shared_type[i]];
     if (!m) continue;
     m->Run(ctx);
-    for (auto& tr : tracks) tr.mod_out[NUM_MODS + i] = m->out;
+    for (auto& tr : tracks) { tr.mod_out[NUM_MODS + i] = m->out; tr.mod_step[NUM_MODS + i] = m->Stepped(); }
   }
   for (int t = 0; t < NUM_TRACKS; t++) {
     Track& tr = tracks[t];
@@ -1545,6 +1549,7 @@ FLASHMEM void AppLoom::ModulateAll() {
       if (!m) continue;
       m->Run(ctx);
       tr.mod_out[i] = m->out;
+      tr.mod_step[i] = m->Stepped();
     }
   }
   for (auto& tr : tracks) {
