@@ -88,6 +88,9 @@ constexpr int MAX_PARAMS = 8;
 // modulator outputs a setting can pick: the track's MOD A-D, then the
 // shared MOD E-H (the same for both tracks)
 constexpr int MOD_BUSES = 8;
+// a pitch setting's MOD1 / MOD2 source past MOD H: the last MIDI note
+// played (any channel), C3 (60) = no change, a semitone a key at +100 %
+constexpr uint8_t MIDI_BUS = MOD_BUSES + 1;
 
 // rising edges since the last modulator tick: bits 0-3 gate inputs,
 // bits 4-11 CV inputs as gates. Set in the ISR, taken in the main loop.
@@ -328,15 +331,26 @@ public:
   // a setting that goes round when turned past an end (DRAFT's POS: its
   // recording is a loop)
   virtual bool Wraps(int p) const { return false; }
+  // a setting in semitones (PITCH, NOTE): it can follow MIDI notes
+  bool PitchSetting(int p) const {
+    const ParamDef& d = param(p);
+    return d.kind != LIST && (!strcmp(d.name, "PITCH") || !strcmp(d.name, "NOTE"));
+  }
+  // MIDI as a source: keys from C3, scaled so +100 % is a semitone a key
+  float MidiSource(int p) const {
+    const int note = midi_note_seq[0] ? midi_note[0] : 60;  // (none yet: no change)
+    return (note - 60) / float(std::max(1, param(p).max - param(p).min));
+  }
   bool Bipolar(int p) const { return mod_bi & (1 << p); }
   bool Bipolar2(int p) const { return mod_bi2 & (1 << p); }
   bool Modded(int p) const { return mod_amt[p] || mod_amt2[p]; }
   // a source with an amount that really moves the setting (not off, not an
   // empty MOD slot)
   bool ModLive(int p, int k) const {
-    if (k) return mod_amt2[p] && mod_bus2[p] && mod_bus && mod_bus[mod_bus2[p] - 1] >= 0.0f;
+    if (k) return mod_amt2[p] && mod_bus2[p]
+                  && (mod_bus2[p] == MIDI_BUS || (mod_bus && mod_bus[mod_bus2[p] - 1] >= 0.0f));
     return mod_amt[p] && ModSourceOn(p)
-           && !(mod_bus_sel[p] && mod_bus && mod_bus[mod_bus_sel[p] - 1] < 0.0f);
+           && !(mod_bus_sel[p] && mod_bus_sel[p] != MIDI_BUS && mod_bus && mod_bus[mod_bus_sel[p] - 1] < 0.0f);
   }
   bool ModsLive(int p) const { return ModLive(p, 0) || ModLive(p, 1); }
   // the lowest and highest value the live sources together can give
@@ -345,7 +359,8 @@ public:
     for (int k = 0; k < 2; k++) {
       if (!ModLive(p, k)) continue;
       const int amt = k ? mod_amt2[p] : mod_amt[p];
-      if (k ? Bipolar2(p) : Bipolar(p)) { a -= abs(amt); b += abs(amt); }
+      const bool midi = (k ? mod_bus2[p] : mod_bus_sel[p]) == MIDI_BUS;  // (keys both ways from C3)
+      if (midi || (k ? Bipolar2(p) : Bipolar(p))) { a -= abs(amt); b += abs(amt); }
       else if (amt > 0) b += amt;
       else a += amt;
     }
@@ -386,16 +401,27 @@ FLASHMEM int Device::Modulated(int p) const {
   float sum = 0.0f;
   if (one) {
     const int at = Sampled(p) ? MOD_BUSES - 1 : -1;  // (the steps follow the outputs)
-    float c = (mod_bus_sel[p] && mod_bus) ? mod_bus[mod_bus_sel[p] + at]
-                                          : constrain(mod_in[p].InF(), -1.0f, 1.0f);
-    if (Bipolar(p)) c = 2.0f * c - 1.0f;
+    float c;
+    if (mod_bus_sel[p] == MIDI_BUS) c = MidiSource(p);
+    else {
+      c = (mod_bus_sel[p] && mod_bus) ? mod_bus[mod_bus_sel[p] + at]
+                                      : constrain(mod_in[p].InF(), -1.0f, 1.0f);
+      if (Bipolar(p)) c = 2.0f * c - 1.0f;
+    }
     sum += mod_amt[p] * c;
   }
   if (two) {
-    float c = mod_bus[mod_bus2[p] + (Sampled(p) ? MOD_BUSES - 1 : -1)];
-    if (Bipolar2(p)) c = 2.0f * c - 1.0f;
+    float c;
+    if (mod_bus2[p] == MIDI_BUS) c = MidiSource(p);
+    else {
+      c = mod_bus[mod_bus2[p] + (Sampled(p) ? MOD_BUSES - 1 : -1)];
+      if (Bipolar2(p)) c = 2.0f * c - 1.0f;
+    }
     sum += mod_amt2[p] * c;
   }
+  // (MIDI: exact semitones, rounded rather than cut)
+  if ((one && mod_bus_sel[p] == MIDI_BUS) || (two && mod_bus2[p] == MIDI_BUS))
+    return constrain(val[p] + int(lrintf(sum * 0.01f * (d.max - d.min))), int(d.min), int(d.max));
   const int v = val[p] + int(sum * 0.01f * (d.max - d.min));
   return constrain(v, d.min, d.max);
 }
@@ -472,7 +498,11 @@ FLASHMEM void Device::Restore(const Saved& k) {
 FLASHMEM void Device::ChangeModSource(int p, int dir) {
   HS::CVInputMap& in = mod_in[p];
   uint8_t& bus = mod_bus_sel[p];
-  if (bus) {
+  if (bus == MIDI_BUS) {  // MIDI sits left of off
+    if (dir > 0) { bus = 0; in.Unpack(0); }
+  } else if (!bus && !in.enabled() && dir < 0) {
+    if (PitchSetting(p)) bus = MIDI_BUS;
+  } else if (bus) {
     const int b = bus + dir;
     if (b < 1) { bus = 0; in.Unpack(0); }            // -> off
     else if (b > MOD_BUSES) { bus = 0; in.SetInput(0); }  // -> CV 1
@@ -488,12 +518,15 @@ FLASHMEM void Device::ChangeModSource(int p, int dir) {
 
 // the second source: off, MOD A-H
 FLASHMEM void Device::ChangeModSource2(int p, int dir) {
-  mod_bus2[p] = constrain(mod_bus2[p] + dir, 0, MOD_BUSES);
+  if (mod_bus2[p] == MIDI_BUS) { if (dir > 0) mod_bus2[p] = 0; }       // MIDI sits left of off
+  else if (!mod_bus2[p] && dir < 0) { if (PitchSetting(p)) mod_bus2[p] = MIDI_BUS; }
+  else mod_bus2[p] = constrain(mod_bus2[p] + dir, 0, MOD_BUSES);
   Refresh(p);
 }
 
 FLASHMEM void Device::ModSourceName(int p, char* buf, size_t n) const {
-  if (mod_bus_sel[p]) snprintf(buf, n, "Md%c", 'A' + mod_bus_sel[p] - 1);
+  if (mod_bus_sel[p] == MIDI_BUS) snprintf(buf, n, "MIDI");
+  else if (mod_bus_sel[p]) snprintf(buf, n, "Md%c", 'A' + mod_bus_sel[p] - 1);
   else snprintf(buf, n, "%s", mod_in[p].InputName());
 }
 

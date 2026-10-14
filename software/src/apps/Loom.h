@@ -280,7 +280,17 @@ private:
     uint8_t& bi = mod_slot ? d->mod_bi2 : d->mod_bi;
     auto on = [&]() { return mod_slot ? d->mod_bus2[p] != 0 : d->ModSourceOn(p); };
     auto source = [&](int s) { if (mod_slot) d->ChangeModSource2(p, s); else d->ChangeModSource(p, s); };
+    auto bus = [&]() { return mod_slot ? d->mod_bus2[p] : d->mod_bus_sel[p]; };
     for (int n = 0; n < abs(dir); n++) {
+      // a pitch setting: MIDI notes sit left of off (no u / b)
+      if (bus() == loom::MIDI_BUS) { if (dir > 0) { source(1); bi &= ~bit; } break; }
+      if (!on() && dir < 0) {
+        source(-1);
+        bi &= ~bit;
+        int8_t& amt = mod_slot ? d->mod_amt2[p] : d->mod_amt[p];
+        if (bus() == loom::MIDI_BUS && !amt) { amt = 100; d->Refresh(p); }  // a semitone a key, at once
+        break;
+      }
       if (dir > 0) {
         if (!on() && last_mod >= 0) {
           // off: straight to the modulator just adjusted (a fast turn stops there)
@@ -304,7 +314,7 @@ private:
       }
     }
     // a MOD picked: its u / b is the one the next jump takes
-    if (mod_slot ? d->mod_bus2[p] : d->mod_bus_sel[p]) last_bi = bi & bit;
+    if (bus() && bus() != loom::MIDI_BUS) last_bi = bi & bit;
   }
   void BackToDevice() {
     view = DEVICE;
@@ -2819,7 +2829,8 @@ FLASHMEM void AppLoom::DrawDevice() const {
       // small u / b, so the wave mark fits above it
       const char ub = (mod_slot ? d->Bipolar2(p) : d->Bipolar(p)) ? 'b' : 'u';
       char src[8] = {};
-      if (bus) snprintf(src, sizeof(src), "M%c%c", 'A' + bus - 1, ub);
+      if (bus == MIDI_BUS) snprintf(src, sizeof(src), "MIDI");
+      else if (bus) snprintf(src, sizeof(src), "M%c%c", 'A' + bus - 1, ub);
       else if (!mod_slot && in.enabled()) {
         // CV / MIDI: its short name without the gaps (C 1 -> C1)
         int k = 0;
@@ -3220,13 +3231,13 @@ namespace loom {
         md = uint8_t(constrain((comp + 2) / 5, 0, 20));
       }
       d->mod_amt2[p] = constrain(amt2, -100, 100);
-      d->mod_bus2[p] = bus2 <= MOD_BUSES ? bus2 : 0;
+      d->mod_bus2[p] = bus2 <= MIDI_BUS ? bus2 : 0;
       const ParamDef& pd = d->param(p);
       d->val[p] = constrain(v, pd.min, pd.max);
       d->mode[p] = pd.nmodes ? constrain(md, 0, pd.nmodes - 1) : 0;
       d->mod_amt[p] = constrain(amt, -100, 100);
       d->mod_in[p].Unpack(src);
-      d->mod_bus_sel[p] = bus <= MOD_BUSES ? bus : 0;
+      d->mod_bus_sel[p] = bus <= MIDI_BUS ? bus : 0;
       if (flip_pos && p == StretchDevice::POS) {
         d->val[p] = 100 - d->val[p];
         d->mod_amt[p] = -d->mod_amt[p];
