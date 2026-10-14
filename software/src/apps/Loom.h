@@ -469,6 +469,7 @@ private:
   void SetPans(int l, int r);
   void MoveEffect(int dir);
   uint32_t repatch_at[2] = {};  // a moved effect waits for its track to fade out
+  uint32_t unduck_at[2] = {};   // ... and then for the dropped block to pass
   void RepatchQuiet();
   int16_t unlinked_pan[2] = {INT16_MIN, 0};  // the tracks' own PAN from before the link
   void UpdateMixLevels() const;
@@ -1248,12 +1249,16 @@ FLASHMEM void AppLoom::MoveEffect(int dir) {
 FLASHMEM void AppLoom::RepatchQuiet() {
   using namespace loom;
   for (int t = 0; t < NUM_TRACKS; t++) {
-    if (!repatch_at[t] || !mixer) continue;
+    if (!mixer) continue;
+    // back in once the block the change dropped has gone by (it reaches
+    // the mixer a block or two later)
+    if (unduck_at[t] && int32_t(millis() - unduck_at[t]) >= 0) { unduck_at[t] = 0; mixer->duck_to[t] = 1.0f; }
+    if (!repatch_at[t]) continue;
     // (signed: the mark can be a millisecond ahead, from the | 1)
     if (mixer->duck[t] > 0.001f && int32_t(millis() - repatch_at[t]) < 60) continue;
     Repatch(t);
     repatch_at[t] = 0;
-    mixer->duck_to[t] = 1.0f;
+    unduck_at[t] = (millis() + 9) | 1;
   }
 }
 
