@@ -4680,8 +4680,8 @@ FLASHMEM void DirtDevice::DrawViz(int x, int y, int w, int h) {
     pole -= floorf(pole);
     static const uint8_t bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
     const int fill_front = 2 + cur[HMIX] * 14 / 100;  // 2 .. 16 of 16
-    const int fill_back = 1 + cur[HMIX] * 2 / 100;    // faint behind
-    const int strands = 2 + cur[HFDBK] * 3 / 100;     // 2 .. 5
+    const int fill_back = 1 + cur[HMIX] * 4 / 100;    // faint behind
+    const int strands = 3 + cur[HFDBK] * 5 / 100;     // 3 .. 8
     const bool both = !Phasing() && cur[SIDE] == 2;
     const int poles = both ? 2 : 1;
     const float R = both ? 14.0f : 18.0f, E = R * 0.28f;  // radius, and the rims' ellipse height
@@ -4699,29 +4699,20 @@ FLASHMEM void DirtDevice::DrawViz(int x, int y, int w, int h) {
       }
       gfxLine(int(cx - R + 0.5f), int(top), int(cx - R + 0.5f), int(bot));
       gfxLine(int(cx + R + 0.5f), int(top), int(cx + R + 0.5f), int(bot));
-      // the strands: 3/4 of a turn over the height, as lines; the back
-      // only a light dotted trace
+      // the strands: 1.5 turns over the height, one sample a pixel row
       for (int st = 0; st < strands; st++) {
         const float off = st * (2.0f * float(M_PI) / strands);
-        float px = 0.0f, py = 0.0f;
-        bool pf = false;
-        constexpr int SEG = 28;
-        for (int k = 0; k <= SEG; k++) {
-          const float hy = float(k) / SEG;  // 0 at the bottom .. 1 at the top
-          const float a = off + ph + hy * 1.5f * float(M_PI);
-          const float sx = cx + R * sinf(a) * 0.97f;
-          const float sy = bot - hy * (bot - top) - E * cosf(a) * 0.9f;
-          const bool front = cosf(a) > 0.0f;
-          if (k) {  // the segment from the last point, pixel by pixel
-            const int nn = int(std::max(fabsf(sx - px), fabsf(sy - py))) + 1;
-            for (int i = 0; i <= nn; i++) {
-              const int qx = int(px + (sx - px) * i / nn + 0.5f), qy = int(py + (sy - py) * i / nn + 0.5f);
-              if (qy <= y || qy >= y + h - 1) continue;
-              const bool f = front || pf;
-              if (bayer[qy & 3][qx & 3] < (f ? fill_front : fill_back)) gfxPixel(qx, qy);
-            }
+        for (int r = int(top); r <= int(bot); r++) {
+          const float hy = (bot - r) / (bot - top);  // 0 at the bottom .. 1 at the top
+          for (int sub = 0; sub < 3; sub++) {  // three points a row: no gaps where it runs flat
+            const float a = off + ph + (hy + sub / (3.0f * (bot - top))) * 3.0f * float(M_PI);
+            const float sx = cx + R * sinf(a) * 0.96f;
+            const float sy = r - E * cosf(a) * 0.9f;
+            const bool front = cosf(a) > 0.0f;
+            const int px = int(sx + 0.5f), py = int(sy + 0.5f);
+            if (py <= y || py >= y + h - 1) continue;
+            if (bayer[py & 3][px & 3] < (front ? fill_front : fill_back)) gfxPixel(px, py);
           }
-          px = sx; py = sy; pf = front;
         }
       }
     }
