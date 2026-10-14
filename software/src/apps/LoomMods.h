@@ -228,26 +228,32 @@ FLASHMEM void WaveMod::Format(int p, char* buf, size_t n) const {
 // RANDOM: stepped random, optionally a looping pattern
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef RANDOM_DEF = {
-  "RANDOM", "RND", 7, {"STP", ""},
+  "RANDOM", "RND", 8, {"STP", ""},
   {
-    {"RATE", 0, 100, 45, UNI, 0, 4, 0, {}, {"FREE", "STR", "TRI", "DOT"}},
     {"AMNT", 0, 100, 100, UNI},
-    {"SMTH", 0, 100, 0, UNI},
-    {"OFFS", -50, 50, 0, BI},
     {"LEN", 0, 16, 0, UNI},
     {"VARI", 0, 100, 20, UNI},
+    {"OFFS", -50, 50, 0, BI},
     {"CLOCK", 0, TRIG_SOURCES - 1, 0, UNI},
+    {"RATE", 0, 100, 45, UNI, 0, 4, 0, {}, {"FREE", "STR", "TRI", "DOT"}},
+    {"SMTH", 0, 100, 0, UNI},
+    // the scale the output snaps to (off, then as TWILL's, with BLUES);
+    // mode: its root note, C .. B
+    {"QUANT", 0, 16, 0, UNI, 0, 12, 0},
   }
 };
 
 class RandomMod : public Modulator {
 public:
-  enum { P_RATE, P_AMT, P_SMTH, P_OFFS, P_LEN, P_VARI, P_CLOCK };
+  // (before 2026-10-14: RATE AMNT SMTH OFFS LEN VARI CLOCK, no QUANT)
+  enum { P_AMT, P_LEN, P_VARI, P_OFFS, P_CLOCK, P_RATE, P_SMTH, P_QUANT };
+  static constexpr int SCALES = 17, SCALES12 = 9;  // off, 8 on the 12 notes, 8 microtonal
   RandomMod() : Modulator(RANDOM_DEF) {
     for (auto& s : steps) s = random(1000) * 0.001f;
   }
   void Tick(const ModCtx& ctx) override;
   void Format(int p, char* buf, size_t n) const override;
+  void FormatMode(int p, char* buf, size_t n) const override;
   void Action(int a) override { if (a == 0) Step(); }
   void DrawViz(int x, int y, int w, int h) override;
 private:
@@ -256,7 +262,68 @@ private:
   float target = 0.5f, smooth = 0.5f, t = 0.0f;
   float Hz() const { return RateHz(P_RATE, 0.05f, 30.0f); }
   void Step();
+  float Shaped(float s) const;
+  float Quantized(float v) const;
 };
+
+// a step through AMNT / OFFS, then onto the scale
+FLASHMEM float RandomMod::Shaped(float s) const {
+  const float v = constrain(0.5f + (s - 0.5f) * cur[P_AMT] * 0.01f + cur[P_OFFS] * 0.01f, 0.0f, 1.0f);
+  return cur[P_QUANT] ? Quantized(v) : v;
+}
+
+// the whole output is four octaves (48 semitones), as a PITCH setting's
+// range: AMNT 100 on a PITCH setting lands on the notes
+FLASHMEM float RandomMod::Quantized(float v) const {
+  static const uint16_t masks[SCALES12 - 1] = {
+    0xFFF,                                                                        // CHROM
+    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 5) | (1 << 7) | (1 << 9) | (1 << 11),  // MAJOR
+    (1 << 0) | (1 << 2) | (1 << 3) | (1 << 5) | (1 << 7) | (1 << 8) | (1 << 10),  // MINOR
+    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 7) | (1 << 9),                         // PENTA
+    (1 << 0) | (1 << 3) | (1 << 5) | (1 << 7) | (1 << 10),                        // minor pentatonic
+    (1 << 0) | (1 << 3) | (1 << 5) | (1 << 6) | (1 << 7) | (1 << 10),             // BLUES
+    (1 << 0) | (1 << 7),                                                          // FIFTH: root and fifth
+    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 6) | (1 << 8) | (1 << 10),             // WHOLE tones
+  };
+  // as TWILL's: slendro, pelog (approximate), the 22 shrutis, the harmonic
+  // series 8 .. 15
+  static const float slendro[5] = {0, 240, 480, 720, 960};
+  static const float pelog[7] = {0, 120, 270, 540, 670, 785, 950};
+  static const float shruti[22] = {0, 90.2f, 111.7f, 182.4f, 203.9f, 294.1f, 315.6f, 386.3f, 407.8f, 498.0f, 519.6f,
+                                   590.2f, 611.7f, 702.0f, 792.2f, 813.7f, 884.4f, 905.9f, 996.1f, 1017.6f, 1088.3f, 1109.8f};
+  static const float harmonic[8] = {0, 203.91f, 386.31f, 551.32f, 701.96f, 840.53f, 968.83f, 1088.27f};
+  float st[24];
+  int ns = 0;
+  float period = 1200.0f;
+  auto equal = [&](int k, float per) { for (int i = 0; i < k; i++) st[i] = per * i / k; ns = k; period = per; };
+  auto table = [&](const float* tb, int k) { for (int i = 0; i < k; i++) st[i] = tb[i]; ns = k; };
+  const int sc = constrain(int(cur[P_QUANT]), 1, SCALES - 1);
+  if (sc < SCALES12) {
+    for (int i = 0; i < 12; i++) if (masks[sc - 1] >> i & 1) st[ns++] = i * 100.0f;
+  } else switch (sc) {
+    case 9: equal(24, 1200.0f); break;     // QUART: quarter tones
+    case 10: equal(17, 1200.0f); break;    // 17ET
+    case 11: equal(19, 1200.0f); break;    // 19ET
+    case 12: table(slendro, 5); break;     // SLEND
+    case 13: table(pelog, 7); break;       // PELOG
+    case 14: equal(13, 1901.955f); break;  // BOHLN: Bohlen-Pierce, 13 steps of the twelfth
+    case 15: table(shruti, 22); break;     // SHRUT
+    default: table(harmonic, 8); break;    // HARMO
+  }
+  // the nearest note, in cents from the bottom (the root from mode)
+  const float c = v * 4800.0f - mode[P_QUANT] * 100.0f;
+  const int k = int(floorf(c / period));
+  float best = 0.0f, gap = 1e9f;
+  for (int o = k - 1; o <= k + 1; o++) {
+    for (int i = 0; i < ns; i++) {
+      const float nc = o * period + st[i];
+      const float a = mode[P_QUANT] * 100.0f + nc;
+      if (a < -0.5f || a > 4800.5f) continue;
+      if (fabsf(nc - c) < gap) { gap = fabsf(nc - c); best = a; }
+    }
+  }
+  return gap < 1e8f ? constrain(best / 4800.0f, 0.0f, 1.0f) : v;
+}
 
 FLASHMEM void RandomMod::Step() {
   const int len = cur[P_LEN];
@@ -283,18 +350,18 @@ FLASHMEM void RandomMod::Tick(const ModCtx& ctx) {
     t += Hz() * ctx.dt;
     if (t >= 1.0f) { t -= floorf(t); Step(); }
   }
-  // P_SMTH glides between steps
+  // P_SMTH glides between steps (between the notes when quantized)
   const float s = cur[P_SMTH] * 0.01f;
   const float tau = 0.0005f + s * s * 1.0f;
-  smooth += (target - smooth) * std::min(1.0f, ctx.dt / tau);
-  out = 0.5f + (smooth - 0.5f) * cur[P_AMT] * 0.01f + cur[P_OFFS] * 0.01f;
+  smooth += (Shaped(target) - smooth) * std::min(1.0f, ctx.dt / tau);
+  out = smooth;
 }
 
 // LEN set: the sequence as bars, the current step lit; free: the last steps
 // going by as a line
 FLASHMEM void RandomMod::DrawViz(int x, int y, int w, int h) {
   const int ww = w - 8, top = y + 1, hh = h - 3;
-  auto val = [&](float s) { return constrain(0.5f + (s - 0.5f) * cur[P_AMT] * 0.01f + cur[P_OFFS] * 0.01f, 0.0f, 1.0f); };
+  auto val = [&](float s) { return Shaped(s); };
   auto yy = [&](float v) { return top + hh - int(v * hh + 0.5f); };
   const int len = cur[P_LEN];
   if (len > 0) {
@@ -329,9 +396,19 @@ FLASHMEM void RandomMod::Format(int p, char* buf, size_t n) const {
   } else if (p == P_CLOCK) {
     if (val[P_CLOCK] == 0) snprintf(buf, n, "rate");
     else FormatTrig(val[P_CLOCK], buf, n);
+  } else if (p == P_QUANT) {
+    static const char* const scales[SCALES] = {"off", "CHROM", "MAJOR", "MINOR", "PENTA", "mPENT", "BLUES", "FIFTH",
+                                               "WHOLE", "QUART", "17ET", "19ET", "SLEND", "PELOG", "BOHLN", "SHRUT", "HARMO"};
+    snprintf(buf, n, "%s", scales[constrain(int(val[P_QUANT]), 0, SCALES - 1)]);
   } else {
     Device::Format(p, buf, n);
   }
+}
+
+FLASHMEM void RandomMod::FormatMode(int p, char* buf, size_t n) const {
+  static const char* const names[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+  if (p == P_QUANT) snprintf(buf, n, "%s", names[mode[P_QUANT] % 12]);
+  else Modulator::FormatMode(p, buf, n);
 }
 
 /////////////////////////////////////////////////////////////////

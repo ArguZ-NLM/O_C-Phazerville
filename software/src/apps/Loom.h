@@ -2977,6 +2977,9 @@ namespace loom {
     // v16 (one day only) had this lane's SPOOL in front of WARP's SRC modes:
     // back one (that one becomes the other track's SPOOL)
     const bool warp_src16 = use && !memcmp(tag, "WRP", 4) && load_version == 16;
+    // RANDOM was RATE AMNT SMTH OFFS LEN VARI CLOCK (no QUANT) until 2026-10-14
+    const bool rnd_order = use && !memcmp(tag, "RND", 4) && n == 7;
+    static constexpr int8_t RND_MAP[7] = {5, 0, 6, 3, 1, 2, 4};
     int old_diff = -1;
     // before v6 the reverb's 6th was SIZE (now PRE: left at its default);
     // DECAY's value becomes ROOM, TONE's WALL (same places)
@@ -3020,6 +3023,7 @@ namespace loom {
         md = 0;
         p = StretchDevice::TONE;
       }
+      if (rnd_order) p = RND_MAP[q];
       if (skip_size && p == 5) { p = q; continue; }
       if (spool_order) {
         if (SPOOL_MAP[q] < 0) { old_dub = v; continue; }
@@ -3090,6 +3094,14 @@ namespace loom {
         return o;
       };
       bi = so(bi); bi2 = so(bi2);
+    }
+    if (rnd_order) {
+      auto ro = [](uint8_t b) {
+        uint8_t o = 0;
+        for (int k = 0; k < 7; k++) if (b >> k & 1) o |= uint8_t(1 << RND_MAP[k]);
+        return o;
+      };
+      bi = ro(bi); bi2 = ro(bi2);
     }
     if (old_bands) { bi &= 0x0F; bi2 &= 0x0F; }
     if (use) {
