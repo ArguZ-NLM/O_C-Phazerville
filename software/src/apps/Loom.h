@@ -277,7 +277,7 @@ private:
   // L enc in modulation: each source comes as U then B (off has neither)
   void StepModOption(loom::Device* d, int p, int dir) {
     const int bit = 1 << p;
-    uint8_t& bi = mod_slot ? d->mod_bi2 : d->mod_bi;
+    uint16_t& bi = mod_slot ? d->mod_bi2 : d->mod_bi;
     auto on = [&]() { return mod_slot ? d->mod_bus2[p] != 0 : d->ModSourceOn(p); };
     auto source = [&](int s) { if (mod_slot) d->ChangeModSource2(p, s); else d->ChangeModSource(p, s); };
     auto bus = [&]() { return mod_slot ? d->mod_bus2[p] : d->mod_bus_sel[p]; };
@@ -448,7 +448,8 @@ private:
     int8_t mod_amt[loom::MAX_PARAMS], mod_amt2[loom::MAX_PARAMS];
     HS::CVInputMap mod_in[loom::MAX_PARAMS];
     uint8_t mod_bus_sel[loom::MAX_PARAMS], mod_bus2[loom::MAX_PARAMS];
-    uint8_t mod_bi = 0, mod_bi2 = 0, act_trig[2] = {};
+    uint16_t mod_bi = 0, mod_bi2 = 0;
+    uint8_t act_trig[2] = {};
     void Take(const loom::Device* d);
     void Give(loom::Device* d) const;
   };
@@ -2790,7 +2791,8 @@ FLASHMEM void AppLoom::DrawDevice() const {
   }
   if (n > 4) {
     gfxPrint(110, 1, cursor / 4 + 1);
-    gfxPrint(116, 1, PSTR("/2"));
+    gfxPrint(116, 1, PSTR("/"));
+    gfxPrint(122, 1, (n + 3) / 4);
   }
   gfxLine(0, 9, 127, 9);
 
@@ -3100,7 +3102,7 @@ namespace loom {
   // 14: DRAFT in FIBRE's order SPEED SIZE PITCH POS (was PITCH POS SIZE SPEED)
   // 15: DRAFT page 2 DIFF TONE SPRD MIX (was TONE FDBK SPRD MIX, TONE's mode
   //     the diffusion)
-  constexpr uint8_t SAVE_VERSION = 19;
+  constexpr uint8_t SAVE_VERSION = 20;
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -3122,8 +3124,8 @@ namespace loom {
       f.write(&d->mod_amt2[p], 1);
       f.write(&d->mod_bus2[p], 1);
     }
-    f.write(&d->mod_bi, 1);
-    f.write(&d->mod_bi2, 1);
+    f.write(reinterpret_cast<const uint8_t*>(&d->mod_bi), 2);  // (two bytes from v20: twelve settings)
+    f.write(reinterpret_cast<const uint8_t*>(&d->mod_bi2), 2);
     f.write(d->act_trig, 2);
   }
 
@@ -3276,8 +3278,10 @@ namespace loom {
         d->mod_in[p] = HS::CVInputMap{};
       }
     }
-    uint8_t bi, bi2 = 0, trig[2];
-    if (f.read(&bi, 1) != 1 || (load_version >= 3 && f.read(&bi2, 1) != 1)
+    uint16_t bi = 0, bi2 = 0;
+    uint8_t trig[2];
+    const int bw = load_version >= 20 ? 2 : 1;  // the bit masks: a byte up to v19 (eight settings)
+    if (f.read(reinterpret_cast<uint8_t*>(&bi), bw) != bw || (load_version >= 3 && f.read(reinterpret_cast<uint8_t*>(&bi2), bw) != bw)
         || f.read(trig, 2) != 2) return false;
     if (remap_spr) {  // the bipolar bits move with MIX too
       auto mv = [](uint8_t b) { return uint8_t((b & 0x3F) | ((b & 0x40) << 1)); };

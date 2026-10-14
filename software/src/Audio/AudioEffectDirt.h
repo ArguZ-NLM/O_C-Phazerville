@@ -82,6 +82,20 @@ public:
   }
   void wet(float w) { wet_ = constrain(w, 0.0f, 1.0f); }
 
+  // HEDDLE (after the rest): a frequency shifter, after Bode. Every
+  // frequency moves by the same Hz, up or down (a pitch shifter multiplies
+  // instead), so harmonics turn inharmonic: bells, metal, and at a few Hz
+  // the endless barber-pole sweep. The sound split into two 90 degrees
+  // apart (two all-pass chains), times a sine / cosine pair: their sum is
+  // one side, their difference the other.
+  enum { SIDE_UP, SIDE_DOWN, SIDE_BOTH };  // BOTH: up on the left, down on the right
+  void shift(float hz, int side, float fdbk, float mix) {
+    shift_hz = hz;
+    shift_side = uint8_t(side);
+    shift_fb = constrain(fdbk, 0.0f, 0.95f);
+    shift_mix = constrain(mix, 0.0f, 1.0f);
+  }
+
   // fold curve, shared with the picture: sin() of the boosted signal folds
   // it back from the edges; crossfaded in so 0 is clean
   static inline float Fold(float x, float fold) {
@@ -124,6 +138,21 @@ private:
   volatile float tilt_lo = 1.0f, tilt_hi = 1.0f, tilt_a = 0.1f, tilt_gain = 1.0f;
   volatile float drive_gain = 1.0f;
   volatile float noise_amt = 0.0f, noise_rel = 0.999f, svf_f = 0.1f;
+
+  volatile float shift_hz = 0.0f, shift_fb = 0.0f, shift_mix = 0.0f;
+  volatile uint8_t shift_side = SIDE_UP;
+  // HEDDLE's state: the oscillator (cos, sin), the all-passes (per side,
+  // 4 + 4 sections of x[n-1], x[n-2], y[n-1], y[n-2]), the one-sample delay
+  // of the first chain, the last output (feedback)
+  float osc_c = 1.0f, osc_s = 0.0f;
+  float hb[2][8][4] = {};
+  float hb_d[2] = {}, hb_fb[2] = {};
+  float mix_now = 0.0f;
+  // Olli Niemitalo's coefficients (squared): 90 degrees apart within ~0.1
+  // degree from ~20 Hz to ~20 kHz at 48 kHz
+  static constexpr float HB_A[8] = {
+    0.6923878f * 0.6923878f, 0.9360654322959f * 0.9360654322959f, 0.9882295226860f * 0.9882295226860f, 0.9987488452737f * 0.9987488452737f,
+    0.4021921162426f * 0.4021921162426f, 0.8561710882420f * 0.8561710882420f, 0.9722909545651f * 0.9722909545651f, 0.9952884791278f * 0.9952884791278f};
 
   // state
   uint32_t rng = 0x12345678;
@@ -174,6 +203,14 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
 
   float peak_in = 0.0f, peak_out = 0.0f;
   constexpr float q = 1.0f / 32768.0f;
+
+  // HEDDLE: the oscillator turns by this a sample (a rotation); its MIX
+  // glides; nothing to do while it is off
+  const float sh_w = 2.0f * float(M_PI) * shift_hz / AUDIO_SAMPLE_RATE_EXACT;
+  const float rc = cosf(sh_w), rs = sinf(sh_w);
+  const float sh_fb = shift_fb, sh_mix_to = shift_mix;
+  const uint8_t sh_side = shift_side;
+  const bool shifting = sh_mix_to > 0.0f || mix_now > 1e-4f;
 
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
     float x[2] = {in[0] ? in[0]->data[n] * q : 0.0f, in[1] ? in[1]->data[n] * q : 0.0f};
@@ -236,11 +273,44 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
       x[c] = v;
     }
 
-    for (int c = 0; c < 2; c++) {
-      const float o = dry[c] + w * (x[c] - dry[c]);
-      peak_out = std::max(peak_out, fabsf(o));
-      out[c]->data[n] = ToSample16(o);
+    float o2[2];
+    for (int c = 0; c < 2; c++) o2[c] = dry[c] + w * (x[c] - dry[c]);
+    if (shifting) {
+      mix_now += 0.002f * (sh_mix_to - mix_now);
+      const float oc = osc_c * rc - osc_s * rs;  // the oscillator a step on
+      osc_s = osc_c * rs + osc_s * rc;
+      osc_c = oc;
+      for (int c = 0; c < 2; c++) {
+        float u = o2[c] + sh_fb * hb_fb[c];
+        u = u / (1.0f + fabsf(u) * 0.25f);  // (the feedback can't run away)
+        float re = u, im = u;
+        for (int k = 0; k < 4; k++) {  // y = a (x + y[n-2]) - x[n-2]
+          float* st = hb[c][k];
+          const float y = HB_A[k] * (re + st[3]) - st[1];
+          st[1] = st[0]; st[0] = re; st[3] = st[2]; st[2] = y; re = y;
+        }
+        for (int k = 4; k < 8; k++) {
+          float* st = hb[c][k];
+          const float y = HB_A[k] * (im + st[3]) - st[1];
+          st[1] = st[0]; st[0] = im; st[3] = st[2]; st[2] = y; im = y;
+        }
+        const float red = hb_d[c];  // the first chain a sample later
+        hb_d[c] = re;
+        const bool up = sh_side == SIDE_UP || (sh_side == SIDE_BOTH && c == 0);
+        const float sh = up ? red * osc_c - im * osc_s : red * osc_c + im * osc_s;
+        hb_fb[c] = sh;
+        o2[c] += mix_now * (sh - o2[c]);
+      }
     }
+    for (int c = 0; c < 2; c++) {
+      peak_out = std::max(peak_out, fabsf(o2[c]));
+      out[c]->data[n] = ToSample16(o2[c]);
+    }
+  }
+  if (shifting) {  // keep the oscillator on the circle
+    const float m = 1.0f / sqrtf(osc_c * osc_c + osc_s * osc_s);
+    osc_c *= m;
+    osc_s *= m;
   }
 
   transmit(out[0], 0);

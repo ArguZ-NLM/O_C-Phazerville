@@ -81,11 +81,11 @@ struct DeviceDef {
   char tag[4];       // 3 letters for the chain view
   uint8_t nparams;
   char actions[2][5];
-  ParamDef params[8];
-  char page_title[2][6]; // shown after the name in the header, per page
+  ParamDef params[12];   // up to three pages of four
+  char page_title[3][8]; // shown after the name in the header, per page
 };
 
-constexpr int MAX_PARAMS = 8;
+constexpr int MAX_PARAMS = 12;
 // modulator outputs a setting can pick: the track's MOD A-D, then the
 // shared MOD E-H (the same for both tracks)
 constexpr int MOD_BUSES = 8;
@@ -252,8 +252,8 @@ public:
   uint8_t act_trig[2] = {};              // trigger sources for the 2 actions
   bool act_prev[2] = {};
   const float* mod_bus = nullptr;        // the track's modulator outputs
-  uint8_t mod_bi = 0;                // bit per param: bipolar around val
-  uint8_t mod_bi2 = 0;               // the same for the second source
+  uint16_t mod_bi = 0;               // bit per param: bipolar around val
+  uint16_t mod_bi2 = 0;              // the same for the second source
   bool active = false;
   float wet = 1.0f;       // the device's share in its slot's fade (SPRAY: LEVEL)
   uint8_t view_page = 0;  // which page of settings the device view shows
@@ -325,7 +325,7 @@ public:
     int8_t mod_amt[MAX_PARAMS], mod_amt2[MAX_PARAMS];
     HS::CVInputMap mod_in[MAX_PARAMS];
     uint8_t mod_bus_sel[MAX_PARAMS], mod_bus2[MAX_PARAMS];
-    uint8_t mod_bi, mod_bi2;
+    uint16_t mod_bi, mod_bi2;
     uint32_t ex[2];  // PLAYER: its exact edges
     bool ex_valid;
   };
@@ -4467,7 +4467,7 @@ FLASHMEM void EchoDevice::DrawMini(int x, int y, int w, int h) {
 // TEXTURE: fold, drive, crush, tilt, envelope-following noise
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef DIRT_DEF = {
-  "TEXTURE", "TEX", 8, {"", ""},
+  "TEXTURE", "TEX", 12, {"", ""},
   {
     {"DRIVE", 0, 100, 0, UNI},
     {"FOLD", 0, 100, 0, UNI},
@@ -4477,13 +4477,40 @@ PROGMEM static const DeviceDef DIRT_DEF = {
     {"N.DCY", 0, 100, 40, UNI},
     {"N.TON", 0, 100, 50, UNI},
     {"WET", 0, 100, 100, UNI},
-  }
+    // page 3, HEDDLE: a frequency shifter (as Bode's). SHIFT in Hz, down
+    // left of the middle, up right (0: none); mode: FREE, or CLK: one turn
+    // of the barber pole a clock note value. SIDE: which way the sound goes
+    // (BOTH: up left, down right)
+    {"SHIFT", -100, 100, 0, BI, 0, 2, 0, {}, {"FREE", "CLK"}},
+    {"SIDE", 0, 2, 0, LIST, 3, 0, 0, {"UP", "DOWN", "BOTH"}},
+    {"FDBK", 0, 100, 0, UNI},
+    {"MIX", 0, 100, 0, UNI},
+  },
+  {"", "", "HEDDLE"},
 };
 
 class DirtDevice : public Device {
 public:
-  enum { DRIVE, FOLD, CRUSH, TILT, NOISE, NDECAY, NTONE, WET };
+  enum { DRIVE, FOLD, CRUSH, TILT, NOISE, NDECAY, NTONE, WET, SHIFT, SIDE, HFDBK, HMIX };
   DirtDevice() : Device(DIRT_DEF) {}
+  // HEDDLE's SHIFT in Hz: 0.05 .. 2000, either way (CLK: a turn a note value)
+  float ShiftHz(int v) const {
+    if (!v) return 0.0f;
+    const float hz = mode[SHIFT] != SYNC_FREE ? 1.0f / DivSeconds(DivIndex(abs(v), 1, 100))
+                                              : 0.05f * powf(40000.0f, abs(v) * 0.01f);
+    return v < 0 ? -hz : hz;
+  }
+  void TempoChanged() override { if (mode[SHIFT] != SYNC_FREE) Apply(SHIFT); }
+  int Step(int p, int v, int dir) const override {
+    if (p != SHIFT || mode[SHIFT] == SYNC_FREE) return v + dir;
+    // on the clock: one note value a turn (the longest next to the middle)
+    const int s = v > 0 ? 1 : v < 0 ? -1 : 0;
+    if (!s) return dir > 0 ? DivValue(0, 1, 100) : -DivValue(0, 1, 100);
+    const int idx = DivIndex(abs(v), 1, 100) + dir * s;
+    return idx < 0 ? 0 : s * DivValue(idx, 1, 100);
+  }
+  float pole = 0.0f;           // the picture's barber pole, where it is
+  uint32_t pole_at = 0;
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
   void Apply(int p) override;
@@ -4545,6 +4572,9 @@ FLASHMEM void DirtDevice::Apply(int p) {
     case NDECAY: fx.noise_decay(NoiseDecaySecs()); break;
     case NTONE:  fx.noise_tone(v); break;
     case WET:    fx.wet(v); break;
+    case SHIFT: case SIDE: case HFDBK: case HMIX:
+      fx.shift(ShiftHz(cur[SHIFT]), cur[SIDE], cur[HFDBK] * 0.0095f, cur[HMIX] * 0.01f);
+      break;
   }
 }
 
@@ -4557,6 +4587,17 @@ FLASHMEM void DirtDevice::Format(int p, char* buf, size_t n) const {
     const int hz = int(100.0f * powf(100.0f, val[NTONE] * 0.01f));
     if (hz < 1000) snprintf(buf, n, "%dHz", hz);
     else snprintf(buf, n, "%dk%d", hz / 1000, (hz % 1000) / 100);
+  } else if (p == SHIFT && mode[SHIFT] != SYNC_FREE && val[SHIFT]) {
+    char d[8];
+    FormatDiv(DivIndex(abs(val[SHIFT]), 1, 100), d, sizeof(d));
+    snprintf(buf, n, "%c%s", val[SHIFT] < 0 ? '-' : '+', d);
+  } else if (p == SHIFT) {  // Hz, finer near 0
+    const float hz = fabsf(ShiftHz(val[SHIFT]));
+    const char sg = val[SHIFT] < 0 ? '-' : val[SHIFT] > 0 ? '+' : ' ';
+    if (!val[SHIFT]) snprintf(buf, n, "0");
+    else if (hz < 10.0f) snprintf(buf, n, "%c%d.%02d", sg, int(hz), int(hz * 100.0f) % 100);
+    else if (hz < 1000.0f) snprintf(buf, n, "%c%d", sg, int(hz + 0.5f));
+    else snprintf(buf, n, "%c%dk%d", sg, int(hz) / 1000, int(hz) % 1000 / 100);
   } else {
     Device::Format(p, buf, n);
   }
@@ -4572,6 +4613,30 @@ FLASHMEM void DirtDevice::Poll() {
 
 FLASHMEM void DirtDevice::DrawViz(int x, int y, int w, int h) {
   Poll();
+  if (view_page == 2) {
+    // HEDDLE: a barber pole. Its stripes roll up (shifted up) or down,
+    // faster the further SHIFT goes; BOTH: up on the left, down on the
+    // right. FDBK thickens them; MIX at 0: dotted only
+    const uint32_t now = millis();
+    const float dt = pole_at ? std::min(0.1f, (now - pole_at) * 0.001f) : 0.0f;
+    pole_at = now;
+    const float hz = ShiftHz(cur[SHIFT]);
+    const float speed = (hz < 0.0f ? -1.0f : 1.0f) * 6.0f * log2f(1.0f + fabsf(hz) * 4.0f);  // px a second
+    pole += speed * dt;
+    pole -= 16.0f * floorf(pole / 16.0f);
+    const int sw = 2 + cur[HFDBK] * 5 / 100;
+    const bool solid = cur[HMIX] > 0;
+    for (int px = 0; px < w; px++) {
+      const bool down = cur[SIDE] == 1 || (cur[SIDE] == 2 && px >= w / 2);
+      for (int py = 0; py < h; py++) {
+        int ph = (px + (down ? -py : py) + int(down ? -pole : pole)) % 16;
+        if (ph < 0) ph += 16;
+        if (ph < sw && (solid || ((px + py) & 1))) gfxPixel(x + px, y + py);
+      }
+    }
+    if (cur[SIDE] == 2) gfxLine(x + w / 2, y, x + w / 2, y + h - 1);
+    return;
+  }
   // only the section of the setting under the cursor gets an outline
   int sect;
   switch (view_cursor) {
