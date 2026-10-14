@@ -103,6 +103,7 @@ volatile uint32_t loop_counter = 0;
 volatile bool g_noise_request = false;  // Loom's noise test (USB 'N')
 volatile uint8_t g_heavy_request = 0;   // Loom: stress test (USB 'H' everything on and up, 'h' back)
 volatile uint8_t g_capture_request = 0;  // Loom's output capture (USB 'W' / 'U')
+volatile uint32_t g_remote_at = 0;      // the last remote-panel key over USB (Loom shows a note)
 volatile uint8_t g_notes_request = 0;    // Loom: test notes, captured (USB 'M'; 'm' both tracks)
 volatile bool g_tape_request = false;    // Loom: TAPE on / off (USB 'T')
 volatile bool g_midilog_request = false; // Loom: the MIDI log (USB 'J')
@@ -769,6 +770,9 @@ void FASTRUN loop() {
       bool capreq = false;
       do {
         int cmd = Serial.read();
+        // the remote panel (keys sent from the computer): Loom shows a
+        // sticky note meanwhile, so nobody turns a knob at the same time
+        if (cmd > 0 && strchr("+-uy*[],.<>&!%~", cmd)) g_remote_at = millis() | 1;
         switch (cmd) {
 #if defined(__IMXRT1062__)
 #ifdef CARD_APP

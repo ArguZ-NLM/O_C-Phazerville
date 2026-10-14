@@ -3617,6 +3617,19 @@ FLASHMEM void AppLoom::View() const {
   if (view == DEVICE && Focused()) DrawDevice();
   else if (view == MODS) DrawMods();
   else DrawChain();
+  // driven from the computer: a sticky note (USB, folded corner) in the
+  // bottom right for 4 s after the last remote key, so the knobs are left alone
+  if (g_remote_at && millis() - g_remote_at < 4000) {
+    constexpr int x = 104, y = 52, w = 24, h = 12;
+    graphics.clearRect(x - 1, y - 1, w + 1, h + 1);
+    gfxRect(x, y, w, h);
+    graphics.clearRect(x + w - 4, y, 4, 1);  // the corner folded down
+    graphics.clearRect(x + w - 3, y + 1, 3, 1);
+    graphics.clearRect(x + w - 2, y + 2, 2, 1);
+    graphics.clearRect(x + w - 1, y + 3, 1, 1);
+    gfxPrint(x + 3, y + 3, PSTR("USB"));
+    gfxInvert(x + 3, y + 3, 18, 7);
+  }
   // the link mode, for a moment after it changed: in a box with a double
   // outline (like the boot picture's LOOM, smaller)
   if (link_note_at && millis() - link_note_at < 1200) {

@@ -53,6 +53,7 @@ extern volatile uint8_t g_notes_request;    // USB 'M' / 'm' (Main.cpp)
 extern volatile bool g_tape_request;        // USB 'T' (Main.cpp)
 extern volatile bool g_midilog_request;     // USB 'J' (Main.cpp)
 extern volatile bool g_droplog_request;     // USB 'O' (Main.cpp)
+extern volatile uint32_t g_remote_at;       // the last remote-panel key (Main.cpp)
 
 extern char g_warp_report[200];  // what WARP loaded last (USB 'P', Main.cpp)
 
