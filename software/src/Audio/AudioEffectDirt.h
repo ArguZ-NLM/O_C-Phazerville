@@ -103,6 +103,7 @@ public:
   // rate: octaves a second (signed); reso: feedback; depth 0..1 (1: the
   // deepest notches)
   static constexpr int PH_MAX = 20, PH_STREAMS = 3;
+  static inline volatile bool lite = false;  // the CPU short: PHASE on at most 8 stages
   void phase(float oct_per_s, int stages, float reso, float depth) {
     phasing = true;
     ph_rate = oct_per_s;
@@ -261,7 +262,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
   // PHASE: this block's all-pass coefficient and level per phaser
   const bool ph = phasing;
   float ph_a[PH_STREAMS] = {}, ph_w[PH_STREAMS] = {};
-  const int ph_n = ph_stages;
+  const int ph_n = lite ? std::min<int>(ph_stages, 8) : ph_stages;
   if (ph && shifting) {
     constexpr float PH_OCTS = 8.0f, F_LO = 40.0f;
     ph_pos += ph_rate / PH_OCTS * (AUDIO_BLOCK_SAMPLES / AUDIO_SAMPLE_RATE_EXACT);

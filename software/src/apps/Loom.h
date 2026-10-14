@@ -822,9 +822,15 @@ FLASHMEM static float WorstCost(const Device* d) {
     const int m = d->val[ModalDevice::MODEL];
     return m == RingsVoice::SYMPATHETIC || m == RingsVoice::SYMPATHETIC_QUANTIZED ? 16.0f : 9.0f;
   }
-  if (!strcmp(t, "ECO")) return 12.0f;  // REPEAT
+  if (!strcmp(t, "ECO")) {  // REPEAT; GLINT on: its pitch shifter (two voices for 12+7)
+    const uint8_t* m = d->mode;
+    return 12.0f + (m[EchoDevice::ROOM] ? (m[EchoDevice::PRE] == 5 ? 4.0f : 2.5f) : 0.0f);
+  }
   if (!strcmp(t, "STR")) return 11.5f;  // DRAFT (with its diffuser)
-  if (!strcmp(t, "TEX")) return 8.0f;   // TEXTURE
+  if (!strcmp(t, "TEX")) {  // TEXTURE; HEDDLE: the shifter ~1 %, PHASE ~0.6 % a stage (measured)
+    const DirtDevice* x = static_cast<const DirtDevice*>(d);
+    return 8.0f + (x->Phasing() ? 1.0f + 0.6f * x->Stages() : 1.0f);
+  }
   if (!strcmp(t, "CHM")) return 7.0f;   // TWILL
   if (!strcmp(t, "SPR")) return 6.0f;   // FIBRE
   if (!strcmp(t, "RES")) return 3.0f;   // REED
@@ -1439,6 +1445,7 @@ static void FollowLoad() {
   AudioEffectEcho::lite = lite;
   AudioEffectResonator::lite = lite;
   AudioEffectChime::lite = lite;
+  AudioEffectDirt::lite = lite;   // HEDDLE's PHASE: at most 8 stages
   AudioEffectClouds::grain_limit = lite ? 5 : 8;
 }
 }  // namespace loom
@@ -2450,10 +2457,17 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
   } else if (left) {
     // the left encoder picks the mode of the setting under the cursor
     if (d->param(cursor).nmodes) {
+      const float before = WorstCost(d);
       d->NudgeMode(cursor, dir);
       Mirror(d, cursor);
       edit_mode = true; // show the mode name for a moment
       mode_shown = 0;
+      // a costlier mode (HEDDLE's PHASE, GLINT) only with room for it
+      const float more = (WorstCost(d) - before) * (linked ? 2.0f : 1.0f);
+      if (more > 0.0f && !focus_mod && col > SOURCE && col < SLOT_COUNT && !(tracks[track].bypass >> col & 1) && !Admit(more)) {
+        d->NudgeMode(cursor, -dir);
+        Mirror(d, cursor);
+      }
     }
   } else if (!editing) {
     cursor = constrain(cursor + dir, 0, d->num_params() - 1);
