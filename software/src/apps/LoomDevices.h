@@ -4491,7 +4491,7 @@ FLASHMEM void EchoDevice::DrawMini(int x, int y, int w, int h) {
 // TEXTURE: fold, drive, crush, tilt, envelope-following noise
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef DIRT_DEF = {
-  "TEXTURE", "TEX", 12, {"", ""},
+  "TEXTURE", "TEX", 8, {"", ""},
   {
     {"DRIVE", 0, 100, 0, UNI},
     {"FOLD", 0, 100, 0, UNI},
@@ -4501,55 +4501,32 @@ PROGMEM static const DeviceDef DIRT_DEF = {
     {"N.DCY", 0, 100, 40, UNI},
     {"N.TON", 0, 100, 50, UNI},
     {"WET", 0, 100, 100, UNI},
-    // page 3, HEDDLE. Mode: SHIFT, a frequency shifter (as Bode's): in Hz,
-    // down left of the middle, up right; or PHASE, an endless phaser (as
-    // the Buchla 297): its notches rise (right) or fall (left) for ever, in
-    // octaves a second; SHCLK / PHCLK: the same on the clock (a turn / an
-    // octave a note value). SHIFT: SIDE, which way the sound goes (BOTH: up
-    // left, down right); PHASE: STAGE, 4 .. 20 all-passes, and RESO
+  },
+  {"", ""},
+};
+
+// HEDDLE, in TEXTURE's slot instead of it. Mode: SHIFT, a frequency
+// shifter (as Bode's): in Hz, down left of the middle, up right; or PHASE,
+// an endless phaser (as the Buchla 297): its notches rise (right) or fall
+// (left) for ever, in octaves a second; SHCLK / PHCLK: the same on the
+// clock (a turn / an octave a note value). SHIFT: SIDE, which way the
+// sound goes (BOTH: up left, down right); PHASE: STAGE, 4 .. 20
+// all-passes, and RESO
+PROGMEM static const DeviceDef HEDDLE_DEF = {
+  "HEDDLE", "HDL", 4, {"", ""},
+  {
     {"SHIFT", -100, 100, 0, BI, 0, 4, 0, {}, {"SHIFT", "SHCLK", "PHASE", "PHCLK"}},
     {"SIDE", 0, 16, 0, UNI},
     {"FDBK", 0, 100, 0, UNI},
-    {"MIX", 0, 100, 0, UNI},
+    {"MIX", 0, 100, 100, UNI},
   },
-  {"", "", "HEDDLE"},
+  {""},
 };
 
 class DirtDevice : public Device {
 public:
-  enum { DRIVE, FOLD, CRUSH, TILT, NOISE, NDECAY, NTONE, WET, SHIFT, SIDE, HFDBK, HMIX };
+  enum { DRIVE, FOLD, CRUSH, TILT, NOISE, NDECAY, NTONE, WET };
   DirtDevice() : Device(DIRT_DEF) {}
-  // HEDDLE: SHIFT or PHASE, each free or on the clock
-  bool Phasing() const { return mode[SHIFT] >= 2; }
-  bool OnClk() const { return mode[SHIFT] & 1; }
-  // SHIFT in Hz: 0.05 .. 2000, either way; PHASE in octaves a second,
-  // 0.01 .. 2.5 (the clock: a turn / an octave a note value)
-  float ShiftHz(int v) const {
-    if (!v) return 0.0f;
-    const float r = OnClk() ? 1.0f / DivSeconds(DivIndex(abs(v), 1, 100))
-                  : Phasing() ? 0.01f * powf(250.0f, (abs(v) - 1) / 99.0f)
-                              : 0.05f * powf(40000.0f, abs(v) * 0.01f);
-    return v < 0 ? -r : r;
-  }
-  int Stages() const { return 4 + 2 * constrain(int(cur[SIDE]), 0, 8); }  // 4, 6 .. 20
-  const char* Name(int p) const override {
-    if (Phasing() && p == SIDE) return "STAGE";
-    if (Phasing() && p == HFDBK) return "RESO";
-    return Device::Name(p);
-  }
-  int8_t was_phase = -1;  // (switching SHIFT <-> PHASE: SIDE / STAGE start sensible)
-  void TempoChanged() override { if (OnClk()) Apply(SHIFT); }
-  int Step(int p, int v, int dir) const override {
-    if (p == SIDE) return constrain(v + dir, 0, Phasing() ? 8 : 2);
-    if (p != SHIFT || !OnClk()) return v + dir;
-    // on the clock: one note value a turn (the longest next to the middle)
-    const int s = v > 0 ? 1 : v < 0 ? -1 : 0;
-    if (!s) return dir > 0 ? DivValue(0, 1, 100) : -DivValue(0, 1, 100);
-    const int idx = DivIndex(abs(v), 1, 100) + dir * s;
-    return idx < 0 ? 0 : s * DivValue(idx, 1, 100);
-  }
-  float pole = 0.0f;           // the picture's barber pole, where it is
-  uint32_t pole_at = 0;
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
   void Apply(int p) override;
@@ -4611,14 +4588,6 @@ FLASHMEM void DirtDevice::Apply(int p) {
     case NDECAY: fx.noise_decay(NoiseDecaySecs()); break;
     case NTONE:  fx.noise_tone(v); break;
     case WET:    fx.wet(v); break;
-    case SHIFT: case SIDE: case HFDBK: case HMIX:
-      if (was_phase != int8_t(Phasing())) {  // SIDE <-> STAGE: from where it makes sense
-        if (was_phase >= 0) val[SIDE] = cur[SIDE] = Phasing() ? 4 : 0;  // 12 stages / UP
-        was_phase = int8_t(Phasing());
-      }
-      if (Phasing()) fx.phase(ShiftHz(cur[SHIFT]), Stages(), cur[HFDBK] * 0.009f, cur[HMIX] * 0.01f);
-      else fx.shift(ShiftHz(cur[SHIFT]), std::min<int>(cur[SIDE], 2), cur[HFDBK] * 0.0095f, cur[HMIX] * 0.01f);
-      break;
   }
 }
 
@@ -4631,27 +4600,6 @@ FLASHMEM void DirtDevice::Format(int p, char* buf, size_t n) const {
     const int hz = int(100.0f * powf(100.0f, val[NTONE] * 0.01f));
     if (hz < 1000) snprintf(buf, n, "%dHz", hz);
     else snprintf(buf, n, "%dk%d", hz / 1000, (hz % 1000) / 100);
-  } else if (p == SIDE) {  // SHIFT: the side; PHASE: the stages
-    static const char* const sides[3] = {"UP", "DOWN", "BOTH"};
-    if (Phasing()) snprintf(buf, n, "%d", 4 + 2 * constrain(int(val[SIDE]), 0, 8));
-    else snprintf(buf, n, "%s", sides[constrain(int(val[SIDE]), 0, 2)]);
-  } else if (p == SHIFT && Phasing() && !OnClk()) {  // octaves a second
-    const float r = fabsf(ShiftHz(val[SHIFT]));
-    const char sg = val[SHIFT] < 0 ? '-' : val[SHIFT] > 0 ? '+' : ' ';
-    if (!val[SHIFT]) snprintf(buf, n, "0");
-    else snprintf(buf, n, "%c%d.%02d", sg, int(r), int(r * 100.0f + 0.5f) % 100);
-  } else if (p == SHIFT && OnClk() && val[SHIFT]) {
-    char d[8];
-    FormatDiv(DivIndex(abs(val[SHIFT]), 1, 100), d, sizeof(d));
-    // with its sign: a 1/x note value without the 1 (+/16Q), so it fits
-    snprintf(buf, n, "%c%s", val[SHIFT] < 0 ? '-' : '+', d[0] == '1' && d[1] == '/' ? d + 1 : d);
-  } else if (p == SHIFT) {  // Hz, finer near 0
-    const float hz = fabsf(ShiftHz(val[SHIFT]));
-    const char sg = val[SHIFT] < 0 ? '-' : val[SHIFT] > 0 ? '+' : ' ';
-    if (!val[SHIFT]) snprintf(buf, n, "0");
-    else if (hz < 10.0f) snprintf(buf, n, "%c%d.%02d", sg, int(hz), int(hz * 100.0f) % 100);
-    else if (hz < 1000.0f) snprintf(buf, n, "%c%d", sg, int(hz + 0.5f));
-    else snprintf(buf, n, "%c%dk%d", sg, int(hz) / 1000, int(hz) % 1000 / 100);
   } else {
     Device::Format(p, buf, n);
   }
@@ -4667,45 +4615,6 @@ FLASHMEM void DirtDevice::Poll() {
 
 FLASHMEM void DirtDevice::DrawViz(int x, int y, int w, int h) {
   Poll();
-  if (view_page == 2) {
-    // HEDDLE: a barber pole. Its stripes roll up (shifted up) or down,
-    // faster the further SHIFT goes; BOTH: up on the left, down on the
-    // right. SHIFT / SHCLK: level stripes, PHASE / PHCLK: slanting ones. FDBK / RESO thickens them; MIX fills them in, a dither as
-    // FIBRE's wave (0: a faint trace, 100: solid)
-    const uint32_t now = millis();
-    const float dt = pole_at ? std::min(0.1f, (now - pole_at) * 0.001f) : 0.0f;
-    pole_at = now;
-    const float hz = ShiftHz(cur[SHIFT]);
-    // px a second: lively, up to ~60 (the page is drawn ~500 times a second)
-    const float raw = Phasing() ? hz * 24.0f  // (octaves a second)
-                                : (hz < 0.0f ? -1.0f : 1.0f) * 12.0f * log2f(1.0f + fabsf(hz) * 4.0f);
-    const float speed = constrain(raw, -60.0f, 60.0f);
-    pole += speed * dt;
-    pole -= 16.0f * floorf(pole / 16.0f);
-    const int sw = 2 + cur[HFDBK] * 5 / 100;
-    static const uint8_t bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
-    const int fill = 1 + cur[HMIX] * 15 / 100;  // 1 .. 16 of 16
-    const bool level = !Phasing();
-    for (int px = 0; px < w; px++) {
-      const bool down = !Phasing() && (cur[SIDE] == 1 || (cur[SIDE] == 2 && px >= w / 2));
-      for (int py = 0; py < h; py++) {
-        // where this pixel is across the stripes, in fractions of a pixel:
-        // the edges are lit by how much of them the stripe covers (shaded
-        // with the dither), so the stripes glide instead of stepping
-        float u = level ? py + (down ? -pole : pole)
-                        : px + (down ? -py : py) + (down ? -pole : pole);
-        u -= 16.0f * floorf(u / 16.0f);
-        const float cover = std::min(1.0f, std::max(0.0f, std::min(u + 1.0f, float(sw) - u)));
-        if (cover <= 0.0f) continue;
-        // (the dither travels with its stripe: no dots blinking at the edges)
-        const int moved = int(floorf(down ? -pole : pole));
-        const int d = level ? bayer[(py + moved) & 3][px & 3] : bayer[py & 3][(px + moved) & 3];
-        if (d < int(fill * cover + 0.5f)) gfxPixel(x + px, y + py);
-      }
-    }
-    if (!Phasing() && cur[SIDE] == 2) gfxLine(x + w / 2, y, x + w / 2, y + h - 1);
-    return;
-  }
   // only the section of the setting under the cursor gets an outline
   int sect;
   switch (view_cursor) {
@@ -4853,6 +4762,137 @@ FLASHMEM void DirtDevice::DrawMini(int x, int y, int w, int h) {
       if (lvl > 0.02f && random(100) < int(lvl * 160.0f))
         gfxRect(x + random(w - 2), y + random(h - 2), 2, 2);
   }
+}
+
+class HeddleDevice : public Device {
+public:
+  enum { SHIFT, SIDE, HFDBK, HMIX };
+  HeddleDevice() : Device(HEDDLE_DEF) {}
+  // HEDDLE: SHIFT or PHASE, each free or on the clock
+  bool Phasing() const { return mode[SHIFT] >= 2; }
+  bool OnClk() const { return mode[SHIFT] & 1; }
+  // SHIFT in Hz: 0.05 .. 2000, either way; PHASE in octaves a second,
+  // 0.01 .. 2.5 (the clock: a turn / an octave a note value)
+  float ShiftHz(int v) const {
+    if (!v) return 0.0f;
+    const float r = OnClk() ? 1.0f / DivSeconds(DivIndex(abs(v), 1, 100))
+                  : Phasing() ? 0.01f * powf(250.0f, (abs(v) - 1) / 99.0f)
+                              : 0.05f * powf(40000.0f, abs(v) * 0.01f);
+    return v < 0 ? -r : r;
+  }
+  int Stages() const { return 4 + 2 * constrain(int(cur[SIDE]), 0, 8); }  // 4, 6 .. 20
+  const char* Name(int p) const override {
+    if (Phasing() && p == SIDE) return "STAGE";
+    if (Phasing() && p == HFDBK) return "RESO";
+    return Device::Name(p);
+  }
+  int8_t was_phase = -1;  // (switching SHIFT <-> PHASE: SIDE / STAGE start sensible)
+  void TempoChanged() override { if (OnClk()) Apply(SHIFT); }
+  int Step(int p, int v, int dir) const override {
+    if (p == SIDE) return constrain(v + dir, 0, Phasing() ? 8 : 2);
+    if (p != SHIFT || !OnClk()) return v + dir;
+    // on the clock: one note value a turn (the longest next to the middle)
+    const int s = v > 0 ? 1 : v < 0 ? -1 : 0;
+    if (!s) return dir > 0 ? DivValue(0, 1, 100) : -DivValue(0, 1, 100);
+    const int idx = DivIndex(abs(v), 1, 100) + dir * s;
+    return idx < 0 ? 0 : s * DivValue(idx, 1, 100);
+  }
+  float pole = 0.0f;           // the picture's barber pole, where it is
+  uint32_t pole_at = 0;
+  AudioStream* in() override { return &fx; }
+  AudioStream* out() override { return &fx; }
+  void Apply(int p) override;
+  void Format(int p, char* buf, size_t n) const override;
+  void DrawViz(int x, int y, int w, int h) override { DrawPole(x, y, w, h); }
+  void DrawMini(int x, int y, int w, int h) override { DrawPole(x, y, w, h); }
+  void CpuMax(float parts[2]) override {
+    parts[0] = fx.processorUsageMax();
+    parts[1] = 0.0f;
+    fx.processorUsageMaxReset();
+  }
+private:
+  AudioEffectDirt fx;  // (TEXTURE's engine with its own part left clean)
+  void DrawPole(int x, int y, int w, int h);
+};
+
+FLASHMEM void HeddleDevice::Apply(int p) {
+  switch (p) {
+    case SHIFT: case SIDE: case HFDBK: case HMIX:
+      if (was_phase != int8_t(Phasing())) {  // SIDE <-> STAGE: from where it makes sense
+        if (was_phase >= 0) val[SIDE] = cur[SIDE] = Phasing() ? 4 : 0;  // 12 stages / UP
+        was_phase = int8_t(Phasing());
+      }
+      if (Phasing()) fx.phase(ShiftHz(cur[SHIFT]), Stages(), cur[HFDBK] * 0.009f, cur[HMIX] * 0.01f);
+      else fx.shift(ShiftHz(cur[SHIFT]), std::min<int>(cur[SIDE], 2), cur[HFDBK] * 0.0095f, cur[HMIX] * 0.01f);
+      break;
+  }
+}
+
+FLASHMEM void HeddleDevice::Format(int p, char* buf, size_t n) const {
+  if (p == SIDE) {  // SHIFT: the side; PHASE: the stages
+    static const char* const sides[3] = {"UP", "DOWN", "BOTH"};
+    if (Phasing()) snprintf(buf, n, "%d", 4 + 2 * constrain(int(val[SIDE]), 0, 8));
+    else snprintf(buf, n, "%s", sides[constrain(int(val[SIDE]), 0, 2)]);
+  } else if (p == SHIFT && Phasing() && !OnClk()) {  // octaves a second
+    const float r = fabsf(ShiftHz(val[SHIFT]));
+    const char sg = val[SHIFT] < 0 ? '-' : val[SHIFT] > 0 ? '+' : ' ';
+    if (!val[SHIFT]) snprintf(buf, n, "0");
+    else snprintf(buf, n, "%c%d.%02d", sg, int(r), int(r * 100.0f + 0.5f) % 100);
+  } else if (p == SHIFT && OnClk() && val[SHIFT]) {
+    char d[8];
+    FormatDiv(DivIndex(abs(val[SHIFT]), 1, 100), d, sizeof(d));
+    // with its sign: a 1/x note value without the 1 (+/16Q), so it fits
+    snprintf(buf, n, "%c%s", val[SHIFT] < 0 ? '-' : '+', d[0] == '1' && d[1] == '/' ? d + 1 : d);
+  } else if (p == SHIFT) {  // Hz, finer near 0
+    const float hz = fabsf(ShiftHz(val[SHIFT]));
+    const char sg = val[SHIFT] < 0 ? '-' : val[SHIFT] > 0 ? '+' : ' ';
+    if (!val[SHIFT]) snprintf(buf, n, "0");
+    else if (hz < 10.0f) snprintf(buf, n, "%c%d.%02d", sg, int(hz), int(hz * 100.0f) % 100);
+    else if (hz < 1000.0f) snprintf(buf, n, "%c%d", sg, int(hz + 0.5f));
+    else snprintf(buf, n, "%c%dk%d", sg, int(hz) / 1000, int(hz) % 1000 / 100);
+  } else {
+    Device::Format(p, buf, n);
+  }
+}
+
+FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
+  // HEDDLE: a barber pole. Its stripes roll up (shifted up) or down,
+  // faster the further SHIFT goes; BOTH: up on the left, down on the
+  // right. SHIFT / SHCLK: level stripes, PHASE / PHCLK: slanting ones.
+  // FDBK / RESO thickens them; MIX fills them in, a dither as FIBRE's
+  // wave (0: a faint trace, 100: solid)
+  const uint32_t now = millis();
+  const float dt = pole_at ? std::min(0.1f, (now - pole_at) * 0.001f) : 0.0f;
+  pole_at = now;
+  const float hz = ShiftHz(cur[SHIFT]);
+  // px a second: lively, up to ~60 (the page is drawn ~500 times a second)
+  const float raw = Phasing() ? hz * 24.0f  // (octaves a second)
+                              : (hz < 0.0f ? -1.0f : 1.0f) * 12.0f * log2f(1.0f + fabsf(hz) * 4.0f);
+  const float speed = constrain(raw, -60.0f, 60.0f);
+  pole += speed * dt;
+  pole -= 16.0f * floorf(pole / 16.0f);
+  const int sw = 2 + cur[HFDBK] * 5 / 100;
+  static const uint8_t bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
+  const int fill = 1 + cur[HMIX] * 15 / 100;  // 1 .. 16 of 16
+  const bool level = !Phasing();
+  for (int px = 0; px < w; px++) {
+    const bool down = !Phasing() && (cur[SIDE] == 1 || (cur[SIDE] == 2 && px >= w / 2));
+    for (int py = 0; py < h; py++) {
+      // where this pixel is across the stripes, in fractions of a pixel:
+      // the edges are lit by how much of them the stripe covers (shaded
+      // with the dither), so the stripes glide instead of stepping
+      float u = level ? py + (down ? -pole : pole)
+                      : px + (down ? -py : py) + (down ? -pole : pole);
+      u -= 16.0f * floorf(u / 16.0f);
+      const float cover = std::min(1.0f, std::max(0.0f, std::min(u + 1.0f, float(sw) - u)));
+      if (cover <= 0.0f) continue;
+      // (the dither travels with its stripe: no dots blinking at the edges)
+      const int moved = int(floorf(down ? -pole : pole));
+      const int d = level ? bayer[(py + moved) & 3][px & 3] : bayer[py & 3][(px + moved) & 3];
+      if (d < int(fill * cover + 0.5f)) gfxPixel(x + px, y + py);
+    }
+  }
+  if (!Phasing() && cur[SIDE] == 2) gfxLine(x + w / 2, y, x + w / 2, y + h - 1);
 }
 
 /////////////////////////////////////////////////////////////////
@@ -7025,7 +7065,7 @@ PROGMEM static const SlotDef SLOT_DEFS[SLOT_COUNT] = {
   {"SOURCE",   "SRC", 4, 4},  // INPUT, SPOOL, PLAYER, WARP (owned by the track, not made here)
   {"FIBRE",    "FIB", 3, 1},  // BYPASS, FIBRE (grains), DRAFT (pitch / time)
   {"REED",     "RD",  4, 1},  // BYPASS, REED (filter bank), BEATER (struck object), TWILL (tuned resonators)
-  {"TEXTURE",  "TEX", 2, 1},  // BYPASS, TEXTURE
+  {"TEXTURE",  "TEX", 3, 1},  // BYPASS, TEXTURE, HEDDLE (shifter / phaser)
   {"REPEAT",   "RPT", 2, 1},  // BYPASS, REPEAT (delay, reverb)
 };
 
@@ -7047,6 +7087,7 @@ FLASHMEM static Device* MakeDevice(int slot, int option) {
   if (slot == RESONATOR && option == 2) return new ModalDevice;
   if (slot == RESONATOR && option == 3) return new ChimeDevice;
   if (slot == TEXTURE && option == 1) return new DirtDevice;
+  if (slot == TEXTURE && option == 2) return new HeddleDevice;
   if (slot == ECHO && option == 1) return new EchoDevice;
   return nullptr;
 }

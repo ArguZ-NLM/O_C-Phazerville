@@ -829,9 +829,10 @@ FLASHMEM static float WorstCost(const Device* d) {
     return 12.0f + (m[EchoDevice::ROOM] ? (m[EchoDevice::PRE] == 5 ? 4.0f : 2.5f) : 0.0f);
   }
   if (!strcmp(t, "STR")) return 11.5f;  // DRAFT (with its diffuser)
-  if (!strcmp(t, "TEX")) {  // TEXTURE; HEDDLE: the shifter ~1 %, PHASE ~0.6 % a stage (measured)
-    const DirtDevice* x = static_cast<const DirtDevice*>(d);
-    return 8.0f + (x->Phasing() ? 1.0f + 0.6f * x->Stages() : 1.0f);
+  if (!strcmp(t, "TEX")) return 8.0f;  // TEXTURE
+  if (!strcmp(t, "HDL")) {  // HEDDLE: TEXTURE's engine left clean, the shifter ~1 %, PHASE ~0.6 % a stage (measured)
+    const HeddleDevice* x = static_cast<const HeddleDevice*>(d);
+    return 4.0f + (x->Phasing() ? 1.0f + 0.6f * x->Stages() : 1.0f);
   }
   if (!strcmp(t, "CHM")) return 7.0f;   // TWILL
   if (!strcmp(t, "SPR")) return 6.0f;   // FIBRE
@@ -3299,7 +3300,10 @@ namespace loom {
     for (auto& r : renamed) if (!memcmp(tag, r[0], 4)) memcpy(tag, r[1], 4);
     // SHUTTLE was PLAYER (PLY) until 2026-10-09, and SHT for an hour
     if (!memcmp(tag, "PLY", 4) || !memcmp(tag, "SHT", 4)) memcpy(tag, "SHU", 4);
-    const bool use = d && !memcmp(tag, d->def.tag, 4) && n <= d->num_params();
+    // until 2026-10-14 HEDDLE was TEXTURE's page 3 (12 settings): TEXTURE
+    // takes its 8, the HEDDLE ones are left out
+    const bool tex_heddle = d && !memcmp(tag, "TEX", 4) && !memcmp(d->def.tag, "TEX", 4) && n == 12;
+    const bool use = d && !memcmp(tag, d->def.tag, 4) && (n <= d->num_params() || tex_heddle);
     const bool remap_spr = use && !memcmp(tag, "SPR", 4) && n == 7;
     const bool remap_mix = use && !memcmp(tag, "MIX", 4) && n == 7;  // MIX came in first
     const bool reorder_out = use && !memcmp(tag, "MIX", 4) && load_version < 5;
@@ -3353,6 +3357,7 @@ namespace loom {
       int8_t amt2 = 0; uint8_t bus2 = 0;
       if (load_version >= 3 && (f.read(&amt2, 1) != 1 || f.read(&bus2, 1) != 1)) return false;
       if (!use) continue;
+      if (tex_heddle && p >= d->num_params()) continue;
       // SPRAY gained SPRD before MIX: an older file's MIX (its 7th) goes to 8th
       const int q = p;
       if (remap_spr && p == 6) p = 7;
