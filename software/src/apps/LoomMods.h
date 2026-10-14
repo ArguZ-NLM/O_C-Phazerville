@@ -265,7 +265,7 @@ private:
   uint8_t pos = 0;
   float target = 0.5f, smooth = 0.5f, t = 0.0f;
   uint32_t step_at = 0;
-  float step_s = 0.5f;  // the time between the last two steps (the picture's glides)
+  float step_s = 0.5f;  // the time between steps, averaged (the picture's glides when CLOCK steps it)
   float Hz() const { return RateHz(P_RATE, 0.05f, 30.0f); }
   float GlideTau() const { const float s = cur[P_SMTH] * 0.01f; return 0.0005f + s * s * 1.0f; }
   void Step();
@@ -334,7 +334,7 @@ FLASHMEM float RandomMod::Quantized(float v) const {
 
 FLASHMEM void RandomMod::Step() {
   const uint32_t now = millis();
-  if (step_at && now - step_at < 20000) step_s = std::max(0.005f, (now - step_at) * 0.001f);
+  if (step_at && now - step_at < 20000) step_s += 0.25f * (std::max(0.005f, (now - step_at) * 0.001f) - step_s);
   step_at = now;
   const int len = cur[P_LEN];
   if (len == 0) {
@@ -379,7 +379,10 @@ FLASHMEM void RandomMod::DrawViz(int x, int y, int w, int h) {
     // SMTH: each block's top glides up / down from the step before, over
     // as much of the step as the glide takes
     const float tau = GlideTau();
-    const bool glide = cur[P_SMTH] > 0 && tau * 3.0f > step_s * 0.05f;
+    const bool glide = cur[P_SMTH] > 0;
+    // a step's length: RATE's (steady), or when CLOCK steps it the gaps
+    // between the last steps, averaged (so the curves don't twitch)
+    const float st = cur[P_CLOCK] ? step_s : 1.0f / std::max(0.01f, Hz());
     for (int i = 0; i < len; i++) {
       const int bx = x + i * bw + 1, w1 = std::max(1, bw - 2);
       const float to = val(steps[i]), from = val(steps[(i + len - 1) % len]);
@@ -391,7 +394,7 @@ FLASHMEM void RandomMod::DrawViz(int x, int y, int w, int h) {
       }
       int py = -1;
       for (int c = 0; c < w1; c++) {
-        const float tt = (c + 0.5f) / w1 * step_s;
+        const float tt = (c + 0.5f) / w1 * st;
         const int cy = yy(from + (to - from) * (1.0f - expf(-tt / tau)));
         if (i == pos) gfxLine(bx + c, cy, bx + c, bottom);
         else {
