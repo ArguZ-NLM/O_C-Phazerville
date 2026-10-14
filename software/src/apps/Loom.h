@@ -3617,24 +3617,11 @@ FLASHMEM void AppLoom::View() const {
   if (view == DEVICE && Focused()) DrawDevice();
   else if (view == MODS) DrawMods();
   else DrawChain();
-  // driven from the computer: a sticky note (USB, folded corner) in the
-  // bottom right and a frame round the screen, blinking, for 10 s after the
-  // last remote key, so the knobs are left alone meanwhile
-  if (g_remote_at && millis() - g_remote_at < 10000) {
-    if ((millis() / 250) % 2) {
-      gfxFrame(0, 0, 128, 64);
-      gfxFrame(1, 1, 126, 62);
-    }
-    constexpr int x = 104, y = 52, w = 24, h = 12;
-    graphics.clearRect(x - 1, y - 1, w + 1, h + 1);
-    gfxLine(x, y, x + w - 5, y);              // the outline, its top right
-    gfxLine(x, y, x, y + h - 1);              // corner folded down
-    gfxLine(x, y + h - 1, x + w - 1, y + h - 1);
-    gfxLine(x + w - 1, y + 4, x + w - 1, y + h - 1);
-    gfxLine(x + w - 5, y, x + w - 1, y + 4);
-    gfxLine(x + w - 5, y, x + w - 5, y + 4);
-    gfxLine(x + w - 5, y + 4, x + w - 1, y + 4);
-    gfxPrint(x + 2, y + 3, PSTR("USB"));
+  // driven from the computer: a frame round the screen, blinking, for 10 s
+  // after the last remote key, so the knobs are left alone meanwhile
+  if (g_remote_at && millis() - g_remote_at < 10000 && (millis() / 250) % 2) {
+    gfxFrame(0, 0, 128, 64);
+    gfxFrame(1, 1, 126, 62);
   }
   // the link mode, for a moment after it changed: in a box with a double
   // outline (like the boot picture's LOOM, smaller)
