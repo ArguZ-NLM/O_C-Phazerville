@@ -4172,7 +4172,7 @@ PROGMEM static const DeviceDef ECHO_DEF = {
   {
     // page 1: the delay, page 2: the reverb and TONE
     {"LEVEL", 0, 100, 40, UNI, 0, 2, 1, {}, {"MIX", "SEND"}},  // the delay's; mode: crossfade / added (SEND first)
-    {"TIME", 20, 6000, 450, UNI, 0, 2, 0, {}, {"FREE", "CLK"}},
+    {"TIME", 20, 6000, 450, UNI, 0, 2, 0, {}, {"FREE", "CLOCK"}},
     {"FDBK", 0, 100, 45, UNI},
     {"SPRD", 0, 100, 40, UNI, 0, 3, 1, {}, {"PHASE", "PING", "DIFF"}},
     // the reverb, after the Tegeler Raummaschine: mix, pre-delay, room
@@ -4500,7 +4500,7 @@ PROGMEM static const DeviceDef DIRT_DEF = {
     // left of the middle, up right (0: none); mode: FREE, or CLK: one turn
     // of the barber pole a clock note value. SIDE: which way the sound goes
     // (BOTH: up left, down right)
-    {"SHIFT", -100, 100, 0, BI, 0, 2, 0, {}, {"FREE", "CLK"}},
+    {"SHIFT", -100, 100, 0, BI, 0, 2, 0, {}, {"FREE", "CLOCK"}},
     {"SIDE", 0, 2, 0, LIST, 3, 0, 0, {"UP", "DOWN", "BOTH"}},
     {"FDBK", 0, 100, 0, UNI},
     {"MIX", 0, 100, 0, UNI},
@@ -5006,7 +5006,7 @@ PROGMEM static const DeviceDef SPRAY_DEF = {
   {
     // left of the middle: P (periodic), right: R (random), middle: no grains;
     // mode: FREE, or CLK: P on the clock's note values (see ClockDiv)
-    {"RATE", -100, 100, 55, BI, 0, 2, 0, {}, {"FREE", "CLK"}},
+    {"RATE", -100, 100, 55, BI, 0, 2, 0, {}, {"FREE", "CLOCK"}},
     {"SIZE", 0, 100, 50, UNI, 0, 21, 0},   // mode: size spread, 0..100% in 5% steps
     {"PITCH", -24, 24, 0, BI, 0, 25, 0},  // mode: pitch spread, 0..24 semitones
     // 0 = the oldest audio (left on the picture), 100 = now (right); mode:
@@ -5063,6 +5063,7 @@ private:
   void TempoChanged() override { Apply(RATE); }
   bool clock_was = false;
   int64_t grid_at = -1;  // the last division a grain was fired on
+  float grid_div = 0.0f; // ... of which note value (in beats)
   int SpreadSemis() const { return mode[PITCH]; }
   float SizeSpread() const { return mode[SIZE] * 0.05f; }
   float PosVariation() const { return mode[POS] * 0.025f; }  // up to half the buffer either way
@@ -5133,7 +5134,11 @@ FLASHMEM int SprayDevice::Step(int p, int v, int dir) const {
 FLASHMEM void SprayDevice::Clocked() {
   if (clock_was != clock_running) { clock_was = clock_running; grid_at = -1; Apply(RATE); }
   if (!OnClock() || !clock_running || !active) { grid_at = -1; return; }
-  const int64_t g = ClockGrid(DivBeats());
+  const float db = DivBeats();
+  const int64_t g = ClockGrid(db);
+  // another note value: counted on its grid from here, the first grain on
+  // its next tick (not at once)
+  if (db != grid_div) { grid_div = db; if (grid_at >= 0) grid_at = g; }
   if (g != grid_at) {
     // (switched on half way into a division: wait for the next)
     if (grid_at >= 0 || (clock_beat_n == 0 && clock_beat_ph < 0.01f)) fx.triggerGrain();

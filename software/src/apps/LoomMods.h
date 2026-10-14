@@ -81,7 +81,7 @@ FLASHMEM float Modulator::RateHz(int p, float lo, float hi) const {
 }
 
 FLASHMEM int Modulator::Step(int p, int v, int dir) const {
-  if (!strcmp(param(p).modes[1], "CLK") && mode[p] != SYNC_FREE) // RATE on the clock: note values
+  if (!strcmp(param(p).modes[1], "CLOCK") && mode[p] != SYNC_FREE) // RATE on the clock: note values
     return DivValue(DivIndex(v, 0, 100) + dir, 0, 100);
   return v + dir;
 }
@@ -150,7 +150,7 @@ FLASHMEM void Modulator::DrawMini(int x, int y, int w, int h) {
 PROGMEM static const DeviceDef WAVE_DEF = {
   "WAVE", "WAV", 7, {"RST", ""},
   {
-    {"RATE", 0, 100, 40, UNI, 0, 2, 0, {}, {"FREE", "CLK"}},
+    {"RATE", 0, 100, 40, UNI, 0, 2, 0, {}, {"FREE", "CLOCK"}},
     {"AMNT", 0, 100, 100, UNI},
     {"PHASE", 0, 100, 0, UNI},
     {"OFFS", -50, 50, 0, BI},
@@ -242,7 +242,7 @@ PROGMEM static const DeviceDef RANDOM_DEF = {
     {"VARI", 0, 100, 20, UNI, 0, 21, 20},
     {"OFFS", -50, 50, 0, BI},
     {"CLOCK", 0, TRIG_SOURCES - 1, 0, UNI},
-    {"RATE", 0, 100, 45, UNI, 0, 2, 0, {}, {"FREE", "CLK"}},
+    {"RATE", 0, 100, 45, UNI, 0, 2, 0, {}, {"FREE", "CLOCK"}},
     {"SMTH", 0, 100, 0, UNI},
     // the scale the output snaps to (off, then as TWILL's, with BLUES);
     // mode: its root note, C .. B
@@ -271,6 +271,7 @@ private:
   float target = 0.5f, smooth = 0.5f, t = 0.0f;
   uint32_t step_at = 0;
   int64_t grid_at = -1;  // on the clock: the division it last stepped on
+  float grid_div = 0.0f; // ... of which note value (in beats)
   float step_s = 0.5f;  // the time between steps, averaged (the picture's glides when CLOCK steps it)
   float Hz() const { return RateHz(P_RATE, 0.05f, 30.0f); }
   float GlideTau() const { const float s = cur[P_SMTH] * 0.01f; return 0.0005f + s * s * 1.0f; }
@@ -374,7 +375,10 @@ FLASHMEM void RandomMod::Tick(const ModCtx& ctx) {
     if (Edge(cur[P_CLOCK], ctx, 0)) Step();
   } else if (synced && clock_running) {
     // on the clock's grid (as FIBRE's grains on the clock count it)
-    const int64_t g = ClockGrid(DivBeats(DivIndex(cur[P_RATE], 0, 100)));
+    const float db = DivBeats(DivIndex(cur[P_RATE], 0, 100));
+    const int64_t g = ClockGrid(db);
+    // another note value: on its grid from here, its first step on its next tick
+    if (db != grid_div) { grid_div = db; grid_at = g; }
     if (g != grid_at) { if (grid_at >= 0) Step(); grid_at = g; }
   } else if (!synced) {
     t += Hz() * ctx.dt;
