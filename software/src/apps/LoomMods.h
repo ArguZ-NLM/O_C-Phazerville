@@ -915,8 +915,8 @@ PROGMEM static const DeviceDef PICK_DEF = {
   "PICK", "PCK", 8, {"RST", ""},
   {
     {"RATE", 0, 100, 74, UNI, 0, 2, 1, {}, {"FREE", "CLOCK"}},  // a tick; on the clock (74: 1/16)
-    {"DIV A", 1, 144, 3, UNI, 0, 7, 0, {}, {}},  // mode: the set of numbers
-    {"DIV B", 0, 144, 4, UNI, 0, 7, 0, {}, {}},  // (0: off)
+    {"DIVA", 1, 144, 3, UNI, 0, 7, 0, {}, {}},  // mode: the set of numbers
+    {"DIVB", 0, 144, 4, UNI, 0, 7, 0, {}, {}},  // (0: off)
     {"DENS", 0, 100, 100, UNI},
     {"START", 0, TRIG_SOURCES - 1, 0, UNI},  // none: runs all the time
     {"BURST", 1, 64, 8, UNI},  // ticks per START
@@ -937,7 +937,7 @@ public:
   void Action(int a) override { if (a == 0) Sync(); }
   void DrawViz(int x, int y, int w, int h) override;
 private:
-  static constexpr int HITS = 32;
+  static constexpr int HITS = 40;
   uint8_t count[2] = {255, 255};  // ticks since each divider's last hit
   uint8_t hits[HITS] = {};        // the last ticks: bit 0 A, bit 1 B, bit 2 left out
   uint8_t hits_pos = 0;
