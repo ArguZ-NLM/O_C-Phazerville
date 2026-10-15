@@ -4455,7 +4455,8 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
     // glide instead of twinkling
     const float glint = mode[ROOM] * 0.05f;  // 0 .. 1
     const bool g_down = mode[PRE] == 4;      // (-12)
-    const float drift = (millis() % 100000) * 0.012f * (g_down ? -1.0f : 1.0f);  // px
+    // (whole pixels: slid by fractions the dots twinkled)
+    const float drift = float(int((millis() % 100000) * 0.012f)) * (g_down ? -1.0f : 1.0f);  // px
     auto spark = [&](int px, int py) {  // 0..1, fixed per place on the sliding pattern
       const float t = px * 0.7548777f + (py + drift) * 0.5698403f;
       return t - floorf(t);
