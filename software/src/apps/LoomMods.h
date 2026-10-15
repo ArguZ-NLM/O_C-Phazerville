@@ -945,7 +945,7 @@ private:
   static constexpr char SET_NAMES[SETS][6] = {"ALL", "ODD", "EVEN", "PRIME", "TRIP", "FIB", "2^N"};
   static constexpr int HITS = 40;
   uint8_t count[2] = {255, 255};  // ticks since each divider's last hit
-  uint8_t hits[HITS] = {};        // the last ticks: bit 0 A, bit 1 B, bit 2 left out
+  uint8_t hits[HITS] = {};        // the last ticks: bit 0 A, bit 1 B, bit 2 left out, bit 3 resting
   uint8_t hits_pos = 0;
   int64_t grid_at = -1;
   float t = 0.0f, gate_s = 0.0f, tick_s = 0.125f, hit_lvl = 0.0f;
@@ -1044,6 +1044,9 @@ FLASHMEM void PickMod::Tick(const ModCtx& ctx) {
   if (now && (!bursts || burst_left > 0)) {
     Pulse();
     if (bursts) burst_left--;
+  } else if (now) {  // resting between bursts: an empty tick goes by
+    hits[hits_pos] = 8;
+    hits_pos = (hits_pos + 1) % HITS;
   }
   if (gate_s > 0.0f) { gate_s -= ctx.dt; out = hit_lvl; }
   else out = 0.0f;
@@ -1069,14 +1072,14 @@ FLASHMEM void PickMod::Format(int p, char* buf, size_t n) const {
 
 // the last ticks going by, newest on the right: A hits full height, B hits
 // half, both: A over B; hits DENS left out dotted; every tick a dot on
-// the line; while a burst runs, what is left of it
+// the line (none between bursts); while a burst runs, what is left of it
 FLASHMEM void PickMod::DrawViz(int x, int y, int w, int h) {
   const int ww = w - 8, base = y + h - 2, top = y + 1;
   const int cw = std::max(2, ww / HITS);
   for (int i = 0; i < HITS; i++) {
     const uint8_t f = hits[(hits_pos + i) % HITS];
     const int cx = x + i * cw;
-    gfxPixel(cx, base + 1);
+    if (!(f & 8)) gfxPixel(cx, base + 1);  // (no dot: a rest between bursts)
     if (!(f & 3)) continue;
     const int bh = (f & 1) ? base - top : (base - top) / 2;
     if (f & 4) gfxDottedLine(cx, base, cx, base - bh, 2);
