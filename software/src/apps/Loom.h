@@ -3092,9 +3092,15 @@ FLASHMEM void AppLoom::DrawDevice() const {
     gfxPrint(1, 1, track ? PSTR("B") : PSTR("A"));
     gfxInvert(0, 0, 9, 9);
   }
+  // a modulator: its letter and full name (its one action moves right to
+  // make room; next to MOD1 / MOD2, where there is none, its tag)
+  int act_x = 56;
   if (focus_mod && mod_cursor < CLK_CURSOR) {
-    char buf[8];
-    snprintf(buf, sizeof(buf), "%c %s", 'A' + mod_cursor, ShownTag(d->def.tag)); // short: actions follow
+    char buf[12];
+    snprintf(buf, sizeof(buf), "%c %s", 'A' + mod_cursor, d->def.name);
+    const int end = name_x + 6 * int(strlen(buf));
+    if (mod_mode ? end > 62 : end > 80) snprintf(buf, sizeof(buf), "%c %s", 'A' + mod_cursor, ShownTag(d->def.tag));
+    else if (end > 50) act_x = 82;
     gfxPrint(name_x, 1, buf);
   } else {
     gfxPrint(name_x, 1, name);
@@ -3133,7 +3139,7 @@ FLASHMEM void AppLoom::DrawDevice() const {
     // the modulators show theirs (RST, STP, TRG)
     const char* label = byp ? PSTR("BYP") : focus_mod ? d->def.actions[a] : "";
     if (!label[0] || (a == 1 && mute_turn)) continue;
-    const int x = 56 + a * 26; // clear of the page number at 110
+    const int x = act_x + a * 26; // clear of the page number at 110
     gfxPrint(x, 1, label);
     // lit actions (e.g. a modulator's STP) are inverted
     const int lw = 6 * int(strlen(label)) + 2;
