@@ -4189,9 +4189,9 @@ PROGMEM static const DeviceDef ECHO_DEF = {
     // (size and decay together), walls (soft: dark and dense .. hard:
     // bright with audible reflections; also the delay's tone)
     {"LEVEL", 0, 100, 30, UNI, 0, 2, 1, {}, {"MIX", "SEND"}},
-    {"PRE", 0, 150, 20, UNI, 0, 6, 0},   // mode: GLINT's interval (see ROOM)
+    {"PRE", 0, 150, 20, UNI},
     {"ROOM", 0, 100, 50, UNI, 0, 21, 0}, // mode: GLINT (a shimmer), the tail pitched back into itself, off .. 100 %
-    {"WALL", -50, 50, -10, BI},
+    {"WALL", -50, 50, -10, BI, 0, 6, 0},  // mode: GLINT's interval (see ROOM)
   },
   {"DELAY", "REVRB"},
 };
@@ -4307,8 +4307,13 @@ FLASHMEM void EchoDevice::Apply(int p) {
     case DELAY:    echo.delay_mix(v); echo.delay_send(mode[DELAY] == 1); break;
     case TIME:     SetTimes(); break;
     case REVERB:   echo.reverb_mix(v); echo.reverb_send(mode[REVERB] == 1); break;
-    case PRE:      echo.pre_delay(cur[PRE]); echo.shimmer(mode[ROOM] * 0.05f, mode[PRE]); break;
-    case ROOM:     echo.size(v); echo.decay(DecaySecs()); echo.shimmer(mode[ROOM] * 0.05f, mode[PRE]); break;
+    case PRE:
+      // (saved before GLINT's interval moved from PRE to WALL: take it along)
+      if (mode[PRE]) { mode[WALL] = mode[PRE]; mode[PRE] = 0; }
+      echo.pre_delay(cur[PRE]);
+      echo.shimmer(mode[ROOM] * 0.05f, mode[WALL]);
+      break;
+    case ROOM:     echo.size(v); echo.decay(DecaySecs()); echo.shimmer(mode[ROOM] * 0.05f, mode[WALL]); break;
     case FEEDBACK: echo.feedback(v); break;
     case SPREAD:
       echo.pingpong(mode[SPREAD] == PING ? v : 0.0f);
@@ -4318,6 +4323,7 @@ FLASHMEM void EchoDevice::Apply(int p) {
     case WALL:  // soft walls: dark and dense; hard: bright, sparse reflections
       echo.tone(cur[WALL] * 0.02f);
       echo.density(0.5f - cur[WALL] * 0.01f);
+      echo.shimmer(mode[ROOM] * 0.05f, mode[WALL]);  // (its mode: GLINT's interval)
       break;
   }
 }
@@ -4346,10 +4352,12 @@ FLASHMEM void EchoDevice::Format(int p, char* buf, size_t n) const {
   }
 }
 
-// PRE's mode: GLINT's interval; ROOM's: how much of it
+// WALL's mode: GLINT's interval; ROOM's: how much of it
 FLASHMEM void EchoDevice::FormatMode(int p, char* buf, size_t n) const {
-  static const char* const iv[6] = {"+12", "+7", "+19", "+5", "-12", "12+7"};
-  if (p == PRE) snprintf(buf, n, "%s", iv[constrain(int(mode[PRE]), 0, 5)]);
+  // octave up, fifth up, octave and a fifth up (a twelfth), fourth up,
+  // octave down, octave and fifth up together
+  static const char* const iv[6] = {"OCT", "5TH", "12TH", "4TH", "-OCT", "OCT+5"};
+  if (p == WALL) snprintf(buf, n, "%s", iv[constrain(int(mode[WALL]), 0, 5)]);
   else if (p == ROOM) snprintf(buf, n, mode[ROOM] ? "GL%d" : "GL off", mode[ROOM] * 5);
   else Device::FormatMode(p, buf, n);
 }
@@ -4454,7 +4462,7 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
     // shimmer climbs; the dots sit on a fixed pattern that slides, so they
     // glide instead of twinkling
     const float glint = mode[ROOM] * 0.05f;  // 0 .. 1
-    const bool g_down = mode[PRE] == 4;      // (-12)
+    const bool g_down = mode[WALL] == 4;     // (an octave down)
     // (whole pixels: slid by fractions the dots twinkled)
     const float drift = float(int((millis() % 100000) * 0.012f)) * (g_down ? -1.0f : 1.0f);  // px
     auto spark = [&](int px, int py) {  // 0..1, fixed per place on the sliding pattern
