@@ -4908,11 +4908,11 @@ public:
   void TempoChanged() override { if (OnClk()) Apply(SHIFT); }
   void Idle() override;
   void FormatMode(int p, char* buf, size_t n) const override;
-  // the variations as second values (the L knob switches to them)
-  const char* AltName(int p) const override { return p == SIDE || p == HFDBK || p == HMIX ? "VARI" : nullptr; }
+  // the variations (the L knob, straight): the bar over the name shows how
+  // much, from the left (STAGE: +- stages, out from the middle)
   int BarStyle(int p) const override {
-    if (p == SIDE && Phasing()) return BAR_CENTRE;  // (STAGE: +- stages)
-    return AltName(p) ? BAR_LEFT : BAR_PARTS;
+    if (p == SIDE && Phasing()) return BAR_CENTRE;
+    return p == SIDE || p == HFDBK || p == HMIX ? BAR_LEFT : BAR_PARTS;
   }
   int Step(int p, int v, int dir) const override {
     if (p == SIDE) return constrain(v + dir, 0, Phasing() ? 8 : 2);
