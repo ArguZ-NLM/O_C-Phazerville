@@ -4887,7 +4887,9 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
   slide -= 4.0f * floorf(slide / 4.0f);
   slide += (off - floorf(off)) - (slide - floorf(slide));  // (the same fraction as the stripes)
   const float sw = std::max(1.0f, roundf((2 + cur[HFDBK] * 5 / 100) * per / 16.0f));
-  static const uint8_t bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
+  // the fill dots: every line of a stripe gets its share (a square dither
+  // left whole slanting lines dark at low MIX: they blinked in and out)
+  static const uint8_t ord[4] = {0, 2, 1, 3};
   const int fill = 1 + cur[HMIX] * 15 / 100;  // 1 .. 16 of 16
   const bool level = !Phasing();
   for (int px = 0; px < w; px++) {
@@ -4904,7 +4906,9 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
       if (cover <= 0.0f) continue;
       // (the dither travels with its stripe: no dots blinking at the edges)
       const int moved = int(floorf(down ? -slide : slide));
-      const int d = level ? bayer[(py + moved) & 3][px & 3] : bayer[py & 3][(px + moved) & 3];
+      const int a = level ? py + moved : px + (down ? -py : py) + moved;  // which line
+      const int t = level ? px : px + moved;  // where along it (the dots ride with it)
+      const int d = 4 * ord[(t + a) & 3] + ord[a & 3];
       if (d < int(fill * cover + 0.5f)) gfxPixel(x + px, y + py);
     }
   }
