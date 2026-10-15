@@ -811,7 +811,7 @@ FLASHMEM void ClockDevice::DrawMini(int x, int y, int w, int h) {
 // how many of each part's steps sound (their L knob: how many steps the
 // part has, 1-32, so they can run against each other), CHAOS changes
 // them at random, new each run through: below 0 it leaves steps that
-// sound out, above 0 it adds a step after steps that sound; PLAY: forwards, backwards, back and
+// sound out, above 0 it fills in steps the way a drummer would; PLAY: forwards, backwards, back and
 // forth, or a drunken walk. Six outputs: the three parts (each hit a short pulse,
 // accents full height, the others lower), then each part's
 // accents alone. Its own box sends one; the other boxes can take the rest.
@@ -825,7 +825,7 @@ PROGMEM static const DeviceDef TREADLE_DEF = {
     {"PLAY", 0, 3, 0, LIST, 4, 0, 0, {"FWD", "REV", "PING", "DRUNK"}},
     {"X", 0, 100, 50, UNI},
     {"Y", 0, 100, 50, UNI},
-    {"CHAOS", -32, 32, 0, BI},  // (-: each step that sounds a chance in 32 to be left out; +: to add the step after it)
+    {"CHAOS", -32, 32, 0, BI},  // (-: each step that sounds a chance in 32 to be left out; +: that share of the silent ones filled in)
     {"RATE", 0, 100, 74, UNI, 0, 2, 1, {}, {"FREE", "CLOCK"}},  // a step; on the clock (74: 1/16)
   },
   {"FILL", "MAP"}
@@ -871,6 +871,8 @@ private:
   bool Hits(int part, int lv) const { return lv > 255 - cur[P_LOW + part] * 255 / 100; }
   void Restart() { grid_base = grid_at >= 0 ? grid_at + 1 : 0; step = -1; t = 0.0f; }
   void Advance(int s);
+  int FillScore(int part, int s, int len) const;
+  void Fill(int part, int len, int ch);
 };
 
 FLASHMEM int TreadleMod::Level(int part, int s) const {
@@ -882,6 +884,52 @@ FLASHMEM int TreadleMod::Level(int part, int s) const {
   const int qx = (x << 2) & 255, qy = (y << 2) & 255;
   const int ab = (b * qx + a * (255 - qx)) >> 8, cd = (d * qx + c * (255 - qx)) >> 8;
   return (cd * qy + ab * (255 - qy)) >> 8;
+}
+
+// how much a drummer would play a part's silent step s (more: sooner).
+// The beat first, then the eighths, then the sixteenths, and the map's
+// own leaning; the kick (LOW) leans into its own hits (the eighth and
+// the sixteenth before them) and stays off the snare's; the snare (MID)
+// plays ghost notes round its hits and rolls into the end of the part;
+// the hi-hat (HIGH) fills the eighths, then the sixteenths
+FLASHMEM int TreadleMod::FillScore(int part, int s, int len) const {
+  auto on = [&](int pt, int k) { return Hits(pt, Level(pt, ((k % len) + len) % len)); };
+  const int b = s & 15;
+  int sc = (b & 7) == 0 ? 100 : (b & 3) == 0 ? 80 : (b & 1) == 0 ? 55 : 30;
+  sc += Level(part, s) / 4;
+  switch (part) {
+    case 0:  // kick
+      if (on(0, s + 2) && (s & 1) == 0) sc += 40;
+      if (on(0, s + 1)) sc += 25;
+      if (on(1, s)) sc -= 90;
+      break;
+    case 1:  // snare
+      if (on(1, s - 1) || on(1, s + 1)) sc += 35;
+      if (s >= len - 8) sc += 10 + (s - (len - 8)) * 8;
+      if (on(0, s) && (b & 3) == 0) sc -= 60;
+      sc -= (b & 1) == 0 ? 0 : 10;
+      break;
+    default:  // hi-hat
+      sc += (s & 1) == 0 ? 50 : 0;
+  }
+  return sc;
+}
+
+// CHAOS above 0: fills that share of the part's silent steps (all at
+// 32), the ones a drummer would play first, with a little chance in
+// which, so each run through differs
+FLASHMEM void TreadleMod::Fill(int part, int len, int ch) {
+  int sc[32], idx[32], n = 0;
+  for (int k = 0; k < len; k++)
+    if (!Hits(part, Level(part, k))) { idx[n] = k; sc[n++] = FillScore(part, k, len) + int(random(50)); }
+  const int want = (n * ch + 16) / 32;
+  for (int i = 0; i < want && i < n; i++) {
+    int best = i;
+    for (int j = i + 1; j < n; j++) if (sc[j] > sc[best]) best = j;
+    std::swap(sc[i], sc[best]);
+    std::swap(idx[i], idx[best]);
+    add[part] |= 1u << idx[i];
+  }
 }
 
 // step s since the start: each part one step on. Its length counts at
@@ -916,17 +964,14 @@ FLASHMEM void TreadleMod::Advance(int s) {
       }
     }
     if (!end) continue;
-    // CHAOS: each run through, each step that sounds a chance (CHAOS in
-    // 32) to be left out (below 0) or to bring in the step after it if
-    // that one is silent (above 0; the last one's is the first)
+    // CHAOS, new each run through: below 0 each step that sounds a chance
+    // (CHAOS in 32) to be left out; above 0 it fills in (Fill)
     drop[part] = add[part] = 0;
     const int ch = cur[P_CHAOS];
-    for (int k = 0; k < len && ch; k++) {
-      if (!Hits(part, Level(part, k)) || int(random(32)) >= abs(ch)) continue;
-      const int nx = (k + 1) % len;
-      if (ch < 0) drop[part] |= 1u << k;
-      else if (!Hits(part, Level(part, nx))) add[part] |= 1u << nx;
-    }
+    if (ch < 0)
+      for (int k = 0; k < len; k++)
+        if (Hits(part, Level(part, k)) && int(random(32)) < -ch) drop[part] |= 1u << k;
+    if (ch > 0) Fill(part, len, ch);
     const int was = play_now[part];
     play_now[part] = uint8_t(play);
     run[part] = 0;
@@ -942,11 +987,11 @@ FLASHMEM void TreadleMod::Advance(int s) {
     const int lv = Level(part, pos[part]);
     const bool hit = Hits(part, lv) && !(drop[part] >> (pos[part] & 31) & 1);
     if (!hit && !(add[part] >> (pos[part] & 31) & 1)) continue;
-    // accents (the map's strong steps) full height, the others (and the
-    // ones CHAOS adds) lower
+    // accents (the map's strong steps) full height, the others lower, the
+    // ones CHAOS adds (ghost notes) lower still
     const bool acc = hit && lv > 192;
     gate[part] = g;
-    lvl[part] = acc ? 1.0f : 0.775f;
+    lvl[part] = acc ? 1.0f : hit ? 0.775f : 0.5f;
     if (acc) { gate[3 + part] = g; lvl[3 + part] = 1.0f; }
     if (part == own_out % 3) flash = 0.06f;
   }
