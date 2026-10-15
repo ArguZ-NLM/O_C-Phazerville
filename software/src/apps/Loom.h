@@ -2277,7 +2277,8 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
         edit_mode = false;
         // R pushed twice quickly on a setting (the two pushes leave the grab
         // as it was): back to its default, and twice more back to where it
-        // was. SPEED reverses (PLAYER: REV <-> FWD), SPOOL's MON 100 <-> 0,
+        // was. SPOOL's SPEED reverses, its MON 100 <-> 0 (SHUTTLE's SPEED
+        // to 100 %: on SYNC the clock's tempo),
         // FADE to 0. Not the settings that pick the source or the file.
         if (millis() - r_click_at < 350 && r_click_dev == d && r_click_p == cursor) {
           if (d && view == DEVICE && !focus_mod && col == SOURCE && d->ListsOnDoubleClick() &&
@@ -2622,8 +2623,6 @@ FLASHMEM void AppLoom::DoubleClick(loom::Device* d, int p) {
     v = v ? 0 : 100;
   } else if (src && d == tr.reel && p == ReelDevice::SPEED) {
     v = -v;
-  } else if (src && d == tr.player && p == PlayerDevice::SPEED) {
-    if (d->mode[p] < 2) d->mode[p] ^= 1;  // REV <-> FWD (SYNC stays)
   } else {
     const bool fade = src && ((d == tr.reel && p == ReelDevice::XFADE) || (d == tr.player && p == PlayerDevice::XFADE));
     // RANDOM's VARI to 0: the pattern frozen as it is

@@ -351,6 +351,8 @@ public:
   virtual void RestoreMore(const Saved&) {}
   void Nudge(int p, int dir);
   void NudgeMode(int p, int dir);
+  // the lowest mode the L knob can pick now (SHUTTLE streaming: no REV)
+  virtual int ModeMin(int p) const { return 0; }
   // a setting that goes round when turned past an end (DRAFT's POS: its
   // recording is a loop)
   virtual bool Wraps(int p) const { return false; }
@@ -567,7 +569,7 @@ FLASHMEM void Device::Nudge(int p, int dir) {
 FLASHMEM void Device::NudgeMode(int p, int dir) {
   const ParamDef& d = param(p);
   if (!d.nmodes) return;
-  mode[p] = constrain(mode[p] + dir, 0, d.nmodes - 1);
+  mode[p] = constrain(mode[p] + dir, ModeMin(p), d.nmodes - 1);
   Apply(p);
 }
 
@@ -2953,6 +2955,8 @@ public:
   enum { FILE_, LOOP, LEVEL, SPEED, START, END, XFADE, SNAP };
   enum { SNAP_OFF, SNAP_ZERO, SNAP_BEAT };
   enum { DIR_REV, DIR_FWD, DIR_SYNC };  // SPEED's modes
+  // STRM reads the card forward only: no REV (MEM has it)
+  int ModeMin(int p) const override { return p == SPEED && mode[FILE_] == 0 ? DIR_FWD : 0; }
   // FILE's number row already says STRM / MEM (the file's name is above)
   const char* Name(int p) const override { return p == FILE_ ? "MODE" : Device::Name(p); }
   static float MaxSecs() { return BigSecs(); }
@@ -3710,6 +3714,7 @@ FLASHMEM void PlayerDevice::Window() {
 }
 
 FLASHMEM void PlayerDevice::Apply(int p) {
+  if (mode[SPEED] < ModeMin(SPEED)) mode[SPEED] = DIR_FWD;  // (STRM plays forward only)
   switch (p) {
     case FILE_: {  // Idle() loads it
       if (applied_file >= 0 && cur[FILE_] != applied_file) sec_len = 0;  // another file
@@ -3731,7 +3736,7 @@ FLASHMEM void PlayerDevice::Apply(int p) {
       applied_file = cur[FILE_];
       applied_mode = mode[FILE_];
     } break;
-    case SPEED: {  // mode REV (0) plays backwards (streamed files: forward only)
+    case SPEED: {  // mode REV (0) plays backwards (MEM only: STRM can't pick it)
       const float sp = cur[SPEED] * 0.01f * rate * SyncRatio();
       synced_at = tempo_bpm;
       synced_bpm = bpm;
