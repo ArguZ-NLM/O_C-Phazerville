@@ -798,8 +798,10 @@ FLASHMEM void ClockDevice::DrawMini(int x, int y, int w, int h) {
 // patterns (32 steps each, for a low, a mid and a high part) after Grids
 // (c) 2011-2012 Emilie Gillet, GPL 3 (the pattern data): X / Y move
 // across the map, blending its four nearest patterns; LOW / MID / HIGH set
-// how many of each part's steps sound, CHAOS stirs a little at random in
-// each round. Six outputs: the three parts (each hit a short pulse,
+// how many of each part's steps sound (their L knob: how many steps the
+// part has, 1-32, so they can run against each other), CHAOS stirs a
+// little at random in each round; PLAY: forwards, backwards, back and
+// forth, or a drunken walk. Six outputs: the three parts (each hit a short pulse,
 // accents full height, the others lower by ACCNT), then each part's
 // accents alone. Its own box sends one; the other boxes can take the rest.
 /////////////////////////////////////////////////////////////////
@@ -810,10 +812,10 @@ PROGMEM static const DeviceDef TREADLE_DEF = {
     {"Y", 0, 100, 50, UNI},
     {"CHAOS", 0, 100, 0, UNI},
     {"ACCNT", 0, 100, 50, UNI},  // how much lower the plain hits are than the accents
-    {"LOW", 0, 100, 50, UNI},    // each part's fill
-    {"MID", 0, 100, 50, UNI},
-    {"HIGH", 0, 100, 50, UNI},
-    {"LEN", 1, 32, 32, UNI},
+    {"LOW", 0, 100, 50, UNI, 0, 32, 31},    // each part's fill; mode: its length - 1
+    {"MID", 0, 100, 50, UNI, 0, 32, 31},
+    {"HIGH", 0, 100, 50, UNI, 0, 32, 31},
+    {"PLAY", 0, 3, 0, LIST, 4, 0, 0, {"FWD", "REV", "PING", "DRUNK"}},
     {"RATE", 0, 100, 74, UNI, 0, 2, 1, {}, {"FREE", "CLOCK"}},  // a step; on the clock (74: 1/16)
     {"RESET", 0, TRIG_SOURCES - 1, 0, UNI},
   },
@@ -822,7 +824,8 @@ PROGMEM static const DeviceDef TREADLE_DEF = {
 
 class TreadleMod : public Modulator {
 public:
-  enum { P_X, P_Y, P_CHAOS, P_ACCNT, P_LOW, P_MID, P_HIGH, P_LEN, P_RATE, P_RESET };
+  enum { P_X, P_Y, P_CHAOS, P_ACCNT, P_LOW, P_MID, P_HIGH, P_PLAY, P_RATE, P_RESET };
+  enum { FWD, REV, PING, DRUNK };
   static constexpr int OUTS = 6;  // LOW MID HIGH, then their accents
   TreadleMod() : Modulator(TREADLE_DEF) {}
   void Tick(const ModCtx& ctx) override;
@@ -835,14 +838,20 @@ public:
     snprintf(buf, n, "%s", names[constrain(k, 0, OUTS - 1)]);
   }
   float OutVal(int k) const override { return k >= 0 && k < OUTS && gate[k] > 0.0f ? lvl[k] : 0.0f; }
+  void FormatMode(int p, char* buf, size_t n) const override {
+    if (p >= P_LOW && p <= P_HIGH) snprintf(buf, n, "LEN%d", Len(p - P_LOW));
+    else Modulator::FormatMode(p, buf, n);
+  }
+  int BarStyle(int p) const override { return p >= P_LOW && p <= P_HIGH ? BAR_LEFT : Modulator::BarStyle(p); }
 private:
-  int step = -1;           // the step playing (-1: none yet)
+  int step = -1;           // steps since the start (-1: none yet)
+  int pos[3] = {};         // where each part is
   int64_t grid_at = -1, grid_base = 0;
   float grid_div = 0.0f;
   float t = 0.0f, step_s = 0.125f;
   uint8_t stir = 0;        // CHAOS: this round's push
   float gate[OUTS] = {}, lvl[OUTS] = {};
-  int Len() const { return constrain(int(cur[P_LEN]), 1, 32); }
+  int Len(int part) const { return constrain(int(mode[P_LOW + part]) + 1, 1, 32); }
   int Level(int part, int s) const;  // the map's strength of a part's step s, with CHAOS (0..255)
   bool Hits(int part, int lv) const { return lv > 255 - cur[P_LOW + part] * 255 / 100; }
   void Restart() { grid_base = grid_at >= 0 ? grid_at + 1 : 0; step = -1; t = 0.0f; }
@@ -860,12 +869,29 @@ FLASHMEM int TreadleMod::Level(int part, int s) const {
   return std::min(255, ((cd * qy + ab * (255 - qy)) >> 8) + stir);
 }
 
+// step s since the start: each part's place by its length and PLAY
 FLASHMEM void TreadleMod::Advance(int s) {
   step = s;
-  if (s == 0) stir = uint8_t(random(0, cur[P_CHAOS] * 255 / 100 / 4 + 1));  // a new round
+  const int play = constrain(int(cur[P_PLAY]), 0, 3);
+  for (int part = 0; part < 3; part++) {
+    const int len = Len(part);
+    switch (play) {
+      case REV: pos[part] = len - 1 - s % len; break;
+      case PING: {  // there and back, the ends once
+        const int period = std::max(1, 2 * len - 2);
+        const int k = s % period;
+        pos[part] = len > 1 && k >= len ? period - k : (len > 1 ? k : 0);
+      } break;
+      case DRUNK:  // a step forwards or backwards at random (round the ends)
+        pos[part] = s == 0 ? 0 : (pos[part] + (random(2) ? 1 : len - 1)) % len;
+        break;
+      default: pos[part] = s % len;
+    }
+  }
+  if (s % 32 == 0) stir = uint8_t(random(0, cur[P_CHAOS] * 255 / 100 / 4 + 1));  // a new round (every 32 steps)
   const float g = constrain(step_s * 0.25f, 0.005f, 0.03f);
   for (int part = 0; part < 3; part++) {
-    const int lv = Level(part, s);
+    const int lv = Level(part, pos[part]);
     if (!Hits(part, lv)) continue;
     // accents (the map's strong steps) full height, the others lower by ACCNT
     const bool acc = lv > 192;
@@ -881,7 +907,6 @@ FLASHMEM void TreadleMod::Tick(const ModCtx& ctx) {
   if (Restarted() && synced) { grid_at = -1; grid_base = 0; step = -1; }
   if (cur[P_RESET] && Edge(cur[P_RESET], ctx, 0)) Restart();
   for (float& g : gate) if (g > 0.0f) g -= ctx.dt;
-  const int len = Len();
   if (synced && clock_running) {
     const float db = DivBeats(DivIndex(cur[P_RATE], 0, 100));
     step_s = db * 60.0f / tempo_bpm;
@@ -889,13 +914,13 @@ FLASHMEM void TreadleMod::Tick(const ModCtx& ctx) {
     if (db != grid_div) { grid_div = db; grid_base = g - (step >= 0 ? step : 0); grid_at = g - 1; }
     if (g != grid_at) {
       grid_at = g;
-      Advance(int(((g - grid_base) % len + len) % len));
+      Advance(int(std::max<int64_t>(0, g - grid_base)));
     }
   } else if (!synced) {
     const float hz = RateHz(P_RATE, 0.5f, 30.0f);
     step_s = 1.0f / hz;
     t += hz * ctx.dt;
-    if (t >= 1.0f || step < 0) { t -= floorf(t); Advance(step < 0 ? 0 : (step + 1) % len); }
+    if (t >= 1.0f || step < 0) { t -= floorf(t); Advance(step < 0 ? 0 : step + 1); }
   }
 }
 
@@ -905,23 +930,27 @@ FLASHMEM void TreadleMod::Format(int p, char* buf, size_t n) const {
   else Device::Format(p, buf, n);
 }
 
-// the three parts in rows, LOW at the top: a bar per step that sounds
-// (accents the row's full height), a dot for the steps that don't; the
-// part its own box sends marked on the left; the step playing underneath
+// the three parts in rows, LOW at the top, each as long as it is: a bar
+// per step that sounds (accents the row's full height), a dot for the
+// steps that don't, a line under the step playing; the part its own box
+// sends marked on the left
 FLASHMEM void TreadleMod::DrawViz(int x, int y, int w, int h) {
-  const int len = Len(), rh = (h - 3) / 3;
-  const int bw = std::max(2, (w - 6) / len);
+  const int rh = h / 3;
+  const int bw = std::max(2, (w - 6) / 32);
   for (int part = 0; part < 3; part++) {
-    const int top = y + part * rh, base = top + rh - 2;
-    if (part == own_out % 3) gfxRect(x, top + 1, 2, rh - 3);
+    const int top = y + part * rh, base = top + rh - 3, len = Len(part);
+    if (part == own_out % 3) gfxRect(x, top + 1, 2, rh - 4);
     for (int s = 0; s < len; s++) {
       const int lv = Level(part, s), bx = x + 4 + s * bw;
-      if (!Hits(part, lv)) { gfxPixel(bx, base); continue; }
-      const int bh = lv > 192 ? rh - 2 : (rh - 2) * 2 / 3;
-      gfxRect(bx, base - bh + 1, std::max(1, bw - 1), bh);
+      if (Hits(part, lv)) {
+        const int bh = lv > 192 ? rh - 3 : (rh - 3) * 2 / 3;
+        gfxRect(bx, base - bh + 1, std::max(1, bw - 1), bh);
+      } else {
+        gfxPixel(bx, base);
+      }
     }
+    if (step >= 0) gfxLine(x + 4 + pos[part] * bw, base + 2, x + 4 + pos[part] * bw + std::max(1, bw - 1) - 1, base + 2);
   }
-  if (step >= 0 && step < len) gfxRect(x + 4 + step * bw, y + h - 2, std::max(1, bw - 1), 2);
 }
 
 /////////////////////////////////////////////////////////////////
