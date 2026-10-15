@@ -60,6 +60,9 @@ extern volatile int8_t g_move_request;      // USB 'Y' / 'Z' (Main.cpp)
 
 extern char g_warp_report[200];  // what WARP loaded last (USB 'P', Main.cpp)
 
+// the font's plus-minus sign (char 127), for the variations: LOOM_PM "%d"
+#define LOOM_PM "\x7f"
+
 namespace loom {
 // the longest SPOOL loop / PLAYER sample held in memory. They take only
 // what they hold (SPOOL: what is free when REC starts, then just the loop),
@@ -364,11 +367,8 @@ public:
   // the middle (HEDDLE's FDBK / its ± STAGE)
   enum { BAR_PARTS, BAR_HALVES, BAR_LEFT, BAR_CENTRE };
   virtual int BarStyle(int p) const { return AltName(p) ? BAR_HALVES : BAR_PARTS; }
-  // a variation up or down by a percentage: "+-35%" ("+-100": the % no longer fits)
-  static void FormatVar(char* buf, size_t n, int pct) {
-    if (pct >= 100) snprintf(buf, n, "+-%d", pct);
-    else snprintf(buf, n, "+-%d%%", pct);
-  }
+  // a variation up or down by a percentage: "±35%" (the font's ± is char 127, LOOM_PM)
+  static void FormatVar(char* buf, size_t n, int pct) { snprintf(buf, n, LOOM_PM "%d%%", pct); }
   uint16_t alt_on = 0;  // which of those show their second value (the page's, not saved)
   bool AltShown(int p) const { return AltName(p) && (alt_on >> p & 1); }
   // a setting that goes round when turned past an end (DRAFT's POS: its
@@ -5011,7 +5011,7 @@ FLASHMEM void HeddleDevice::Idle() {
 FLASHMEM void HeddleDevice::FormatMode(int p, char* buf, size_t n) const {
   if (p == SHIFT) Device::FormatMode(p, buf, n);
   else if (mode[p] == 0) snprintf(buf, n, "OFF");
-  else if (p == SIDE && Phasing()) snprintf(buf, n, "+-%d", 2 * mode[p]);
+  else if (p == SIDE && Phasing()) snprintf(buf, n, LOOM_PM "%d", 2 * mode[p]);
   else if (p == SIDE) snprintf(buf, n, "%d%%", mode[p] * 10);
   else FormatVar(buf, n, mode[p] * 5);  // FDBK / RESO, MIX: up or down
 }
@@ -5188,8 +5188,8 @@ FLASHMEM void ResonatorDevice::Rebuild() {
 
 FLASHMEM void ResonatorDevice::FormatMode(int p, char* buf, size_t n) const {
   if ((p == PITCH || p == TONE) && mode[p] == 0) snprintf(buf, n, "OFF");
-  else if (p == PITCH) snprintf(buf, n, "+-%d", mode[p]);
-  else if (p == TONE) snprintf(buf, n, "+-%d", mode[p] * 5);
+  else if (p == PITCH) snprintf(buf, n, LOOM_PM "%d", mode[p]);
+  else if (p == TONE) snprintf(buf, n, LOOM_PM "%d", mode[p] * 5);
   else Device::FormatMode(p, buf, n);
 }
 
@@ -5415,7 +5415,7 @@ FLASHMEM void SprayDevice::Apply(int p) {
 // the spreads: OFF, then +-semitones (PITCH) or percent (SIZE, POS)
 FLASHMEM void SprayDevice::FormatMode(int p, char* buf, size_t n) const {
   if ((p == PITCH || p == SIZE || p == POS) && mode[p] == 0) snprintf(buf, n, "OFF");
-  else if (p == PITCH) snprintf(buf, n, "+-%d", mode[p]);
+  else if (p == PITCH) snprintf(buf, n, LOOM_PM "%d", mode[p]);
   else if (p == SIZE || p == POS) FormatVar(buf, n, mode[p] * 5);
   else Device::FormatMode(p, buf, n);
 }
@@ -6086,7 +6086,7 @@ FLASHMEM void StretchDevice::Apply(int p) {
 // the variations: OFF, then +-semitones (PITCH) or percent
 FLASHMEM void StretchDevice::FormatMode(int p, char* buf, size_t n) const {
   if (mode[p] == 0) snprintf(buf, n, "OFF");
-  else if (p == PITCH) snprintf(buf, n, "+-%d", mode[p]);
+  else if (p == PITCH) snprintf(buf, n, LOOM_PM "%d", mode[p]);
   else FormatVar(buf, n, mode[p] * 5);
 }
 
@@ -6408,11 +6408,11 @@ FLASHMEM void ChimeDevice::FormatMode(int p, char* buf, size_t n) const {
     else snprintf(buf, n, "CH%d", mode[NOTE] - 1);
   } else if (p == DECAY) {
     if (mode[DECAY] == 0) snprintf(buf, n, "OFF");
-    else snprintf(buf, n, "+-%d%%", int((powf(2.0f, mode[DECAY] * 0.1f) - 1.0f) * 100.0f + 0.5f));
+    else snprintf(buf, n, LOOM_PM "%d%%", int((powf(2.0f, mode[DECAY] * 0.1f) - 1.0f) * 100.0f + 0.5f));
   }
   else if ((p == TUNE || p == TONE) && mode[p] == 0) snprintf(buf, n, "OFF");
-  else if (p == TUNE) snprintf(buf, n, "+-%d", mode[p]);
-  else if (p == TONE) snprintf(buf, n, "+-%d", mode[p] * 5);
+  else if (p == TUNE) snprintf(buf, n, LOOM_PM "%d", mode[p]);
+  else if (p == TONE) snprintf(buf, n, LOOM_PM "%d", mode[p] * 5);
   else Device::FormatMode(p, buf, n);
 }
 

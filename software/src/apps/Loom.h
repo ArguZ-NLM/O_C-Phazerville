@@ -2627,7 +2627,11 @@ FLASHMEM void AppLoom::SetByText(bool want_mode, const char* text) {
   // upper case, no spaces; letters = all but the number, number = its value
   auto norm = [](const char* in, char* out, size_t n) {
     size_t k = 0;
-    for (; *in && k + 1 < n; in++) if (*in != ' ') out[k++] = char(toupper(*in));
+    for (; *in && k + 1 < n; in++) {
+      if (*in == ' ') continue;
+      if (in[0] == '+' && in[1] == '-') { out[k++] = '\x7f'; in++; continue; }  // "+-4": the screen's ±4
+      out[k++] = char(toupper(*in));
+    }
     out[k] = 0;
   };
   auto split = [](const char* t, char* letters, float& num) {
