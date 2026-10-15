@@ -101,6 +101,10 @@ namespace loom {
     LoomFade* out_fade = nullptr;     // OUTPUT MIX: the source against the chain
     Modulator* mods[NUM_MODS][MOD_TYPES] = {};
     uint8_t mod_type[NUM_MODS] = {};
+    // each box's output: bits 0-3 which output (of PICK / TREADLE: the
+    // modulator's own_out), bit 7 set: not its own modulator but that
+    // output of box bits 4-6 (A-D this track's, E-H the shared ones)
+    uint8_t mod_tap[NUM_MODS] = {};
     // MOD A-D, then a copy of the shared E-H; -1 = no modulator there
     float mod_out[MOD_BUSES] = {-1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f};
     // ... each one's step without its glide (RANDOM's SMTH), for settings
@@ -183,6 +187,8 @@ namespace loom {
   // MOD E-H: shared by both tracks (in the MOD view's second page)
   Modulator* shared_mods[NUM_MODS][MOD_TYPES] = {};
   uint8_t shared_type[NUM_MODS] = {};
+  uint8_t shared_tap[NUM_MODS] = {};  // as Track::mod_tap (E-H take only E-H)
+  constexpr uint8_t TAP_OTHER = 0x80;
   char load_note[160] = "";  // how the last settings load went (USB stats)
   // MOD view cursor: 0-3 the track's A-D, 4-7 the shared E-H, then CLOCK,
   // then the 8 CV outputs (page 3)
@@ -260,6 +266,7 @@ private:
   uint32_t clear_hold = 0;  // ... since then
   bool editing = false;   // device view: setting grabbed, R enc changes it
   bool out_editing = false;  // CV outputs page: output grabbed, R enc picks its modulator
+  bool tap_editing = false;  // MOD view: L pushed on a box, L turns through its outputs
   // MIDI maps page: the map's editor open (-1: the grid), its field under
   // the cursor (CHAN TYPE VOICE LOW HIGH), the field grabbed
   int8_t map_field = -1;
@@ -377,6 +384,27 @@ private:
   static uint8_t& ModType(int t, int i) {
     return i < loom::NUM_MODS ? loom::tracks[t].mod_type[i] : loom::shared_type[i - loom::NUM_MODS];
   }
+  static uint8_t& ModTap(int t, int i) {
+    return i < loom::NUM_MODS ? loom::tracks[t].mod_tap[i] : loom::shared_tap[i - loom::NUM_MODS];
+  }
+  // the modulator whose output box i sends (another box's when it takes
+  // one of theirs; null when that one is gone or has no such output)
+  static loom::Modulator* BoxSource(int t, int i) {
+    using namespace loom;
+    const uint8_t tap = ModTap(t, i);
+    if (!(tap & TAP_OTHER)) return ModRow(t, i)[ModType(t, i)];
+    const int j = (tap >> 4) & 7;
+    if (ModTap(t, j) & TAP_OTHER) return nullptr;
+    Modulator* m = ModRow(t, j)[ModType(t, j)];
+    return m && (tap & 15) < m->Outs() ? m : nullptr;
+  }
+  static float BoxValue(int t, int i) {
+    const loom::Modulator* m = BoxSource(t, i);
+    if (!m) return -1.0f;
+    return (ModTap(t, i) & loom::TAP_OTHER) ? m->OutVal(ModTap(t, i) & 15) : m->out;
+  }
+  int TapOptions(int t, int i, uint8_t* opt, int max) const;
+  void SetModTap(int t, int i, uint8_t tap);
   static loom::Modulator* ModAt(int t, int i) {
     if (i > loom::CLK_CURSOR) return nullptr;  // the CV outputs
     if (i == loom::CLK_CURSOR) return loom::tempo_clock;
@@ -462,7 +490,7 @@ private:
   };
   struct TrackSnap {
     uint8_t choice[loom::SLOT_COUNT], last_choice[loom::SLOT_COUNT], order[loom::SLOT_COUNT - 1];
-    uint8_t bypass, mod_type[loom::NUM_MODS];
+    uint8_t bypass, mod_type[loom::NUM_MODS], mod_tap[loom::NUM_MODS];
     DevState input, reel, player, warp, mix;
     DevState inst[loom::SLOT_COUNT][loom::MAX_OPTIONS];
     DevState mods[loom::NUM_MODS][loom::MOD_TYPES];
@@ -805,11 +833,44 @@ FLASHMEM void AppLoom::SetModType(int t, int i, int type) {
     m->Defaults();
     row[type] = m;
   }
+  if (ModType(t, i) != type) ModTap(t, i) = 0;
   ModType(t, i) = type;
+  if (row[type]) row[type]->own_out = 0;
   if (!type) {
     if (i < NUM_MODS) tracks[t].mod_out[i] = tracks[t].mod_step[i] = -1.0f;  // a setting listening to it stays put
     else for (auto& tr : tracks) tr.mod_out[i] = tr.mod_step[i] = -1.0f;
   }
+}
+
+// what box i (0-7) can send: each output of its own modulator, then each
+// output of the other boxes with several (PICK, TREADLE) that run their own
+// (A-D: this track's and E-H; E-H: only E-H). Packed as in mod_tap.
+FLASHMEM int AppLoom::TapOptions(int t, int i, uint8_t* opt, int max) const {
+  using namespace loom;
+  int n = 0;
+  const Modulator* own = ModRow(t, i)[ModType(t, i)];
+  const int own_n = own ? own->Outs() : 1;
+  for (int k = 0; k < own_n && n < max; k++) opt[n++] = uint8_t(k);
+  for (int j = i < NUM_MODS ? 0 : NUM_MODS; j < 2 * NUM_MODS; j++) {
+    if (j == i || (ModTap(t, j) & TAP_OTHER)) continue;
+    const Modulator* m = ModRow(t, j)[ModType(t, j)];
+    if (!m || m->Outs() < 2) continue;
+    for (int k = 0; k < m->Outs() && n < max; k++) opt[n++] = uint8_t(TAP_OTHER | (j << 4) | k);
+  }
+  return n;
+}
+
+FLASHMEM void AppLoom::SetModTap(int t, int i, uint8_t tap) {
+  using namespace loom;
+  ModTap(t, i) = tap;
+  if (!(tap & TAP_OTHER)) {
+    if (Modulator* m = ModRow(t, i)[ModType(t, i)]) m->own_out = tap & 15;
+  } else {
+    // whatever took this box's output before follows it there, not the other way round
+    for (int j = 0; j < 2 * NUM_MODS; j++)
+      if (j != i && (ModTap(t, j) & TAP_OTHER) && ((ModTap(t, j) >> 4) & 7) == i) ModTap(t, j) = 0;
+  }
+  if (linked && i < NUM_MODS && t == track) tracks[1 - t].mod_tap[i] = tap;
 }
 
 // what a device costs at the most (CPU %, all its settings up, measured on
@@ -1129,6 +1190,7 @@ FLASHMEM void AppLoom::KeepB() {
   memcpy(k.order, b.order, sizeof(k.order));
   k.bypass = b.bypass;
   memcpy(k.mod_type, b.mod_type, sizeof(k.mod_type));
+  memcpy(k.mod_tap, b.mod_tap, sizeof(k.mod_tap));
   k.input.Take(b.input);
   k.reel.Take(b.reel);
   k.player.Take(b.player);
@@ -1163,6 +1225,7 @@ FLASHMEM void AppLoom::BringBackB() {
   for (int i = 0; i < NUM_MODS; i++) {
     for (int t = 1; t < MOD_TYPES; t++) k.mods[i][t].Give(b.mods[i][t]);
     SetModType(1, i, k.mod_type[i]);
+    b.mod_tap[i] = k.mod_tap[i];
   }
   delete b_own;
   b_own = nullptr;
@@ -1225,6 +1288,7 @@ FLASHMEM void AppLoom::LinkCopy() {
       }
       b.mods[i][type]->CopyFrom(*a.mods[i][type]);
     }
+    b.mod_tap[i] = a.mod_tap[i];
   }
   for (int p = 1; p < b.input->num_params(); p++) b.input->val[p] = a.input->val[p];
   b.input->ApplyAll();
@@ -1589,7 +1653,8 @@ FLASHMEM void AppLoom::ModulateAll() {
   ctx.out_level = std::max(mixer->level[0], mixer->level[1]);
   for (int i = 0; i < NUM_MODS; i++) {
     Modulator* m = shared_mods[i][shared_type[i]];
-    if (!m) continue;
+    if (!m || (shared_tap[i] & TAP_OTHER)) continue;  // (a box taking another's output runs nothing)
+    m->own_out = shared_tap[i] & 15;
     m->Run(ctx);
     for (auto& tr : tracks) { tr.mod_out[NUM_MODS + i] = m->out; tr.mod_step[NUM_MODS + i] = m->Stepped(); }
   }
@@ -1599,12 +1664,22 @@ FLASHMEM void AppLoom::ModulateAll() {
     ctx.out_level = mixer->level[t];
     for (int i = 0; i < NUM_MODS; i++) {
       Modulator* m = tr.mod(i);
-      if (!m) continue;
+      if (!m || (tr.mod_tap[i] & TAP_OTHER)) continue;
+      m->own_out = tr.mod_tap[i] & 15;
       m->Run(ctx);
       tr.mod_out[i] = m->out;
       tr.mod_step[i] = m->Stepped();
     }
   }
+  // the boxes taking another's output (PICK's /4, TREADLE's MID ..)
+  for (int i = 0; i < NUM_MODS; i++) {
+    if (!(shared_tap[i] & TAP_OTHER)) continue;
+    const float v = BoxValue(0, NUM_MODS + i);
+    for (auto& tr : tracks) tr.mod_out[NUM_MODS + i] = tr.mod_step[NUM_MODS + i] = v;
+  }
+  for (int t = 0; t < NUM_TRACKS; t++)
+    for (int i = 0; i < NUM_MODS; i++)
+      if (tracks[t].mod_tap[i] & TAP_OTHER) tracks[t].mod_out[i] = tracks[t].mod_step[i] = BoxValue(t, i);
   for (auto& tr : tracks) {
     for (int s = SOURCE; s < SLOT_COUNT; s++) {
       if (Device* d = tr.current(s)) {
@@ -1645,9 +1720,10 @@ FLASHMEM const loom::Modulator* AppLoom::OutMod(int o) const {
   using namespace loom;
   const int s = cv_out_src[o];
   if (s < OUT_L || s >= OUT_CLOCK) return nullptr;
-  if (s >= OUT_SHARED) return ModAt(0, NUM_MODS + s - OUT_SHARED);
-  if (s >= OUT_R) return ModAt(1, s - OUT_R);
-  return ModAt(0, s - OUT_L);
+  // (a box taking another's output plays that one: gates, not notes)
+  if (s >= OUT_SHARED) return BoxSource(0, NUM_MODS + s - OUT_SHARED);
+  if (s >= OUT_R) return BoxSource(1, s - OUT_R);
+  return BoxSource(0, s - OUT_L);
 }
 
 FLASHMEM void AppLoom::WriteOutputs() {
@@ -2140,6 +2216,12 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
       if (l_used) return;
       // CV outputs page: L push bypasses the output (0 V)
       if (view == MODS && IsOutCursor(mod_cursor)) cv_out_bypass ^= 1 << (mod_cursor - OUT_CURSOR);
+      // a MOD box: L push, then L turns through what it sends (when there
+      // is a choice); L push again ends it
+      if (view == MODS && mod_cursor < CLK_CURSOR) {
+        uint8_t opt[64];
+        tap_editing = !tap_editing && TapOptions(track, mod_cursor, opt, 64) > 1;
+      }
       // L push: modulation on / off (starting with MOD1)
       if (view == DEVICE) {
         if (trig_mode) trig_mode = false;
@@ -2284,6 +2366,10 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
         out_editing = !out_editing;
       } else if (view == MODS) {
         focus_mod = true;
+        tap_editing = false;
+        // a box taking another's output: that one opens
+        if (mod_cursor < CLK_CURSOR && (ModTap(track, mod_cursor) & TAP_OTHER) && BoxSource(track, mod_cursor))
+          mod_cursor = int8_t((ModTap(track, mod_cursor) >> 4) & 7);
         if (Device* o = Focused()) {
           view = DEVICE;
           cursor = constrain(int(o->ui_cursor), 0, o->num_params() - 1);  // where it was left
@@ -2332,6 +2418,7 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
     case OC::CONTROL_BUTTON_Y:
       if (view == DEVICE && Focused() && !mod_mode && !trig_mode) Focused()->ui_cursor = int8_t(cursor);  // (opens there again)
       if (view == MODS && out_editing) out_editing = false;
+      else if (view == MODS && tap_editing) tap_editing = false;
       else if (view == DEVICE && trig_mode) trig_mode = false;
       else if (view == DEVICE && clock_back.on && focus_mod && mod_cursor == CLK_CURSOR) {
         view = clock_back.view;
@@ -2345,7 +2432,7 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
       editing = mod_mode = false;
       break;
     case OC::CONTROL_BUTTON_X:
-      out_editing = clock_back.on = false;
+      out_editing = clock_back.on = tap_editing = false;
       // device page: the MOD view, coming back to this page afterwards
       if (view == DEVICE) {
         back = {true, focus_mod, mod_cursor, cursor};
@@ -2427,12 +2514,22 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
         s = OUT_GROUP_START[g] + constrain(OutIndex(s) + dir, 0, OUT_GROUP_SIZE[g] - 1);
       } else {
         mod_cursor = constrain(mod_cursor + dir, 0, LAST_CURSOR);
+        tap_editing = false;
       }
     } else if (IsOutCursor(mod_cursor)) {
       // L / R / LR, keeping the letter's place (A-D <-> E-H)
       uint8_t& s = cv_out_src[mod_cursor - OUT_CURSOR];
       const int g = constrain(OutGroup(s) + dir, 0, 2);
       s = OUT_GROUP_START[g] + std::min<int>(OutIndex(s), OUT_GROUP_SIZE[g] - 1);
+    } else if (mod_cursor < CLK_CURSOR && tap_editing) {
+      uint8_t opt[64];
+      const int n = TapOptions(track, mod_cursor, opt, 64);
+      int at = 0;
+      for (int k = 0; k < n; k++) if (opt[k] == ModTap(track, mod_cursor)) at = k;
+      SetModTap(track, mod_cursor, opt[constrain(at + dir, 0, n - 1)]);
+    } else if (mod_cursor < CLK_CURSOR && (ModTap(track, mod_cursor) & TAP_OTHER)) {
+      // taking another's output: the first turn brings its own modulator back
+      SetModTap(track, mod_cursor, 0);
     } else if (mod_cursor < CLK_CURSOR) {
       SetModType(track, mod_cursor, ModType(track, mod_cursor) + dir);
       if (linked && mod_cursor < NUM_MODS) SetModType(1 - track, mod_cursor, ModType(track, mod_cursor));
@@ -3243,7 +3340,19 @@ FLASHMEM void AppLoom::DrawMods() const {
     if (i < CLK_CURSOR) snprintf(buf, sizeof(buf), "-%c-", 'A' + i);
     else snprintf(buf, sizeof(buf), "CLK");
     gfxPrint(x + (bw - 1 - 6 * int(strlen(buf))) / 2, 12, buf);
-    if (m) {
+    const uint8_t tap = i < CLK_CURSOR ? ModTap(track, i) : 0;
+    if (tap & TAP_OTHER) {
+      // another box's output: its letter and the output, lit while high
+      gfxFrame(x, 21, bw - 1, 30);
+      const Modulator* src = BoxSource(track, i);
+      char nb[8] = "?";
+      if (src) src->OutName(tap & 15, nb, sizeof(nb));
+      char lb[4];
+      snprintf(lb, sizeof(lb), "%c", 'A' + ((tap >> 4) & 7));
+      gfxPrint(x + (bw - 7) / 2, 25, lb);
+      gfxPrint(x + std::max(1, (bw - 1 - 6 * int(strlen(nb))) / 2), 36, nb);
+      if (BoxValue(track, i) > 0.5f) gfxInvert(x + 1, 22, bw - 3, 28);
+    } else if (m) {
       gfxFrame(x, 21, bw - 1, 30);
       m->DrawMini(x + 1, 22, bw - 3, 28);
     } else {
@@ -3251,9 +3360,29 @@ FLASHMEM void AppLoom::DrawMods() const {
     }
     if (i == mod_cursor) gfxInvert(x, 11, bw - 1, 9);
   }
+  // the bottom line: the type, and what the box sends when there is a
+  // choice ("PICK /4"; another's: "from A /4"), lit while L turns it
   Modulator* m = ModAt(track, mod_cursor);
-  gfxPrint(0, 56, m ? m->def.name : PSTR("off"));
-  gfxPrint(80, 56, PSTR("Y:back"));
+  const uint8_t tap = mod_cursor < CLK_CURSOR ? ModTap(track, mod_cursor) : 0;
+  const Modulator* src = mod_cursor < CLK_CURSOR ? BoxSource(track, mod_cursor) : nullptr;
+  char ob[8] = "";
+  int ox = 0;
+  if (tap & TAP_OTHER) {
+    char from[10];
+    snprintf(from, sizeof(from), "from %c", 'A' + ((tap >> 4) & 7));
+    gfxPrint(0, 56, from);
+    ox = 6 * int(strlen(from)) + 6;
+    if (src) src->OutName(tap & 15, ob, sizeof(ob)); else snprintf(ob, sizeof(ob), "?");
+  } else {
+    gfxPrint(0, 56, m ? m->def.name : PSTR("off"));
+    if (m && m->Outs() > 1) { ox = 6 * int(strlen(m->def.name)) + 6; m->OutName(tap & 15, ob, sizeof(ob)); }
+  }
+  if (ob[0]) {
+    gfxPrint(ox, 56, ob);
+    if (tap_editing) gfxInvert(ox - 1, 55, 6 * int(strlen(ob)) + 1, 9);
+  }
+  if (!tap_editing) gfxPrint(80, 56, PSTR("Y:back"));
+  else gfxPrint(92, 56, PSTR("L:ok"));
 }
 
 // the clock page: one setting per line with room for full names, then the
@@ -3498,6 +3627,12 @@ namespace loom {
     const bool warp_src16 = use && !memcmp(tag, "WRP", 4) && load_version == 16;
     // RANDOM was RATE AMNT SMTH OFFS LEN VARI CLOCK (no QUANT) until 2026-10-14
     const bool rnd_order = use && !memcmp(tag, "RND", 4) && n == 7;
+    // TREADLE was X Y FILL CHAOS RATE RESET ACCNT LEN (FILL's mode the
+    // part) until 2026-10-15: now a FILL for each part, X Y CHAOS ACCNT /
+    // LOW MID HIGH LEN / RATE RESET; the old FILL goes to its part
+    const bool trd_old = use && !memcmp(tag, "TRD", 4) && n == 8;
+    static constexpr int8_t TRD_MAP[8] = {TreadleMod::P_X, TreadleMod::P_Y, TreadleMod::P_LOW, TreadleMod::P_CHAOS,
+                                          TreadleMod::P_RATE, TreadleMod::P_RESET, TreadleMod::P_ACCNT, TreadleMod::P_LEN};
     static constexpr int8_t RND_MAP[7] = {5, 0, 6, 3, 1, 2, 4};
     int old_diff = -1;
     // before v6 the reverb's 6th was SIZE (now PRE: left at its default);
@@ -3549,6 +3684,10 @@ namespace loom {
         p = StretchDevice::TONE;
       }
       if (rnd_order) p = RND_MAP[q];
+      if (trd_old) {
+        p = TRD_MAP[q];
+        if (q == 2) { p = TreadleMod::P_LOW + constrain(int(md), 0, 2); md = 0; }
+      }
       if (skip_size && p == 5) { p = q; continue; }
       if (spool_order) {
         if (SPOOL_MAP[q] < 0) { old_dub = v; continue; }
@@ -3754,6 +3893,10 @@ FLASHMEM void AppLoom::SaveFile() const {
     const uint8_t o = e ? static_cast<const EchoDevice*>(e)->off : 0;
     f.write(&o, 1);
   }
+  // ... and what each MOD box sends (PICK's /4, another box's output)
+  f.write("P", 1);
+  for (auto& tr : tracks) f.write(tr.mod_tap, NUM_MODS);
+  f.write(shared_tap, NUM_MODS);
   f.close();
   fs.remove(SAVE_FILE);
   fs.rename(SAVE_TMP, SAVE_FILE);
@@ -3781,6 +3924,9 @@ FLASHMEM void AppLoom::LoadFile() {
     return;
   }
   load_version = version;
+  // (files from before the boxes had a choice of outputs: each its own)
+  for (auto& tr : tracks) memset(tr.mod_tap, 0, sizeof(tr.mod_tap));
+  memset(shared_tap, 0, sizeof(shared_tap));
   bool ok = ReadDevice(f, tempo_clock);
   int stage = 0;
   for (int t = 0; t < NUM_TRACKS && ok; t++) {
@@ -3909,6 +4055,14 @@ FLASHMEM void AppLoom::LoadFile() {
           if (got_mark && mark == 'E' && f.read(eo, 2) == 2) {
             for (int t = 0; t < NUM_TRACKS; t++)
               if (tracks[t].inst[ECHO][1]) static_cast<EchoDevice*>(tracks[t].inst[ECHO][1])->SetOff(eo[t]);
+            got_mark = f.read(&mark, 1) == 1;
+          } else got_mark = false;
+          uint8_t taps[3 * NUM_MODS];
+          if (got_mark && mark == 'P' && f.read(taps, sizeof(taps)) == sizeof(taps)) {
+            for (int t = 0; t < NUM_TRACKS; t++) memcpy(tracks[t].mod_tap, taps + t * NUM_MODS, NUM_MODS);
+            for (int i = 0; i < NUM_MODS; i++)  // (E-H take only E-H)
+              shared_tap[i] = (taps[2 * NUM_MODS + i] & TAP_OTHER) && ((taps[2 * NUM_MODS + i] >> 4) & 7) < NUM_MODS
+                ? 0 : taps[2 * NUM_MODS + i];
           }
         }
       }

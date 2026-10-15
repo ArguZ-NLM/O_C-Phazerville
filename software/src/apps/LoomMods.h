@@ -56,6 +56,13 @@ public:
   virtual bool Pitched() const { return false; }
   // the value without a glide (RANDOM: its step as it is)
   virtual float Stepped() const { return out; }
+  // several outputs (PICK, TREADLE): how many, each one's name (5 letters
+  // at most) and value; own_out is the one its own box sends (out), the
+  // other boxes can take any of them (see the MOD view)
+  virtual int Outs() const { return 1; }
+  virtual void OutName(int k, char* buf, size_t n) const { snprintf(buf, n, "OUT"); }
+  virtual float OutVal(int k) const { return out; }
+  uint8_t own_out = 0;
   void Run(const ModCtx& ctx);
   void DrawViz(int x, int y, int w, int h) override;
   void DrawMini(int x, int y, int w, int h) override;
@@ -108,6 +115,7 @@ FLASHMEM bool Modulator::Edge(int src, const ModCtx& ctx, int slot) {
 FLASHMEM void Modulator::Run(const ModCtx& ctx) {
   Modulate(); // a modulator's own settings can be modulated too
   Tick(ctx);
+  if (Outs() > 1) out = OutVal(std::min<int>(own_out, Outs() - 1));
   out = constrain(out, 0.0f, 1.0f);
   if (flash > 0.0f) flash -= ctx.dt;
   // history for the scope: ~1 s across the screen
@@ -786,53 +794,62 @@ FLASHMEM void ClockDevice::DrawMini(int x, int y, int w, int h) {
 // treadles are pressed in, the rhythm of the weave. A map of 25 drum
 // patterns (32 steps each, for a low, a mid and a high part) after Grids
 // (c) 2011-2012 Emilie Gillet, GPL 3 (the pattern data): X / Y move
-// across the map, blending its four nearest patterns; FILL sets how many of
-// the steps sound (its mode: the part), CHAOS stirs a little at random in
-// each round. Each hit is a short pulse, accents full height, the others
-// lower by ACCNT, so it strikes devices (MOD A-H as trigger sources) and
-// plays drums from a CV output.
+// across the map, blending its four nearest patterns; LOW / MID / HIGH set
+// how many of each part's steps sound, CHAOS stirs a little at random in
+// each round. Six outputs: the three parts (each hit a short pulse,
+// accents full height, the others lower by ACCNT), then each part's
+// accents alone. Its own box sends one; the other boxes can take the rest.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef TREADLE_DEF = {
-  "TREADLE", "TRD", 8, {"RST", ""},
+  "TREADLE", "TRD", 10, {"RST", ""},
   {
     {"X", 0, 100, 50, UNI},
     {"Y", 0, 100, 50, UNI},
-    {"FILL", 0, 100, 50, UNI, 0, 3, 0, {}, {"LOW", "MID", "HIGH"}},  // mode: the part
     {"CHAOS", 0, 100, 0, UNI},
+    {"ACCNT", 0, 100, 50, UNI},  // how much lower the plain hits are than the accents
+    {"LOW", 0, 100, 50, UNI},    // each part's fill
+    {"MID", 0, 100, 50, UNI},
+    {"HIGH", 0, 100, 50, UNI},
+    {"LEN", 1, 32, 32, UNI},
     {"RATE", 0, 100, 74, UNI, 0, 2, 1, {}, {"FREE", "CLOCK"}},  // a step; on the clock (74: 1/16)
     {"RESET", 0, TRIG_SOURCES - 1, 0, UNI},
-    {"ACCNT", 0, 100, 50, UNI},  // how much lower the plain hits are than the accents
-    {"LEN", 1, 32, 32, UNI},
-  }
+  },
+  {"", "FILL", "STEP"}
 };
 
 class TreadleMod : public Modulator {
 public:
-  enum { P_X, P_Y, P_FILL, P_CHAOS, P_RATE, P_RESET, P_ACCNT, P_LEN };
+  enum { P_X, P_Y, P_CHAOS, P_ACCNT, P_LOW, P_MID, P_HIGH, P_LEN, P_RATE, P_RESET };
+  static constexpr int OUTS = 6;  // LOW MID HIGH, then their accents
   TreadleMod() : Modulator(TREADLE_DEF) {}
   void Tick(const ModCtx& ctx) override;
   void Format(int p, char* buf, size_t n) const override;
   void Action(int a) override { if (a == 0) Restart(); }
   void DrawViz(int x, int y, int w, int h) override;
+  int Outs() const override { return OUTS; }
+  void OutName(int k, char* buf, size_t n) const override {
+    static const char names[OUTS][6] = {"LOW", "MID", "HIGH", "ACC.L", "ACC.M", "ACC.H"};
+    snprintf(buf, n, "%s", names[constrain(k, 0, OUTS - 1)]);
+  }
+  float OutVal(int k) const override { return k >= 0 && k < OUTS && gate[k] > 0.0f ? lvl[k] : 0.0f; }
 private:
   int step = -1;           // the step playing (-1: none yet)
   int64_t grid_at = -1, grid_base = 0;
   float grid_div = 0.0f;
-  float t = 0.0f, gate_s = 0.0f, step_s = 0.125f;
+  float t = 0.0f, step_s = 0.125f;
   uint8_t stir = 0;        // CHAOS: this round's push
-  float hit_lvl = 0.0f;
-  int Part() const { return constrain(int(mode[P_FILL]), 0, 2); }
+  float gate[OUTS] = {}, lvl[OUTS] = {};
   int Len() const { return constrain(int(cur[P_LEN]), 1, 32); }
-  int Level(int s) const;  // the map's strength of step s, with CHAOS (0..255)
-  bool Hits(int lv) const { return lv > 255 - cur[P_FILL] * 255 / 100; }
+  int Level(int part, int s) const;  // the map's strength of a part's step s, with CHAOS (0..255)
+  bool Hits(int part, int lv) const { return lv > 255 - cur[P_LOW + part] * 255 / 100; }
   void Restart() { grid_base = grid_at >= 0 ? grid_at + 1 : 0; step = -1; t = 0.0f; }
   void Advance(int s);
 };
 
-FLASHMEM int TreadleMod::Level(int s) const {
+FLASHMEM int TreadleMod::Level(int part, int s) const {
   const int x = cur[P_X] * 255 / 100, y = cur[P_Y] * 255 / 100;
   const int i = std::min(3, x >> 6), j = std::min(3, y >> 6);
-  const int off = Part() * 32 + (s & 31);
+  const int off = part * 32 + (s & 31);
   const int a = grids::drum_map[i][j][off], b = grids::drum_map[i + 1][j][off];
   const int c = grids::drum_map[i][j + 1][off], d = grids::drum_map[i + 1][j + 1][off];
   const int qx = (x << 2) & 255, qy = (y << 2) & 255;
@@ -843,12 +860,16 @@ FLASHMEM int TreadleMod::Level(int s) const {
 FLASHMEM void TreadleMod::Advance(int s) {
   step = s;
   if (s == 0) stir = uint8_t(random(0, cur[P_CHAOS] * 255 / 100 / 4 + 1));  // a new round
-  const int lv = Level(s);
-  if (Hits(lv)) {
+  const float g = constrain(step_s * 0.25f, 0.005f, 0.03f);
+  for (int part = 0; part < 3; part++) {
+    const int lv = Level(part, s);
+    if (!Hits(part, lv)) continue;
     // accents (the map's strong steps) full height, the others lower by ACCNT
-    hit_lvl = lv > 192 ? 1.0f : 1.0f - cur[P_ACCNT] * 0.0045f;
-    gate_s = constrain(step_s * 0.25f, 0.005f, 0.03f);
-    flash = 0.06f;
+    const bool acc = lv > 192;
+    gate[part] = g;
+    lvl[part] = acc ? 1.0f : 1.0f - cur[P_ACCNT] * 0.0045f;
+    if (acc) { gate[3 + part] = g; lvl[3 + part] = 1.0f; }
+    if (part == own_out % 3) flash = 0.06f;
   }
 }
 
@@ -856,6 +877,7 @@ FLASHMEM void TreadleMod::Tick(const ModCtx& ctx) {
   const bool synced = Synced(P_RATE);
   if (Restarted() && synced) { grid_at = -1; grid_base = 0; step = -1; }
   if (cur[P_RESET] && Edge(cur[P_RESET], ctx, 0)) Restart();
+  for (float& g : gate) if (g > 0.0f) g -= ctx.dt;
   const int len = Len();
   if (synced && clock_running) {
     const float db = DivBeats(DivIndex(cur[P_RATE], 0, 100));
@@ -872,8 +894,6 @@ FLASHMEM void TreadleMod::Tick(const ModCtx& ctx) {
     t += hz * ctx.dt;
     if (t >= 1.0f || step < 0) { t -= floorf(t); Advance(step < 0 ? 0 : (step + 1) % len); }
   }
-  if (gate_s > 0.0f) { gate_s -= ctx.dt; out = hit_lvl; }
-  else out = 0.0f;
 }
 
 FLASHMEM void TreadleMod::Format(int p, char* buf, size_t n) const {
@@ -882,34 +902,38 @@ FLASHMEM void TreadleMod::Format(int p, char* buf, size_t n) const {
   else Device::Format(p, buf, n);
 }
 
-// the pattern: a bar per step as tall as the map's strength there; steps
-// that sound solid (accents to the top), the rest a dotted outline, the
-// line FILL draws across; the step playing marked underneath
+// the three parts in rows, LOW at the top: a bar per step that sounds
+// (accents the row's full height), a dot for the steps that don't; the
+// part its own box sends marked on the left; the step playing underneath
 FLASHMEM void TreadleMod::DrawViz(int x, int y, int w, int h) {
-  const int len = Len(), ww = w - 2, hh = h - 4, base = y + hh;
-  const int bw = std::max(2, ww / len);
-  const int thr = 255 - cur[P_FILL] * 255 / 100;
-  for (int s = 0; s < len; s++) {
-    const int lv = Level(s), bx = x + 1 + s * bw;
-    const int bh = std::max(1, lv * hh / 255);
-    if (Hits(lv)) gfxRect(bx, base - bh + 1, std::max(1, bw - 1), bh);
-    else gfxDottedLine(bx, base, bx, base - bh + 1, 2);
+  const int len = Len(), rh = (h - 3) / 3;
+  const int bw = std::max(2, (w - 6) / len);
+  for (int part = 0; part < 3; part++) {
+    const int top = y + part * rh, base = top + rh - 2;
+    if (part == own_out % 3) gfxRect(x, top + 1, 2, rh - 3);
+    for (int s = 0; s < len; s++) {
+      const int lv = Level(part, s), bx = x + 4 + s * bw;
+      if (!Hits(part, lv)) { gfxPixel(bx, base); continue; }
+      const int bh = lv > 192 ? rh - 2 : (rh - 2) * 2 / 3;
+      gfxRect(bx, base - bh + 1, std::max(1, bw - 1), bh);
+    }
   }
-  const int ty = base - thr * hh / 255;
-  gfxDottedLine(x + 1, ty, x + 1 + len * bw - 1, ty, 3);
-  if (step >= 0 && step < len) gfxRect(x + 1 + step * bw, base + 2, std::max(1, bw - 1), 2);
+  if (step >= 0 && step < len) gfxRect(x + 4 + step * bw, y + h - 2, std::max(1, bw - 1), 2);
 }
 
 /////////////////////////////////////////////////////////////////
-// PICK: a clock and two dividers. On a loom a pick is one pass of the
-// weft; picks per inch is how dense the cloth is. RATE ticks; DIV A and
-// DIV B count the ticks and strike every n-th (A full height, B lower);
-// their L knob keeps the count to a set of numbers (all, odd, even,
-// primes, triplets, Fibonacci, powers of two). A divider changed while
-// running counts on from its last hit, so A and B on the same count can
-// sit on different ticks; RESET (or the clock starting) lines them up.
-// DENS leaves out hits at random; START plays a burst of BURST ticks on
-// each trigger and then rests.
+// PICK: a clock and its dividers. On a loom a pick is one pass of the
+// weft; picks per inch is how dense the cloth is. RATE ticks (TICK); DENS
+// lets each tick through at random (TOCK). The dividers count the ticks,
+// or with DENS's mode on TOCK only the ones let through: DIV A and DIV B
+// strike every n-th, their L knob keeping the count to a set of numbers
+// (all, odd, even, primes, triplets, Fibonacci, powers of two), and eight
+// fixed ones /2 /3 /4 /6 /8 /12 /16 /24. A divider changed while running
+// counts on from its last hit, so A and B on the same count can sit on
+// different ticks; RESET (or the clock starting) lines them all up. START
+// plays a burst of BURST ticks on each trigger and then rests.
+// Thirteen outputs: A+B (A full height, B lower), A, B, TICK, TOCK and the
+// fixed ones. Its own box sends one; the other boxes can take the rest.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef PICK_DEF = {
   "PICK", "PCK", 8, {"RST", ""},
@@ -917,7 +941,7 @@ PROGMEM static const DeviceDef PICK_DEF = {
     {"RATE", 0, 100, 74, UNI, 0, 2, 1, {}, {"FREE", "CLOCK"}},  // a tick; on the clock (74: 1/16)
     {"DIVA", 1, 144, 3, UNI, 0, 7, 0, {}, {}},  // mode: the set of numbers
     {"DIVB", 0, 144, 4, UNI, 0, 7, 0, {}, {}},  // (0: off)
-    {"DENS", 0, 100, 100, UNI},
+    {"DENS", 0, 100, 100, UNI, 0, 2, 0, {}, {"TICK", "TOCK"}},  // mode: what the dividers count
     {"START", 0, TRIG_SOURCES - 1, 0, UNI},  // none: runs all the time
     {"BURST", 1, 64, 8, UNI},  // ticks per START
     {"RESET", 0, TRIG_SOURCES - 1, 0, UNI},
@@ -929,32 +953,45 @@ class PickMod : public Modulator {
 public:
   enum { P_RATE, P_DIVA, P_DIVB, P_DENS, P_START, P_BURST, P_RESET, P_GATE };
   enum { SET_ALL, SET_ODD, SET_EVEN, SET_PRIME, SET_TRIP, SET_FIB, SET_POW2, SETS };
+  enum { O_AB, O_A, O_B, O_TICK, O_TOCK, O_FIXED, OUTS = O_FIXED + 8 };
   PickMod() : Modulator(PICK_DEF) {}
   void Tick(const ModCtx& ctx) override;
   int Step(int p, int v, int dir) const override;
   void Format(int p, char* buf, size_t n) const override;
   void FormatMode(int p, char* buf, size_t n) const override;
-  // a divider's name is its set once one is chosen (PRIME, FIB ..)
+  // a divider's name is its set once one is chosen (PRIME, FIB ..); DENS
+  // keeps its name (its mode is what the dividers count)
   const char* Name(int p) const override {
     if ((p == P_DIVA || p == P_DIVB) && mode[p] > 0 && mode[p] < SETS) return SET_NAMES[mode[p]];
+    if (p == P_DENS) return param(p).name;
     return Modulator::Name(p);
   }
   void Action(int a) override { if (a == 0) Sync(); }
   void DrawViz(int x, int y, int w, int h) override;
+  int Outs() const override { return OUTS; }
+  void OutName(int k, char* buf, size_t n) const override;
+  float OutVal(int k) const override { return k >= 0 && k < OUTS && og[k] > 0.0f ? olv[k] : 0.0f; }
 private:
   static constexpr char SET_NAMES[SETS][6] = {"ALL", "ODD", "EVEN", "PRIME", "TRIP", "FIB", "2^N"};
+  static constexpr uint8_t FIXED[8] = {2, 3, 4, 6, 8, 12, 16, 24};
   static constexpr int HITS = 40;
   uint8_t count[2] = {255, 255};  // ticks since each divider's last hit
-  uint8_t hits[HITS] = {};        // the last ticks: bit 0 A, bit 1 B, bit 2 left out, bit 3 resting
+  uint32_t counted = 0;           // ticks the dividers counted since the last sync
+  uint8_t hits[HITS] = {};        // the last ticks: bit 0 A, bit 1 B, bit 2 TOCK, bit 3 resting
   uint8_t hits_pos = 0;
   int64_t grid_at = -1;
-  float t = 0.0f, gate_s = 0.0f, tick_s = 0.125f, hit_lvl = 0.0f;
+  float t = 0.0f, tick_s = 0.125f;
+  float og[OUTS] = {}, olv[OUTS] = {};  // each output: its pulse's time left, its height
   int burst_left = 0;
-  void Sync() { count[0] = count[1] = 255; }
+  void Sync() { count[0] = count[1] = 255; counted = 0; }
+  void Fire(int k, float lv = 1.0f);
   void Pulse();
   static bool InSet(int set, int v);
   int Div(int p, int v) const;  // v snapped into p's set (0: off)
 };
+
+constexpr char PickMod::SET_NAMES[PickMod::SETS][6];
+constexpr uint8_t PickMod::FIXED[8];
 
 FLASHMEM bool PickMod::InSet(int set, int v) {
   if (v < 1) return false;
@@ -995,30 +1032,39 @@ FLASHMEM int PickMod::Step(int p, int v, int dir) const {
   return v;
 }
 
+FLASHMEM void PickMod::Fire(int k, float lv) {
+  og[k] = cur[P_GATE] ? std::max(0.005f, tick_s * cur[P_GATE] * 0.0095f)
+                      : constrain(tick_s * 0.25f, 0.005f, 0.03f);
+  olv[k] = lv;
+}
+
 FLASHMEM void PickMod::Pulse() {
-  int fired = 0;
-  for (int k = 0; k < 2; k++) {
-    const int p = k ? P_DIVB : P_DIVA, div = Div(p, cur[p]);
-    if (!div) continue;
-    if (count[k] < 255) count[k]++;
-    if (count[k] >= div) { count[k] = 0; fired |= 1 << k; }
+  Fire(O_TICK);
+  const bool tock = int(random(100)) < cur[P_DENS];
+  if (tock) Fire(O_TOCK);
+  int fired = tock ? 4 : 0;
+  if (tock || !mode[P_DENS]) {  // the dividers count this one
+    for (int k = 0; k < 2; k++) {
+      const int p = k ? P_DIVB : P_DIVA, div = Div(p, cur[p]);
+      if (!div) continue;
+      if (count[k] < 255) count[k]++;
+      if (count[k] >= div) { count[k] = 0; fired |= 1 << k; }
+    }
+    for (int j = 0; j < 8; j++) if (counted % FIXED[j] == 0) Fire(O_FIXED + j);
+    counted++;
   }
-  // DENS: at random, some hits are left out
-  if (fired && int(random(100)) >= cur[P_DENS]) fired |= 4;
+  if (fired & 1) Fire(O_A);
+  if (fired & 2) Fire(O_B);
+  if (fired & 3) { Fire(O_AB, (fired & 1) ? 1.0f : 0.6f); flash = 0.06f; }
   hits[hits_pos] = uint8_t(fired);
   hits_pos = (hits_pos + 1) % HITS;
-  if (fired && !(fired & 4)) {
-    hit_lvl = (fired & 1) ? 1.0f : 0.6f;
-    gate_s = std::max(0.005f, tick_s * cur[P_GATE] * 0.0095f);
-    if (!cur[P_GATE]) gate_s = constrain(tick_s * 0.25f, 0.005f, 0.03f);
-    flash = 0.06f;
-  }
 }
 
 FLASHMEM void PickMod::Tick(const ModCtx& ctx) {
   const bool synced = Synced(P_RATE);
   if (Restarted() && synced) { grid_at = -1; Sync(); }
   if (cur[P_RESET] && Edge(cur[P_RESET], ctx, 0)) Sync();
+  for (float& g : og) if (g > 0.0f) g -= ctx.dt;
   const bool bursts = cur[P_START] != 0;
   bool now = false;
   if (bursts && Edge(cur[P_START], ctx, 1)) {
@@ -1048,16 +1094,17 @@ FLASHMEM void PickMod::Tick(const ModCtx& ctx) {
     hits[hits_pos] = 8;
     hits_pos = (hits_pos + 1) % HITS;
   }
-  if (gate_s > 0.0f) { gate_s -= ctx.dt; out = hit_lvl; }
-  else out = 0.0f;
+}
+
+FLASHMEM void PickMod::OutName(int k, char* buf, size_t n) const {
+  static const char names[O_FIXED][6] = {"A+B", "A", "B", "TICK", "TOCK"};
+  if (k >= O_FIXED && k < OUTS) snprintf(buf, n, "/%d", FIXED[k - O_FIXED]);
+  else snprintf(buf, n, "%s", names[constrain(k, 0, O_FIXED - 1)]);
 }
 
 FLASHMEM void PickMod::FormatMode(int p, char* buf, size_t n) const {
-  if (p == P_DIVA || p == P_DIVB) {
-    snprintf(buf, n, "%s", SET_NAMES[constrain(int(mode[p]), 0, SETS - 1)]);
-  } else {
-    Modulator::FormatMode(p, buf, n);
-  }
+  if (p == P_DIVA || p == P_DIVB) snprintf(buf, n, "%s", SET_NAMES[constrain(int(mode[p]), 0, SETS - 1)]);
+  else Modulator::FormatMode(p, buf, n);
 }
 
 FLASHMEM void PickMod::Format(int p, char* buf, size_t n) const {
@@ -1071,19 +1118,20 @@ FLASHMEM void PickMod::Format(int p, char* buf, size_t n) const {
 }
 
 // the last ticks going by, newest on the right: A hits full height, B hits
-// half, both: A over B; hits DENS left out dotted; every tick a dot on
-// the line (none between bursts); while a burst runs, what is left of it
+// half, both: A over B; under each tick a dot, two for the ones let
+// through to TOCK (none between bursts); while a burst runs, what is left
 FLASHMEM void PickMod::DrawViz(int x, int y, int w, int h) {
-  const int ww = w - 8, base = y + h - 2, top = y + 1;
+  const int ww = w - 8, base = y + h - 4, top = y + 1;
   const int cw = std::max(2, ww / HITS);
   for (int i = 0; i < HITS; i++) {
     const uint8_t f = hits[(hits_pos + i) % HITS];
     const int cx = x + i * cw;
-    if (!(f & 8)) gfxPixel(cx, base + 1);  // (no dot: a rest between bursts)
+    if (f & 8) continue;  // a rest between bursts
+    gfxPixel(cx, base + 3);
+    if (f & 4) gfxPixel(cx, base + 2);
     if (!(f & 3)) continue;
     const int bh = (f & 1) ? base - top : (base - top) / 2;
-    if (f & 4) gfxDottedLine(cx, base, cx, base - bh, 2);
-    else gfxRect(cx, base - bh, std::max(1, cw - 1), bh + 1);
+    gfxRect(cx, base - bh, std::max(1, cw - 1), bh + 1);
   }
   if (cur[P_START] && burst_left > 0) {
     char b[6];
