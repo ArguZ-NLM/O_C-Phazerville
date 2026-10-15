@@ -4869,9 +4869,11 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
   const float raw = Phasing() ? hz * 24.0f  // (octaves a second)
                               : (hz < 0.0f ? -1.0f : 1.0f) * 12.0f * log2f(1.0f + fabsf(hz) * 4.0f);
   const float speed = constrain(raw, -60.0f, 60.0f);
+  // PHASE: the stripes as wide as the stages are few (4: wide, 20: fine)
+  const float per = Phasing() ? 24.0f - (Stages() - 4) * 0.875f : 16.0f;  // 24 .. 10 px
   pole += speed * dt;
-  pole -= 16.0f * floorf(pole / 16.0f);
-  const int sw = 2 + cur[HFDBK] * 5 / 100;
+  pole -= per * floorf(pole / per);
+  const float sw = (2 + cur[HFDBK] * 5 / 100) * per / 16.0f;
   static const uint8_t bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
   const int fill = 1 + cur[HMIX] * 15 / 100;  // 1 .. 16 of 16
   const bool level = !Phasing();
@@ -4883,8 +4885,8 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
       // with the dither), so the stripes glide instead of stepping
       float u = level ? py + (down ? -pole : pole)
                       : px + (down ? -py : py) + (down ? -pole : pole);
-      u -= 16.0f * floorf(u / 16.0f);
-      const float cover = std::min(1.0f, std::max(0.0f, std::min(u + 1.0f, float(sw) - u)));
+      u -= per * floorf(u / per);
+      const float cover = std::min(1.0f, std::max(0.0f, std::min(u + 1.0f, sw - u)));
       if (cover <= 0.0f) continue;
       // (the dither travels with its stripe: no dots blinking at the edges)
       const int moved = int(floorf(down ? -pole : pole));
