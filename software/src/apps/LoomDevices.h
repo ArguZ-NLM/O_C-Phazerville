@@ -4444,12 +4444,46 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
     const int gap = (wall - 2) * cur[PRE] / 150 / 4;  // the pre-delay, at most a quarter of the way to each wall
     const int th = int((h - 2) * sqrtf(cur[REVERB] * 0.01f));  // shows more early on (50% = 70% high)
     const int len = std::max(2, (wall - 1 - gap) * (20 + 80 * cur[ROOM] / 100) / 100);
-    for (int i = gap; i < gap + len; i++) {
-      constexpr float k = 4.0f, end = 0.0183156f;  // e^-4
-      const int hh = int(th * (expf(-k * (i - gap) / len) - end) / (1.0f - end) + 0.5f);
-      if (hh <= 0) continue;
-      gfxLine(cx + i, base - hh + 1, cx + i, base);
-      if (i) gfxLine(cx - i, base - hh + 1, cx - i, base);
+    constexpr float k = 4.0f, end = 0.0183156f;  // e^-4
+    auto tail = [&](int i, int l, int t) {  // the tail's height i columns out
+      return int(t * (expf(-k * (i - gap) / l) - end) / (1.0f - end) + 0.5f);
+    };
+    // GLINT (ROOM's mode): the tail pitched back into itself, ringing on. A
+    // soft halo of dots round the tail, longer and taller with more GLINT,
+    // and dark sparkles in the tail, both drifting up (down on -12) as the
+    // shimmer climbs; the dots sit on a fixed pattern that slides, so they
+    // glide instead of twinkling
+    const float glint = mode[ROOM] * 0.05f;  // 0 .. 1
+    const bool g_down = mode[PRE] == 4;      // (-12)
+    const float drift = (millis() % 100000) * 0.012f * (g_down ? -1.0f : 1.0f);  // px
+    auto spark = [&](int px, int py) {  // 0..1, fixed per place on the sliding pattern
+      const float t = px * 0.7548777f + (py + drift) * 0.5698403f;
+      return t - floorf(t);
+    };
+    const int len2 = glint > 0.0f ? std::min(wall - 1 - gap, int(len * (1.0f + glint))) : 0;
+    const int th2 = std::min(h - 2, int(th * (1.0f + 0.5f * glint) + 2.0f * glint + 0.5f));
+    for (int i = gap; i < gap + std::max(len, len2); i++) {
+      const int hh = i < gap + len ? tail(i, len, th) : 0;
+      for (int sd : {1, -1}) {
+        if (sd < 0 && !i) continue;
+        const int px = cx + sd * i;
+        if (hh > 0) {
+          if (glint > 0.0f)  // the tail, with dark sparkles
+            for (int py = base - hh + 1; py <= base; py++) {
+              if (spark(px, py) >= 0.12f * glint) gfxPixel(px, py);
+            }
+          else
+            gfxLine(px, base - hh + 1, px, base);
+        }
+        if (len2) {  // the halo above it, thinning out upwards and outwards
+          const int h2 = tail(i, len2, th2);
+          const float out = float(i - gap) / len2;
+          for (int py = base - h2 + 1; py <= base - hh; py++) {
+            const float up = float(base - py) / std::max(1, h2);
+            if (spark(px, py) < glint * 0.45f * (1.0f - 0.6f * out) * (1.0f - 0.5f * up)) gfxPixel(px, py);
+          }
+        }
+      }
     }
     // the walls: hard (WALL +50) a crisp line; softer, it spreads up to 2
     // pixels each side, thinning out from the middle - a diffuse surface.
@@ -4512,7 +4546,7 @@ PROGMEM static const DeviceDef DIRT_DEF = {
 
 // HEDDLE, in TEXTURE's slot instead of it. Mode: SHIFT, a frequency
 // shifter (as Bode's): in Hz, down left of the middle, up right; or PHASE,
-// an endless phaser (as the Buchla 297): its notches rise (right) or fall
+// an endless phaser (a barber pole): its notches rise (right) or fall
 // (left) for ever, in octaves a second; SHCLK / PHCLK: the same on the
 // clock (a turn / an octave a note value). SHIFT: SIDE, which way the
 // sound goes (BOTH: up left, down right); PHASE: STAGE, 4 .. 20
