@@ -878,7 +878,7 @@ FLASHMEM void TreadleMod::Tick(const ModCtx& ctx) {
 
 FLASHMEM void TreadleMod::Format(int p, char* buf, size_t n) const {
   if (p == P_RATE) FormatRate(p, RateHz(P_RATE, 0.5f, 30.0f), buf, n);
-  else if (p == P_RESET) FormatTrig(cur[P_RESET], buf, n);
+  else if (p == P_RESET) FormatTrig(val[P_RESET], buf, n);
   else Device::Format(p, buf, n);
 }
 
@@ -1059,11 +1059,11 @@ FLASHMEM void PickMod::FormatMode(int p, char* buf, size_t n) const {
 
 FLASHMEM void PickMod::Format(int p, char* buf, size_t n) const {
   if (p == P_RATE) FormatRate(p, RateHz(P_RATE, 0.1f, 50.0f), buf, n);
-  else if (p == P_START || p == P_RESET) FormatTrig(cur[p], buf, n);
+  else if (p == P_START || p == P_RESET) FormatTrig(val[p], buf, n);
   else if (p == P_DIVA || p == P_DIVB) {
     const int d = Div(p, val[p]);
     if (d) snprintf(buf, n, "/%d", d); else snprintf(buf, n, "OFF");
-  } else if (p == P_GATE && !cur[P_GATE]) snprintf(buf, n, "SHORT");
+  } else if (p == P_GATE && !val[P_GATE]) snprintf(buf, n, "SHORT");
   else Device::Format(p, buf, n);
 }
 
