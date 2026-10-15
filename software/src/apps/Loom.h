@@ -3100,7 +3100,7 @@ FLASHMEM void AppLoom::DrawDevice() const {
     snprintf(buf, sizeof(buf), "%c %s", 'A' + mod_cursor, d->def.name);
     const int end = name_x + 6 * int(strlen(buf));
     // (clear of the clock mark at 96)
-    const int room = d->def.actions[0][0] ? end + 6 + 18 : end;
+    const int room = d->def.actions[0][0] || d->def.actions[1][0] ? end + 6 + 18 : end;
     if (mod_mode ? end > 62 : room > 94) snprintf(buf, sizeof(buf), "%c %s", 'A' + mod_cursor, ShownTag(d->def.tag));
     else act_x = std::max(56, end + 6);
     gfxPrint(name_x, 1, buf);
@@ -3141,7 +3141,8 @@ FLASHMEM void AppLoom::DrawDevice() const {
     // the modulators show theirs (RST, STP, TRG)
     const char* label = byp ? PSTR("BYP") : focus_mod ? d->def.actions[a] : "";
     if (!label[0] || (a == 1 && mute_turn)) continue;
-    const int x = act_x + a * 26; // clear of the page number at 110
+    // (a modulator's one action right after its name, A's or B's)
+    const int x = act_x + (focus_mod && mod_cursor < CLK_CURSOR && !d->def.actions[0][0] ? 0 : a * 26);
     gfxPrint(x, 1, label);
     // lit actions (e.g. a modulator's STP) are inverted
     const int lw = 6 * int(strlen(label)) + 2;

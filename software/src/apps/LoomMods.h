@@ -806,7 +806,7 @@ FLASHMEM void ClockDevice::DrawMini(int x, int y, int w, int h) {
 // accents alone. Its own box sends one; the other boxes can take the rest.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef TREADLE_DEF = {
-  "TREADLE", "TRD", 10, {"RST", ""},
+  "TREADLE", "TRD", 10, {"", "RST"},  // (B resets)
   {
     {"X", 0, 100, 50, UNI},
     {"Y", 0, 100, 50, UNI},
@@ -830,7 +830,7 @@ public:
   TreadleMod() : Modulator(TREADLE_DEF) {}
   void Tick(const ModCtx& ctx) override;
   void Format(int p, char* buf, size_t n) const override;
-  void Action(int a) override { if (a == 0) Restart(); }
+  void Action(int a) override { if (a == 1) Restart(); }
   void DrawViz(int x, int y, int w, int h) override;
   int Outs() const override { return OUTS; }
   void OutName(int k, char* buf, size_t n) const override {
