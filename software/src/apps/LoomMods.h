@@ -799,7 +799,7 @@ PROGMEM static const DeviceDef TREADLE_DEF = {
     {"Y", 0, 100, 50, UNI},
     {"FILL", 0, 100, 50, UNI, 0, 3, 0, {}, {"LOW", "MID", "HIGH"}},  // mode: the part
     {"CHAOS", 0, 100, 0, UNI},
-    {"RATE", 0, 100, 45, UNI, 0, 2, 1, {}, {"FREE", "CLOCK"}},  // a step; on the clock 1/16 to start
+    {"RATE", 0, 100, 74, UNI, 0, 2, 1, {}, {"FREE", "CLOCK"}},  // a step; on the clock (74: 1/16)
     {"RESET", 0, TRIG_SOURCES - 1, 0, UNI},
     {"ACCNT", 0, 100, 50, UNI},  // how much lower the plain hits are than the accents
     {"LEN", 1, 32, 32, UNI},
@@ -809,10 +809,7 @@ PROGMEM static const DeviceDef TREADLE_DEF = {
 class TreadleMod : public Modulator {
 public:
   enum { P_X, P_Y, P_FILL, P_CHAOS, P_RATE, P_RESET, P_ACCNT, P_LEN };
-  TreadleMod() : Modulator(TREADLE_DEF) {
-    for (int i = 0; i < NUM_DIVS; i++)  // RATE: a sixteenth to start
-      if (DivBeats(i) == 0.25f) { val[P_RATE] = int16_t(DivValue(i, 0, 100)); cur[P_RATE] = val[P_RATE]; }
-  }
+  TreadleMod() : Modulator(TREADLE_DEF) {}
   void Tick(const ModCtx& ctx) override;
   void Format(int p, char* buf, size_t n) const override;
   void Action(int a) override { if (a == 0) Restart(); }
