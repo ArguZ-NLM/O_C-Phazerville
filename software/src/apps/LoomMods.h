@@ -996,7 +996,7 @@ FLASHMEM void TreadleMod::DrawViz(int x, int y, int w, int h) {
 // fixed ones. Its own box sends one; the other boxes can take the rest.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef PICK_DEF = {
-  "PICK", "PCK", 8, {"RST", ""},
+  "PICK", "PCK", 8, {"", "RST"},  // (B resets)
   {
     {"RATE", 0, 100, 74, UNI, 0, 2, 1, {}, {"FREE", "CLOCK"}},  // a tick; on the clock (74: 1/16)
     {"DIVA", 1, 144, 3, UNI, 0, 7, 0, {}, {}},  // mode: the set of numbers
@@ -1026,7 +1026,7 @@ public:
     if (p == P_DENS) return param(p).name;
     return Modulator::Name(p);
   }
-  void Action(int a) override { if (a == 0) Sync(); }
+  void Action(int a) override { if (a == 1) Sync(); }
   void DrawViz(int x, int y, int w, int h) override;
   int Outs() const override { return OUTS; }
   void OutName(int k, char* buf, size_t n) const override;
