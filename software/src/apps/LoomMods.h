@@ -960,15 +960,16 @@ FLASHMEM void TreadleMod::Format(int p, char* buf, size_t n) const {
 // the three parts in rows, LOW at the top, each as long as it is: a bar
 // per step that sounds (accents the row's full height), a dot for the
 // steps that don't, a line under the step playing; the part its own box
-// sends marked on the left
+// sends marked by a line on the left. 4 pixels a step whatever the length
+// (32 fill the width; the last one's gap falls off the edge)
 FLASHMEM void TreadleMod::DrawViz(int x, int y, int w, int h) {
   const int rh = h / 3;
-  const int bw = std::max(2, (w - 6) / 32);
+  const int bw = std::max(2, (w + 2) / 32);
   for (int part = 0; part < 3; part++) {
     const int top = y + part * rh, base = top + rh - 3, len = Len(part);
-    if (part == own_out % 3) gfxRect(x, top + 1, 2, rh - 4);
+    if (part == own_out % 3) gfxLine(x, top + 1, x, base);
     for (int s = 0; s < len; s++) {
-      const int lv = Level(part, s), bx = x + 4 + s * bw;
+      const int lv = Level(part, s), bx = x + 1 + s * bw;
       if (Hits(part, lv)) {
         const int bh = lv > 192 ? rh - 3 : (rh - 3) * 2 / 3;
         gfxRect(bx, base - bh + 1, std::max(1, bw - 1), bh);
@@ -976,7 +977,7 @@ FLASHMEM void TreadleMod::DrawViz(int x, int y, int w, int h) {
         gfxPixel(bx, base);
       }
     }
-    if (step >= 0) gfxLine(x + 4 + pos[part] * bw, base + 2, x + 4 + pos[part] * bw + std::max(1, bw - 1) - 1, base + 2);
+    if (step >= 0 && pos[part] < len) gfxLine(x + 1 + pos[part] * bw, base + 2, x + pos[part] * bw + std::max(1, bw - 1), base + 2);
   }
 }
 
