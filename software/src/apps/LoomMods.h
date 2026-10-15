@@ -934,9 +934,15 @@ public:
   int Step(int p, int v, int dir) const override;
   void Format(int p, char* buf, size_t n) const override;
   void FormatMode(int p, char* buf, size_t n) const override;
+  // a divider's name is its set once one is chosen (PRIME, FIB ..)
+  const char* Name(int p) const override {
+    if ((p == P_DIVA || p == P_DIVB) && mode[p] > 0 && mode[p] < SETS) return SET_NAMES[mode[p]];
+    return Modulator::Name(p);
+  }
   void Action(int a) override { if (a == 0) Sync(); }
   void DrawViz(int x, int y, int w, int h) override;
 private:
+  static constexpr char SET_NAMES[SETS][6] = {"ALL", "ODD", "EVEN", "PRIME", "TRIP", "FIB", "2^N"};
   static constexpr int HITS = 40;
   uint8_t count[2] = {255, 255};  // ticks since each divider's last hit
   uint8_t hits[HITS] = {};        // the last ticks: bit 0 A, bit 1 B, bit 2 left out
@@ -1045,8 +1051,7 @@ FLASHMEM void PickMod::Tick(const ModCtx& ctx) {
 
 FLASHMEM void PickMod::FormatMode(int p, char* buf, size_t n) const {
   if (p == P_DIVA || p == P_DIVB) {
-    static const char names[SETS][6] = {"ALL", "ODD", "EVEN", "PRIME", "TRIP", "FIB", "2^N"};
-    snprintf(buf, n, "%s", names[constrain(int(mode[p]), 0, SETS - 1)]);
+    snprintf(buf, n, "%s", SET_NAMES[constrain(int(mode[p]), 0, SETS - 1)]);
   } else {
     Modulator::FormatMode(p, buf, n);
   }
