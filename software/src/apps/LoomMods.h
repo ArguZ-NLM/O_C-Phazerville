@@ -947,7 +947,7 @@ private:
   void Sync() { count[0] = count[1] = 255; }
   void Pulse();
   static bool InSet(int set, int v);
-  int Div(int p) const;  // the count in use: cur snapped into its set (0: off)
+  int Div(int p, int v) const;  // v snapped into p's set (0: off)
 };
 
 FLASHMEM bool PickMod::InSet(int set, int v) {
@@ -970,9 +970,9 @@ FLASHMEM bool PickMod::InSet(int set, int v) {
   }
 }
 
-FLASHMEM int PickMod::Div(int p) const {
+FLASHMEM int PickMod::Div(int p, int v) const {
   const ParamDef& pd = param(p);
-  const int v = constrain(int(cur[p]), int(pd.min), int(pd.max));
+  v = constrain(v, int(pd.min), int(pd.max));
   if (v < 1) return 0;
   // the nearest member at or below, else the first above
   for (int d = v; d >= 1; d--) if (InSet(mode[p], d)) return d;
@@ -992,7 +992,7 @@ FLASHMEM int PickMod::Step(int p, int v, int dir) const {
 FLASHMEM void PickMod::Pulse() {
   int fired = 0;
   for (int k = 0; k < 2; k++) {
-    const int div = Div(k ? P_DIVB : P_DIVA);
+    const int p = k ? P_DIVB : P_DIVA, div = Div(p, cur[p]);
     if (!div) continue;
     if (count[k] < 255) count[k]++;
     if (count[k] >= div) { count[k] = 0; fired |= 1 << k; }
@@ -1056,7 +1056,7 @@ FLASHMEM void PickMod::Format(int p, char* buf, size_t n) const {
   if (p == P_RATE) FormatRate(p, RateHz(P_RATE, 0.1f, 50.0f), buf, n);
   else if (p == P_START || p == P_RESET) FormatTrig(cur[p], buf, n);
   else if (p == P_DIVA || p == P_DIVB) {
-    const int d = Div(p);
+    const int d = Div(p, val[p]);
     if (d) snprintf(buf, n, "/%d", d); else snprintf(buf, n, "OFF");
   } else if (p == P_GATE && !cur[P_GATE]) snprintf(buf, n, "SHORT");
   else Device::Format(p, buf, n);
