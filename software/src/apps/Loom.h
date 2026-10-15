@@ -430,6 +430,7 @@ private:
   loom::PlayerDevice* meta_page = nullptr;  // the PLAYER whose page is open
   void Mirror(loom::Device* d, int p) const;
   void SetByText(bool want_mode, const char* text);
+  void GoTo(const char* text);
   void Repatch(int t);
   void ApplyBypass(int t);
   void ParkBypassed(int t);
@@ -1827,9 +1828,10 @@ FLASHMEM void AppLoom::MainLoop() {
     }
     if (g_capture) g_capture->Idle();
     if (g_set_request) {
-      const bool m = g_set_request == ':';
+      const char r = g_set_request;
       g_set_request = 0;
-      SetByText(m, g_set_text);
+      if (r == 'j') GoTo(g_set_text);
+      else SetByText(r == ':', g_set_text);
     }
     // test notes (USB 'M'), as if from a keyboard, while 'U' captures:
     // middle C, the G above, a C major chord, the C above (ms, note, vel)
@@ -2534,6 +2536,60 @@ FLASHMEM bool AppLoom::Muted() const {
 // "=P20", "=3s", ":SHIFT". Without an exact match: the nearest number with
 // the same letters around it ("=3s" finds 2.97s). It gets there in knob
 // steps, so a LINKED twin and the CPU check follow as they do for the knobs
+// USB 'j' (testing, screenshots): jump to a device page, the cursor on a
+// setting: "jA/REPEAT/ROOM", "jB/HDL" (the device's name or its
+// weave view tag; the setting by its name, also as the page shows it now)
+FLASHMEM void AppLoom::GoTo(const char* text) {
+  using namespace loom;
+  char part[3][12] = {};
+  int k = 0, n = 0;
+  for (const char* c = text; *c && k < 3; c++) {
+    if (*c == '/') { part[k][n] = 0; k++; n = 0; continue; }
+    if (n < 11) part[k][n++] = char(toupper(*c));
+  }
+  if (k < 3) part[k][n] = 0;
+  const int t = part[0][0] == 'B' ? 1 : 0;
+  if (linked && t == 1) { Serial.println("GOTO: linked, track A only"); return; }
+  int found = -1;
+  static const char* const tags[COLS] = {"", "", "", "", "", "CLO"};
+  for (int c = 0; c < COLS && found < 0; c++) {
+    Device* d = tracks[t].at(c);
+    if (!d) continue;
+    if (!strcmp(d->def.name, part[1]) || !strncmp(d->def.tag, part[1], 3) || (tags[c][0] && !strcmp(tags[c], part[1])))
+      found = c;
+  }
+  // the weave view's own labels for slots whose tags differ
+  if (found < 0) {
+    static const struct { const char* lbl; const char* name; } alias[] = {
+      {"RPT", "REPEAT"}, {"HDL", "HEDDLE"}, {"TEX", "TEXTURE"}, {"FIB", "FIBRE"}, {"DFT", "DRAFT"},
+      {"TWL", "TWILL"}, {"BTR", "BEATER"}, {"SHU", "SHUTTLE"}, {"WRP", "WARP"}, {"SPL", "SPOOL"}, {"IN", "INPUT"}};
+    for (auto& a : alias)
+      if (!strcmp(a.lbl, part[1]))
+        for (int c = 0; c < COLS && found < 0; c++)
+          if (Device* d = tracks[t].at(c)) if (!strcmp(d->def.name, a.name)) found = c;
+  }
+  if (found < 0) { Serial.printf("GOTO: no %s on track %c\n", part[1], 'A' + t); return; }
+  Device* d = tracks[t].at(found);
+  int p = d->ui_cursor;
+  if (part[2][0]) {
+    p = -1;
+    for (int i = 0; i < d->num_params() && p < 0; i++) {
+      char mb[8] = "";
+      if (d->param(i).nmodes) d->FormatMode(i, mb, sizeof(mb));
+      if (!strcmp(d->Name(i), part[2]) || !strcmp(d->param(i).name, part[2]) || !strcmp(mb, part[2])) p = i;
+    }
+    if (p < 0) { Serial.printf("GOTO: %s has no %s\n", d->def.name, part[2]); return; }
+  }
+  track = int8_t(t);
+  col = int8_t(found);
+  focus_mod = false;
+  view = DEVICE;
+  editing = mod_mode = trig_mode = edit_mode = false;
+  cursor = constrain(p, 0, d->num_params() - 1);
+  d->ui_cursor = int8_t(cursor);
+  Serial.printf("GOTO %c %s %s\n", 'A' + t, d->def.name, d->Name(cursor));
+}
+
 FLASHMEM void AppLoom::SetByText(bool want_mode, const char* text) {
   using namespace loom;
   Device* d = view == DEVICE && !mod_mode && !trig_mode ? Focused() : nullptr;

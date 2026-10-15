@@ -775,7 +775,7 @@ void FASTRUN loop() {
         int cmd = Serial.read();
         // the remote panel (keys sent from the computer): Loom shows a
         // sticky note meanwhile, so nobody turns a knob at the same time
-        if (cmd > 0 && strchr("+-uy*[],.<>&!%~=:", cmd)) g_remote_at = millis() | 1;
+        if (cmd > 0 && strchr("+-uy*[],.<>&!%~=:j", cmd)) g_remote_at = millis() | 1;
         switch (cmd) {
 #if defined(__IMXRT1062__)
 #ifdef CARD_APP
@@ -998,7 +998,8 @@ void FASTRUN loop() {
             OC::ui.Inject(UI::EVENT_BUTTON_PRESS, OC::CONTROL_BUTTON_L, 0, 0);
             break;
 #ifdef ENABLE_APP_LOOM
-          case '=': case ':': {
+          case '=': case ':': case 'j': {
+            // 'j': jump to a device page, "jA/REPEAT/ROOM"
             // the setting under the cursor straight to a value ('=') or mode
             // (':') given as the screen shows it: "=P20", "=3s", ":SHIFT"
             int n = 0;
