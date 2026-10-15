@@ -4901,7 +4901,7 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
       const int cx = px - w / 2, cy = py - h / 2;
       float u = level ? cy + (down ? -off : off)
                       : cx + (down ? -cy : cy) + (down ? -off : off);
-      u -= per * floorf(u / per);
+      u -= per * floorf((u + 1.0f) / per);  // (-1 .. per - 1: the leading edge too)
       float cover = std::min(1.0f, std::max(0.0f, std::min(u + 1.0f, sw - u)));
       // (thinly filled: hard edges; half-lit edges came and went, pumping)
       if (fill <= 8) cover = cover >= 0.5f ? 1.0f : 0.0f;
