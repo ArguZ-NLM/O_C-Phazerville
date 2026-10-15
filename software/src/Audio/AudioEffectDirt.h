@@ -164,6 +164,12 @@ private:
   float ph_pos = 0.0f;                       // 0..1 through the 8 octaves (the first phaser)
   float ph_z[2][PH_STREAMS][PH_MAX] = {};    // the all-passes' state
   float ph_y[2][PH_STREAMS] = {};            // each phaser's last output (RESO)
+  // a new stage count fades in over PH_FADE blocks (~17 ms) while the old
+  // chain, on a copy of its state, fades out: switched at once it clicked
+  static constexpr int PH_FADE = 6;
+  uint8_t ph_n_was = 0, ph_n_old = 0, ph_fade = 0;
+  float ph_z_old[2][PH_STREAMS][PH_MAX] = {};
+  float ph_y_old[2][PH_STREAMS] = {};
   // HEDDLE's state: the oscillator (cos, sin), the all-passes (per side,
   // 4 + 4 sections of x[n-1], x[n-2], y[n-1], y[n-2]), the one-sample delay
   // of the first chain, the last output (feedback)
@@ -224,6 +230,22 @@ FASTRUN __attribute__((optimize("O2"))) static void PhaseChain(const float* in, 
   }
   for (int j = 0; j < N; j++) zs[j] = z[j];
   fb = f;
+}
+
+// a chain of n stages (even, 4 .. 20), each count built on its own
+FASTRUN static void RunChain(int n, const float* in, float* acc, float a, float w,
+                             float fbk, float* zs, float& fb) {
+  switch (n) {
+    case 4:  PhaseChain<4>(in, acc, a, w, fbk, zs, fb); break;
+    case 6:  PhaseChain<6>(in, acc, a, w, fbk, zs, fb); break;
+    case 8:  PhaseChain<8>(in, acc, a, w, fbk, zs, fb); break;
+    case 10: PhaseChain<10>(in, acc, a, w, fbk, zs, fb); break;
+    case 12: PhaseChain<12>(in, acc, a, w, fbk, zs, fb); break;
+    case 14: PhaseChain<14>(in, acc, a, w, fbk, zs, fb); break;
+    case 16: PhaseChain<16>(in, acc, a, w, fbk, zs, fb); break;
+    case 18: PhaseChain<18>(in, acc, a, w, fbk, zs, fb); break;
+    default: PhaseChain<20>(in, acc, a, w, fbk, zs, fb); break;
+  }
 }
 
 // Runs from RAM1 (ITCM) like the other Loom engines.
@@ -385,23 +407,32 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
   }
   if (shifting && ph) {
     // PHASE: a phaser at a time over the block; its stage count fixed at
-    // build time (even, 4 .. 20) so the whole chain stays in registers
+    // build time (even, 4 .. 20) so the whole chain stays in registers.
+    // A new count: the old chain goes on from a copy of its state and fades
+    // out; the new one's added stages start empty
+    if (ph_n_was && ph_n != ph_n_was) {
+      memcpy(ph_z_old, ph_z, sizeof(ph_z));
+      memcpy(ph_y_old, ph_y, sizeof(ph_y));
+      for (int c = 0; c < 2; c++)
+        for (int k = 0; k < PH_STREAMS; k++)
+          for (int j = ph_n_was; j < ph_n; j++) ph_z[c][k][j] = 0.0f;
+      ph_n_old = ph_n_was;
+      ph_fade = PH_FADE;
+    }
+    ph_n_was = uint8_t(ph_n);
+    const float fd_from = ph_fade ? float(PH_FADE - ph_fade) / PH_FADE : 1.0f;
+    const float fd_step = ph_fade ? 1.0f / (PH_FADE * AUDIO_BLOCK_SAMPLES) : 0.0f;
     for (int c = 0; c < 2; c++) {
-      float yw[AUDIO_BLOCK_SAMPLES] = {};
-      for (int k = 0; k < PH_STREAMS; k++) {
-        float& fbk = ph_y[c][k];
-        float* zs = ph_z[c][k];
-        const float a = ph_a[k], wk = ph_w[k];
-        switch (ph_n) {
-          case 4:  PhaseChain<4>(pre[c], yw, a, wk, sh_fb, zs, fbk); break;
-          case 6:  PhaseChain<6>(pre[c], yw, a, wk, sh_fb, zs, fbk); break;
-          case 8:  PhaseChain<8>(pre[c], yw, a, wk, sh_fb, zs, fbk); break;
-          case 10: PhaseChain<10>(pre[c], yw, a, wk, sh_fb, zs, fbk); break;
-          case 12: PhaseChain<12>(pre[c], yw, a, wk, sh_fb, zs, fbk); break;
-          case 14: PhaseChain<14>(pre[c], yw, a, wk, sh_fb, zs, fbk); break;
-          case 16: PhaseChain<16>(pre[c], yw, a, wk, sh_fb, zs, fbk); break;
-          case 18: PhaseChain<18>(pre[c], yw, a, wk, sh_fb, zs, fbk); break;
-          default: PhaseChain<20>(pre[c], yw, a, wk, sh_fb, zs, fbk); break;
+      float yw[AUDIO_BLOCK_SAMPLES] = {}, yo[AUDIO_BLOCK_SAMPLES];
+      for (int k = 0; k < PH_STREAMS; k++)
+        RunChain(ph_n, pre[c], yw, ph_a[k], ph_w[k], sh_fb, ph_z[c][k], ph_y[c][k]);
+      if (ph_fade) {  // the old count, fading out
+        memset(yo, 0, sizeof(yo));
+        for (int k = 0; k < PH_STREAMS; k++)
+          RunChain(ph_n_old, pre[c], yo, ph_a[k], ph_w[k], sh_fb, ph_z_old[c][k], ph_y_old[c][k]);
+        for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+          const float g = fd_from + fd_step * (n + 1);
+          yw[n] = yo[n] + g * (yw[n] - yo[n]);
         }
       }
       float mn = mix_now;
@@ -414,6 +445,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
       }
       if (c == 1) mix_now = mn;
     }
+    if (ph_fade) ph_fade--;
   }
   if (shifting) {  // keep the oscillator on the circle
     const float m = 1.0f / sqrtf(osc_c * osc_c + osc_s * osc_s);
