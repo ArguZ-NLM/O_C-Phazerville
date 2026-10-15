@@ -6575,6 +6575,9 @@ public:
     if (mode[p]) FormatVar(buf, n, mode[p] * 5); else snprintf(buf, n, "OFF");
   }
   int BarStyle(int p) const override { return p == VEL ? BAR_CENTRE : Device::BarStyle(p); }
+  uint32_t held[4] = {};  // the keys down (MIDI notes)
+  float lvl_now = 0.7f, lvl_sent = 0.7f;  // the level for them (see Idle)
+  uint32_t lvl_ms = 0;
   // a played velocity as the engine's level: VEL in dB (100: 40 dB from
   // the softest to the hardest key, 0: every note full)
   int VelOut(int v) const {
@@ -6866,6 +6869,10 @@ FLASHMEM void WarpDevice::Idle() {
   if (note_ev_n - midi_seen > NOTE_EVS) midi_seen = note_ev_n - NOTE_EVS;
   while (midi_seen != note_ev_n) {
     const NoteEv& e = note_ev[midi_seen++ % NOTE_EVS];
+    if (e.note < 128) {  // (keys held, for the level)
+      if (e.vel) held[e.note >> 5] |= 1u << (e.note & 31);
+      else held[e.note >> 5] &= ~(1u << (e.note & 31));
+    }
     if (e.vel) {
       int v = e.vel;
       if (mode[VEL]) v = constrain(v + int(random(-1000, 1001) * 0.001f * mode[VEL] * 5 * 1.27f), 1, 127);  // (this key's own)
@@ -6879,6 +6886,24 @@ FLASHMEM void WarpDevice::Idle() {
     }
   }
   fx.Pressure(chan_at, poly_at);  // WEFT
+  // the level by the keys held: voices add up, so a chord ran into the
+  // limiter (grainy from 3 notes on); 0.7 / sqrt(keys): down at once on a
+  // new key (~30 ms), back up only as slowly as the notes fade (REL), so
+  // tails ringing on don't swell
+  {
+    int n = 0;
+    for (uint32_t w : held) n += __builtin_popcount(w);
+    const float to = 0.7f / sqrtf(float(std::max(1, n)));
+    const uint32_t now = millis();
+    const float dt = std::min(0.1f, (now - lvl_ms) * 0.001f);
+    lvl_ms = now;
+    if (to != lvl_now) {
+      const float k = to < lvl_now ? std::min(1.0f, dt * 30.0f) : std::min(1.0f, dt / std::max(0.3f, Time5(cur[REL])));
+      lvl_now += (to - lvl_now) * k;
+      if (fabsf(to - lvl_now) < 0.001f) lvl_now = to;
+      if (fabsf(lvl_now - lvl_sent) > 0.002f || lvl_now == to) { lvl_sent = lvl_now; Apply(ATK); }
+    }
+  }
   // SRC turned: the other sound
   if (src_was != Src()) {
     Free();
@@ -7226,7 +7251,7 @@ FLASHMEM void WarpDevice::Apply(int p) {
   a.atk_curve = mode[ATK];
   a.dec_curve = mode[DECAY];
   a.rel_curve = mode[REL];
-  a.level = 1.0f;
+  a.level = lvl_now;  // (by how many keys are held: see Idle)
   a.vel_amt = 1.0f;  // (VEL is applied to the velocity: see Idle, in dB)
   a.vib_hz = 1.0f / VibPeriod(cur[WEFT]);
   a.weft = mode[WEFT];
