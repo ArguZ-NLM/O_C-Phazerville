@@ -6575,6 +6575,12 @@ public:
     if (mode[p]) FormatVar(buf, n, mode[p] * 5); else snprintf(buf, n, "OFF");
   }
   int BarStyle(int p) const override { return p == VEL ? BAR_CENTRE : Device::BarStyle(p); }
+  // a played velocity as the engine's level: VEL in dB (100: 40 dB from
+  // the softest to the hardest key, 0: every note full)
+  int VelOut(int v) const {
+    const float db = -cur[VEL] * 0.4f * (1.0f - v / 127.0f);
+    return std::max(1, int(lrintf(127.0f * powf(10.0f, db / 20.0f))));
+  }
   enum { SRC_SPOOL, SRC_PLAYER, SRC_THRUM };
   static constexpr const char* THRUM_DIR = "/LOOM/THRUMS";  // (was WAVES on 2026-10-09)
   // THRUM: R push on SRC opens the file list
@@ -6863,7 +6869,11 @@ FLASHMEM void WarpDevice::Idle() {
     if (e.vel) {
       int v = e.vel;
       if (mode[VEL]) v = constrain(v + int(random(-1000, 1001) * 0.001f * mode[VEL] * 5 * 1.27f), 1, 127);  // (this key's own)
-      fx.NoteOn(e.note, v);
+      // VEL: velocity as the ear hears it, in dB: 100 spans 40 dB (a soft
+      // key ~ -34 dB), 50 half that, 0 every note full; the engine then
+      // takes the velocity as the level (as a straight line it was barely
+      // heard: velocity 20 only -5 dB at VEL 50)
+      fx.NoteOn(e.note, VelOut(v));
     } else {
       fx.NoteOff(e.note);
     }
@@ -7217,7 +7227,7 @@ FLASHMEM void WarpDevice::Apply(int p) {
   a.dec_curve = mode[DECAY];
   a.rel_curve = mode[REL];
   a.level = 1.0f;
-  a.vel_amt = cur[VEL] * 0.01f;
+  a.vel_amt = 1.0f;  // (VEL is applied to the velocity: see Idle, in dB)
   a.vib_hz = 1.0f / VibPeriod(cur[WEFT]);
   a.weft = mode[WEFT];
   a.root = ROOT;
@@ -7255,7 +7265,7 @@ FLASHMEM void WarpDevice::Format(int p, char* buf, size_t n) const {
 FLASHMEM void WarpDevice::Action(int a) {
   if (a == 0) {  // TRIG: the root, as if a key was struck (LOOP on: let go once in)
     fx.NoteOff(ROOT);
-    fx.NoteOn(ROOT, 100, true);
+    fx.NoteOn(ROOT, VelOut(100), true);
   } else {
     fx.AllOff();
   }
