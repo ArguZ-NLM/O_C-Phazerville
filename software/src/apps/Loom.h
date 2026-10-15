@@ -431,6 +431,10 @@ private:
   void Mirror(loom::Device* d, int p) const;
   void SetByText(bool want_mode, const char* text);
   void GoTo(const char* text);
+  uint8_t chord[8] = {};  // USB 'x': notes to hold while capturing
+  int chord_n = 0;
+  uint32_t chord_at = 0;
+  bool chord_on = false;
   void Repatch(int t);
   void ApplyBypass(int t);
   void ParkBypassed(int t);
@@ -1831,7 +1835,23 @@ FLASHMEM void AppLoom::MainLoop() {
       const char r = g_set_request;
       g_set_request = 0;
       if (r == 'j') GoTo(g_set_text);
+      else if (r == 'x') {  // USB "x60.64.67": these notes held 1.5 s, captured (out, A, B), the tracks as they are
+        chord_n = 0;
+        for (const char* c = g_set_text; *c && chord_n < 8; ) {
+          if (isdigit(*c)) { chord[chord_n++] = uint8_t(constrain(atoi(c), 0, 127)); while (isdigit(*c)) c++; }
+          else c++;
+        }
+        if (!g_capture) g_capture = new OutCapture;
+        if (chord_n && g_capture->Start(false, -1, true)) { chord_at = millis() | 1; chord_on = false; }
+        else Serial.println("CHORD: no notes / no PSRAM");
+      }
       else SetByText(r == ':', g_set_text);
+    }
+    // USB 'x': the chord asked for, on at 50 ms, off at 1550 ms
+    if (chord_at) {
+      const uint32_t t = millis() - chord_at;
+      if (!chord_on && t >= 50) { for (int i = 0; i < chord_n; i++) loom::NoteEvent(1, chord[i], 100); chord_on = true; }
+      if (chord_on && t >= 1550) { for (int i = 0; i < chord_n; i++) loom::NoteEvent(1, chord[i], 0); chord_at = 0; }
     }
     // test notes (USB 'M'), as if from a keyboard, while 'U' captures:
     // middle C, the G above, a C major chord, the C above (ms, note, vel)
