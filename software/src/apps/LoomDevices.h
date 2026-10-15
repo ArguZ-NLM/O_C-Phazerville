@@ -6552,7 +6552,7 @@ PROGMEM static const DeviceDef WARP_DEF = {
     // the thrum, one of the WAVs in its folder (R push: the file list)
     {"SRC", 0, 255, 0, UNI, 0, 3, 2, {}, {"SPL", "SHU", "THR"}},
     {"THRU", 0, 1, 1, LIST, 2, 0, 0, {"OFF", "ON"}},  // THREAD: A's output on under the notes
-    {"VEL", 0, 100, 50, UNI},     // %: how much velocity sets a note's loudness
+    {"VEL", 0, 100, 50, UNI, 0, 21, 0},  // %: how much velocity sets a note's loudness; mode: each key's velocity varied, +- 5 n %
     // the vibrato's speed, as one wobble: 0.18 s (5.5 Hz, the fastest) .. 5 s;
     // mode: what wavers (the pitch, the level, the tone or the place)
     {"WEFT", 0, 100, 0, UNI, 0, 4, 0, {}, {"PIT", "LVL", "CUT", "PAN"}},
@@ -6568,6 +6568,13 @@ PROGMEM static const DeviceDef WARP_DEF = {
 class WarpDevice : public Device {
 public:
   enum { SRC, THRU, VEL, WEFT, ATK, DECAY, SUS, REL };  // (DEC is taken by Print.h)
+  // VEL's variation: each key pressed gets its own velocity, up to +- 5 n %
+  // of the full range off what was played
+  void FormatMode(int p, char* buf, size_t n) const override {
+    if (p != VEL) { Device::FormatMode(p, buf, n); return; }
+    if (mode[p]) FormatVar(buf, n, mode[p] * 5); else snprintf(buf, n, "OFF");
+  }
+  int BarStyle(int p) const override { return p == VEL ? BAR_CENTRE : Device::BarStyle(p); }
   enum { SRC_SPOOL, SRC_PLAYER, SRC_THRUM };
   static constexpr const char* THRUM_DIR = "/LOOM/THRUMS";  // (was WAVES on 2026-10-09)
   // THRUM: R push on SRC opens the file list
@@ -6853,8 +6860,13 @@ FLASHMEM void WarpDevice::Idle() {
   if (note_ev_n - midi_seen > NOTE_EVS) midi_seen = note_ev_n - NOTE_EVS;
   while (midi_seen != note_ev_n) {
     const NoteEv& e = note_ev[midi_seen++ % NOTE_EVS];
-    if (e.vel) fx.NoteOn(e.note, e.vel);
-    else fx.NoteOff(e.note);
+    if (e.vel) {
+      int v = e.vel;
+      if (mode[VEL]) v = constrain(v + int(random(-1000, 1001) * 0.001f * mode[VEL] * 5 * 1.27f), 1, 127);  // (this key's own)
+      fx.NoteOn(e.note, v);
+    } else {
+      fx.NoteOff(e.note);
+    }
   }
   fx.Pressure(chan_at, poly_at);  // WEFT
   // SRC turned: the other sound
