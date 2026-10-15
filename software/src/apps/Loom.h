@@ -2473,6 +2473,12 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
     else StepModOption(d, cursor, dir);
     d->Refresh(cursor);
     Mirror(d, cursor);
+  } else if (left && d->AltName(cursor)) {
+    // a setting with a second value (ROOM / GLINT): left shows the setting,
+    // right the second value; it stays there
+    if (dir > 0) d->alt_on |= uint16_t(1u << cursor);
+    else d->alt_on &= uint16_t(~(1u << cursor));
+    if (Device* tw = Twin(d)) tw->alt_on = d->alt_on;
   } else if (left) {
     // the left encoder picks the mode of the setting under the cursor
     if (d->param(cursor).nmodes) {
@@ -2495,6 +2501,16 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
     d->NudgeMode(cursor, dir);
     Mirror(d, cursor);
     l_used = true;
+  } else if (d->AltShown(cursor)) {
+    // its second value (GLINT, the preset): the mode, in the R knob's steps
+    const float before = WorstCost(d);
+    d->NudgeMode(cursor, dir);
+    Mirror(d, cursor);
+    const float more = (WorstCost(d) - before) * (linked ? 2.0f : 1.0f);
+    if (more > 0.0f && !focus_mod && col > SOURCE && col < SLOT_COUNT && !(tracks[track].bypass >> col & 1) && !Admit(more)) {
+      d->NudgeMode(cursor, -dir);
+      Mirror(d, cursor);
+    }
   } else {
     const float before = WorstCost(d);
     d->Nudge(cursor, dir);
@@ -2596,6 +2612,18 @@ FLASHMEM void AppLoom::SetByText(bool want_mode, const char* text) {
   if (!d) { Serial.println("SET: open a device page first"); return; }
   const int p = cursor;
   const ParamDef& pd = d->param(p);
+  if (const char* alt = d->AltName(p)) {  // ROOM / GLINT: ':GLINT' / ':ROOM' switch, '=' sets the one showing
+    char up[24];
+    size_t k = 0;
+    for (const char* c = text; *c && k + 1 < sizeof(up); c++) up[k++] = char(toupper(*c));
+    up[k] = 0;
+    if (want_mode && (!strcmp(up, alt) || !strcmp(up, d->Name(p)))) {
+      if (!strcmp(up, alt)) d->alt_on |= uint16_t(1u << p); else d->alt_on &= uint16_t(~(1u << p));
+      Serial.printf("SET %s shows %s\n", d->param(p).name, up);
+      return;
+    }
+    if (d->AltShown(p)) want_mode = true;
+  }
   // upper case, no spaces; letters = all but the number, number = its value
   auto norm = [](const char* in, char* out, size_t n) {
     size_t k = 0;
@@ -2680,6 +2708,7 @@ FLASHMEM void AppLoom::DoubleClick(loom::Device* d, int p) {
   const bool src = !focus_mod && col == SOURCE;
   if (src && d == tr.reel && p == ReelDevice::IN) return;   // the input
   if (src && d != tr.reel && p == 0) return;                // INPUT's source, PLAYER's file
+  if (d->AltShown(p)) return;                                // (GLINT, the preset: no default jump)
   const ParamDef& pd = d->param(p);
   int16_t& v = d->val[p];
   if (src && d == tr.reel && p == ReelDevice::MON) {
@@ -3057,11 +3086,12 @@ FLASHMEM void AppLoom::DrawDevice() const {
       // a setting with named modes (BIT / REDUX, LOW / MID / HIGH ...) shows
       // that name the whole time it is grabbed
       const bool named = pd.modes[0][0] != 0;
-      const bool show_mode = (pd.nmodes && d->ModeShown(p)) || (sel && pd.nmodes
-        && ((editing && (l_held || named)) || (edit_mode && mode_shown < 1500)));
+      const char* alt = d->AltName(p);
+      const bool show_mode = !alt && ((pd.nmodes && d->ModeShown(p)) || (sel && pd.nmodes
+        && ((editing && (l_held || named)) || (edit_mode && mode_shown < 1500))));
       char mb[8];
       if (show_mode) d->FormatMode(p, mb, sizeof(mb));
-      const char* nm = show_mode ? mb : d->Name(p);
+      const char* nm = d->AltShown(p) ? alt : show_mode ? mb : d->Name(p);
       PrintCentred(x, 43, nm);
     }
     // has modes (the left knob): a small square at the right end of the
@@ -3073,7 +3103,10 @@ FLASHMEM void AppLoom::DrawDevice() const {
     // Two dots at the name's ends drowned in the digits
     if (pd.nmodes && !(sel && mod_mode)) {
       constexpr int bx = 1, bw = 30;  // in the column
-      const int n = std::max<int>(1, pd.nmodes), m = constrain(int(d->mode[p]), 0, n - 1);
+      // (a second value: two halves, the setting left, the value right)
+      const bool two = d->AltName(p) != nullptr;
+      const int n = two ? 2 : std::max<int>(1, pd.nmodes);
+      const int m = two ? int(d->AltShown(p)) : constrain(int(d->mode[p]), 0, n - 1);
       int a = x + bx + m * bw / n, b = x + bx + (m + 1) * bw / n - 1;
       if (b - a + 1 < 4) {  // many modes: a piece at least 4 px wide, sliding end to end
         a = x + bx + (n > 1 ? m * (bw - 4) / (n - 1) : 0);
@@ -3084,6 +3117,7 @@ FLASHMEM void AppLoom::DrawDevice() const {
 
     // value row: always the number
     if (sel && mod_mode) snprintf(buf, sizeof(buf), "%+d%%", mod_slot ? d->mod_amt2[p] : d->mod_amt[p]);
+    else if (d->AltShown(p)) d->FormatMode(p, buf, sizeof(buf));  // (GLINT's amount, the preset)
     else d->Format(p, buf, sizeof(buf));
     PrintCentred(x, 52, buf);
     if (sel && (editing || mod_mode)) gfxInvert(x, 51, 32, 9);

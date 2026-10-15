@@ -353,9 +353,14 @@ public:
   void NudgeMode(int p, int dir);
   // the lowest mode the L knob can pick now (SHUTTLE streaming: no REV)
   virtual int ModeMin(int p) const { return 0; }
-  // the upper row shows the mode instead of the name all the time (REPEAT
-  // with GLINT on: ROOM reads GL70, WALL the recipe)
+  // the upper row shows the mode instead of the name all the time
   virtual bool ModeShown(int p) const { return false; }
+  // a setting whose mode is a second value of its own (REPEAT: ROOM /
+  // GLINT, WALL / PRSET): the L knob switches between the two (the bar's
+  // left / right half), the R knob changes the one showing; its name here
+  virtual const char* AltName(int p) const { return nullptr; }
+  uint16_t alt_on = 0;  // which of those show their second value (the page's, not saved)
+  bool AltShown(int p) const { return AltName(p) && (alt_on >> p & 1); }
   // a setting that goes round when turned past an end (DRAFT's POS: its
   // recording is a loop)
   virtual bool Wraps(int p) const { return false; }
@@ -4233,7 +4238,7 @@ public:
   bool ok() const override { return mem_ok; }
   void Apply(int p) override;
   void Shimmer();  // GLINT to the engine
-  bool ModeShown(int p) const override { return (p == ROOM || p == WALL) && mode[ROOM] > 0; }
+  const char* AltName(int p) const override { return p == ROOM ? "GLINT" : p == WALL ? "PRSET" : nullptr; }
   int Step(int p, int v, int dir) const override;
   void Format(int p, char* buf, size_t n) const override;
   void FormatMode(int p, char* buf, size_t n) const override;
@@ -4412,7 +4417,7 @@ FLASHMEM void EchoDevice::Format(int p, char* buf, size_t n) const {
 // WALL's mode: GLINT's recipe; ROOM's: how much of it
 FLASHMEM void EchoDevice::FormatMode(int p, char* buf, size_t n) const {
   if (p == WALL) snprintf(buf, n, "%s", GLINTS[constrain(int(mode[WALL]), 0, GLINT_N - 1)].name);
-  else if (p == ROOM) snprintf(buf, n, mode[ROOM] ? "GL%d" : "GL off", mode[ROOM] * 5);
+  else if (p == ROOM) snprintf(buf, n, mode[ROOM] ? "%d" : "off", mode[ROOM] * 5);
   else Device::FormatMode(p, buf, n);
 }
 
