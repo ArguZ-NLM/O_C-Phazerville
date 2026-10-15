@@ -977,7 +977,7 @@ public:
 private:
   static constexpr char SET_NAMES[SETS][6] = {"ALL", "ODD", "EVEN", "PRIME", "TRIP", "FIB", "2^N"};
   static constexpr uint8_t FIXED[8] = {2, 3, 4, 6, 8, 12, 16, 24};
-  static constexpr int HITS = 40;
+  static constexpr int HITS = 30;  // (4 pixels each: B's bars hollow)
   uint8_t count[2] = {255, 255};  // ticks since each divider's last hit
   uint32_t counted = 0;           // ticks the dividers counted since the last sync
   uint8_t hits[HITS] = {};        // the last ticks: bit 0 A, bit 1 B, bit 2 TOCK, bit 3 resting
@@ -1133,8 +1133,8 @@ FLASHMEM void PickMod::Format(int p, char* buf, size_t n) const {
   else Device::Format(p, buf, n);
 }
 
-// the last ticks going by, newest on the right: A hits full height, B hits
-// half, both: A over B; under each tick a dot, two for the ones let
+// the last ticks going by, newest on the right: A hits full height and
+// solid, B hits half and hollow, both: A; under each tick a dot, two for the ones let
 // through to TOCK (none between bursts); while a burst runs, what is left
 FLASHMEM void PickMod::DrawViz(int x, int y, int w, int h) {
   const int ww = w - 8, base = y + h - 4, top = y + 1;
@@ -1146,8 +1146,8 @@ FLASHMEM void PickMod::DrawViz(int x, int y, int w, int h) {
     gfxPixel(cx, base + 3);
     if (f & 4) gfxPixel(cx, base + 2);
     if (!(f & 3)) continue;
-    const int bh = (f & 1) ? base - top : (base - top) / 2;
-    gfxRect(cx, base - bh, std::max(1, cw - 1), bh + 1);
+    if (f & 1) gfxRect(cx, top, std::max(1, cw - 1), base - top + 1);
+    else gfxFrame(cx, base - (base - top) / 2, std::max(1, cw - 1), (base - top) / 2 + 1);
   }
   if (cur[P_START] && burst_left > 0) {
     char b[6];
