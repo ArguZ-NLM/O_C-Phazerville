@@ -809,8 +809,8 @@ FLASHMEM void ClockDevice::DrawMini(int x, int y, int w, int h) {
 // (c) 2011-2012 Emilie Gillet, GPL 3 (the pattern data): X / Y move
 // across the map, blending its four nearest patterns; LOW / MID / HIGH set
 // how many of each part's steps sound (their L knob: how many steps the
-// part has, 1-32, so they can run against each other), CHAOS stirs a
-// little at random in each round; PLAY: forwards, backwards, back and
+// part has, 1-32, so they can run against each other), CHAOS leaves
+// some of the steps that sound out at random, new each run through; PLAY: forwards, backwards, back and
 // forth, or a drunken walk. Six outputs: the three parts (each hit a short pulse,
 // accents full height, the others lower by ACCNT), then each part's
 // accents alone. Its own box sends one; the other boxes can take the rest.
@@ -864,7 +864,7 @@ private:
   int64_t grid_at = -1, grid_base = 0;
   float grid_div = 0.0f;
   float t = 0.0f, step_s = 0.125f;
-  uint8_t stir[3] = {};    // CHAOS: each part's push this run through
+  uint32_t drop[3] = {};   // CHAOS: the steps each part leaves out this run through
   float gate[OUTS] = {}, lvl[OUTS] = {};
   int Len(int part) const { return constrain(int(mode[P_LOW + part]) + 1, 1, 32); }
   int Level(int part, int s) const;  // the map's strength of a part's step s, with CHAOS (0..255)
@@ -881,7 +881,7 @@ FLASHMEM int TreadleMod::Level(int part, int s) const {
   const int c = grids::drum_map[i][j + 1][off], d = grids::drum_map[i + 1][j + 1][off];
   const int qx = (x << 2) & 255, qy = (y << 2) & 255;
   const int ab = (b * qx + a * (255 - qx)) >> 8, cd = (d * qx + c * (255 - qx)) >> 8;
-  return std::min(255, ((cd * qy + ab * (255 - qy)) >> 8) + stir[part]);
+  return (cd * qy + ab * (255 - qy)) >> 8;
 }
 
 // step s since the start: each part one step on. Its length counts at
@@ -916,10 +916,10 @@ FLASHMEM void TreadleMod::Advance(int s) {
       }
     }
     if (!end) continue;
-    // CHAOS: each run through, the part's steps all lifted by a new random
-    // amount (as Grids): a different number of its quieter steps join in.
-    // Up to half way (127) at 100: Grids' most (63) is at 50
-    stir[part] = uint8_t(random(0, cur[P_CHAOS] * 127 / 100 + 1));
+    // CHAOS: each run through, each step a chance (CHAOS %) to be left
+    // out; none are added
+    drop[part] = 0;
+    for (int k = 0; k < 32; k++) if (int(random(100)) < cur[P_CHAOS]) drop[part] |= 1u << k;
     const int was = play_now[part];
     play_now[part] = uint8_t(play);
     run[part] = 0;
@@ -933,7 +933,7 @@ FLASHMEM void TreadleMod::Advance(int s) {
   const float g = constrain(step_s * 0.25f, 0.005f, 0.03f);
   for (int part = 0; part < 3; part++) {
     const int lv = Level(part, pos[part]);
-    if (!Hits(part, lv)) continue;
+    if (!Hits(part, lv) || (drop[part] >> (pos[part] & 31) & 1)) continue;
     // accents (the map's strong steps) full height, the others lower by ACCNT
     const bool acc = lv > 192;
     gate[part] = g;
@@ -986,8 +986,10 @@ FLASHMEM void TreadleMod::DrawViz(int x, int y, int w, int h) {
     for (int s = 0; s < len; s++) {
       const int lv = Level(part, s), bx = x + 1 + s * bw;
       if (Hits(part, lv)) {
+        // (left out by CHAOS this run through: hollow)
         const int bh = lv > 192 ? rh - 3 : (rh - 3) * 2 / 3;
-        gfxRect(bx, base - bh + 1, std::max(1, bw - 1), bh);
+        if (drop[part] >> s & 1) gfxFrame(bx, base - bh + 1, std::max(1, bw - 1), bh);
+        else gfxRect(bx, base - bh + 1, std::max(1, bw - 1), bh);
       } else {
         gfxPixel(bx, base);
       }
