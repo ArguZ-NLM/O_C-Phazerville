@@ -1360,14 +1360,15 @@ FLASHMEM void MixDevice::DrawViz(int x, int y, int w, int h) {
 // display tilts +3 dB/octave so music reads roughly level.
 FLASHMEM void MixDevice::DrawSpectrum(int x, int y, int w, int h) {
   constexpr int N = 512, CAP = AudioEffectBandz::CAPTURE, DECIM = CAP / N;
-  if (!fft) fft = new float[4 * N];
+  // its buffers taken once and kept (malloc: none free, no picture; a
+  // plain new can't say so and a 4 KB one each frame failed at a boot)
+  if (!fft) fft = static_cast<float*>(malloc(sizeof(float) * 4 * N + sizeof(int16_t) * CAP));
   if (!fft) return;
   float* re = fft;          // full rate
   float* im = fft + N;
   float* dre = fft + 2 * N; // decimated
   float* dim = fft + 3 * N;
-  int16_t* samples = new int16_t[CAP];
-  if (!samples) return;
+  int16_t* samples = reinterpret_cast<int16_t*>(fft + 4 * N);
   bandz.ReadCapture(samples);
   for (int i = 0; i < N; i++) {
     const float win = 0.5f - 0.5f * cosf(2.0f * float(M_PI) * i / (N - 1)); // Hann
@@ -1379,7 +1380,6 @@ FLASHMEM void MixDevice::DrawSpectrum(int x, int y, int w, int h) {
     dre[i] = acc * (1.0f / (32768.0f * DECIM)) * win;
     dim[i] = 0.0f;
   }
-  delete[] samples;
   Fft(re, im, N);
   Fft(dre, dim, N);
 
