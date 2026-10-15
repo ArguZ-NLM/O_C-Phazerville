@@ -2961,7 +2961,7 @@ FLASHMEM void AppLoom::DrawDevice() const {
   // the device's picture
   d->view_page = cursor / 4;
   d->view_cursor = cursor;
-  if (!trig_mode) d->DrawViz(0, 11, 128, 30);
+  if (!trig_mode) d->DrawViz(0, 11, 128, 28);  // (rows 11..38: row 40 holds the mode bars)
 
   // parameter grid, one page of 4
   const int page = cursor / 4;
@@ -3010,16 +3010,16 @@ FLASHMEM void AppLoom::DrawDevice() const {
     }
     // has modes (the left knob): a small square at the right end of the
     // value lane, out of the way of the names
-    // has modes (the left knob): a 1-pixel bar in the free row between name
-    // and number, cut into as many parts as there are modes, the part of
-    // the one it is on filled (two: the left or right half, three: a third
-    // left, middle or right; many: a short piece moving along). Two dots
-    // at the name's ends drowned in the digits
+    // has modes (the left knob): a 1-pixel bar over the name (row 40, the
+    // picture ends at 38), cut into as many parts as there are modes, the
+    // part of the one it is on filled (two: the left or right half, three:
+    // a third left, middle or right; many: a short piece moving along).
+    // Two dots at the name's ends drowned in the digits
     if (pd.nmodes && !(sel && mod_mode)) {
       constexpr int bx = 1, bw = 30;  // in the column
       const int n = std::max<int>(1, pd.nmodes), m = constrain(int(d->mode[p]), 0, n - 1);
       const int a = x + bx + m * bw / n, b = x + bx + (m + 1) * bw / n - 1;
-      gfxLine(a, 51, std::max(a, b), 51);
+      gfxLine(a, 40, std::max(a, b), 40);
     }
 
     // value row: always the number
