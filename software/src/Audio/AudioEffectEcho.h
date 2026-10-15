@@ -51,6 +51,7 @@ public:
     }
     if (!rv) rv = TakeLines();
     if (!sh) sh = static_cast<int16_t*>(malloc(2 * SH_LEN * sizeof(int16_t)));
+    if (!shd) shd = static_cast<int16_t*>(PsramAlloc(2 * SHD_LEN * sizeof(int16_t)));
     for (auto& b : dbuf) {
       if (!b) b = static_cast<int16_t*>(PsramAlloc(dlen * sizeof(int16_t)));
     }
@@ -67,6 +68,8 @@ public:
     rv = nullptr;
     free(sh);
     sh = nullptr;
+    if (shd) PsramFree(shd);
+    shd = nullptr;
     for (auto& b : dbuf) {
       if (b) PsramFree(b);
       b = nullptr;
@@ -85,6 +88,8 @@ public:
     rv_hp_z[0] = rv_hp_z[1] = 0.0f;
     rv_t[0] = rv_t[1] = 0.0f;
     if (sh) memset(sh, 0, 2 * SH_LEN * sizeof(int16_t));
+    if (shd) memset(shd, 0, 2 * SHD_LEN * sizeof(int16_t));
+    sh_hp2[0] = sh_hp2[1] = 0.0f;
     for (auto& t : sh_tail) for (auto& v : t) v = 0.0f;
     sh_lp[0] = sh_lp[1] = sh_dc[0] = sh_dc[1] = sh_env = 0.0f;
     for (auto b : dbuf) if (b) memset(b, 0, dlen * sizeof(int16_t));
@@ -224,7 +229,12 @@ private:
   int sh_w = 0;
   float sh_d[2] = {2.0f, 2.0f};  // each voice's delay (its first head), samples
   float sh_tail[2][AUDIO_BLOCK_SAMPLES / 2] = {};
-  float sh_lp[2] = {}, sh_dc[2] = {}, sh_env = 0.0f;
+  float sh_lp[2] = {}, sh_dc[2] = {}, sh_hp2[2] = {}, sh_env = 0.0f;
+  // the pitched sound waits ~150 ms before it goes back in (as Eventide's
+  // pitch delay): each step up comes as its own bloom instead of one smear
+  static constexpr int SHD_LEN = 3308;  // at the half rate
+  int16_t* shd = nullptr;  // 2 x SHD_LEN, PSRAM (none: no wait)
+  int shd_w = 0;
   volatile float sh_amt_target = 0.0f;
   float sh_amt = 0.0f;
   volatile uint8_t sh_mode = SHIM_OCT;
@@ -614,8 +624,11 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
     // --- REVERB: 8-line FDN fed by the delay stage, at half the rate: a
     // step takes two samples (their average)
     float rin[2][HALF];
-    // SHIMMER: the last block's tail, darkened a little, pitched by one or
-    // two voices and turned down as the tail gets loud (no runaway)
+    // SHIMMER: the last block's tail, only its mids and highs (~350 Hz ..
+    // 6 kHz: the lows going round again piled up into a wall), pitched by
+    // one or two voices, held back ~150 ms and fed in again, gently
+    // enough that it dies away (it was strong enough to keep itself going,
+    // held only by the guard: massive)
     float shim[2][HALF];
     sh_amt += 0.1f * (sh_amt_target - sh_amt);
     if (sh_amt_target <= 0.0f && sh_amt < 1e-3f) sh_amt = 0.0f;
@@ -626,14 +639,17 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
       const float* ra = RATIO[sh_mode];
       const int nv = ra[1] > 0.0f ? 2 : 1;
       // (the guard only once the tail is loud: past 0.3 it holds it there)
-      const float guard = sh_env > 0.3f ? 0.3f / sh_env : 1.0f;
-      const float g = sh_amt * 1.4f * guard * (nv == 2 ? 0.7f : 1.0f);
+      const float guard = sh_env > 0.15f ? 0.15f / sh_env : 1.0f;
+      const float g = sh_amt * 0.8f * guard * (nv == 2 ? 0.7f : 1.0f);
       float pk = 0.0f;
       for (int k = 0; k < HALF; k++) {
         for (int c = 0; c < 2; c++) {
           sh_lp[c] += 0.55f * (sh_tail[c][k] - sh_lp[c]);  // ~ 6 kHz at the half rate
-          sh_dc[c] += 0.002f * (sh_lp[c] - sh_dc[c]);       // and no DC (~8 Hz)
-          sh[c * SH_LEN + sh_w] = int16_t(constrain((sh_lp[c] - sh_dc[c]) * RV_Q, -32767.0f, 32767.0f));
+          // and the lows out: two poles at ~350 Hz (12 dB an octave)
+          sh_dc[c] += 0.095f * (sh_lp[c] - sh_dc[c]);
+          const float h1 = sh_lp[c] - sh_dc[c];
+          sh_hp2[c] += 0.095f * (h1 - sh_hp2[c]);
+          sh[c * SH_LEN + sh_w] = int16_t(constrain((h1 - sh_hp2[c]) * RV_Q, -32767.0f, 32767.0f));
           pk = std::max(pk, fabsf(sh_tail[c][k]));
         }
         float o[2] = {0.0f, 0.0f};
@@ -658,6 +674,15 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
           }
         }
         if (++sh_w >= SH_LEN) sh_w = 0;
+        if (shd) {  // held back: out what went in SHD_LEN steps ago
+          for (int c = 0; c < 2; c++) {
+            int16_t& slot = shd[c * SHD_LEN + shd_w];
+            const float was = slot * (1.0f / RV_Q);
+            slot = int16_t(constrain(o[c] * RV_Q, -32767.0f, 32767.0f));
+            o[c] = was;
+          }
+          if (++shd_w >= SHD_LEN) shd_w = 0;
+        }
         shim[0][k] = g * o[0];
         shim[1][k] = g * o[1];
       }
