@@ -2594,7 +2594,7 @@ FLASHMEM void AppLoom::GoTo(const char* text) {
   if (!strcmp(part[1], "MOD") && part[2][0] >= 'A' && part[2][0] <= 'H') {
     const int i = part[2][0] - 'A';
     if (part[3][0]) {
-      static const char* const names[MOD_TYPES] = {"OFF", "ADSR", "FOLLOW", "RANDOM", "WAVE", "TREADLE"};
+      static const char* const names[MOD_TYPES] = {"OFF", "ADSR", "FOLLOW", "RANDOM", "WAVE", "TREADLE", "PICK"};
       int ty = -1;
       for (int m = 0; m < MOD_TYPES; m++)
         if (!strcmp(part[3], names[m]) || !strcmp(part[3], MOD_TYPE_TAGS[m])) ty = m;
@@ -3416,7 +3416,7 @@ namespace loom {
   // 14: DRAFT in FIBRE's order SPEED SIZE PITCH POS (was PITCH POS SIZE SPEED)
   // 15: DRAFT page 2 DIFF TONE SPRD MIX (was TONE FDBK SPRD MIX, TONE's mode
   //     the diffusion)
-  constexpr uint8_t SAVE_VERSION = 21;  // 21: TREADLE, a 6th modulator type
+  constexpr uint8_t SAVE_VERSION = 22;  // 21: TREADLE, a 6th modulator type; 22: PICK, a 7th
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -3795,7 +3795,7 @@ FLASHMEM void AppLoom::LoadFile() {
     if (!ok || f.read(types, NUM_MODS) != NUM_MODS) { ok = false; break; }
     stage = 10 * t + 2;
     for (int i = 0; i < NUM_MODS && ok; i++) {
-      const int ntypes = version >= 21 ? MOD_TYPES : MOD_TYPES_V20;  // (older files: no TREADLE)
+      const int ntypes = ModTypesIn(version);  // (older files: fewer types)
       for (int slot = 1; slot < ntypes && ok; slot++) {
         // version 1 kept them in the old order
         const int type = version == 1 ? OLD_MOD_TYPE[slot] : slot;
@@ -3847,7 +3847,7 @@ FLASHMEM void AppLoom::LoadFile() {
       if (f.read(&mark, 1) == 1 && mark == 'S' && f.read(types, NUM_MODS) == NUM_MODS) {
         bool okm = true;
         for (int i = 0; i < NUM_MODS && okm; i++) {
-          for (int type = 1; type < (version >= 21 ? MOD_TYPES : MOD_TYPES_V20) && okm; type++) {
+          for (int type = 1; type < ModTypesIn(version) && okm; type++) {
             if (NextPresent(f) && !shared_mods[i][type]) SetModType(0, NUM_MODS + i, type);
             okm = ReadDevice(f, shared_mods[i][type]);
           }

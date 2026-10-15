@@ -18,7 +18,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Modulators for the Loom app: WAVE / RANDOM / ADSR / FOLLOW / TREADLE. Four slots per track (MOD A-D); a device setting picks one as its
+// Modulators for the Loom app: WAVE / RANDOM / ADSR / FOLLOW / TREADLE / PICK. Four slots per track (MOD A-D); a device setting picks one as its
 // modulation source. They run in the main loop about once per millisecond and
 // output 0..1, like a 0..10 V CV; the setting's U/B choice decides whether
 // that pushes one way or swings around the setting.
@@ -901,17 +901,206 @@ FLASHMEM void TreadleMod::DrawViz(int x, int y, int w, int h) {
 }
 
 /////////////////////////////////////////////////////////////////
+// PICK: a clock and two dividers. On a loom a pick is one pass of the
+// weft; picks per inch is how dense the cloth is. RATE ticks; DIV A and
+// DIV B count the ticks and strike every n-th (A full height, B lower);
+// their L knob keeps the count to a set of numbers (all, odd, even,
+// primes, triplets, Fibonacci, powers of two). A divider changed while
+// running counts on from its last hit, so A and B on the same count can
+// sit on different ticks; RESET (or the clock starting) lines them up.
+// DENS leaves out hits at random; START plays a burst of BURST ticks on
+// each trigger and then rests.
+/////////////////////////////////////////////////////////////////
+PROGMEM static const DeviceDef PICK_DEF = {
+  "PICK", "PCK", 8, {"RST", ""},
+  {
+    {"RATE", 0, 100, 74, UNI, 0, 2, 1, {}, {"FREE", "CLOCK"}},  // a tick; on the clock (74: 1/16)
+    {"DIV A", 1, 144, 3, UNI, 0, 7, 0, {}, {}},  // mode: the set of numbers
+    {"DIV B", 0, 144, 4, UNI, 0, 7, 0, {}, {}},  // (0: off)
+    {"DENS", 0, 100, 100, UNI},
+    {"START", 0, TRIG_SOURCES - 1, 0, UNI},  // none: runs all the time
+    {"BURST", 1, 64, 8, UNI},  // ticks per START
+    {"RESET", 0, TRIG_SOURCES - 1, 0, UNI},
+    {"GATE", 0, 100, 0, UNI},  // 0: a short pulse; up to most of a tick
+  }
+};
+
+class PickMod : public Modulator {
+public:
+  enum { P_RATE, P_DIVA, P_DIVB, P_DENS, P_START, P_BURST, P_RESET, P_GATE };
+  enum { SET_ALL, SET_ODD, SET_EVEN, SET_PRIME, SET_TRIP, SET_FIB, SET_POW2, SETS };
+  PickMod() : Modulator(PICK_DEF) {}
+  void Tick(const ModCtx& ctx) override;
+  int Step(int p, int v, int dir) const override;
+  void Format(int p, char* buf, size_t n) const override;
+  void FormatMode(int p, char* buf, size_t n) const override;
+  void Action(int a) override { if (a == 0) Sync(); }
+  void DrawViz(int x, int y, int w, int h) override;
+private:
+  static constexpr int HITS = 32;
+  uint8_t count[2] = {255, 255};  // ticks since each divider's last hit
+  uint8_t hits[HITS] = {};        // the last ticks: bit 0 A, bit 1 B, bit 2 left out
+  uint8_t hits_pos = 0;
+  int64_t grid_at = -1;
+  float t = 0.0f, gate_s = 0.0f, tick_s = 0.125f, hit_lvl = 0.0f;
+  int burst_left = 0;
+  void Sync() { count[0] = count[1] = 255; }
+  void Pulse();
+  static bool InSet(int set, int v);
+  int Div(int p) const;  // the count in use: cur snapped into its set (0: off)
+};
+
+FLASHMEM bool PickMod::InSet(int set, int v) {
+  if (v < 1) return false;
+  switch (set) {
+    case SET_ODD:  return v & 1;
+    case SET_EVEN: return !(v & 1);
+    case SET_PRIME:
+      if (v < 2) return false;
+      for (int d = 2; d * d <= v; d++) if (v % d == 0) return false;
+      return true;
+    case SET_TRIP: {  // 1 2 3 4 6 8 12 16 24 32 48 64 96 128
+      int m = v;
+      while (m > 4 && !(m & 1)) m >>= 1;
+      return m <= 4;
+    }
+    case SET_FIB: { int a = 1, b = 2; while (b < v) { const int c = a + b; a = b; b = c; } return v == 1 || b == v; }
+    case SET_POW2: return !(v & (v - 1));
+    default: return true;
+  }
+}
+
+FLASHMEM int PickMod::Div(int p) const {
+  const ParamDef& pd = param(p);
+  const int v = constrain(int(cur[p]), int(pd.min), int(pd.max));
+  if (v < 1) return 0;
+  // the nearest member at or below, else the first above
+  for (int d = v; d >= 1; d--) if (InSet(mode[p], d)) return d;
+  for (int d = v + 1; d <= pd.max; d++) if (InSet(mode[p], d)) return d;
+  return 1;
+}
+
+FLASHMEM int PickMod::Step(int p, int v, int dir) const {
+  if (p != P_DIVA && p != P_DIVB) return Modulator::Step(p, v, dir);
+  // from member to member of the set (DIV B: below the first is off)
+  const ParamDef& pd = param(p);
+  for (int d = v + dir; d >= pd.min && d <= pd.max; d += dir)
+    if (d < 1 || InSet(mode[p], d)) return d;
+  return v;
+}
+
+FLASHMEM void PickMod::Pulse() {
+  int fired = 0;
+  for (int k = 0; k < 2; k++) {
+    const int div = Div(k ? P_DIVB : P_DIVA);
+    if (!div) continue;
+    if (count[k] < 255) count[k]++;
+    if (count[k] >= div) { count[k] = 0; fired |= 1 << k; }
+  }
+  // DENS: at random, some hits are left out
+  if (fired && int(random(100)) >= cur[P_DENS]) fired |= 4;
+  hits[hits_pos] = uint8_t(fired);
+  hits_pos = (hits_pos + 1) % HITS;
+  if (fired && !(fired & 4)) {
+    hit_lvl = (fired & 1) ? 1.0f : 0.6f;
+    gate_s = std::max(0.005f, tick_s * cur[P_GATE] * 0.0095f);
+    if (!cur[P_GATE]) gate_s = constrain(tick_s * 0.25f, 0.005f, 0.03f);
+    flash = 0.06f;
+  }
+}
+
+FLASHMEM void PickMod::Tick(const ModCtx& ctx) {
+  const bool synced = Synced(P_RATE);
+  if (Restarted() && synced) { grid_at = -1; Sync(); }
+  if (cur[P_RESET] && Edge(cur[P_RESET], ctx, 0)) Sync();
+  const bool bursts = cur[P_START] != 0;
+  bool now = false;
+  if (bursts && Edge(cur[P_START], ctx, 1)) {
+    // a burst: from the top, its first tick right away
+    Sync();
+    burst_left = cur[P_BURST];
+    t = 0.0f;
+    now = true;
+  }
+  if (synced) {
+    const float db = DivBeats(DivIndex(cur[P_RATE], 0, 100));
+    tick_s = db * 60.0f / tempo_bpm;
+    if (clock_running) {
+      const int64_t g = ClockGrid(db);
+      if (g != grid_at) { if (grid_at >= 0 && !now) now = true; grid_at = g; }
+    }
+  } else {
+    const float hz = RateHz(P_RATE, 0.1f, 50.0f);
+    tick_s = 1.0f / hz;
+    t += hz * ctx.dt;
+    if (t >= 1.0f) { t -= floorf(t); now = true; }
+  }
+  if (now && (!bursts || burst_left > 0)) {
+    Pulse();
+    if (bursts) burst_left--;
+  }
+  if (gate_s > 0.0f) { gate_s -= ctx.dt; out = hit_lvl; }
+  else out = 0.0f;
+}
+
+FLASHMEM void PickMod::FormatMode(int p, char* buf, size_t n) const {
+  if (p == P_DIVA || p == P_DIVB) {
+    static const char names[SETS][6] = {"ALL", "ODD", "EVEN", "PRIME", "TRIP", "FIB", "2^N"};
+    snprintf(buf, n, "%s", names[constrain(int(mode[p]), 0, SETS - 1)]);
+  } else {
+    Modulator::FormatMode(p, buf, n);
+  }
+}
+
+FLASHMEM void PickMod::Format(int p, char* buf, size_t n) const {
+  if (p == P_RATE) FormatRate(p, RateHz(P_RATE, 0.1f, 50.0f), buf, n);
+  else if (p == P_START || p == P_RESET) FormatTrig(cur[p], buf, n);
+  else if (p == P_DIVA || p == P_DIVB) {
+    const int d = Div(p);
+    if (d) snprintf(buf, n, "/%d", d); else snprintf(buf, n, "OFF");
+  } else if (p == P_GATE && !cur[P_GATE]) snprintf(buf, n, "SHORT");
+  else Device::Format(p, buf, n);
+}
+
+// the last ticks going by, newest on the right: A hits full height, B hits
+// half, both: A over B; hits DENS left out dotted; every tick a dot on
+// the line; while a burst runs, what is left of it
+FLASHMEM void PickMod::DrawViz(int x, int y, int w, int h) {
+  const int ww = w - 8, base = y + h - 2, top = y + 1;
+  const int cw = std::max(2, ww / HITS);
+  for (int i = 0; i < HITS; i++) {
+    const uint8_t f = hits[(hits_pos + i) % HITS];
+    const int cx = x + i * cw;
+    gfxPixel(cx, base + 1);
+    if (!(f & 3)) continue;
+    const int bh = (f & 1) ? base - top : (base - top) / 2;
+    if (f & 4) gfxDottedLine(cx, base, cx, base - bh, 2);
+    else gfxRect(cx, base - bh, std::max(1, cw - 1), bh + 1);
+  }
+  if (cur[P_START] && burst_left > 0) {
+    char b[6];
+    snprintf(b, sizeof(b), "%d", burst_left);
+    gfxPrint(x + 1, y + 1, b);
+  }
+  const int bh = int(out * h);
+  gfxFrame(x + w - 4, y, 4, h);
+  if (bh > 0) gfxRect(x + w - 4, y + h - bh, 4, bh);
+}
+
+/////////////////////////////////////////////////////////////////
 // MOD slots: type 0 = off
 /////////////////////////////////////////////////////////////////
 constexpr int NUM_MODS = 4;
-constexpr int MOD_TYPES = 6;
-constexpr int MOD_TYPES_V20 = 5;  // (files before version 21: no TREADLE)
+constexpr int MOD_TYPES = 7;
+// how many types a save file of this version holds (20 and older: no
+// TREADLE; 21: no PICK)
+constexpr int ModTypesIn(int version) { return version >= 22 ? 7 : version >= 21 ? 6 : 5; }
 
-// by name: ADSR, FOLLOW, RANDOM, WAVE, then TREADLE (added later, at the
-// end so saved files keep their numbers; files from before the sort used
+// by name: ADSR, FOLLOW, RANDOM, WAVE, then TREADLE and PICK (added later, at
+// the end so saved files keep their numbers; files from before the sort used
 // WAVE, RANDOM, ADSR, FOLLOW: OLD_MOD_TYPE maps them)
-PROGMEM static const char MOD_TYPE_TAGS[MOD_TYPES][4] = {"-", "ENV", "FOL", "RND", "WAV", "TRD"};
-constexpr uint8_t OLD_MOD_TYPE[MOD_TYPES] = {0, 4, 3, 1, 2, 5};
+PROGMEM static const char MOD_TYPE_TAGS[MOD_TYPES][4] = {"-", "ENV", "FOL", "RND", "WAV", "TRD", "PCK"};
+constexpr uint8_t OLD_MOD_TYPE[MOD_TYPES] = {0, 4, 3, 1, 2, 5, 6};
 
 FLASHMEM static Modulator* MakeModulator(int type) {
   switch (type) {
@@ -920,6 +1109,7 @@ FLASHMEM static Modulator* MakeModulator(int type) {
     case 3: return new RandomMod;
     case 4: return new WaveMod;
     case 5: return new TreadleMod;
+    case 6: return new PickMod;
     default: return nullptr;
   }
 }
