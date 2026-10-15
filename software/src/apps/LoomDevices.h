@@ -359,6 +359,11 @@ public:
   // GLINT, WALL / PRSET): the L knob switches between the two (the bar's
   // left / right half), the R knob changes the one showing; its name here
   virtual const char* AltName(int p) const { return nullptr; }
+  // the bar over the name: the mode's part (BAR_PARTS), which of the two
+  // shows (BAR_HALVES), or a variation's amount growing from the left /
+  // the middle (HEDDLE's FDBK / its ± STAGE)
+  enum { BAR_PARTS, BAR_HALVES, BAR_LEFT, BAR_CENTRE };
+  virtual int BarStyle(int p) const { return AltName(p) ? BAR_HALVES : BAR_PARTS; }
   uint16_t alt_on = 0;  // which of those show their second value (the page's, not saved)
   bool AltShown(int p) const { return AltName(p) && (alt_on >> p & 1); }
   // a setting that goes round when turned past an end (DRAFT's POS: its
@@ -4903,6 +4908,12 @@ public:
   void TempoChanged() override { if (OnClk()) Apply(SHIFT); }
   void Idle() override;
   void FormatMode(int p, char* buf, size_t n) const override;
+  // the variations as second values (the L knob switches to them)
+  const char* AltName(int p) const override { return p == SIDE || p == HFDBK || p == HMIX ? "VARI" : nullptr; }
+  int BarStyle(int p) const override {
+    if (p == SIDE && Phasing()) return BAR_CENTRE;  // (STAGE: +- stages)
+    return AltName(p) ? BAR_LEFT : BAR_PARTS;
+  }
   int Step(int p, int v, int dir) const override {
     if (p == SIDE) return constrain(v + dir, 0, Phasing() ? 8 : 2);
     if (p != SHIFT || !OnClk()) return v + dir;

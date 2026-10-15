@@ -3103,14 +3103,30 @@ FLASHMEM void AppLoom::DrawDevice() const {
     // Two dots at the name's ends drowned in the digits
     if (pd.nmodes && !(sel && mod_mode)) {
       constexpr int bx = 1, bw = 30;  // in the column
-      // (a second value: two halves, the setting left, the value right)
-      const bool two = d->AltName(p) != nullptr;
-      const int n = two ? 2 : std::max<int>(1, pd.nmodes);
-      const int m = two ? int(d->AltShown(p)) : constrain(int(d->mode[p]), 0, n - 1);
-      int a = x + bx + m * bw / n, b = x + bx + (m + 1) * bw / n - 1;
-      if (b - a + 1 < 4) {  // many modes: a piece at least 4 px wide, sliding end to end
-        a = x + bx + (n > 1 ? m * (bw - 4) / (n - 1) : 0);
-        b = a + 3;
+      const int n = std::max<int>(1, pd.nmodes), mm = constrain(int(d->mode[p]), 0, n - 1);
+      const float amt = n > 1 ? float(mm) / (n - 1) : 0.0f;
+      int a, b;
+      switch (d->BarStyle(p)) {
+        case Device::BAR_HALVES:  // the setting (left half) or its second value (right)
+          a = x + bx + (d->AltShown(p) ? bw / 2 : 0);
+          b = a + bw / 2 - 1;
+          break;
+        case Device::BAR_LEFT: {  // a variation's amount, from the left (off: a mark)
+          a = x + bx;
+          b = a + std::max(0, int(amt * (bw - 1) + 0.5f));
+        } break;
+        case Device::BAR_CENTRE: {  // +- amount, out from the middle (off: the middle)
+          const int h = int(amt * (bw / 2 - 1) + 0.5f);
+          a = x + bx + bw / 2 - 1 - h;
+          b = x + bx + bw / 2 + h;
+        } break;
+        default:
+          a = x + bx + mm * bw / n;
+          b = x + bx + (mm + 1) * bw / n - 1;
+          if (b - a + 1 < 4) {  // many modes: a piece at least 4 px wide, sliding end to end
+            a = x + bx + (n > 1 ? mm * (bw - 4) / (n - 1) : 0);
+            b = a + 3;
+          }
       }
       gfxLine(a, 40, b, 40);
     }
