@@ -3075,9 +3075,9 @@ FLASHMEM void AppLoom::DrawDevice() const {
       constexpr int bx = 1, bw = 30;  // in the column
       const int n = std::max<int>(1, pd.nmodes), m = constrain(int(d->mode[p]), 0, n - 1);
       int a = x + bx + m * bw / n, b = x + bx + (m + 1) * bw / n - 1;
-      if (b - a + 1 < 3) {  // many modes: a piece at least 3 px wide, sliding end to end
-        a = x + bx + (n > 1 ? m * (bw - 3) / (n - 1) : 0);
-        b = a + 2;
+      if (b - a + 1 < 4) {  // many modes: a piece at least 4 px wide, sliding end to end
+        a = x + bx + (n > 1 ? m * (bw - 4) / (n - 1) : 0);
+        b = a + 3;
       }
       gfxLine(a, 40, b, 40);
     }
