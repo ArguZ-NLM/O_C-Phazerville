@@ -4799,6 +4799,7 @@ public:
   }
   float pole = 0.0f;           // the picture's barber pole, where it is (in stripes)
   float per_now = 16.0f;       // its stripes' spacing, gliding to the new one
+  float slide = 0.0f;          // how far the dither has moved (px, round 4)
   uint32_t pole_at = 0;
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
@@ -4872,14 +4873,20 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
   const float speed = constrain(raw, -60.0f, 60.0f);
   // PHASE: the stripes as wide as the stages are few (4: wide, 20: fine),
   // gliding there and grown / shrunk from the middle of the picture
-  const float per_to = Phasing() ? 24.0f - (Stages() - 4) * 0.875f : 16.0f;  // 24 .. 10 px
+  // (whole pixels: a fraction of one makes the edge dots shimmer)
+  const float per_to = Phasing() ? roundf(24.0f - (Stages() - 4) * 0.875f) : 16.0f;  // 24 .. 10 px
   per_now += (per_to - per_now) * std::min(1.0f, dt * 8.0f);
   if (fabsf(per_to - per_now) < 0.01f) per_now = per_to;
   const float per = per_now;
   pole += speed * dt / per;
   pole -= floorf(pole);
   const float off = pole * per;  // (px)
-  const float sw = (2 + cur[HFDBK] * 5 / 100) * per / 16.0f;
+  // the dither's own count, round its 4 px: wrapped with the stripes
+  // (round their spacing) it would jump unless that is a multiple of 4
+  slide += speed * dt;
+  slide -= 4.0f * floorf(slide / 4.0f);
+  slide += (off - floorf(off)) - (slide - floorf(slide));  // (the same fraction as the stripes)
+  const float sw = std::max(1.0f, roundf((2 + cur[HFDBK] * 5 / 100) * per / 16.0f));
   static const uint8_t bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
   const int fill = 1 + cur[HMIX] * 15 / 100;  // 1 .. 16 of 16
   const bool level = !Phasing();
@@ -4896,7 +4903,7 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
       const float cover = std::min(1.0f, std::max(0.0f, std::min(u + 1.0f, sw - u)));
       if (cover <= 0.0f) continue;
       // (the dither travels with its stripe: no dots blinking at the edges)
-      const int moved = int(floorf(down ? -off : off));
+      const int moved = int(floorf(down ? -slide : slide));
       const int d = level ? bayer[(py + moved) & 3][px & 3] : bayer[py & 3][(px + moved) & 3];
       if (d < int(fill * cover + 0.5f)) gfxPixel(x + px, y + py);
     }
