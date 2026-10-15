@@ -813,29 +813,27 @@ FLASHMEM void ClockDevice::DrawMini(int x, int y, int w, int h) {
 // them at random, new each run through: below 0 it leaves steps that
 // sound out, above 0 it adds a step after steps that sound; PLAY: forwards, backwards, back and
 // forth, or a drunken walk. Six outputs: the three parts (each hit a short pulse,
-// accents full height, the others lower by ACCNT), then each part's
+// accents full height, the others lower), then each part's
 // accents alone. Its own box sends one; the other boxes can take the rest.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef TREADLE_DEF = {
-  "TREADLE", "TRD", 10, {"RUN", "RST"},  // (A held: stop; B resets)
+  "TREADLE", "TRD", 8, {"RUN", "RST"},  // (A held: stop; B resets)
   {
-    {"X", 0, 100, 50, UNI},
-    {"Y", 0, 100, 50, UNI},
-    {"CHAOS", -32, 32, 0, BI},  // (-: each step that sounds a chance in 32 to be left out; +: to add the step after it)
-    {"ACCNT", 0, 100, 50, UNI},  // how much lower the plain hits are than the accents
     {"LOW", 0, 100, 50, UNI, 0, 32, 31},    // each part's fill; mode: its length - 1
     {"MID", 0, 100, 50, UNI, 0, 32, 31},
     {"HIGH", 0, 100, 50, UNI, 0, 32, 31},
     {"PLAY", 0, 3, 0, LIST, 4, 0, 0, {"FWD", "REV", "PING", "DRUNK"}},
+    {"X", 0, 100, 50, UNI},
+    {"Y", 0, 100, 50, UNI},
+    {"CHAOS", -32, 32, 0, BI},  // (-: each step that sounds a chance in 32 to be left out; +: to add the step after it)
     {"RATE", 0, 100, 74, UNI, 0, 2, 1, {}, {"FREE", "CLOCK"}},  // a step; on the clock (74: 1/16)
-    {"RESET", 0, TRIG_SOURCES - 1, 0, UNI},
   },
-  {"", "FILL", "STEP"}
+  {"FILL", "MAP"}
 };
 
 class TreadleMod : public Modulator {
 public:
-  enum { P_X, P_Y, P_CHAOS, P_ACCNT, P_LOW, P_MID, P_HIGH, P_PLAY, P_RATE, P_RESET };
+  enum { P_LOW, P_MID, P_HIGH, P_PLAY, P_X, P_Y, P_CHAOS, P_RATE };
   enum { FWD, REV, PING, DRUNK };
   static constexpr int OUTS = 6;  // LOW MID HIGH, then their accents
   TreadleMod() : Modulator(TREADLE_DEF) {}
@@ -945,10 +943,10 @@ FLASHMEM void TreadleMod::Advance(int s) {
     const bool hit = Hits(part, lv) && !(drop[part] >> (pos[part] & 31) & 1);
     if (!hit && !(add[part] >> (pos[part] & 31) & 1)) continue;
     // accents (the map's strong steps) full height, the others (and the
-    // ones CHAOS adds) lower by ACCNT
+    // ones CHAOS adds) lower
     const bool acc = hit && lv > 192;
     gate[part] = g;
-    lvl[part] = acc ? 1.0f : 1.0f - cur[P_ACCNT] * 0.0045f;
+    lvl[part] = acc ? 1.0f : 0.775f;
     if (acc) { gate[3 + part] = g; lvl[3 + part] = 1.0f; }
     if (part == own_out % 3) flash = 0.06f;
   }
@@ -957,7 +955,6 @@ FLASHMEM void TreadleMod::Advance(int s) {
 FLASHMEM void TreadleMod::Tick(const ModCtx& ctx) {
   const bool synced = Synced(P_RATE);
   if (Restarted() && synced) { grid_at = -1; grid_base = 0; step = -1; }
-  if (cur[P_RESET] && Edge(cur[P_RESET], ctx, 0)) Restart();
   for (float& g : gate) if (g > 0.0f) g -= ctx.dt;
   if (stopped) { for (float& g : gate) g = 0.0f; grid_at = -1; return; }
   if (synced && clock_running) {
@@ -979,7 +976,6 @@ FLASHMEM void TreadleMod::Tick(const ModCtx& ctx) {
 
 FLASHMEM void TreadleMod::Format(int p, char* buf, size_t n) const {
   if (p == P_RATE) FormatRate(p, RateHz(P_RATE, 0.5f, 30.0f), buf, n);
-  else if (p == P_RESET) FormatTrig(val[P_RESET], buf, n);
   else Device::Format(p, buf, n);
 }
 

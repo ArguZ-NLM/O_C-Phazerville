@@ -3598,7 +3598,7 @@ namespace loom {
   // 14: DRAFT in FIBRE's order SPEED SIZE PITCH POS (was PITCH POS SIZE SPEED)
   // 15: DRAFT page 2 DIFF TONE SPRD MIX (was TONE FDBK SPRD MIX, TONE's mode
   //     the diffusion)
-  constexpr uint8_t SAVE_VERSION = 24;  // 21: TREADLE, a 6th modulator type; 22: PICK, a 7th; 23: TREADLE's LEN per part; 24: TREADLE's CHAOS -32..32
+  constexpr uint8_t SAVE_VERSION = 25;  // 21: TREADLE, a 6th modulator type; 22: PICK, a 7th; 23: TREADLE's LEN per part; 24: TREADLE's CHAOS -32..32; 25: TREADLE's pages
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -3655,7 +3655,9 @@ namespace loom {
     // until 2026-10-14 HEDDLE was TEXTURE's page 3 (12 settings): TEXTURE
     // takes its 8, the HEDDLE ones are left out
     const bool tex_heddle = d && !memcmp(tag, "TEX", 4) && !memcmp(d->def.tag, "TEX", 4) && n == 12;
-    const bool use = d && !memcmp(tag, d->def.tag, 4) && (n <= d->num_params() || tex_heddle);
+    // until v25 TREADLE had 10 settings (ACCNT, RESET since gone)
+    const bool trd10 = d && !memcmp(tag, "TRD", 4) && n == 10 && load_version < 25;
+    const bool use = d && !memcmp(tag, d->def.tag, 4) && (n <= d->num_params() || tex_heddle || trd10);
     const bool remap_spr = use && !memcmp(tag, "SPR", 4) && n == 7;
     const bool remap_mix = use && !memcmp(tag, "MIX", 4) && n == 7;  // MIX came in first
     const bool reorder_out = use && !memcmp(tag, "MIX", 4) && load_version < 5;
@@ -3677,16 +3679,23 @@ namespace loom {
     // TREADLE was X Y FILL CHAOS RATE RESET ACCNT LEN (FILL's mode the
     // part) until 2026-10-15: now a FILL for each part, X Y CHAOS ACCNT /
     // LOW MID HIGH LEN / RATE RESET; the old FILL goes to its part
-    const bool trd_old = use && !memcmp(tag, "TRD", 4) && n == 8;
+    const bool trd_old = use && !memcmp(tag, "TRD", 4) && n == 8 && load_version < 25;
     // before v23 TREADLE's PLAY was one LEN for all parts: now each part's
     // length is its FILL's mode
     const bool trd_len = use && !memcmp(tag, "TRD", 4) && load_version < 23;
     // before v24 TREADLE's CHAOS was 0..100 (% left out): now -32..32,
     // below 0 leaving out
     const bool trd_chaos = use && !memcmp(tag, "TRD", 4) && load_version < 24;
+    // before v25 TREADLE was X Y CHAOS ACCNT / LOW MID HIGH PLAY / RATE
+    // RESET: now LOW MID HIGH PLAY / X Y CHAOS RATE (ACCNT, RESET gone).
+    // The fixes above work on that order (TRD_* below), then it moves
+    const bool trd_v24 = use && !memcmp(tag, "TRD", 4) && load_version < 25;
+    enum { TRD_X, TRD_Y, TRD_CHAOS, TRD_ACCNT, TRD_LOW, TRD_MID, TRD_HIGH, TRD_PLAY, TRD_RATE, TRD_RESET };
+    static constexpr int8_t TRD_V25[10] = {TreadleMod::P_X, TreadleMod::P_Y, TreadleMod::P_CHAOS, -1,
+                                           TreadleMod::P_LOW, TreadleMod::P_MID, TreadleMod::P_HIGH, TreadleMod::P_PLAY,
+                                           TreadleMod::P_RATE, -1};
     int old_len = -1;
-    static constexpr int8_t TRD_MAP[8] = {TreadleMod::P_X, TreadleMod::P_Y, TreadleMod::P_LOW, TreadleMod::P_CHAOS,
-                                          TreadleMod::P_RATE, TreadleMod::P_RESET, TreadleMod::P_ACCNT, TreadleMod::P_PLAY};
+    static constexpr int8_t TRD_MAP[8] = {TRD_X, TRD_Y, TRD_LOW, TRD_CHAOS, TRD_RATE, TRD_RESET, TRD_ACCNT, TRD_PLAY};
     static constexpr int8_t RND_MAP[7] = {5, 0, 6, 3, 1, 2, 4};
     int old_diff = -1;
     // before v6 the reverb's 6th was SIZE (now PRE: left at its default);
@@ -3740,11 +3749,15 @@ namespace loom {
       if (rnd_order) p = RND_MAP[q];
       if (trd_old) {
         p = TRD_MAP[q];
-        if (q == 2) { p = TreadleMod::P_LOW + constrain(int(md), 0, 2); md = 31; }
+        if (q == 2) { p = TRD_LOW + constrain(int(md), 0, 2); md = 31; }
       }
-      if (trd_len && p == TreadleMod::P_PLAY) { old_len = v; v = 0; }
-      if (trd_len && p >= TreadleMod::P_LOW && p <= TreadleMod::P_HIGH) md = 31;
-      if (trd_chaos && p == TreadleMod::P_CHAOS) v = -(v * 32 + 50) / 100;
+      if (trd_len && p == TRD_PLAY) { old_len = v; v = 0; }
+      if (trd_len && p >= TRD_LOW && p <= TRD_HIGH) md = 31;
+      if (trd_chaos && p == TRD_CHAOS) v = -(v * 32 + 50) / 100;
+      if (trd_v24) {
+        p = TRD_V25[constrain(p, 0, 9)];
+        if (p < 0) { p = q; continue; }
+      }
       if (skip_size && p == 5) { p = q; continue; }
       if (spool_order) {
         if (SPOOL_MAP[q] < 0) { old_dub = v; continue; }
