@@ -47,6 +47,9 @@ public:
   // head as a part of the whole buffer (the engine leaves out a stretch by
   // the head that depends on the window length and the pitch), and back
   float BackOf(float position) const;
+  // the same with given variations (the picture's smoothed ones: this
+  // window's own made the brackets and box jitter, a new one every few ms)
+  float BackOfWith(float position, float d_size, float d_pitch) const;
   float PositionOf(float back) const;  // where the frozen playback is (0..1, for the picture)
   // this window's variation (for the picture)
   float DPitch() const { return d_pitch_; }

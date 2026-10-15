@@ -120,6 +120,15 @@ float StretchVoice::BackOf(float position) const {
   return frames_ ? (Limit() * position + 0.5f * Window()) / frames_ : 0.0f;
 }
 
+float StretchVoice::BackOfWith(float position, float d_size, float d_pitch) const {
+  if (!frames_) return 0.0f;
+  const float size = std::min(1.0f, std::max(0.0f, size_ + d_size));
+  const float ws = clouds::kMaxWSOLASize * exp2f((size - 1.0f) * 5.0f);
+  const float inv = exp2f(-(pitch_ + d_pitch) / 12.0f);
+  const float lim = std::max(0.0f, frames_ - 2.0f * ws * inv - 2.0f * ws);
+  return (lim * position + 0.5f * ws) / frames_;
+}
+
 float StretchVoice::PositionOf(float back) const {
   const float l = Limit();
   return l > 0.0f ? (back * frames_ - 0.5f * Window()) / l : 0.0f;

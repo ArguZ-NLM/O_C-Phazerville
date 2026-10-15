@@ -6212,7 +6212,7 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
   // (an engine position, where it really plays: see BackOf)
   auto pos_x = [&](float p) {
     p = frozen ? p - floorf(p) : constrain(p, 0.0f, 0.98f);
-    float f = head / HIST - fx.voice.BackOf(p);
+    float f = head / HIST - fx.voice.BackOfWith(p, v_size, v_pitch);  // (smoothed: no jitter)
     f -= floorf(f);
     return x + int(f * ww) % ww;
   };
