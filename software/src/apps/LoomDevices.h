@@ -220,7 +220,7 @@ FLASHMEM static void FormatTrig(int src, char* buf, size_t n) {
   if (src <= 0) snprintf(buf, n, "none");
   else if (src <= 4) snprintf(buf, n, "TR%d", src);
   else if (src <= 12) snprintf(buf, n, "CV%d", src - 4);
-  else if (src < TRIG_MOD0) snprintf(buf, n, "MIDI%d", src - 12);
+  else if (src < TRIG_MOD0) snprintf(buf, n, src - 12 < 10 ? "MIDI%d" : "MID%d", src - 12);  // (5 letters at most: MID10)
   else snprintf(buf, n, "MOD %c", 'A' + (src - TRIG_MOD0));
 }
 
