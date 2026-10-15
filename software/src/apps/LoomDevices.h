@@ -4208,7 +4208,7 @@ PROGMEM static const DeviceDef ECHO_DEF = {
     {"LEVEL", 0, 100, 30, UNI, 0, 2, 1, {}, {"MIX", "SEND"}},
     {"PRE", 0, 150, 20, UNI},
     {"ROOM", 0, 100, 50, UNI, 0, 21, 0}, // mode: GLINT (a shimmer), the tail pitched back into itself, off .. 100 %
-    {"WALL", -50, 50, -10, BI, 0, 5, 0},  // mode: GLINT's interval (see ROOM)
+    {"WALL", -50, 50, -10, BI, 0, 6, 1},  // mode: GLINT's recipe (see ROOM)
   },
   {"DELAY", "REVRB"},
 };
@@ -4319,11 +4319,23 @@ FLASHMEM void EchoDevice::SetTimes() {
   }
 }
 
-// GLINT: ROOM's mode the amount, WALL's the interval (the engine's
-// interval 4, an octave down, is not offered: the 5th, OCT+5, is its 5)
+// GLINT: ROOM's mode the amount, WALL's a recipe taken from Eventide's
+// ShimmerVerb presets: left / right pitch (cents), the wait before the
+// shifters (ms), and the low / mid / high bands that go round again
+// (the lows kept down: they made it massive)
+struct GlintRecipe { char name[6]; int16_t cl, cr, ms; float lo, mid, hi; };
+PROGMEM static const GlintRecipe GLINTS[6] = {
+  {"MICRO", -12, 13, 15, 0.85f, 0.5f, 0.55f},   // Porcelain Glow: no climb, a lush detuned room
+  {"OCT", 1204, 1193, 50, 0.4f, 0.9f, 0.8f},    // the Default / Touched By an H9
+  {"ORGAN", 700, 1200, 20, 0.3f, 0.5f, 0.3f},   // Pipe Organ Decays: fifth left, octave right
+  {"12TH", 1899, 1905, 100, 0.3f, 0.85f, 0.6f}, // Ice Amphitheater / The Pleiades
+  {"2OCT", 1200, 2400, 120, 0.4f, 0.9f, 0.8f},  // Happy Trailing / Mirage Glimmer
+  {"SKY", 2390, 2410, 350, 0.5f, 0.95f, 0.75f}, // Heaven Can't Wait
+};
 FLASHMEM void EchoDevice::Shimmer() {
-  if (mode[WALL] > 4) mode[WALL] = 4;
-  echo.shimmer(mode[ROOM] * 0.05f, mode[WALL] == 4 ? 5 : mode[WALL]);
+  const GlintRecipe& r = GLINTS[constrain(int(mode[WALL]), 0, 5)];
+  echo.shimmer_recipe(r.cl, r.cr, r.ms, r.lo, r.mid, r.hi);
+  echo.shimmer(mode[ROOM] * 0.05f);
 }
 
 FLASHMEM void EchoDevice::Apply(int p) {
@@ -4377,12 +4389,9 @@ FLASHMEM void EchoDevice::Format(int p, char* buf, size_t n) const {
   }
 }
 
-// WALL's mode: GLINT's interval; ROOM's: how much of it
+// WALL's mode: GLINT's recipe; ROOM's: how much of it
 FLASHMEM void EchoDevice::FormatMode(int p, char* buf, size_t n) const {
-  // octave up, fifth up, octave and a fifth up (a twelfth), fourth up,
-  // octave and fifth up together
-  static const char* const iv[5] = {"OCT", "5TH", "12TH", "4TH", "OCT+5"};
-  if (p == WALL) snprintf(buf, n, "%s", iv[constrain(int(mode[WALL]), 0, 4)]);
+  if (p == WALL) snprintf(buf, n, "%s", GLINTS[constrain(int(mode[WALL]), 0, 5)].name);
   else if (p == ROOM) snprintf(buf, n, mode[ROOM] ? "GL%d" : "GL off", mode[ROOM] * 5);
   else Device::FormatMode(p, buf, n);
 }

@@ -110,11 +110,16 @@ public:
   void delay_send(bool s) { dsend = s; }
   void reverb_send(bool s) { rsend = s; }
   // GLINT (a shimmer): the reverb's tail pitched and fed back into it, so it climbs
-  // with every pass. amount 0..1 (0: off); interval: SHIM_* below
-  enum { SHIM_OCT, SHIM_FIFTH, SHIM_OCT5, SHIM_FOURTH, SHIM_DOWN, SHIM_OCT_FIFTH, SHIM_INTERVALS };
-  void shimmer(float amount, int interval) {
-    sh_amt_target = constrain(amount, 0.0f, 1.0f);
-    sh_mode = uint8_t(constrain(interval, 0, SHIM_INTERVALS - 1));
+  // with every pass. amount 0..1 (0: off); the recipe: below
+  // A recipe, as Eventide's ShimmerVerb: the pitch of the left and the
+  // right shifter (cents), how long the tail waits before them (ms) and how
+  // much of its low / mid / high band goes round again (0..1)
+  void shimmer(float amount) { sh_amt_target = constrain(amount, 0.0f, 1.0f); }
+  void shimmer_recipe(float cents_l, float cents_r, float ms, float lo, float mid, float hi) {
+    sh_ra[0] = exp2f(cents_l / 1200.0f);
+    sh_ra[1] = exp2f(cents_r / 1200.0f);
+    shd_n = constrain(int(ms * 0.001f * AUDIO_SAMPLE_RATE_EXACT * 0.5f), 1, SHD_LEN - 1);
+    sh_lv[0] = lo; sh_lv[1] = mid; sh_lv[2] = hi;
   }
   // a part switched off: its input closes, the dry passes whole and what
   // it holds rings out
@@ -232,12 +237,14 @@ private:
   float sh_lp[2] = {}, sh_dc[2] = {}, sh_hp2[2] = {}, sh_env = 0.0f;
   // the pitched sound waits ~150 ms before it goes back in (as Eventide's
   // pitch delay): each step up comes as its own bloom instead of one smear
-  static constexpr int SHD_LEN = 3308;  // at the half rate
+  static constexpr int SHD_LEN = 8820;  // at the half rate: up to 400 ms
   int16_t* shd = nullptr;  // 2 x SHD_LEN, PSRAM (none: no wait)
   int shd_w = 0;
+  volatile int shd_n = 1102;  // the wait (50 ms)
+  volatile float sh_ra[2] = {2.0f, 2.0f};  // the shifters' ratios, left / right
+  volatile float sh_lv[3] = {0.4f, 0.9f, 0.8f};  // low / mid / high round again
   volatile float sh_amt_target = 0.0f;
   float sh_amt = 0.0f;
-  volatile uint8_t sh_mode = SHIM_OCT;
   bool rv_hi_cold = false;  // lines 4..7 were left out: cleared before they come back
   float rv_hp_z[2] = {};
   const float rv_hp_a = OnePoleCoeff(180.0f);  // 90 Hz at half the rate: the low cut at the input
@@ -635,27 +642,23 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
     const bool shim_on = sh && sh_amt > 0.0f;
     if (shim_on) {
       // a shifter a side, as Eventide's (the left tail through A, the right
-      // through B): the same interval detuned ~7 cents apart (a slow,
-      // wide chorus: the same shift both sides built a static mass);
-      // OCT+5: the octave left, the fifth right
-      constexpr float lo = 0.9959650f, hi = 1.0040519f;  // -7 / +7 cents
-      static const float RATIO[SHIM_INTERVALS][2] = {
-        {2.0f * lo, 2.0f * hi}, {1.4983071f * lo, 1.4983071f * hi}, {2.9966142f * lo, 2.9966142f * hi},
-        {1.3348399f * lo, 1.3348399f * hi}, {0.5f * lo, 0.5f * hi}, {2.0f * lo, 1.4983071f * hi}};
-      const float* ra = RATIO[sh_mode];
+      // through B), each with the recipe's pitch
+      const float ra[2] = {sh_ra[0], sh_ra[1]};
+      const float lv0 = sh_lv[0], lv1 = sh_lv[1], lv2 = sh_lv[2];
+      const int dn = shd_n;
       // (the guard only once the tail is loud: past 0.15 it holds it there)
       const float guard = sh_env > 0.15f ? 0.15f / sh_env : 1.0f;
       const float g = sh_amt * 0.8f * guard;
       float pk = 0.0f;
       for (int k = 0; k < HALF; k++) {
         for (int c = 0; c < 2; c++) {
-          sh_lp[c] += 0.55f * (sh_tail[c][k] - sh_lp[c]);  // ~ 6 kHz at the half rate
-          // and the lows out: two poles at ~350 Hz (12 dB an octave)
-          sh_dc[c] += 0.095f * (sh_lp[c] - sh_dc[c]);
-          const float h1 = sh_lp[c] - sh_dc[c];
-          sh_hp2[c] += 0.095f * (h1 - sh_hp2[c]);
-          sh[c * SH_LEN + sh_w] = int16_t(constrain((h1 - sh_hp2[c]) * RV_Q, -32767.0f, 32767.0f));
-          pk = std::max(pk, fabsf(sh_tail[c][k]));
+          // three bands (~300 Hz / ~3 kHz at the half rate), each at its level
+          const float x = sh_tail[c][k];
+          sh_dc[c] += 0.0819f * (x - sh_dc[c]);  // below ~300 Hz
+          sh_lp[c] += 0.575f * (x - sh_lp[c]);   // below ~3 kHz
+          const float y = lv0 * sh_dc[c] + lv1 * (sh_lp[c] - sh_dc[c]) + lv2 * (x - sh_lp[c]);
+          sh[c * SH_LEN + sh_w] = int16_t(constrain(y * RV_Q, -32767.0f, 32767.0f));
+          pk = std::max(pk, fabsf(x));
         }
         float o[2] = {0.0f, 0.0f};
         for (int c = 0; c < 2; c++) {  // side c through its own shifter
@@ -677,12 +680,12 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
           }
         }
         if (++sh_w >= SH_LEN) sh_w = 0;
-        if (shd) {  // held back: out what went in SHD_LEN steps ago
+        if (shd) {  // held back: out what went in dn steps ago
+          int r = shd_w - dn;
+          if (r < 0) r += SHD_LEN;
           for (int c = 0; c < 2; c++) {
-            int16_t& slot = shd[c * SHD_LEN + shd_w];
-            const float was = slot * (1.0f / RV_Q);
-            slot = int16_t(constrain(o[c] * RV_Q, -32767.0f, 32767.0f));
-            o[c] = was;
+            shd[c * SHD_LEN + shd_w] = int16_t(constrain(o[c] * RV_Q, -32767.0f, 32767.0f));
+            o[c] = shd[c * SHD_LEN + r] * (1.0f / RV_Q);
           }
           if (++shd_w >= SHD_LEN) shd_w = 0;
         }
