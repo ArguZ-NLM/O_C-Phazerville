@@ -948,7 +948,7 @@ PROGMEM static const DeviceDef PICK_DEF = {
     {"START", 0, TRIG_SOURCES - 1, 0, UNI},  // none: runs all the time
     {"BURST", 1, 64, 8, UNI},  // ticks per START
     {"RESET", 0, TRIG_SOURCES - 1, 0, UNI},
-    {"GATE", 0, 100, 0, UNI},  // 0: a short pulse; up to most of a tick
+    {"GATE", 0, 100, 0, UNI},  // 0: a short pulse; then 1 ms .. 1 s (no longer than most of a tick)
   }
 };
 
@@ -988,6 +988,7 @@ private:
   int burst_left = 0;
   void Sync() { count[0] = count[1] = 255; counted = 0; }
   void Fire(int k, float lv = 1.0f);
+  float GateSeconds(int v) const;
   void Pulse();
   static bool InSet(int set, int v);
   int Div(int p, int v) const;  // v snapped into p's set (0: off)
@@ -1035,9 +1036,15 @@ FLASHMEM int PickMod::Step(int p, int v, int dir) const {
   return v;
 }
 
+// how long a hit lasts: SHORT, a quarter of a tick (5 .. 30 ms); else
+// 1 ms .. 1 s, but at most 95 % of a tick, so hits stay apart
+FLASHMEM float PickMod::GateSeconds(int v) const {
+  if (v <= 0) return constrain(tick_s * 0.25f, 0.005f, 0.03f);
+  return std::min(Seconds(v, 0.001f, 1.0f), tick_s * 0.95f);
+}
+
 FLASHMEM void PickMod::Fire(int k, float lv) {
-  og[k] = cur[P_GATE] ? std::max(0.005f, tick_s * cur[P_GATE] * 0.0095f)
-                      : constrain(tick_s * 0.25f, 0.005f, 0.03f);
+  og[k] = GateSeconds(cur[P_GATE]);
   olv[k] = lv;
 }
 
@@ -1116,7 +1123,13 @@ FLASHMEM void PickMod::Format(int p, char* buf, size_t n) const {
   else if (p == P_DIVA || p == P_DIVB) {
     const int d = Div(p, val[p]);
     if (d) snprintf(buf, n, "/%d", d); else snprintf(buf, n, "OFF");
-  } else if (p == P_GATE && !val[P_GATE]) snprintf(buf, n, "SHORT");
+  } else if (p == P_GATE) {
+    // in ms as it plays now (held to most of a tick at fast rates)
+    const float g = GateSeconds(val[P_GATE]);
+    if (!val[P_GATE]) snprintf(buf, n, "SHORT");
+    else if (g < 0.9995f) snprintf(buf, n, "%dms", std::max(1, int(g * 1000.0f + 0.5f)));
+    else snprintf(buf, n, "1.0s");
+  }
   else Device::Format(p, buf, n);
 }
 
