@@ -994,7 +994,7 @@ FLASHMEM void TreadleMod::Advance(int s) {
     // ones CHAOS adds (ghost notes) lower still
     const bool acc = hit && lv > 192;
     gate[part] = g;
-    lvl[part] = acc ? 1.0f : hit ? 0.775f : 0.5f;
+    lvl[part] = acc ? 1.0f : hit ? 0.8f : 0.6f;  // (all past half way: they strike)
     if (acc) { gate[3 + part] = g; lvl[3 + part] = 1.0f; }
     if (part == own_out % 3) flash = 0.06f;
   }
