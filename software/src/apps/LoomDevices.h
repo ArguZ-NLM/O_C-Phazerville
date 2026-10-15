@@ -4208,7 +4208,7 @@ PROGMEM static const DeviceDef ECHO_DEF = {
     {"LEVEL", 0, 100, 30, UNI, 0, 2, 1, {}, {"MIX", "SEND"}},
     {"PRE", 0, 150, 20, UNI},
     {"ROOM", 0, 100, 50, UNI, 0, 21, 0}, // mode: GLINT (a shimmer), the tail pitched back into itself, off .. 100 %
-    {"WALL", -50, 50, -10, BI, 0, 6, 1},  // mode: GLINT's recipe (see ROOM)
+    {"WALL", -50, 50, -10, BI, 0, 20, 3},  // mode: GLINT's recipe (see ROOM; 3: OCT)
   },
   {"DELAY", "REVRB"},
 };
@@ -4323,18 +4323,34 @@ FLASHMEM void EchoDevice::SetTimes() {
 // ShimmerVerb presets: left / right pitch (cents), the wait before the
 // shifters (ms), and the low / mid / high bands that go round again
 // (the lows kept down: they made it massive)
-struct GlintRecipe { char name[6]; int16_t cl, cr, ms; float lo, mid, hi; };
-PROGMEM static const GlintRecipe GLINTS[6] = {
-  {"MICRO", -12, 13, 15, 0.85f, 0.5f, 0.55f},   // Porcelain Glow: no climb, a lush detuned room
-  {"OCT", 1204, 1193, 50, 0.4f, 0.9f, 0.8f},    // the Default / Touched By an H9
-  {"ORGAN", 700, 1200, 20, 0.3f, 0.5f, 0.3f},   // Pipe Organ Decays: fifth left, octave right
-  {"12TH", 1899, 1905, 100, 0.3f, 0.85f, 0.6f}, // Ice Amphitheater / The Pleiades
-  {"2OCT", 1200, 2400, 120, 0.4f, 0.9f, 0.8f},  // Happy Trailing / Mirage Glimmer
-  {"SKY", 2390, 2410, 350, 0.5f, 0.95f, 0.75f}, // Heaven Can't Wait
+struct GlintRecipe { char name[6]; int16_t cl, cr, ms; float lo, mid, hi, fb; };
+constexpr int GLINT_N = 20;
+// subtle to wild (after the preset named; fb: how strongly it goes round)
+PROGMEM static const GlintRecipe GLINTS[GLINT_N] = {
+  {"MICRO", -25, 23, 15, 0.8f, 0.9f, 0.7f, 1.1f},      // Radiant Caverns: no climb, a lush moving room
+  {"HALL", -7, 6, 30, 0.6f, 0.6f, 0.55f, 1.0f},        // MicroPitch Down the Hall
+  {"DRIFT", -30, -27, 60, 0.7f, 0.95f, 0.75f, 1.0f},   // Mercury Tinctures: sinking slowly
+  {"OCT", 1204, 1193, 50, 0.4f, 0.9f, 0.8f, 0.8f},     // the Default
+  {"OCT+", 1200, 1209, 90, 0.5f, 0.9f, 0.8f, 1.0f},    // Touched By an H9: more of it
+  {"SPRNG", 1206, 1193, 66, 0.0f, 0.5f, 0.9f, 0.85f},  // Celestial Springs: no lows, bright
+  {"5TH", 691, 695, 40, 0.2f, 0.5f, 0.7f, 0.8f},       // Glint of Steel
+  {"4TH5", 504, 702, 60, 0.6f, 0.7f, 0.75f, 0.75f},    // Impressions: fourth / fifth
+  {"ORGAN", 700, 1200, 20, 0.3f, 0.5f, 0.3f, 1.0f},    // Pipe Organ Decays
+  {"HALO", 702, 1209, 90, 0.4f, 0.45f, 0.67f, 0.8f},   // Opiate Halo
+  {"12TH", 1899, 1905, 100, 0.3f, 0.85f, 0.6f, 0.9f},  // Ice Amphitheater
+  {"2OCT", 1200, 2400, 120, 0.4f, 0.9f, 0.8f, 0.75f},  // Happy Trailing
+  {"ANGEL", 3, 2399, 80, 0.1f, 0.66f, 0.73f, 0.9f},    // Solarium Sunset: as it is / two octaves
+  {"GLASS", 2410, 710, 60, 0.15f, 0.55f, 0.55f, 0.7f}, // High Harmonics Too
+  {"STARS", 1208, 1903, 300, 0.3f, 0.85f, 0.9f, 0.9f}, // The Pleiades
+  {"SKY", 2390, 2410, 350, 0.5f, 0.95f, 0.75f, 0.9f},  // Heaven Can't Wait
+  {"DUST", -1203, 1205, 50, 0.6f, 0.6f, 1.0f, 1.0f},   // Majestic Dust: octave down / up
+  {"DEEP", -1200, 1200, 40, 1.0f, 0.2f, 0.0f, 0.85f},  // Strata: dark, both ways
+  {"STAIR", -703, 502, 40, 1.0f, 1.0f, 0.25f, 0.85f},  // Ambiguous Stairway
+  {"DOVE", 509, -1202, 380, 0.3f, 0.3f, 1.0f, 1.0f},   // Dove Line: slow, up a fourth / down an octave
 };
 FLASHMEM void EchoDevice::Shimmer() {
-  const GlintRecipe& r = GLINTS[constrain(int(mode[WALL]), 0, 5)];
-  echo.shimmer_recipe(r.cl, r.cr, r.ms, r.lo, r.mid, r.hi);
+  const GlintRecipe& r = GLINTS[constrain(int(mode[WALL]), 0, GLINT_N - 1)];
+  echo.shimmer_recipe(r.cl, r.cr, r.ms, r.lo, r.mid, r.hi, r.fb);
   echo.shimmer(mode[ROOM] * 0.05f);
 }
 
@@ -4391,7 +4407,7 @@ FLASHMEM void EchoDevice::Format(int p, char* buf, size_t n) const {
 
 // WALL's mode: GLINT's recipe; ROOM's: how much of it
 FLASHMEM void EchoDevice::FormatMode(int p, char* buf, size_t n) const {
-  if (p == WALL) snprintf(buf, n, "%s", GLINTS[constrain(int(mode[WALL]), 0, 5)].name);
+  if (p == WALL) snprintf(buf, n, "%s", GLINTS[constrain(int(mode[WALL]), 0, GLINT_N - 1)].name);
   else if (p == ROOM) snprintf(buf, n, mode[ROOM] ? "GL%d" : "GL off", mode[ROOM] * 5);
   else Device::FormatMode(p, buf, n);
 }

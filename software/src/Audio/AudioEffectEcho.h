@@ -115,7 +115,8 @@ public:
   // right shifter (cents), how long the tail waits before them (ms) and how
   // much of its low / mid / high band goes round again (0..1)
   void shimmer(float amount) { sh_amt_target = constrain(amount, 0.0f, 1.0f); }
-  void shimmer_recipe(float cents_l, float cents_r, float ms, float lo, float mid, float hi) {
+  void shimmer_recipe(float cents_l, float cents_r, float ms, float lo, float mid, float hi, float fb) {
+    sh_fb = constrain(fb, 0.0f, 1.2f);
     sh_ra[0] = exp2f(cents_l / 1200.0f);
     sh_ra[1] = exp2f(cents_r / 1200.0f);
     shd_n = constrain(int(ms * 0.001f * AUDIO_SAMPLE_RATE_EXACT * 0.5f), 1, SHD_LEN - 1);
@@ -243,6 +244,7 @@ private:
   volatile int shd_n = 1102;  // the wait (50 ms)
   volatile float sh_ra[2] = {2.0f, 2.0f};  // the shifters' ratios, left / right
   volatile float sh_lv[3] = {0.4f, 0.9f, 0.8f};  // low / mid / high round again
+  volatile float sh_fb = 0.8f;  // how strongly it goes round
   volatile float sh_amt_target = 0.0f;
   float sh_amt = 0.0f;
   bool rv_hi_cold = false;  // lines 4..7 were left out: cleared before they come back
@@ -648,7 +650,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
       const int dn = shd_n;
       // (the guard only once the tail is loud: past 0.15 it holds it there)
       const float guard = sh_env > 0.15f ? 0.15f / sh_env : 1.0f;
-      const float g = sh_amt * 0.8f * guard;
+      const float g = sh_amt * sh_fb * guard;
       float pk = 0.0f;
       for (int k = 0; k < HALF; k++) {
         for (int c = 0; c < 2; c++) {
