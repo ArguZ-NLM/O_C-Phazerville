@@ -3001,8 +3001,8 @@ FLASHMEM void AppLoom::DrawDevice() const {
       // a setting with named modes (BIT / REDUX, LOW / MID / HIGH ...) shows
       // that name the whole time it is grabbed
       const bool named = pd.modes[0][0] != 0;
-      const bool show_mode = sel && pd.nmodes
-        && ((editing && (l_held || named)) || (edit_mode && mode_shown < 1500));
+      const bool show_mode = (pd.nmodes && d->ModeShown(p)) || (sel && pd.nmodes
+        && ((editing && (l_held || named)) || (edit_mode && mode_shown < 1500)));
       char mb[8];
       if (show_mode) d->FormatMode(p, mb, sizeof(mb));
       const char* nm = show_mode ? mb : d->Name(p);

@@ -353,6 +353,9 @@ public:
   void NudgeMode(int p, int dir);
   // the lowest mode the L knob can pick now (SHUTTLE streaming: no REV)
   virtual int ModeMin(int p) const { return 0; }
+  // the upper row shows the mode instead of the name all the time (REPEAT
+  // with GLINT on: ROOM reads GL70, WALL the recipe)
+  virtual bool ModeShown(int p) const { return false; }
   // a setting that goes round when turned past an end (DRAFT's POS: its
   // recording is a loop)
   virtual bool Wraps(int p) const { return false; }
@@ -4230,6 +4233,7 @@ public:
   bool ok() const override { return mem_ok; }
   void Apply(int p) override;
   void Shimmer();  // GLINT to the engine
+  bool ModeShown(int p) const override { return (p == ROOM || p == WALL) && mode[ROOM] > 0; }
   int Step(int p, int v, int dir) const override;
   void Format(int p, char* buf, size_t n) const override;
   void FormatMode(int p, char* buf, size_t n) const override;
