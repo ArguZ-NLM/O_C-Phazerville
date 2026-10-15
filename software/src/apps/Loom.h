@@ -2581,16 +2581,17 @@ FLASHMEM bool AppLoom::Muted() const {
 // weave view tag; the setting by its name, also as the page shows it now)
 FLASHMEM void AppLoom::GoTo(const char* text) {
   using namespace loom;
-  char part[4][12] = {};
+  char part[5][12] = {};
   int k = 0, n = 0;
-  for (const char* c = text; *c && k < 4; c++) {
+  for (const char* c = text; *c && k < 5; c++) {
     if (*c == '/') { part[k][n] = 0; k++; n = 0; continue; }
     if (n < 11) part[k][n++] = char(toupper(*c));
   }
-  if (k < 4) part[k][n] = 0;
+  if (k < 5) part[k][n] = 0;
   const int t = part[0][0] == 'B' ? 1 : 0;
   if (linked && t == 1) { Serial.println("GOTO: linked, track A only"); return; }
-  // a modulator: "jA/MOD/C" opens it, "jA/MOD/C/TREADLE" makes it one first
+  // a modulator: "jA/MOD/C" opens it, "jA/MOD/C/TREADLE" makes it one first,
+  // "jA/MOD/C/TREADLE/FILL" puts the cursor on a setting
   if (!strcmp(part[1], "MOD") && part[2][0] >= 'A' && part[2][0] <= 'H') {
     const int i = part[2][0] - 'A';
     if (part[3][0]) {
@@ -2608,7 +2609,12 @@ FLASHMEM void AppLoom::GoTo(const char* text) {
     Device* m = Focused();
     view = m ? DEVICE : MODS;
     cursor = m ? constrain(int(m->ui_cursor), 0, m->num_params() - 1) : 0;
-    Serial.printf("GOTO %c MOD %c %s\n", 'A' + t, 'A' + i, m ? m->def.name : "(off)");
+    // "jB/MOD/D/PICK/DIVA": the cursor on that setting too
+    if (m && part[4][0])
+      for (int p = 0; p < m->num_params(); p++)
+        if (!strcmp(part[4], m->param(p).name) || !strcmp(part[4], m->Name(p))) cursor = p;
+    if (m) m->ui_cursor = int8_t(cursor);
+    Serial.printf("GOTO %c MOD %c %s %s\n", 'A' + t, 'A' + i, m ? m->def.name : "(off)", m ? m->Name(cursor) : "");
     return;
   }
   int found = -1;
