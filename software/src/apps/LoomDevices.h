@@ -4914,10 +4914,10 @@ public:
   void Idle() override;
   void FormatMode(int p, char* buf, size_t n) const override;
   // the variations (the L knob, straight): the bar over the name shows how
-  // much, from the left (STAGE: +- stages, out from the middle)
+  // much: +- ones out from the middle, SIDE's chance (no +-) from the left
   int BarStyle(int p) const override {
-    if (p == SIDE && Phasing()) return BAR_CENTRE;
-    return p == SIDE || p == HFDBK || p == HMIX ? BAR_LEFT : BAR_PARTS;
+    if (p == SIDE) return Phasing() ? BAR_CENTRE : BAR_LEFT;
+    return p == HFDBK || p == HMIX ? BAR_CENTRE : BAR_PARTS;
   }
   int Step(int p, int v, int dir) const override {
     if (p == SIDE) return constrain(v + dir, 0, Phasing() ? 8 : 2);
@@ -5323,8 +5323,8 @@ PROGMEM static const DeviceDef SPRAY_DEF = {
 class SprayDevice : public Device {
 public:
   enum { RATE, SIZE, PITCH, POS, SHAPE, FDBK, SPREAD, LEVEL };
-  // the variations' bars: PITCH +- semitones from the middle, SIZE / POS amounts from the left
-  int BarStyle(int p) const override { return p == PITCH ? BAR_CENTRE : p == SIZE || p == POS ? BAR_LEFT : BAR_PARTS; }
+  // the variations' bars: all +-, out from the middle
+  int BarStyle(int p) const override { return p == PITCH || p == SIZE || p == POS ? BAR_CENTRE : BAR_PARTS; }
   static constexpr float BUF_SECS = 4.0f;
   SprayDevice();
   // each grain takes PITCH, SIZE and POS once as it starts: the
@@ -5986,8 +5986,8 @@ PROGMEM static const DeviceDef STRETCH_DEF = {
 class StretchDevice : public Device {
 public:
   enum { SPEED, SIZE, PITCH, POS, DIFF, TONE, SPRD, MIX };
-  // the variations' bars: PITCH / TONE +- steps from the middle, the rest amounts from the left
-  int BarStyle(int p) const override { return p == PITCH || p == TONE ? BAR_CENTRE : BAR_LEFT; }
+  // the variations' bars: all +-, out from the middle
+  int BarStyle(int p) const override { return BAR_CENTRE; }
   static constexpr float BUF_SECS = AudioStretch::BUF_SECS;
   void FormatMode(int p, char* buf, size_t n) const override;
   StretchDevice() : Device(STRETCH_DEF) {}
@@ -6256,7 +6256,7 @@ public:
   enum { NOTE, SPRD, DECAY, ROT, TUNE, TONE, SCALE, WET };
   // the variations' bars (NOTE, SPRD's MORPH, ROT's count are no variations)
   int BarStyle(int p) const override {
-    return p == TUNE || p == TONE ? BAR_CENTRE : p == DECAY ? BAR_LEFT : BAR_PARTS;
+    return p == TUNE || p == TONE || p == DECAY ? BAR_CENTRE : BAR_PARTS;  // (+-: out from the middle)
   }
   static constexpr int SCALES = 15, SCALES12 = 7;  // the first 7 on the 12 notes (TUNE)
   ChimeDevice() : Device(CHIME_DEF) {}
