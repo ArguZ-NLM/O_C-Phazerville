@@ -3010,13 +3010,16 @@ FLASHMEM void AppLoom::DrawDevice() const {
     }
     // has modes (the left knob): a small square at the right end of the
     // value lane, out of the way of the names
-    // has modes (the left knob): two dots under each end of the name, in the
-    // free row between name and number
+    // has modes (the left knob): a 1-pixel bar in the free row between name
+    // and number, cut into as many parts as there are modes, the part of
+    // the one it is on filled (two: the left or right half, three: a third
+    // left, middle or right; many: a short piece moving along). Two dots
+    // at the name's ends drowned in the digits
     if (pd.nmodes && !(sel && mod_mode)) {
-      const int w = 6 * int(strlen(d->Name(p)));
-      const int x0 = x + std::max(0, (32 - w) / 2) + 1;
-      // just the ends: two dots at each side of the name
-      for (int px : {x0, x0 + 2, x0 + w - 4, x0 + w - 2}) gfxPixel(px, 51);
+      constexpr int bx = 1, bw = 30;  // in the column
+      const int n = std::max<int>(1, pd.nmodes), m = constrain(int(d->mode[p]), 0, n - 1);
+      const int a = x + bx + m * bw / n, b = x + bx + (m + 1) * bw / n - 1;
+      gfxLine(a, 51, std::max(a, b), 51);
     }
 
     // value row: always the number
