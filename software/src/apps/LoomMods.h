@@ -809,8 +809,9 @@ FLASHMEM void ClockDevice::DrawMini(int x, int y, int w, int h) {
 // (c) 2011-2012 Emilie Gillet, GPL 3 (the pattern data): X / Y move
 // across the map, blending its four nearest patterns; LOW / MID / HIGH set
 // how many of each part's steps sound (their L knob: how many steps the
-// part has, 1-32, so they can run against each other), CHAOS leaves
-// some of the steps that sound out at random, new each run through; PLAY: forwards, backwards, back and
+// part has, 1-32, so they can run against each other), CHAOS changes
+// them at random, new each run through: below 0 it leaves steps that
+// sound out, above 0 it adds a step after steps that sound; PLAY: forwards, backwards, back and
 // forth, or a drunken walk. Six outputs: the three parts (each hit a short pulse,
 // accents full height, the others lower by ACCNT), then each part's
 // accents alone. Its own box sends one; the other boxes can take the rest.
@@ -820,7 +821,7 @@ PROGMEM static const DeviceDef TREADLE_DEF = {
   {
     {"X", 0, 100, 50, UNI},
     {"Y", 0, 100, 50, UNI},
-    {"CHAOS", 0, 100, 0, UNI},
+    {"CHAOS", -32, 32, 0, BI},  // (-: each step that sounds a chance in 32 to be left out; +: to add the step after it)
     {"ACCNT", 0, 100, 50, UNI},  // how much lower the plain hits are than the accents
     {"LOW", 0, 100, 50, UNI, 0, 32, 31},    // each part's fill; mode: its length - 1
     {"MID", 0, 100, 50, UNI, 0, 32, 31},
@@ -865,6 +866,7 @@ private:
   float grid_div = 0.0f;
   float t = 0.0f, step_s = 0.125f;
   uint32_t drop[3] = {};   // CHAOS: the steps each part leaves out this run through
+  uint32_t add[3] = {};    // and the ones it adds
   float gate[OUTS] = {}, lvl[OUTS] = {};
   int Len(int part) const { return constrain(int(mode[P_LOW + part]) + 1, 1, 32); }
   int Level(int part, int s) const;  // the map's strength of a part's step s, with CHAOS (0..255)
@@ -916,10 +918,17 @@ FLASHMEM void TreadleMod::Advance(int s) {
       }
     }
     if (!end) continue;
-    // CHAOS: each run through, each step a chance (CHAOS %) to be left
-    // out; none are added
-    drop[part] = 0;
-    for (int k = 0; k < 32; k++) if (int(random(100)) < cur[P_CHAOS]) drop[part] |= 1u << k;
+    // CHAOS: each run through, each step that sounds a chance (CHAOS in
+    // 32) to be left out (below 0) or to bring in the step after it if
+    // that one is silent (above 0; the last one's is the first)
+    drop[part] = add[part] = 0;
+    const int ch = cur[P_CHAOS];
+    for (int k = 0; k < len && ch; k++) {
+      if (!Hits(part, Level(part, k)) || int(random(32)) >= abs(ch)) continue;
+      const int nx = (k + 1) % len;
+      if (ch < 0) drop[part] |= 1u << k;
+      else if (!Hits(part, Level(part, nx))) add[part] |= 1u << nx;
+    }
     const int was = play_now[part];
     play_now[part] = uint8_t(play);
     run[part] = 0;
@@ -933,9 +942,11 @@ FLASHMEM void TreadleMod::Advance(int s) {
   const float g = constrain(step_s * 0.25f, 0.005f, 0.03f);
   for (int part = 0; part < 3; part++) {
     const int lv = Level(part, pos[part]);
-    if (!Hits(part, lv) || (drop[part] >> (pos[part] & 31) & 1)) continue;
-    // accents (the map's strong steps) full height, the others lower by ACCNT
-    const bool acc = lv > 192;
+    const bool hit = Hits(part, lv) && !(drop[part] >> (pos[part] & 31) & 1);
+    if (!hit && !(add[part] >> (pos[part] & 31) & 1)) continue;
+    // accents (the map's strong steps) full height, the others (and the
+    // ones CHAOS adds) lower by ACCNT
+    const bool acc = hit && lv > 192;
     gate[part] = g;
     lvl[part] = acc ? 1.0f : 1.0f - cur[P_ACCNT] * 0.0045f;
     if (acc) { gate[3 + part] = g; lvl[3 + part] = 1.0f; }
@@ -990,6 +1001,10 @@ FLASHMEM void TreadleMod::DrawViz(int x, int y, int w, int h) {
         const int bh = lv > 192 ? rh - 3 : (rh - 3) * 2 / 3;
         if (drop[part] >> s & 1) gfxFrame(bx, base - bh + 1, std::max(1, bw - 1), bh);
         else gfxRect(bx, base - bh + 1, std::max(1, bw - 1), bh);
+      } else if (add[part] >> s & 1) {
+        // (added by CHAOS this run through: a short bar)
+        const int bh = std::max(2, (rh - 3) / 3);
+        gfxRect(bx, base - bh + 1, std::max(1, bw - 1), bh);
       } else {
         gfxPixel(bx, base);
       }

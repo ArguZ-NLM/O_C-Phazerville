@@ -3598,7 +3598,7 @@ namespace loom {
   // 14: DRAFT in FIBRE's order SPEED SIZE PITCH POS (was PITCH POS SIZE SPEED)
   // 15: DRAFT page 2 DIFF TONE SPRD MIX (was TONE FDBK SPRD MIX, TONE's mode
   //     the diffusion)
-  constexpr uint8_t SAVE_VERSION = 23;  // 21: TREADLE, a 6th modulator type; 22: PICK, a 7th; 23: TREADLE's LEN per part
+  constexpr uint8_t SAVE_VERSION = 24;  // 21: TREADLE, a 6th modulator type; 22: PICK, a 7th; 23: TREADLE's LEN per part; 24: TREADLE's CHAOS -32..32
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -3681,6 +3681,9 @@ namespace loom {
     // before v23 TREADLE's PLAY was one LEN for all parts: now each part's
     // length is its FILL's mode
     const bool trd_len = use && !memcmp(tag, "TRD", 4) && load_version < 23;
+    // before v24 TREADLE's CHAOS was 0..100 (% left out): now -32..32,
+    // below 0 leaving out
+    const bool trd_chaos = use && !memcmp(tag, "TRD", 4) && load_version < 24;
     int old_len = -1;
     static constexpr int8_t TRD_MAP[8] = {TreadleMod::P_X, TreadleMod::P_Y, TreadleMod::P_LOW, TreadleMod::P_CHAOS,
                                           TreadleMod::P_RATE, TreadleMod::P_RESET, TreadleMod::P_ACCNT, TreadleMod::P_PLAY};
@@ -3741,6 +3744,7 @@ namespace loom {
       }
       if (trd_len && p == TreadleMod::P_PLAY) { old_len = v; v = 0; }
       if (trd_len && p >= TreadleMod::P_LOW && p <= TreadleMod::P_HIGH) md = 31;
+      if (trd_chaos && p == TreadleMod::P_CHAOS) v = -(v * 32 + 50) / 100;
       if (skip_size && p == 5) { p = q; continue; }
       if (spool_order) {
         if (SPOOL_MAP[q] < 0) { old_dub = v; continue; }
