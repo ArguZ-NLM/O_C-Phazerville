@@ -648,9 +648,10 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
       const float ra[2] = {sh_ra[0], sh_ra[1]};
       const float lv0 = sh_lv[0], lv1 = sh_lv[1], lv2 = sh_lv[2];
       const int dn = shd_n;
-      // (the guard only once the tail is loud: past 0.15 it holds it there)
-      const float guard = sh_env > 0.15f ? 0.15f / sh_env : 1.0f;
-      const float g = sh_amt * sh_fb * guard;
+      // (the guard only once the tail is loud: past 0.25 it holds it there;
+      // x1 and 0.15 were too quiet a shimmer)
+      const float guard = sh_env > 0.25f ? 0.25f / sh_env : 1.0f;
+      const float g = sh_amt * sh_fb * 1.5f * guard;
       float pk = 0.0f;
       for (int k = 0; k < HALF; k++) {
         for (int c = 0; c < 2; c++) {
