@@ -4797,7 +4797,8 @@ public:
     const int idx = DivIndex(abs(v), 1, 100) + dir * s;
     return idx < 0 ? 0 : s * DivValue(idx, 1, 100);
   }
-  float pole = 0.0f;           // the picture's barber pole, where it is
+  float pole = 0.0f;           // the picture's barber pole, where it is (in stripes)
+  float per_now = 16.0f;       // its stripes' spacing, gliding to the new one
   uint32_t pole_at = 0;
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
@@ -4869,10 +4870,15 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
   const float raw = Phasing() ? hz * 24.0f  // (octaves a second)
                               : (hz < 0.0f ? -1.0f : 1.0f) * 12.0f * log2f(1.0f + fabsf(hz) * 4.0f);
   const float speed = constrain(raw, -60.0f, 60.0f);
-  // PHASE: the stripes as wide as the stages are few (4: wide, 20: fine)
-  const float per = Phasing() ? 24.0f - (Stages() - 4) * 0.875f : 16.0f;  // 24 .. 10 px
-  pole += speed * dt;
-  pole -= per * floorf(pole / per);
+  // PHASE: the stripes as wide as the stages are few (4: wide, 20: fine),
+  // gliding there and grown / shrunk from the middle of the picture
+  const float per_to = Phasing() ? 24.0f - (Stages() - 4) * 0.875f : 16.0f;  // 24 .. 10 px
+  per_now += (per_to - per_now) * std::min(1.0f, dt * 8.0f);
+  if (fabsf(per_to - per_now) < 0.01f) per_now = per_to;
+  const float per = per_now;
+  pole += speed * dt / per;
+  pole -= floorf(pole);
+  const float off = pole * per;  // (px)
   const float sw = (2 + cur[HFDBK] * 5 / 100) * per / 16.0f;
   static const uint8_t bayer[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
   const int fill = 1 + cur[HMIX] * 15 / 100;  // 1 .. 16 of 16
@@ -4883,13 +4889,14 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
       // where this pixel is across the stripes, in fractions of a pixel:
       // the edges are lit by how much of them the stripe covers (shaded
       // with the dither), so the stripes glide instead of stepping
-      float u = level ? py + (down ? -pole : pole)
-                      : px + (down ? -py : py) + (down ? -pole : pole);
+      const int cx = px - w / 2, cy = py - h / 2;
+      float u = level ? cy + (down ? -off : off)
+                      : cx + (down ? -cy : cy) + (down ? -off : off);
       u -= per * floorf(u / per);
       const float cover = std::min(1.0f, std::max(0.0f, std::min(u + 1.0f, sw - u)));
       if (cover <= 0.0f) continue;
       // (the dither travels with its stripe: no dots blinking at the edges)
-      const int moved = int(floorf(down ? -pole : pole));
+      const int moved = int(floorf(down ? -off : off));
       const int d = level ? bayer[(py + moved) & 3][px & 3] : bayer[py & 3][(px + moved) & 3];
       if (d < int(fill * cover + 0.5f)) gfxPixel(x + px, y + py);
     }
