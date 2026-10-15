@@ -45,7 +45,7 @@ public:
   float out = 0.0f;     // 0..1
   float hist[HIST] = {};
   uint8_t hist_pos = 0;
-  float hist_t = 0.0f;
+  float hist_t = 0.0f, hist_peak = 0.0f;
   float flash = 0.0f;   // trigger indicator, seconds left
 
   explicit Modulator(const DeviceDef& d);
@@ -119,10 +119,13 @@ FLASHMEM void Modulator::Run(const ModCtx& ctx) {
   out = constrain(out, 0.0f, 1.0f);
   if (flash > 0.0f) flash -= ctx.dt;
   // history for the scope: ~1 s across the screen
+  // (the highest since the last point, so short pulses show)
   hist_t += ctx.dt;
+  hist_peak = std::max(hist_peak, out);
   if (hist_t >= 1.0f / HIST) {
     hist_t = 0.0f;
-    hist[hist_pos] = out;
+    hist[hist_pos] = hist_peak;
+    hist_peak = 0.0f;
     hist_pos = (hist_pos + 1) % HIST;
   }
 }

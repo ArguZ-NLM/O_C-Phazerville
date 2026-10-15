@@ -2101,6 +2101,8 @@ FLASHMEM void AppLoom::MainLoop() {
       const loom::Modulator* m = ModAt(t, i);
       Serial.printf(" %c:%s=%d.%02d", 'A' + i, m ? m->def.tag : "-", int(tr.mod_out[i]), int(tr.mod_out[i] * 100) % 100);
     }
+    for (int i = 0; i < loom::MOD_BUSES; i++)  // what a box sends when not its own modulator's first output
+      if (ModTap(t, i)) Serial.printf(" %c<%02x", 'A' + i, ModTap(t, i));
     Serial.println();
     ForEachDevice([&](loom::Device* d) {
       if (d->mod_bus != tr.mod_out) return;
