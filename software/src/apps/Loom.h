@@ -439,7 +439,8 @@ private:
   loom::Device* undo_dev[2] = {};
   loom::Device::Saved undo_state[2];
   uint32_t undone_at = 0;  // UNDO shown
-  bool stop_held = false, stop_armed = false;  // A held to stop the PLAYER ...
+  bool stop_held = false, stop_armed = false;  // A held to stop the PLAYER (or a modulator: stop_mod) ...
+  loom::Modulator* stop_mod = nullptr;
   uint32_t stop_hold = 0;                      // ... since then
   // a SPOOL loop would go (its lane turned to another source): asked first,
   // A says yes. ask_at: since when (0: nothing asked; 4 s, then forgotten)
@@ -2038,6 +2039,13 @@ FLASHMEM void AppLoom::MainLoop() {
   }
   if (stop_held && millis() - stop_hold >= HOLD_MS) {
     stop_held = false;
+    if (stop_mod) {
+      stop_mod->stopped = true;
+      // linked: the other track's too
+      if (linked && mod_cursor < loom::NUM_MODS)
+        if (loom::Modulator* tw = ModAt(1 - track, mod_cursor)) if (tw->Stops()) tw->stopped = true;
+      stop_mod = nullptr;
+    } else
     for (int t = 0; t < loom::NUM_TRACKS; t++) {  // linked: both
       loom::PlayerDevice* pl = loom::tracks[t].player;
       if ((t == track || linked) && pl && loom::tracks[t].choice[loom::SOURCE] == 2 && pl->ActionLit(0)) pl->Action(0);
@@ -2246,6 +2254,10 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
       const PlayerDevice* pl = tracks[track].player;
       stop_armed = stop_held = view == CHAIN && col == SOURCE && tracks[track].choice[SOURCE] == 2
           && pl && pl->ActionLit(0);
+      // a running WAVE / PICK / TREADLE on its page: held, it stops
+      Modulator* sm = view == DEVICE && focus_mod && mod_cursor < CLK_CURSOR ? ModAt(track, mod_cursor) : nullptr;
+      stop_mod = sm && sm->Stops() && !sm->stopped ? sm : nullptr;
+      if (stop_mod) stop_armed = stop_held = true;
       stop_hold = millis();
       tape_held = view == DEVICE && !focus_mod && col == MIX_COL;
       tape_hold = millis();
@@ -3100,9 +3112,16 @@ FLASHMEM void AppLoom::DrawDevice() const {
     snprintf(buf, sizeof(buf), "%c %s", 'A' + mod_cursor, d->def.name);
     const int end = name_x + 6 * int(strlen(buf));
     // (clear of the clock mark at 96)
-    const int room = d->def.actions[0][0] || d->def.actions[1][0] ? end + 6 + 18 : end;
-    if (mod_mode ? end > 62 : room > 94) snprintf(buf, sizeof(buf), "%c %s", 'A' + mod_cursor, ShownTag(d->def.tag));
-    else act_x = std::max(56, end + 6);
+    // (A's RUN is an icon, 6 pixels; the clock mark at 103)
+    int room = end;
+    for (int a = 0; a < 2; a++)
+      if (d->def.actions[a][0]) room += 6 + (strcmp(d->def.actions[a], "RUN") ? 6 * int(strlen(d->def.actions[a])) : 5);
+    if (mod_mode ? end > 62 : room > 101) {
+      snprintf(buf, sizeof(buf), "%c %s", 'A' + mod_cursor, ShownTag(d->def.tag));
+      act_x = name_x + 6 * int(strlen(buf)) + 6;
+    } else {
+      act_x = end + 6;
+    }
     gfxPrint(name_x, 1, buf);
   } else {
     gfxPrint(name_x, 1, name);
@@ -3135,7 +3154,24 @@ FLASHMEM void AppLoom::DrawDevice() const {
   const bool byp_on = (BypassKey() && (tracks[track].bypass >> col & 1)) || PartOff();
   const bool mute_turn = !mod_mode && Muted()
       && (!((focus_mod && d->def.actions[1][0]) || byp_on) || (millis() / 600) % 2);
+  const bool mod_page = focus_mod && mod_cursor < CLK_CURSOR;
+  int mx = act_x;  // a modulator's actions one after the other
   for (int a = 0; a < 2 && !mod_mode; a++) {
+    if (mod_page) {
+      const char* label = d->def.actions[a];
+      if (!label[0]) continue;
+      if (!strcmp(label, "RUN")) {
+        // running: a play triangle; stopped (A held): a square
+        if (d->ActionLit(0)) for (int i = 0; i < 4; i++) gfxLine(mx + i, 1 + i, mx + i, 7 - i);
+        else gfxRect(mx, 2, 5, 5);
+        mx += 11;
+      } else {
+        gfxPrint(mx, 1, label);
+        if (d->ActionLit(a)) gfxInvert(mx - 1, 0, 6 * int(strlen(label)) + 2, 9);
+        mx += 6 * int(strlen(label)) + 6;
+      }
+      continue;
+    }
     const bool byp = a == 1 && byp_on;
     // slot devices keep their actions (ECHO: FRZ / CLR) off the header;
     // the modulators show theirs (RST, STP, TRG)

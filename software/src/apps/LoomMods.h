@@ -63,6 +63,11 @@ public:
   virtual void OutName(int k, char* buf, size_t n) const { snprintf(buf, n, "OUT"); }
   virtual float OutVal(int k) const { return out; }
   uint8_t own_out = 0;
+  // WAVE, PICK, TREADLE: A runs it, A held stops it (as SHUTTLE); stopped,
+  // WAVE holds where it is and the others play no hits
+  virtual bool Stops() const { return false; }
+  bool stopped = false;
+  bool ActionLit(int a) const override { return a == 0 && Stops() && !stopped; }
   void Run(const ModCtx& ctx);
   void DrawViz(int x, int y, int w, int h) override;
   void DrawMini(int x, int y, int w, int h) override;
@@ -165,7 +170,7 @@ FLASHMEM void Modulator::DrawMini(int x, int y, int w, int h) {
 // WAVE: LFO
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef WAVE_DEF = {
-  "WAVE", "WAV", 7, {"RST", ""},
+  "WAVE", "WAV", 7, {"RUN", "RST"},  // (A held: stop)
   {
     {"RATE", 0, 100, 40, UNI, 0, 2, 0, {}, {"FREE", "CLOCK"}},
     {"AMNT", 0, 100, 100, UNI},
@@ -183,7 +188,11 @@ public:
   WaveMod() : Modulator(WAVE_DEF) {}
   void Tick(const ModCtx& ctx) override;
   void Format(int p, char* buf, size_t n) const override;
-  void Action(int a) override { if (a == 0) { ph = 0.0f; flash = 0.1f; } }
+  void Action(int a) override {
+    if (a == 0) stopped = false;
+    else if (a == 1) { ph = 0.0f; flash = 0.1f; }
+  }
+  bool Stops() const override { return true; }
   void DrawViz(int x, int y, int w, int h) override;
 private:
   float ph = 0.0f;
@@ -209,6 +218,7 @@ FLASHMEM float WaveMod::At(float phase) const {
 
 FLASHMEM void WaveMod::Tick(const ModCtx& ctx) {
   if (Edge(cur[P_RESET], ctx, 0)) { ph = 0.0f; flash = 0.1f; }
+  if (stopped) { out = At(ph); return; }
   const bool synced = Synced(P_RATE);
   if (Restarted() && synced) ph = 0.0f;
   if (!synced || clock_running) ph += Hz() * ctx.dt;
@@ -806,7 +816,7 @@ FLASHMEM void ClockDevice::DrawMini(int x, int y, int w, int h) {
 // accents alone. Its own box sends one; the other boxes can take the rest.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef TREADLE_DEF = {
-  "TREADLE", "TRD", 10, {"", "RST"},  // (B resets)
+  "TREADLE", "TRD", 10, {"RUN", "RST"},  // (A held: stop; B resets)
   {
     {"X", 0, 100, 50, UNI},
     {"Y", 0, 100, 50, UNI},
@@ -830,7 +840,8 @@ public:
   TreadleMod() : Modulator(TREADLE_DEF) {}
   void Tick(const ModCtx& ctx) override;
   void Format(int p, char* buf, size_t n) const override;
-  void Action(int a) override { if (a == 1) Restart(); }
+  void Action(int a) override { if (a == 0) stopped = false; else if (a == 1) Restart(); }
+  bool Stops() const override { return true; }
   void DrawViz(int x, int y, int w, int h) override;
   int Outs() const override { return OUTS; }
   void OutName(int k, char* buf, size_t n) const override {
@@ -853,7 +864,7 @@ private:
   int64_t grid_at = -1, grid_base = 0;
   float grid_div = 0.0f;
   float t = 0.0f, step_s = 0.125f;
-  uint8_t stir = 0;        // CHAOS: this round's push
+  uint8_t stir[3] = {};    // CHAOS: each part's push this run through
   float gate[OUTS] = {}, lvl[OUTS] = {};
   int Len(int part) const { return constrain(int(mode[P_LOW + part]) + 1, 1, 32); }
   int Level(int part, int s) const;  // the map's strength of a part's step s, with CHAOS (0..255)
@@ -870,7 +881,7 @@ FLASHMEM int TreadleMod::Level(int part, int s) const {
   const int c = grids::drum_map[i][j + 1][off], d = grids::drum_map[i + 1][j + 1][off];
   const int qx = (x << 2) & 255, qy = (y << 2) & 255;
   const int ab = (b * qx + a * (255 - qx)) >> 8, cd = (d * qx + c * (255 - qx)) >> 8;
-  return std::min(255, ((cd * qy + ab * (255 - qy)) >> 8) + stir);
+  return std::min(255, ((cd * qy + ab * (255 - qy)) >> 8) + stir[part]);
 }
 
 // step s since the start: each part one step on. Its length counts at
@@ -905,6 +916,10 @@ FLASHMEM void TreadleMod::Advance(int s) {
       }
     }
     if (!end) continue;
+    // CHAOS: each run through, the part's steps all lifted by a new random
+    // amount (as Grids): a different number of its quieter steps join in.
+    // Up to half way (127) at 100: Grids' most (63) is at 50
+    stir[part] = uint8_t(random(0, cur[P_CHAOS] * 127 / 100 + 1));
     const int was = play_now[part];
     play_now[part] = uint8_t(play);
     run[part] = 0;
@@ -915,7 +930,6 @@ FLASHMEM void TreadleMod::Advance(int s) {
       default: ps = 0;
     }
   }
-  if (s % 32 == 0) stir = uint8_t(random(0, cur[P_CHAOS] * 255 / 100 / 4 + 1));  // a new round (every 32 steps)
   const float g = constrain(step_s * 0.25f, 0.005f, 0.03f);
   for (int part = 0; part < 3; part++) {
     const int lv = Level(part, pos[part]);
@@ -934,6 +948,7 @@ FLASHMEM void TreadleMod::Tick(const ModCtx& ctx) {
   if (Restarted() && synced) { grid_at = -1; grid_base = 0; step = -1; }
   if (cur[P_RESET] && Edge(cur[P_RESET], ctx, 0)) Restart();
   for (float& g : gate) if (g > 0.0f) g -= ctx.dt;
+  if (stopped) { for (float& g : gate) g = 0.0f; grid_at = -1; return; }
   if (synced && clock_running) {
     const float db = DivBeats(DivIndex(cur[P_RATE], 0, 100));
     step_s = db * 60.0f / tempo_bpm;
@@ -996,7 +1011,7 @@ FLASHMEM void TreadleMod::DrawViz(int x, int y, int w, int h) {
 // fixed ones. Its own box sends one; the other boxes can take the rest.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef PICK_DEF = {
-  "PICK", "PCK", 8, {"", "RST"},  // (B resets)
+  "PICK", "PCK", 8, {"RUN", "RST"},  // (A held: stop; B resets)
   {
     {"RATE", 0, 100, 74, UNI, 0, 2, 1, {}, {"FREE", "CLOCK"}},  // a tick; on the clock (74: 1/16)
     {"DIVA", 1, 144, 3, UNI, 0, 7, 0, {}, {}},  // mode: the set of numbers
@@ -1026,7 +1041,8 @@ public:
     if (p == P_DENS) return param(p).name;
     return Modulator::Name(p);
   }
-  void Action(int a) override { if (a == 1) Sync(); }
+  void Action(int a) override { if (a == 0) stopped = false; else if (a == 1) Sync(); }
+  bool Stops() const override { return true; }
   void DrawViz(int x, int y, int w, int h) override;
   int Outs() const override { return OUTS; }
   void OutName(int k, char* buf, size_t n) const override;
@@ -1132,6 +1148,7 @@ FLASHMEM void PickMod::Tick(const ModCtx& ctx) {
   if (Restarted() && synced) { grid_at = -1; Sync(); }
   if (cur[P_RESET] && Edge(cur[P_RESET], ctx, 0)) Sync();
   for (float& g : og) if (g > 0.0f) g -= ctx.dt;
+  if (stopped) { for (float& g : og) g = 0.0f; grid_at = -1; return; }
   const bool bursts = cur[P_START] != 0;
   bool now = false;
   if (bursts && Edge(cur[P_START], ctx, 1)) {
