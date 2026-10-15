@@ -825,7 +825,7 @@ PROGMEM static const DeviceDef TREADLE_DEF = {
     {"PLAY", 0, 3, 0, LIST, 4, 0, 0, {"FWD", "REV", "PING", "DRUNK"}},
     {"X", 0, 100, 50, UNI},
     {"Y", 0, 100, 50, UNI},
-    {"CHAOS", -32, 32, 0, BI},  // (-: each step that sounds a chance in 32 to be left out; +: that share of them added)
+    {"CHAOS", -32, 32, 0, BI},  // (-: that share of the steps that sound left out, the weakest first; +: that share of them added)
     {"RATE", 0, 100, 74, UNI, 0, 2, 1, {}, {"FREE", "CLOCK"}},  // a step; on the clock (74: 1/16)
   },
   {"FILL", "MAP"}
@@ -873,6 +873,7 @@ private:
   void Advance(int s);
   int FillScore(int part, int s, int len) const;
   void Fill(int part, int len, int ch);
+  void Thin(int part, int len, int ch);
 };
 
 FLASHMEM int TreadleMod::Level(int part, int s) const {
@@ -937,6 +938,32 @@ FLASHMEM void TreadleMod::Fill(int part, int len, int ch) {
   }
 }
 
+// CHAOS below 0: leaves out that share of the steps the part plays (all
+// at -32), the least needed first: the sixteenths in between, then the
+// eighths, then the beats, the one last; accents, and the snare's
+// backbeat, hold on longer. A little chance in which, as Fill
+FLASHMEM void TreadleMod::Thin(int part, int len, int ch) {
+  int sc[32], idx[32], n = 0;
+  for (int k = 0; k < len; k++) {
+    const int lv = Level(part, k);
+    if (!Hits(part, lv)) continue;
+    const int b = k & 15;
+    int keep = b == 0 ? 160 : (b & 7) == 0 ? 120 : (b & 3) == 0 ? 90 : (b & 1) == 0 ? 55 : 20;
+    keep += lv / 4 + (lv > 192 ? 30 : 0);
+    if (part == 1 && (b & 7) == 4) keep += 50;
+    idx[n] = k;
+    sc[n++] = keep + int(random(40));
+  }
+  const int want = (n * ch + 16) / 32;
+  for (int i = 0; i < want && i < n; i++) {
+    int worst = i;
+    for (int j = i + 1; j < n; j++) if (sc[j] < sc[worst]) worst = j;
+    std::swap(sc[i], sc[worst]);
+    std::swap(idx[i], idx[worst]);
+    drop[part] |= 1u << idx[i];
+  }
+}
+
 // step s since the start: each part one step on. Its length counts at
 // once, the step it is on stays: it plays on to the new end and turns
 // there (shorter than where it is: it turns on the next step). A new PLAY
@@ -969,13 +996,11 @@ FLASHMEM void TreadleMod::Advance(int s) {
       }
     }
     if (!end) continue;
-    // CHAOS, new each run through: below 0 each step that sounds a chance
-    // (CHAOS in 32) to be left out; above 0 it fills in (Fill)
+    // CHAOS, new each run through: below 0 it thins out (Thin), above 0
+    // it fills in (Fill)
     drop[part] = add[part] = 0;
     const int ch = cur[P_CHAOS];
-    if (ch < 0)
-      for (int k = 0; k < len; k++)
-        if (Hits(part, Level(part, k)) && int(random(32)) < -ch) drop[part] |= 1u << k;
+    if (ch < 0) Thin(part, len, -ch);
     if (ch > 0) Fill(part, len, ch);
     const int was = play_now[part];
     play_now[part] = uint8_t(play);
