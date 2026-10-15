@@ -366,7 +366,7 @@ public:
   // shows (BAR_HALVES), or a variation's amount growing from the left /
   // the middle (HEDDLE's FDBK / its ± STAGE)
   enum { BAR_PARTS, BAR_HALVES, BAR_LEFT, BAR_CENTRE };
-  virtual int BarStyle(int p) const { return AltName(p) ? BAR_HALVES : BAR_PARTS; }
+  virtual int BarStyle(int p) const { return AltName(p) ? BAR_HALVES : Varies(p) ? BAR_CENTRE : BAR_PARTS; }
   // a variation up or down by a percentage: "±35%" (the font's ± is char 127, LOOM_PM)
   static void FormatVar(char* buf, size_t n, int pct) { snprintf(buf, n, LOOM_PM "%d%%", pct); }
   uint16_t alt_on = 0;  // which of those show their second value (the page's, not saved)
@@ -412,6 +412,18 @@ public:
     hi = constrain(val[p] + int(b * 0.01f * (d.max - d.min)), d.min, d.max);
   }
   int Modulated(int p) const;
+  // a variation (the L knob, OFF .. +- 100 % of the range in 5 % steps):
+  // each clock beat a new random offset, glided to, added like modulation;
+  // a device says which settings vary (where the L knob is free)
+  virtual bool Varies(int p) const { return false; }
+  float var_now[MAX_PARAMS] = {}, var_to[MAX_PARAMS] = {};
+  uint32_t var_beat = 0, var_ms = 0;
+  void VarTick();
+  int VarAdd(int p, int v) const {
+    if (!Varies(p) || var_now[p] == 0.0f) return v;
+    const ParamDef& d = param(p);
+    return constrain(v + int(lrintf(var_now[p] * 0.01f * (d.max - d.min))), int(d.min), int(d.max));
+  }
   void Refresh(int p);   // recompute cur[p] and apply it
   void Modulate();       // follow the CV inputs
   void RunTriggers(uint16_t edges);  // fire actions from their triggers
@@ -439,7 +451,7 @@ FLASHMEM int Device::Modulated(int p) const {
   const ParamDef& d = param(p);
   // a MOD slot with no modulator in it (-1) counts as no source
   const bool one = ModLive(p, 0), two = ModLive(p, 1);
-  if (!one && !two) return val[p];
+  if (!one && !two) return VarAdd(p, val[p]);
   // the two sources add up, each by its own amount
   float sum = 0.0f;
   if (one) {
@@ -464,9 +476,9 @@ FLASHMEM int Device::Modulated(int p) const {
   }
   // (MIDI: exact semitones, rounded rather than cut)
   if ((one && mod_bus_sel[p] == MIDI_BUS) || (two && mod_bus2[p] == MIDI_BUS))
-    return constrain(val[p] + int(lrintf(sum * 0.01f * (d.max - d.min))), int(d.min), int(d.max));
+    return VarAdd(p, constrain(val[p] + int(lrintf(sum * 0.01f * (d.max - d.min))), int(d.min), int(d.max)));
   const int v = val[p] + int(sum * 0.01f * (d.max - d.min));
-  return constrain(v, d.min, d.max);
+  return VarAdd(p, constrain(v, d.min, d.max));
 }
 
 FLASHMEM void Device::Refresh(int p) {
@@ -479,8 +491,9 @@ FLASHMEM void Device::ApplyAll() {
 }
 
 FLASHMEM void Device::Modulate() {
+  VarTick();
   for (int p = 0; p < num_params(); p++) {
-    if (!Modded(p) && cur[p] == val[p]) continue;
+    if (!Modded(p) && cur[p] == val[p] && !(Varies(p) && var_now[p] != 0.0f)) continue;
     const int m = Modulated(p);
     if (m != cur[p]) {
       cur[p] = m;
@@ -591,7 +604,33 @@ FLASHMEM void Device::NudgeMode(int p, int dir) {
   Apply(p);
 }
 
+// the variations: on each clock beat a new offset for every setting that
+// varies, then a glide there (~50 ms; LEVEL, CUT ... no jumps)
+FLASHMEM void Device::VarTick() {
+  const uint32_t now = millis();
+  if (now - var_ms < 2) return;
+  const float dt = std::min(0.1f, (now - var_ms) * 0.001f);
+  var_ms = now;
+  const bool beat = loom::clock_beat_n != var_beat;
+  var_beat = loom::clock_beat_n;
+  const float k = std::min(1.0f, dt * 20.0f);
+  for (int p = 0; p < num_params(); p++) {
+    if (!Varies(p)) continue;
+    if (!mode[p]) var_to[p] = 0.0f;
+    else if (beat) var_to[p] = random(-1000, 1001) * 0.001f * mode[p] * 5.0f;
+    if (var_now[p] != var_to[p]) {
+      var_now[p] += (var_to[p] - var_now[p]) * k;
+      if (fabsf(var_now[p] - var_to[p]) < 0.05f) var_now[p] = var_to[p];
+    }
+  }
+}
+
 FLASHMEM void Device::FormatMode(int p, char* buf, size_t n) const {
+  if (Varies(p)) {  // the variation: OFF, +-5 .. +-100 %
+    if (mode[p]) FormatVar(buf, n, mode[p] * 5);
+    else snprintf(buf, n, "OFF");
+    return;
+  }
   const int m = mode[p];
   // unnamed modes (amounts, zoom steps): the number, never a blank
   if (m < 4 && param(p).modes[m][0]) snprintf(buf, n, "%s", param(p).modes[m]);
@@ -1186,9 +1225,9 @@ PROGMEM static const DeviceDef MIX_DEF = {
   {
     // the chain against the track's source as it came in (0 = only the
     // source, 100 = only the chain): all the effects dialled back at once
-    {"MIX", 0, 100, 100, UNI},
-    {"LEVEL", 0, 200, 80, UNI},  // (a double click: 100) 100: as it comes, 200: twice (a limiter on the output keeps it clean)
-    {"PAN", -50, 50, 0, BI},
+    {"MIX", 0, 100, 100, UNI, 0, 21, 0},
+    {"LEVEL", 0, 200, 80, UNI, 0, 21, 0},  // (a double click: 100) 100: as it comes, 200: twice (a limiter on the output keeps it clean)
+    {"PAN", -50, 50, 0, BI, 0, 21, 0},
     {"MUTE", 0, 1, 0, LIST, 2, 0, 0, {"off", "ON"}},
     // three bands: the band's level, -12 .. +12 dB; mode: its compressor,
     // how hard it squashes (off, 5 .. 100 %)
@@ -1204,6 +1243,7 @@ PROGMEM static const DeviceDef MIX_DEF = {
 class MixDevice : public Device {
 public:
   enum { DRYWET, LEVEL, PAN, MUTE, B_LOW, B_MID, B_HIGH, SPLIT };
+  bool Varies(int p) const override { return p == DRYWET || p == LEVEL || p == PAN; }
   static constexpr float LO_HZ[5] = {120.0f, 180.0f, 250.0f, 350.0f, 500.0f};
   static constexpr float HI_HZ[5] = {1500.0f, 2000.0f, 3000.0f, 4000.0f, 6000.0f};
   LoomFade* out_fade = nullptr;  // source (dry) against the chain (wet), before the band stage
@@ -1828,7 +1868,7 @@ PROGMEM static const DeviceDef SPOOL_DEF = {
     // the live input passed through; mode (L): DUB, how much of the old loop
     // stays when overdubbing, 0..100 % in 5 % steps
     {"MON", 0, 100, 100, UNI, 0, 21, 16},
-    {"LEVEL", 0, 100, 100, UNI},
+    {"LEVEL", 0, 100, 100, UNI, 0, 21, 0},
     // the picture only. Mode (L): ALL, LOOP (just START..END), or how much
     // time a closer view shows (REEL_VIEW_MS); value (R): where it looks,
     // HEAD (-1: follows the play head) or a place in the loop, 0..100 %
@@ -1857,6 +1897,7 @@ static void FormatSeconds(uint32_t ms, char* buf, size_t n) {
 class ReelDevice : public Device {
 public:
   enum { SPEED, START, END, XFADE, IN, MON, LEVEL, VIEW };
+  bool Varies(int p) const override { return p == LEVEL; }
   static float MaxSecs() { return BigSecs(); }
   explicit ReelDevice(InputDevice* i) : Device(SPOOL_DEF), input(i) {}
   void Reset() override {
@@ -2587,7 +2628,7 @@ PROGMEM static const DeviceDef PLAYER_DEF = {
   {
     {"FILE", 0, MAX_FILES - 1, 0, UNI, 0, 2, 0, {}, {"STRM", "MEM"}},
     {"LOOP", 0, 1, 1, LIST, 2, 0, 0, {"OFF", "ON"}},
-    {"LEVEL", 0, 100, 100, UNI},
+    {"LEVEL", 0, 100, 100, UNI, 0, 21, 0},
     {"SPEED", 0, 200, 100, UNI, 0, 3, 1, {}, {"REV", "FWD", "SYNC"}},  // mode: direction, REV left; SYNC: forward at the clock's tempo
     {"START", 0, 10000, 0, UNI, 0, 10, 0},      // mode: zoom, all .. 0.3 ms across
     {"END", 0, 10000, 10000, UNI, 0, 10, 0},
@@ -2988,6 +3029,7 @@ FLASHMEM size_t LoomPreview::ReadFrames(int16_t* l, int16_t* r, size_t n) {
 class PlayerDevice : public Device {
 public:
   enum { FILE_, LOOP, LEVEL, SPEED, START, END, XFADE, SNAP };
+  bool Varies(int p) const override { return p == LEVEL; }
   enum { SNAP_OFF, SNAP_ZERO, SNAP_BEAT };
   enum { DIR_REV, DIR_FWD, DIR_SYNC };  // SPEED's modes
   // STRM reads the card forward only: no REV (MEM has it)
@@ -4224,7 +4266,7 @@ PROGMEM static const DeviceDef ECHO_DEF = {
     // (size and decay together), walls (soft: dark and dense .. hard:
     // bright with audible reflections; also the delay's tone)
     {"LEVEL", 0, 100, 30, UNI, 0, 2, 1, {}, {"MIX", "SEND"}},
-    {"PRE", 0, 150, 20, UNI},
+    {"PRE", 0, 150, 20, UNI, 0, 21, 0},
     {"ROOM", 0, 100, 50, UNI, 0, 21, 0}, // mode: GLINT (a shimmer), the tail pitched back into itself, off .. 100 %
     {"WALL", -50, 50, -10, BI, 0, 20, 13},  // mode: GLINT's recipe (see ROOM; 13: OCT)
   },
@@ -4234,6 +4276,7 @@ PROGMEM static const DeviceDef ECHO_DEF = {
 class EchoDevice : public Device {
 public:
   enum { DELAY, TIME, FEEDBACK, SPREAD, REVERB, PRE, ROOM, WALL };
+  bool Varies(int p) const override { return p == PRE; }
   // ROOM: decay 0.4 .. 16 s
   float DecaySecs() const { return 0.4f * powf(40.0f, cur[ROOM] * 0.01f); }
   enum { PHASE, PING, DIFFUSE };
@@ -4638,14 +4681,14 @@ FLASHMEM void EchoDevice::DrawMini(int x, int y, int w, int h) {
 PROGMEM static const DeviceDef DIRT_DEF = {
   "TEXTURE", "TEX", 8, {"", ""},
   {
-    {"DRIVE", 0, 100, 0, UNI},
-    {"FOLD", 0, 100, 0, UNI},
+    {"DRIVE", 0, 100, 0, UNI, 0, 21, 0},
+    {"FOLD", 0, 100, 0, UNI, 0, 21, 0},
     {"CRSH", 0, 100, 0, UNI, 0, 3, 0, {}, {"BIT", "REDUX", "BOTH"}},
     {"TILT", -50, 50, 0, BI, 0, 3, 1, {}, {"LOW", "MID", "HIGH"}},
     {"NOICE", 0, 100, 0, UNI, 0, 3, 1, {}, {"WHITE", "PINK", "DUST"}},
-    {"N.DCY", 0, 100, 40, UNI},
-    {"N.TON", 0, 100, 50, UNI},
-    {"WET", 0, 100, 100, UNI},
+    {"N.DCY", 0, 100, 40, UNI, 0, 21, 0},
+    {"N.TON", 0, 100, 50, UNI, 0, 21, 0},
+    {"WET", 0, 100, 100, UNI, 0, 21, 0},
   },
   {"", ""},
 };
@@ -4673,6 +4716,7 @@ PROGMEM static const DeviceDef HEDDLE_DEF = {
 class DirtDevice : public Device {
 public:
   enum { DRIVE, FOLD, CRUSH, TILT, NOISE, NDECAY, NTONE, WET };
+  bool Varies(int p) const override { return p == DRIVE || p == FOLD || p == NDECAY || p == NTONE || p == WET; }
   DirtDevice() : Device(DIRT_DEF) {}
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
@@ -5138,24 +5182,25 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
 PROGMEM static const DeviceDef RESONATOR_DEF = {
   "REED", "RES", 8, {"", ""},  // (was RESONATOR)
   {
-    {"CUT", 0, 100, 70, UNI},
-    {"SLOPE", -50, 50, -50, BI},
-    {"RESO", 0, 100, 20, UNI},
+    {"CUT", 0, 100, 70, UNI, 0, 21, 0},
+    {"SLOPE", -50, 50, -50, BI, 0, 21, 0},
+    {"RESO", 0, 100, 20, UNI, 0, 21, 0},
     {"DCAY", 0, 100, 50, UNI, 0, 2, 0, {}, {"SUST", "CHOKE"}},  // Q 4 .. 1000: from the middle up, the bands ring as pitches
     // modes: variation per hit (PITCH: the notes it rings move by up to
     // +- n semitones, in the scale; TONE: its brightness by up to +- 5 n)
     {"PITCH", -24, 24, 0, BI, 0, 25, 0},
     {"TONE", -50, 50, 0, BI, 0, 11, 0},
     {"SCALE", 0, 3, 0, LIST, 4, 0, 0, {"CHROM", "MAJOR", "MINOR", "PENTA"}},
-    {"WET", 0, 100, 100, UNI},
+    {"WET", 0, 100, 100, UNI, 0, 21, 0},
   }
 };
 
 class ResonatorDevice : public Device {
 public:
   enum { CUT, SLOPE, RESO, DECAY, PITCH, TONE, SCALE, WET };
+  bool Varies(int p) const override { return p == CUT || p == SLOPE || p == RESO || p == WET; }
   // the variations' bars: +- steps, out from the middle
-  int BarStyle(int p) const override { return p == PITCH || p == TONE ? BAR_CENTRE : BAR_PARTS; }
+  int BarStyle(int p) const override { return p == PITCH || p == TONE ? BAR_CENTRE : Device::BarStyle(p); }
   static constexpr int BANDS = AudioEffectResonator::BANDS;
   ResonatorDevice() : Device(RESONATOR_DEF) {}
   AudioStream* in() override { return &fx; }
@@ -5341,10 +5386,10 @@ PROGMEM static const DeviceDef SPRAY_DEF = {
     // 0 = the oldest audio (left on the picture), 100 = now (right); mode:
     // position variation, 0..100% in 5% steps
     {"POS", 0, 100, 50, UNI, 0, 21, 4},
-    {"SHAPE", 0, 100, 70, UNI},
-    {"FDBK", 0, 100, 0, UNI},
-    {"SPRD", 0, 100, 60, UNI},  // stereo spread: each grain's random place left / right
-    {"MIX", 0, 100, 50, UNI},  // source <> grains
+    {"SHAPE", 0, 100, 70, UNI, 0, 21, 0},
+    {"FDBK", 0, 100, 0, UNI, 0, 21, 0},
+    {"SPRD", 0, 100, 60, UNI, 0, 21, 0},  // stereo spread: each grain's random place left / right
+    {"MIX", 0, 100, 50, UNI, 0, 21, 0},  // source <> grains
   },
   {"", ""},
 };
@@ -5352,8 +5397,9 @@ PROGMEM static const DeviceDef SPRAY_DEF = {
 class SprayDevice : public Device {
 public:
   enum { RATE, SIZE, PITCH, POS, SHAPE, FDBK, SPREAD, LEVEL };
+  bool Varies(int p) const override { return p == SHAPE || p == FDBK || p == SPREAD || p == LEVEL; }
   // the variations' bars: all +-, out from the middle
-  int BarStyle(int p) const override { return p == PITCH || p == SIZE || p == POS ? BAR_CENTRE : BAR_PARTS; }
+  int BarStyle(int p) const override { return p == PITCH || p == SIZE || p == POS ? BAR_CENTRE : Device::BarStyle(p); }
   static constexpr float BUF_SECS = 4.0f;
   SprayDevice();
   // each grain takes PITCH, SIZE and POS once as it starts: the
@@ -5647,13 +5693,13 @@ PROGMEM static const DeviceDef MODAL_DEF = {
   "BEATER", "MDL", 8, {"HIT", ""},  // (was MODAL)
   {
     {"NOTE", 0, 72, 36, UNI},      // C0 .. C6, C3 in the middle
-    {"STRUC", 0, 100, 70, UNI},    // the module's STRUCTURE (SYMQ: the chord)
-    {"BRITE", 0, 100, 60, UNI},
-    {"DAMP", 0, 100, 65, UNI},
-    {"POS", 0, 100, 25, UNI},      // where it is struck
-    {"SPRD", 0, 100, 70, UNI},     // odd / even apart
+    {"STRUC", 0, 100, 70, UNI, 0, 21, 0},    // the module's STRUCTURE (SYMQ: the chord)
+    {"BRITE", 0, 100, 60, UNI, 0, 21, 0},
+    {"DAMP", 0, 100, 65, UNI, 0, 21, 0},
+    {"POS", 0, 100, 25, UNI, 0, 21, 0},      // where it is struck
+    {"SPRD", 0, 100, 70, UNI, 0, 21, 0},     // odd / even apart
     {"MODEL", 0, RingsVoice::MODELS - 1, 0, UNI},
-    {"WET", 0, 100, 100, UNI},
+    {"WET", 0, 100, 100, UNI, 0, 21, 0},
   },
   {"", ""},
 };
@@ -5661,6 +5707,7 @@ PROGMEM static const DeviceDef MODAL_DEF = {
 class ModalDevice : public Device {
 public:
   enum { NOTE, STRUC, BRITE, DAMP, POS, SPRD, MODEL, WET };
+  bool Varies(int p) const override { return p != NOTE && p != MODEL; }
   ModalDevice() : Device(MODAL_DEF), sum_l(in_mix, 0, fx, 0) {
     in_mix.gain(0, 0.5f); in_mix.gain(1, 0.5f); in_mix.gain(2, 0.0f); in_mix.gain(3, 0.0f);
   }
@@ -6275,7 +6322,7 @@ PROGMEM static const DeviceDef CHIME_DEF = {
     // mode: variation per hit, +- 5 n
     {"TONE", -50, 50, 0, BI, 0, 11, 0},
     {"SCALE", 0, 14, 3, UNI},    // 7 of 12 notes, then 8 microtonal (see Apply)
-    {"WET", 0, 100, 100, UNI},
+    {"WET", 0, 100, 100, UNI, 0, 21, 0},
   },
   {"", ""},
 };
@@ -6283,9 +6330,10 @@ PROGMEM static const DeviceDef CHIME_DEF = {
 class ChimeDevice : public Device {
 public:
   enum { NOTE, SPRD, DECAY, ROT, TUNE, TONE, SCALE, WET };
+  bool Varies(int p) const override { return p == WET; }
   // the variations' bars (NOTE, SPRD's MORPH, ROT's count are no variations)
   int BarStyle(int p) const override {
-    return p == TUNE || p == TONE || p == DECAY ? BAR_CENTRE : BAR_PARTS;  // (+-: out from the middle)
+    return p == TUNE || p == TONE || p == DECAY ? BAR_CENTRE : Device::BarStyle(p);  // (+-: out from the middle)
   }
   static constexpr int SCALES = 15, SCALES12 = 7;  // the first 7 on the 12 notes (TUNE)
   ChimeDevice() : Device(CHIME_DEF) {}
