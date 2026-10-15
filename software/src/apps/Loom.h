@@ -3099,8 +3099,10 @@ FLASHMEM void AppLoom::DrawDevice() const {
     char buf[12];
     snprintf(buf, sizeof(buf), "%c %s", 'A' + mod_cursor, d->def.name);
     const int end = name_x + 6 * int(strlen(buf));
-    if (mod_mode ? end > 62 : end > 80) snprintf(buf, sizeof(buf), "%c %s", 'A' + mod_cursor, ShownTag(d->def.tag));
-    else if (end > 50) act_x = 82;
+    // (clear of the clock mark at 96)
+    const int room = d->def.actions[0][0] ? end + 6 + 18 : end;
+    if (mod_mode ? end > 62 : room > 94) snprintf(buf, sizeof(buf), "%c %s", 'A' + mod_cursor, ShownTag(d->def.tag));
+    else act_x = std::max(56, end + 6);
     gfxPrint(name_x, 1, buf);
   } else {
     gfxPrint(name_x, 1, name);
