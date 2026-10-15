@@ -889,8 +889,9 @@ FLASHMEM int TreadleMod::Level(int part, int s) const {
 // how much a drummer would play a part's silent step s (more: sooner).
 // The beat first, then the eighths, then the sixteenths, and the map's
 // own leaning; the kick (LOW) leans into its own hits (the eighth and
-// the sixteenth before them) and stays off the snare's; the snare (MID)
-// plays ghost notes round its hits and rolls into the end of the part;
+// the sixteenth before them) and stays off the snare's and the backbeat;
+// the snare (MID) takes the backbeat, plays ghost notes round its hits
+// and rolls into the end of the part;
 // the hi-hat (HIGH) fills the eighths, then the sixteenths
 FLASHMEM int TreadleMod::FillScore(int part, int s, int len) const {
   auto on = [&](int pt, int k) { return Hits(pt, Level(pt, ((k % len) + len) % len)); };
@@ -902,11 +903,13 @@ FLASHMEM int TreadleMod::FillScore(int part, int s, int len) const {
       if (on(0, s + 2) && (s & 1) == 0) sc += 40;
       if (on(0, s + 1)) sc += 25;
       if (on(1, s)) sc -= 90;
+      if ((b & 7) == 4) sc -= 50;  // (the backbeat is the snare's)
       break;
     case 1:  // snare
       if (on(1, s - 1) || on(1, s + 1)) sc += 35;
       if (s >= len - 8) sc += 10 + (s - (len - 8)) * 8;
       if (on(0, s) && (b & 3) == 0) sc -= 60;
+      sc += (b & 7) == 4 ? 40 : (b & 7) == 0 ? -40 : 0;  // the backbeat, not the one
       sc -= (b & 1) == 0 ? 0 : 10;
       break;
     default:  // hi-hat
