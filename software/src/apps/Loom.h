@@ -179,6 +179,8 @@ namespace loom {
   Track tracks[NUM_TRACKS];
   LoomMixer* mixer = nullptr;
   inline uint32_t view_frames = 0;  // pages drawn (status print: a second)
+  inline uint32_t box_rises[2][4] = {};  // each track's boxes A-D: times past half way (USB status)
+  inline uint8_t box_high[2] = {};
   enum DropKind : uint8_t { DROP_LOST, DROP_SKIP, DROP_SAVE, DROP_MUTE, DROP_GAP, DROP_PATCH };
   void DropNote(uint8_t kind, uint8_t track, uint32_t n, uint16_t detail = 0);  // the dropout log
   LoomPreview* preview = nullptr;  // PLAYER's file list: B listens
@@ -1681,6 +1683,13 @@ FLASHMEM void AppLoom::ModulateAll() {
   for (int t = 0; t < NUM_TRACKS; t++)
     for (int i = 0; i < NUM_MODS; i++)
       if (tracks[t].mod_tap[i] & TAP_OTHER) tracks[t].mod_out[i] = tracks[t].mod_step[i] = BoxValue(t, i);
+  // (USB status: how often each box has passed half way)
+  for (int t = 0; t < NUM_TRACKS; t++)
+    for (int i = 0; i < NUM_MODS; i++) {
+      const bool hi = tracks[t].mod_out[i] > 0.5f;
+      if (hi && !(box_high[t] >> i & 1)) box_rises[t][i]++;
+      box_high[t] = uint8_t(hi ? box_high[t] | 1u << i : box_high[t] & ~(1u << i));
+    }
   for (auto& tr : tracks) {
     for (int s = SOURCE; s < SLOT_COUNT; s++) {
       if (Device* d = tr.current(s)) {
@@ -2109,6 +2118,8 @@ FLASHMEM void AppLoom::MainLoop() {
       const loom::Modulator* m = ModAt(t, i);
       Serial.printf(" %c:%s=%d.%02d", 'A' + i, m ? m->def.tag : "-", int(tr.mod_out[i]), int(tr.mod_out[i] * 100) % 100);
     }
+    Serial.printf(" | hits");
+    for (int i = 0; i < loom::NUM_MODS; i++) Serial.printf(" %lu", (unsigned long)loom::box_rises[t][i]);
     for (int i = 0; i < loom::MOD_BUSES; i++)  // what a box sends when not its own modulator's first output
       if (ModTap(t, i)) Serial.printf(" %c<%02x", 'A' + i, ModTap(t, i));
     Serial.println();
