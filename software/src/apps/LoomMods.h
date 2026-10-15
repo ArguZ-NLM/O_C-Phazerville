@@ -846,9 +846,9 @@ public:
 private:
   int step = -1;           // steps since the start (-1: none yet)
   int pos[3] = {};         // where each part is
-  // each part's length and PLAY as it plays this round (a change waits
-  // for the round's end), its direction (PING), steps into the round (DRUNK)
-  uint8_t len_now[3] = {32, 32, 32}, play_now[3] = {}, run[3] = {};
+  // each part's PLAY as it plays this round (a change waits for an end),
+  // its direction (PING), steps into the round (DRUNK)
+  uint8_t play_now[3] = {}, run[3] = {};
   int8_t dir[3] = {1, 1, 1};
   int64_t grid_at = -1, grid_base = 0;
   float grid_div = 0.0f;
@@ -873,28 +873,32 @@ FLASHMEM int TreadleMod::Level(int part, int s) const {
   return std::min(255, ((cd * qy + ab * (255 - qy)) >> 8) + stir);
 }
 
-// step s since the start: each part one step on in its round; at a
-// round's end (FWD: past the last step, REV: past the first, PING: back
-// where it started, DRUNK: as many steps as it is long) it takes the
-// length and PLAY set now, so a change never cuts a round short
+// step s since the start: each part one step on. Its length counts at
+// once, the step it is on stays: it plays on to the new end and turns
+// there (shorter than where it is: it turns on the next step). A new PLAY
+// waits for an end (FWD: past the last step, REV: past the first, PING:
+// back at the start, DRUNK: as many steps as the part is long).
 FLASHMEM void TreadleMod::Advance(int s) {
   step = s;
   const int play = constrain(int(cur[P_PLAY]), 0, 3);
   for (int part = 0; part < 3; part++) {
-    int len = len_now[part];
+    const int len = Len(part);
     int& ps = pos[part];
     bool end = s == 0;  // (the start: everything new)
     if (!end) {
       switch (play_now[part]) {
-        case REV: if (--ps < 0) end = true; break;
+        case REV:
+          if (ps >= len) ps = len - 1;  // (past the new end: in at its last step)
+          else if (--ps < 0) end = true;
+          break;
         case PING:
           if (len < 2) { end = true; break; }
-          if (dir[part] > 0 && ps >= len - 1) dir[part] = -1;
+          if (ps >= len - 1) { ps = std::min(ps, len - 1); dir[part] = -1; }
           ps += dir[part];
-          if (dir[part] < 0 && ps <= 0) end = true;  // (step 1 played on the way back: the round is done)
+          if (dir[part] < 0 && ps <= 0) end = true;  // (back at the start: the round is done)
           break;
         case DRUNK:
-          ps = (ps + (random(2) ? 1 : len - 1)) % len;
+          ps = ((ps < len ? ps : len - 1) + (random(2) ? 1 : len - 1)) % len;
           if (++run[part] >= len) end = true;
           break;
         default: if (++ps >= len) end = true;
@@ -902,7 +906,6 @@ FLASHMEM void TreadleMod::Advance(int s) {
     }
     if (!end) continue;
     const int was = play_now[part];
-    len_now[part] = uint8_t(len = Len(part));
     play_now[part] = uint8_t(play);
     run[part] = 0;
     switch (play) {
@@ -962,7 +965,7 @@ FLASHMEM void TreadleMod::DrawViz(int x, int y, int w, int h) {
   const int rh = h / 3;
   const int bw = std::max(2, (w - 6) / 32);
   for (int part = 0; part < 3; part++) {
-    const int top = y + part * rh, base = top + rh - 3, len = len_now[part];  // (as it plays this round)
+    const int top = y + part * rh, base = top + rh - 3, len = Len(part);
     if (part == own_out % 3) gfxRect(x, top + 1, 2, rh - 4);
     for (int s = 0; s < len; s++) {
       const int lv = Level(part, s), bx = x + 4 + s * bw;
