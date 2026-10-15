@@ -1842,6 +1842,9 @@ FLASHMEM void AppLoom::MainLoop() {
           else c++;
         }
         if (!g_capture) g_capture = new OutCapture;
+        Serial.printf("CHORD '%s':", g_set_text);
+        for (int i = 0; i < chord_n; i++) Serial.printf(" %d", chord[i]);
+        Serial.println();
         if (chord_n && g_capture->Start(false, -1, true)) { chord_at = millis() | 1; chord_on = false; }
         else Serial.println("CHORD: no notes / no PSRAM");
       }
