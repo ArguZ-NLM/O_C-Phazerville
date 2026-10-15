@@ -18,7 +18,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// Modulators for the Loom app: WAVE / RANDOM / ADSR / FOLLOW. Four slots per track (MOD A-D); a device setting picks one as its
+// Modulators for the Loom app: WAVE / RANDOM / ADSR / FOLLOW / TREADLE. Four slots per track (MOD A-D); a device setting picks one as its
 // modulation source. They run in the main loop about once per millisecond and
 // output 0..1, like a 0..10 V CV; the setting's U/B choice decides whether
 // that pushes one way or swings around the setting.
@@ -30,6 +30,12 @@
 #pragma once
 
 #include "LoomDevices.h"
+// the drum map TREADLE reads (the one this build's DrumMap applet uses)
+#ifdef DRUMMAP_GRIDS2
+#include "../grids2_resources.h"
+#else
+#include "../grids_resources.h"
+#endif
 
 namespace loom {
 
@@ -92,11 +98,11 @@ FLASHMEM void Modulator::FormatRate(int p, float hz, char* buf, size_t n) const 
   else snprintf(buf, n, "%dHz", int(hz + 0.5f));
 }
 
-FLASHMEM bool Modulator::Gate(int src) const { return TrigGate(src); }
+FLASHMEM bool Modulator::Gate(int src) const { return SrcGate(src); }
 
 // slot: which of this modulator's trigger settings (for MIDI edge tracking)
 FLASHMEM bool Modulator::Edge(int src, const ModCtx& ctx, int slot) {
-  return TrigEdge(src, ctx.edges, prev_gate[slot]);
+  return SrcEdge(src, ctx.edges, prev_gate[slot]);
 }
 
 FLASHMEM void Modulator::Run(const ModCtx& ctx) {
@@ -707,7 +713,7 @@ FLASHMEM void ClockDevice::Tick(const ModCtx& ctx) {
       midi_mark_us = now;
     }
   } else if (src >= 2) {
-    if (TrigEdge(src - 1, ctx.edges, prev_gate[0])) {
+    if (SrcEdge(src - 1, ctx.edges, prev_gate[0])) {
       const uint32_t dt = now - last_edge_us;
       static const uint8_t ppqn[] = {1, 2, 4, 24};
       if (last_edge_us && dt > 2000 && dt < 4000000)
@@ -774,16 +780,141 @@ FLASHMEM void ClockDevice::DrawMini(int x, int y, int w, int h) {
   else gfxFrame(x + w / 2 - 3, y + h / 2 + 2, 6, 6);
 }
 
+
+/////////////////////////////////////////////////////////////////
+// TREADLE: drum patterns. On a loom the treadling is the order the
+// treadles are pressed in, the rhythm of the weave. A map of 25 drum
+// patterns (32 steps each, for a low, a mid and a high part) after Grids
+// (c) 2011-2012 Emilie Gillet, GPL 3 (the pattern data): X / Y move
+// across the map, blending its four nearest patterns; FILL sets how many of
+// the steps sound (its mode: the part), CHAOS stirs a little at random in
+// each round. Each hit is a short pulse, accents full height, the others
+// lower by ACCNT, so it strikes devices (MOD A-H as trigger sources) and
+// plays drums from a CV output.
+/////////////////////////////////////////////////////////////////
+PROGMEM static const DeviceDef TREADLE_DEF = {
+  "TREADLE", "TRD", 8, {"RST", ""},
+  {
+    {"X", 0, 100, 50, UNI},
+    {"Y", 0, 100, 50, UNI},
+    {"FILL", 0, 100, 50, UNI, 0, 3, 0, {}, {"LOW", "MID", "HIGH"}},  // mode: the part
+    {"CHAOS", 0, 100, 0, UNI},
+    {"RATE", 0, 100, 45, UNI, 0, 2, 1, {}, {"FREE", "CLOCK"}},  // a step; on the clock 1/16 to start
+    {"RESET", 0, TRIG_SOURCES - 1, 0, UNI},
+    {"ACCNT", 0, 100, 50, UNI},  // how much lower the plain hits are than the accents
+    {"LEN", 1, 32, 32, UNI},
+  }
+};
+
+class TreadleMod : public Modulator {
+public:
+  enum { P_X, P_Y, P_FILL, P_CHAOS, P_RATE, P_RESET, P_ACCNT, P_LEN };
+  TreadleMod() : Modulator(TREADLE_DEF) {
+    for (int i = 0; i < NUM_DIVS; i++)  // RATE: a sixteenth to start
+      if (DivBeats(i) == 0.25f) { val[P_RATE] = int16_t(DivValue(i, 0, 100)); cur[P_RATE] = val[P_RATE]; }
+  }
+  void Tick(const ModCtx& ctx) override;
+  void Format(int p, char* buf, size_t n) const override;
+  void Action(int a) override { if (a == 0) Restart(); }
+  void DrawViz(int x, int y, int w, int h) override;
+private:
+  int step = -1;           // the step playing (-1: none yet)
+  int64_t grid_at = -1, grid_base = 0;
+  float grid_div = 0.0f;
+  float t = 0.0f, gate_s = 0.0f, step_s = 0.125f;
+  uint8_t stir = 0;        // CHAOS: this round's push
+  float hit_lvl = 0.0f;
+  int Part() const { return constrain(int(mode[P_FILL]), 0, 2); }
+  int Len() const { return constrain(int(cur[P_LEN]), 1, 32); }
+  int Level(int s) const;  // the map's strength of step s, with CHAOS (0..255)
+  bool Hits(int lv) const { return lv > 255 - cur[P_FILL] * 255 / 100; }
+  void Restart() { grid_base = grid_at >= 0 ? grid_at + 1 : 0; step = -1; t = 0.0f; }
+  void Advance(int s);
+};
+
+FLASHMEM int TreadleMod::Level(int s) const {
+  const int x = cur[P_X] * 255 / 100, y = cur[P_Y] * 255 / 100;
+  const int i = std::min(3, x >> 6), j = std::min(3, y >> 6);
+  const int off = Part() * 32 + (s & 31);
+  const int a = grids::drum_map[i][j][off], b = grids::drum_map[i + 1][j][off];
+  const int c = grids::drum_map[i][j + 1][off], d = grids::drum_map[i + 1][j + 1][off];
+  const int qx = (x << 2) & 255, qy = (y << 2) & 255;
+  const int ab = (b * qx + a * (255 - qx)) >> 8, cd = (d * qx + c * (255 - qx)) >> 8;
+  return std::min(255, ((cd * qy + ab * (255 - qy)) >> 8) + stir);
+}
+
+FLASHMEM void TreadleMod::Advance(int s) {
+  step = s;
+  if (s == 0) stir = uint8_t(random(0, cur[P_CHAOS] * 255 / 100 / 4 + 1));  // a new round
+  const int lv = Level(s);
+  if (Hits(lv)) {
+    // accents (the map's strong steps) full height, the others lower by ACCNT
+    hit_lvl = lv > 192 ? 1.0f : 1.0f - cur[P_ACCNT] * 0.0045f;
+    gate_s = constrain(step_s * 0.25f, 0.005f, 0.03f);
+    flash = 0.06f;
+  }
+}
+
+FLASHMEM void TreadleMod::Tick(const ModCtx& ctx) {
+  const bool synced = Synced(P_RATE);
+  if (Restarted() && synced) { grid_at = -1; grid_base = 0; step = -1; }
+  if (cur[P_RESET] && Edge(cur[P_RESET], ctx, 0)) Restart();
+  const int len = Len();
+  if (synced && clock_running) {
+    const float db = DivBeats(DivIndex(cur[P_RATE], 0, 100));
+    step_s = db * 60.0f / tempo_bpm;
+    const int64_t g = ClockGrid(db);
+    if (db != grid_div) { grid_div = db; grid_base = g - (step >= 0 ? step : 0); grid_at = g - 1; }
+    if (g != grid_at) {
+      grid_at = g;
+      Advance(int(((g - grid_base) % len + len) % len));
+    }
+  } else if (!synced) {
+    const float hz = RateHz(P_RATE, 0.5f, 30.0f);
+    step_s = 1.0f / hz;
+    t += hz * ctx.dt;
+    if (t >= 1.0f || step < 0) { t -= floorf(t); Advance(step < 0 ? 0 : (step + 1) % len); }
+  }
+  if (gate_s > 0.0f) { gate_s -= ctx.dt; out = hit_lvl; }
+  else out = 0.0f;
+}
+
+FLASHMEM void TreadleMod::Format(int p, char* buf, size_t n) const {
+  if (p == P_RATE) FormatRate(p, RateHz(P_RATE, 0.5f, 30.0f), buf, n);
+  else if (p == P_RESET) FormatTrig(cur[P_RESET], buf, n);
+  else Device::Format(p, buf, n);
+}
+
+// the pattern: a bar per step as tall as the map's strength there; steps
+// that sound solid (accents to the top), the rest a dotted outline, the
+// line FILL draws across; the step playing marked underneath
+FLASHMEM void TreadleMod::DrawViz(int x, int y, int w, int h) {
+  const int len = Len(), ww = w - 2, hh = h - 4, base = y + hh;
+  const int bw = std::max(2, ww / len);
+  const int thr = 255 - cur[P_FILL] * 255 / 100;
+  for (int s = 0; s < len; s++) {
+    const int lv = Level(s), bx = x + 1 + s * bw;
+    const int bh = std::max(1, lv * hh / 255);
+    if (Hits(lv)) gfxRect(bx, base - bh + 1, std::max(1, bw - 1), bh);
+    else gfxDottedLine(bx, base, bx, base - bh + 1, 2);
+  }
+  const int ty = base - thr * hh / 255;
+  gfxDottedLine(x + 1, ty, x + 1 + len * bw - 1, ty, 3);
+  if (step >= 0 && step < len) gfxRect(x + 1 + step * bw, base + 2, std::max(1, bw - 1), 2);
+}
+
 /////////////////////////////////////////////////////////////////
 // MOD slots: type 0 = off
 /////////////////////////////////////////////////////////////////
 constexpr int NUM_MODS = 4;
-constexpr int MOD_TYPES = 5;
+constexpr int MOD_TYPES = 6;
+constexpr int MOD_TYPES_V20 = 5;  // (files before version 21: no TREADLE)
 
-// by name: ADSR, FOLLOW, RANDOM, WAVE (files from before the sort used
+// by name: ADSR, FOLLOW, RANDOM, WAVE, then TREADLE (added later, at the
+// end so saved files keep their numbers; files from before the sort used
 // WAVE, RANDOM, ADSR, FOLLOW: OLD_MOD_TYPE maps them)
-PROGMEM static const char MOD_TYPE_TAGS[MOD_TYPES][4] = {"-", "ENV", "FOL", "RND", "WAV"};
-constexpr uint8_t OLD_MOD_TYPE[MOD_TYPES] = {0, 4, 3, 1, 2};
+PROGMEM static const char MOD_TYPE_TAGS[MOD_TYPES][4] = {"-", "ENV", "FOL", "RND", "WAV", "TRD"};
+constexpr uint8_t OLD_MOD_TYPE[MOD_TYPES] = {0, 4, 3, 1, 2, 5};
 
 FLASHMEM static Modulator* MakeModulator(int type) {
   switch (type) {
@@ -791,6 +922,7 @@ FLASHMEM static Modulator* MakeModulator(int type) {
     case 2: return new FollowMod;
     case 3: return new RandomMod;
     case 4: return new WaveMod;
+    case 5: return new TreadleMod;
     default: return nullptr;
   }
 }

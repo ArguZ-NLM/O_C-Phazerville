@@ -213,18 +213,21 @@ FLASHMEM static float DivSeconds(int idx) { return DivBeats(idx) * 60.0f / tempo
 FLASHMEM static void FormatDiv(int idx, char* buf, size_t n) { ClockDiv(idx, nullptr, buf, n); }
 
 // trigger source numbering: 0 off, 1-4 gate in, 5-12 CV in, 13+ MIDI map
-constexpr int TRIG_SOURCES = 1 + 4 + 8 + MIDIMAP_MAX;
+constexpr int TRIG_SOURCES = 1 + 4 + 8 + MIDIMAP_MAX + 8;  // ... then MOD A-H (a modulator past half way)
+constexpr int TRIG_MOD0 = 1 + 4 + 8 + MIDIMAP_MAX;  // MOD A
 
 FLASHMEM static void FormatTrig(int src, char* buf, size_t n) {
   if (src <= 0) snprintf(buf, n, "none");
   else if (src <= 4) snprintf(buf, n, "TR%d", src);
   else if (src <= 12) snprintf(buf, n, "CV%d", src - 4);
-  else snprintf(buf, n, "MIDI%d", src - 12);
+  else if (src < TRIG_MOD0) snprintf(buf, n, "MIDI%d", src - 12);
+  else snprintf(buf, n, "MOD %c", 'A' + (src - TRIG_MOD0));
 }
 
 FLASHMEM static bool TrigGate(int src) {
   if (src <= 0) return false;
   if (src <= 12) return HS::frame.gate_high[src - 1];
+  if (src >= TRIG_MOD0) return false;  // (MOD A-H: the device's own bus, see Device::SrcGate)
   return HS::frame.MIDIState.mapping[src - 13].ViewOut() > GATE_THRESHOLD;
 }
 
@@ -258,6 +261,18 @@ public:
   uint8_t act_trig[2] = {};              // trigger sources for the 2 actions
   bool act_prev[2] = {};
   const float* mod_bus = nullptr;        // the track's modulator outputs
+  // a trigger source as this device sees it: MOD A-H are its track's
+  // modulators (a hit once one passes half way), the rest the inputs / MIDI
+  bool SrcGate(int src) const {
+    if (src >= TRIG_MOD0) return mod_bus && src - TRIG_MOD0 < MOD_BUSES && mod_bus[src - TRIG_MOD0] > 0.5f;
+    return TrigGate(src);
+  }
+  bool SrcEdge(int src, uint16_t edges, bool& prev) const {
+    if (src < TRIG_MOD0) return TrigEdge(src, edges, prev);
+    const bool g = SrcGate(src), e = g && !prev;
+    prev = g;
+    return e;
+  }
   uint16_t mod_bi = 0;               // bit per param: bipolar around val
   uint16_t mod_bi2 = 0;              // the same for the second source
   bool active = false;
@@ -504,7 +519,7 @@ FLASHMEM void Device::Modulate() {
 
 FLASHMEM void Device::RunTriggers(uint16_t edges) {
   for (int a = 0; a < 2; a++) {
-    if (act_trig[a] && TrigEdge(act_trig[a], edges, act_prev[a])) Action(a);
+    if (act_trig[a] && SrcEdge(act_trig[a], edges, act_prev[a])) Action(a);
   }
 }
 
