@@ -2832,7 +2832,7 @@ FLASHMEM void AppLoom::SetByText(bool want_mode, const char* text) {
     }
     d->val[p] = was;
   }
-  if (best < 0) { Serial.printf("SET %s: nothing shows \"%s\"\n", pd.name, text); return; }
+  if (best_d >= 1e9f) { Serial.printf("SET %s: nothing shows \"%s\"\n", pd.name, text); return; }  // (values can be below 0)
   // in knob steps (a stuck step ends it)
   auto walk = [&](int target) {
     for (int guard = 0; guard < 4000; guard++) {
