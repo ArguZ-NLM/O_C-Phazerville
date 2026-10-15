@@ -364,6 +364,11 @@ public:
   // the middle (HEDDLE's FDBK / its ± STAGE)
   enum { BAR_PARTS, BAR_HALVES, BAR_LEFT, BAR_CENTRE };
   virtual int BarStyle(int p) const { return AltName(p) ? BAR_HALVES : BAR_PARTS; }
+  // a variation up or down by a percentage: "+-35%" ("+-100": the % no longer fits)
+  static void FormatVar(char* buf, size_t n, int pct) {
+    if (pct >= 100) snprintf(buf, n, "+-%d", pct);
+    else snprintf(buf, n, "+-%d%%", pct);
+  }
   uint16_t alt_on = 0;  // which of those show their second value (the page's, not saved)
   bool AltShown(int p) const { return AltName(p) && (alt_on >> p & 1); }
   // a setting that goes round when turned past an end (DRAFT's POS: its
@@ -5008,7 +5013,7 @@ FLASHMEM void HeddleDevice::FormatMode(int p, char* buf, size_t n) const {
   else if (mode[p] == 0) snprintf(buf, n, "OFF");
   else if (p == SIDE && Phasing()) snprintf(buf, n, "+-%d", 2 * mode[p]);
   else if (p == SIDE) snprintf(buf, n, "%d%%", mode[p] * 10);
-  else snprintf(buf, n, "%d%%", mode[p] * 5);
+  else FormatVar(buf, n, mode[p] * 5);  // FDBK / RESO, MIX: up or down
 }
 
 FLASHMEM void HeddleDevice::Format(int p, char* buf, size_t n) const {
@@ -5120,6 +5125,8 @@ PROGMEM static const DeviceDef RESONATOR_DEF = {
 class ResonatorDevice : public Device {
 public:
   enum { CUT, SLOPE, RESO, DECAY, PITCH, TONE, SCALE, WET };
+  // the variations' bars: +- steps, out from the middle
+  int BarStyle(int p) const override { return p == PITCH || p == TONE ? BAR_CENTRE : BAR_PARTS; }
   static constexpr int BANDS = AudioEffectResonator::BANDS;
   ResonatorDevice() : Device(RESONATOR_DEF) {}
   AudioStream* in() override { return &fx; }
@@ -5316,6 +5323,8 @@ PROGMEM static const DeviceDef SPRAY_DEF = {
 class SprayDevice : public Device {
 public:
   enum { RATE, SIZE, PITCH, POS, SHAPE, FDBK, SPREAD, LEVEL };
+  // the variations' bars: PITCH +- semitones from the middle, SIZE / POS amounts from the left
+  int BarStyle(int p) const override { return p == PITCH ? BAR_CENTRE : p == SIZE || p == POS ? BAR_LEFT : BAR_PARTS; }
   static constexpr float BUF_SECS = 4.0f;
   SprayDevice();
   // each grain takes PITCH, SIZE and POS once as it starts: the
@@ -5407,7 +5416,7 @@ FLASHMEM void SprayDevice::Apply(int p) {
 FLASHMEM void SprayDevice::FormatMode(int p, char* buf, size_t n) const {
   if ((p == PITCH || p == SIZE || p == POS) && mode[p] == 0) snprintf(buf, n, "OFF");
   else if (p == PITCH) snprintf(buf, n, "+-%d", mode[p]);
-  else if (p == SIZE || p == POS) snprintf(buf, n, "%d%%", mode[p] * 5);
+  else if (p == SIZE || p == POS) FormatVar(buf, n, mode[p] * 5);
   else Device::FormatMode(p, buf, n);
 }
 
@@ -5977,6 +5986,8 @@ PROGMEM static const DeviceDef STRETCH_DEF = {
 class StretchDevice : public Device {
 public:
   enum { SPEED, SIZE, PITCH, POS, DIFF, TONE, SPRD, MIX };
+  // the variations' bars: PITCH / TONE +- steps from the middle, the rest amounts from the left
+  int BarStyle(int p) const override { return p == PITCH || p == TONE ? BAR_CENTRE : BAR_LEFT; }
   static constexpr float BUF_SECS = AudioStretch::BUF_SECS;
   void FormatMode(int p, char* buf, size_t n) const override;
   StretchDevice() : Device(STRETCH_DEF) {}
@@ -6076,7 +6087,7 @@ FLASHMEM void StretchDevice::Apply(int p) {
 FLASHMEM void StretchDevice::FormatMode(int p, char* buf, size_t n) const {
   if (mode[p] == 0) snprintf(buf, n, "OFF");
   else if (p == PITCH) snprintf(buf, n, "+-%d", mode[p]);
-  else snprintf(buf, n, "%d%%", mode[p] * 5);
+  else FormatVar(buf, n, mode[p] * 5);
 }
 
 FLASHMEM void StretchDevice::Format(int p, char* buf, size_t n) const {
@@ -6243,6 +6254,10 @@ PROGMEM static const DeviceDef CHIME_DEF = {
 class ChimeDevice : public Device {
 public:
   enum { NOTE, SPRD, DECAY, ROT, TUNE, TONE, SCALE, WET };
+  // the variations' bars (NOTE, SPRD's MORPH, ROT's count are no variations)
+  int BarStyle(int p) const override {
+    return p == TUNE || p == TONE ? BAR_CENTRE : p == DECAY ? BAR_LEFT : BAR_PARTS;
+  }
   static constexpr int SCALES = 15, SCALES12 = 7;  // the first 7 on the 12 notes (TUNE)
   ChimeDevice() : Device(CHIME_DEF) {}
   AudioStream* in() override { return &fx; }
