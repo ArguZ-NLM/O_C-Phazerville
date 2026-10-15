@@ -4218,7 +4218,7 @@ PROGMEM static const DeviceDef ECHO_DEF = {
     // page 1: the delay, page 2: the reverb and TONE
     {"LEVEL", 0, 100, 40, UNI, 0, 2, 1, {}, {"MIX", "SEND"}},  // the delay's; mode: crossfade / added (SEND first)
     {"TIME", 20, 6000, 450, UNI, 0, 2, 0, {}, {"FREE", "CLOCK"}},
-    {"FDBK", 0, 100, 45, UNI},
+    {"FDBK", 0, 100, 45, UNI, 0, 21, 0},  // mode: variation, +- 5 n, new each round of echoes
     {"SPRD", 0, 100, 40, UNI, 0, 3, 1, {}, {"PHASE", "PING", "DIFF"}},
     // the reverb, after the Tegeler Raummaschine: mix, pre-delay, room
     // (size and decay together), walls (soft: dark and dense .. hard:
@@ -4249,6 +4249,10 @@ public:
   void Apply(int p) override;
   void Shimmer();  // GLINT to the engine
   const char* AltName(int p) const override { return p == ROOM ? "GLINT" : p == WALL ? "PRSET" : nullptr; }
+  int BarStyle(int p) const override { return p == FEEDBACK ? BAR_CENTRE : Device::BarStyle(p); }  // (FDBK's +- variation)
+  void Idle() override;
+  // FDBK as heard: the setting with this round's variation
+  float Fdbk() const { return constrain(cur[FEEDBACK] + v_fb, 0.0f, 100.0f); }
   int Step(int p, int v, int dir) const override;
   void Format(int p, char* buf, size_t n) const override;
   void FormatMode(int p, char* buf, size_t n) const override;
@@ -4278,6 +4282,9 @@ private:
   bool mem_ok = false;
   float tap_secs[2][TAPS] = {};
   Meter tap_m[2][TAPS], tail_m;
+  // FDBK's variation: a new amount each round of echoes, glided to
+  float v_fb = 0.0f, v_fb_to = 0.0f;
+  uint32_t v_round = 0, v_ms = 0;
 
   static constexpr float TAP_POS[2][TAPS] = {
     {0.25f, 0.50f, 0.75f, 1.0f},
@@ -4386,7 +4393,7 @@ FLASHMEM void EchoDevice::Apply(int p) {
       Shimmer();
       break;
     case ROOM:     echo.size(v); echo.decay(DecaySecs()); Shimmer(); break;
-    case FEEDBACK: echo.feedback(v); break;
+    case FEEDBACK: echo.feedback(Fdbk() * 0.01f); break;
     case SPREAD:
       echo.pingpong(mode[SPREAD] == PING ? v : 0.0f);
       echo.diffuse(mode[SPREAD] == DIFFUSE ? v : 0.0f);
@@ -4428,6 +4435,7 @@ FLASHMEM void EchoDevice::Format(int p, char* buf, size_t n) const {
 FLASHMEM void EchoDevice::FormatMode(int p, char* buf, size_t n) const {
   if (p == WALL) snprintf(buf, n, "%s", GLINTS[constrain(int(mode[WALL]), 0, GLINT_N - 1)].name);
   else if (p == ROOM) snprintf(buf, n, mode[ROOM] ? "%d" : "off", mode[ROOM] * 5);
+  else if (p == FEEDBACK) { if (mode[p]) FormatVar(buf, n, mode[p] * 5); else snprintf(buf, n, "OFF"); }
   else Device::FormatMode(p, buf, n);
 }
 
@@ -4444,6 +4452,27 @@ FLASHMEM void EchoDevice::Action(int a) {
 }
 
 FLASHMEM bool EchoDevice::ActionLit(int a) const { return a == 0 && echo.frozen(); }
+
+// FDBK's variation: each round of echoes (the 4th head's time) a new
+// amount, up to +- 5 n points, glided to over ~30 ms
+FLASHMEM void EchoDevice::Idle() {
+  if (!active || !mem_ok) return;
+  const uint32_t now = millis();
+  if (now - v_ms < 4) return;
+  const float dt = std::min(0.1f, (now - v_ms) * 0.001f);
+  v_ms = now;
+  const uint32_t round_ms = std::max<uint32_t>(20, uint32_t(tap_secs[0][TAPS - 1] * 1000.0f));
+  if (!mode[FEEDBACK]) v_fb_to = 0.0f;
+  else if (now - v_round >= round_ms) {
+    v_round = now;
+    v_fb_to = random(-1000, 1001) * 0.001f * mode[FEEDBACK] * 5.0f;
+  }
+  if (v_fb != v_fb_to) {
+    v_fb += (v_fb_to - v_fb) * std::min(1.0f, dt * 30.0f);
+    if (fabsf(v_fb - v_fb_to) < 0.05f) v_fb = v_fb_to;
+    echo.feedback(Fdbk() * 0.01f);
+  }
+}
 
 FLASHMEM void EchoDevice::Poll() {
   AudioEffectEcho::Viz v;
@@ -4472,7 +4501,7 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
       const int tw = w - 8;
       auto px = [&](float sec) { return x + int(constrain(sec / MAX_SECS, 0.0f, 1.0f) * tw); };
       const float period = tap_secs[0][TAPS - 1], period_r = tap_secs[1][TAPS - 1];
-      const float fb = std::min(1.0f, cur[FEEDBACK] * 0.01f);
+      const float fb = std::min(1.0f, Fdbk() * 0.01f);  // (with this round's variation)
       // PING: the repeats bounce - each round mostly on one side, the
       // other side down by SPRD (left on the even rounds, right on the odd)
       const bool ping = mode[SPREAD] == PING && cur[SPREAD] > 0;
