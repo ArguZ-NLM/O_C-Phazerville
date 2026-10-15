@@ -917,6 +917,7 @@ class LoomMixer : public AudioStream {
 public:
   LoomMixer() : AudioStream(6, queue) {}  // 4, 5: the file list's quick listen
   volatile float gain[2][2] = {{0.8f, 0.8f}, {0.8f, 0.8f}}; // [track][L/R]
+  float gain_now[2][2] = {{0.8f, 0.8f}, {0.8f, 0.8f}};      // ... as heard: glides there (~5 ms; MUTE clicked)
   volatile float level[2] = {}; // last block's peak per track, for FOLLOW
   // STEREO link: a track's two channels summed into one side of the output
   // (0 both sides as usual, 1 all to the left, 2 all to the right)
@@ -963,13 +964,29 @@ FASTRUN __attribute__((optimize("O2"))) void LoomMixer::update() {  // (O2: the 
       for (int c = 0; c < 2; c++) {
         const audio_block_t* b = in[t * 2 + c];
         if (!b) continue;
-        const int32_t g = static_cast<int32_t>(gain[t][c] * 32767.0f); // Q15
+        const float g_to = gain[t][c];
+        const int32_t g = static_cast<int32_t>(g_to * 32767.0f); // Q15
         const uint8_t rt = route[t];
         // routed: both channels at half into the one side
         const int to = rt ? rt - 1 : c;
         const int sh = rt ? 16 : 15;
         int32_t pk = 0;
-        if (duck[t] >= 1.0f && duck_to[t] >= 1.0f) {
+        if (fabsf(gain_now[t][c] - g_to) > 1e-4f) {
+          // the gain moved (LEVEL, PAN, MUTE): glide to it, with the duck
+          float gn = gain_now[t][c], dk = duck[t];
+          const float k = 1.0f / (0.005f * AUDIO_SAMPLE_RATE_EXACT);
+          const float step = 1.0f / (0.005f * AUDIO_SAMPLE_RATE_EXACT), aim = duck_to[t];
+          const float sc = rt ? 0.5f : 1.0f;
+          for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+            gn += k * (g_to - gn);
+            dk = aim > dk ? std::min(aim, dk + step) : std::max(aim, dk - step);
+            const int32_t v = int32_t(lrintf(b->data[n] * gn * dk * sc));
+            acc[to][n] += v;
+            pk = std::max<int32_t>(pk, abs(v));
+          }
+          gain_now[t][c] = fabsf(gn - g_to) > 1e-4f ? gn : g_to;
+          if (c == 1 || !in[t * 2 + 1]) duck[t] = dk;
+        } else if (duck[t] >= 1.0f && duck_to[t] >= 1.0f) {
           for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
             const int32_t v = (b->data[n] * g + (1 << (sh - 1))) >> sh;  // rounded
             acc[to][n] += v;
@@ -1152,7 +1169,7 @@ PROGMEM static const DeviceDef MIX_DEF = {
     // the chain against the track's source as it came in (0 = only the
     // source, 100 = only the chain): all the effects dialled back at once
     {"MIX", 0, 100, 100, UNI},
-    {"LEVEL", 0, 200, 80, UNI},  // 100: as it comes, 200: twice (a limiter on the output keeps it clean)
+    {"LEVEL", 0, 200, 80, UNI},  // (a double click: 100) 100: as it comes, 200: twice (a limiter on the output keeps it clean)
     {"PAN", -50, 50, 0, BI},
     {"MUTE", 0, 1, 0, LIST, 2, 0, 0, {"off", "ON"}},
     // three bands: the band's level, -12 .. +12 dB; mode: its compressor,
@@ -4191,7 +4208,7 @@ PROGMEM static const DeviceDef ECHO_DEF = {
     {"LEVEL", 0, 100, 30, UNI, 0, 2, 1, {}, {"MIX", "SEND"}},
     {"PRE", 0, 150, 20, UNI},
     {"ROOM", 0, 100, 50, UNI, 0, 21, 0}, // mode: GLINT (a shimmer), the tail pitched back into itself, off .. 100 %
-    {"WALL", -50, 50, -10, BI, 0, 6, 0},  // mode: GLINT's interval (see ROOM)
+    {"WALL", -50, 50, -10, BI, 0, 5, 0},  // mode: GLINT's interval (see ROOM)
   },
   {"DELAY", "REVRB"},
 };
@@ -4212,6 +4229,7 @@ public:
   void Deactivate() override;
   bool ok() const override { return mem_ok; }
   void Apply(int p) override;
+  void Shimmer();  // GLINT to the engine
   int Step(int p, int v, int dir) const override;
   void Format(int p, char* buf, size_t n) const override;
   void FormatMode(int p, char* buf, size_t n) const override;
@@ -4301,6 +4319,13 @@ FLASHMEM void EchoDevice::SetTimes() {
   }
 }
 
+// GLINT: ROOM's mode the amount, WALL's the interval (the engine's
+// interval 4, an octave down, is not offered: the 5th, OCT+5, is its 5)
+FLASHMEM void EchoDevice::Shimmer() {
+  if (mode[WALL] > 4) mode[WALL] = 4;
+  echo.shimmer(mode[ROOM] * 0.05f, mode[WALL] == 4 ? 5 : mode[WALL]);
+}
+
 FLASHMEM void EchoDevice::Apply(int p) {
   const float v = cur[p] * 0.01f;
   switch (p) {
@@ -4311,9 +4336,9 @@ FLASHMEM void EchoDevice::Apply(int p) {
       // (saved before GLINT's interval moved from PRE to WALL: take it along)
       if (mode[PRE]) { mode[WALL] = mode[PRE]; mode[PRE] = 0; }
       echo.pre_delay(cur[PRE]);
-      echo.shimmer(mode[ROOM] * 0.05f, mode[WALL]);
+      Shimmer();
       break;
-    case ROOM:     echo.size(v); echo.decay(DecaySecs()); echo.shimmer(mode[ROOM] * 0.05f, mode[WALL]); break;
+    case ROOM:     echo.size(v); echo.decay(DecaySecs()); Shimmer(); break;
     case FEEDBACK: echo.feedback(v); break;
     case SPREAD:
       echo.pingpong(mode[SPREAD] == PING ? v : 0.0f);
@@ -4323,7 +4348,7 @@ FLASHMEM void EchoDevice::Apply(int p) {
     case WALL:  // soft walls: dark and dense; hard: bright, sparse reflections
       echo.tone(cur[WALL] * 0.02f);
       echo.density(0.5f - cur[WALL] * 0.01f);
-      echo.shimmer(mode[ROOM] * 0.05f, mode[WALL]);  // (its mode: GLINT's interval)
+      Shimmer();  // (its mode: GLINT's interval)
       break;
   }
 }
@@ -4355,9 +4380,9 @@ FLASHMEM void EchoDevice::Format(int p, char* buf, size_t n) const {
 // WALL's mode: GLINT's interval; ROOM's: how much of it
 FLASHMEM void EchoDevice::FormatMode(int p, char* buf, size_t n) const {
   // octave up, fifth up, octave and a fifth up (a twelfth), fourth up,
-  // octave down, octave and fifth up together
-  static const char* const iv[6] = {"OCT", "5TH", "12TH", "4TH", "-OCT", "OCT+5"};
-  if (p == WALL) snprintf(buf, n, "%s", iv[constrain(int(mode[WALL]), 0, 5)]);
+  // octave and fifth up together
+  static const char* const iv[5] = {"OCT", "5TH", "12TH", "4TH", "OCT+5"};
+  if (p == WALL) snprintf(buf, n, "%s", iv[constrain(int(mode[WALL]), 0, 4)]);
   else if (p == ROOM) snprintf(buf, n, mode[ROOM] ? "GL%d" : "GL off", mode[ROOM] * 5);
   else Device::FormatMode(p, buf, n);
 }
@@ -4458,13 +4483,12 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
     };
     // GLINT (ROOM's mode): the tail pitched back into itself, ringing on. A
     // soft halo of dots round the tail, longer and taller with more GLINT,
-    // and dark sparkles in the tail, both drifting up (down on -12) as the
+    // and dark sparkles in the tail, both drifting up as the
     // shimmer climbs; the dots sit on a fixed pattern that slides, so they
     // glide instead of twinkling
     const float glint = mode[ROOM] * 0.05f;  // 0 .. 1
-    const bool g_down = mode[WALL] == 4;     // (an octave down)
     // (whole pixels: slid by fractions the dots twinkled)
-    const float drift = float(int((millis() % 100000) * 0.012f)) * (g_down ? -1.0f : 1.0f);  // px
+    const float drift = float(int((millis() % 100000) * 0.012f));  // px
     auto spark = [&](int px, int py) {  // 0..1, fixed per place on the sliding pattern
       const float t = px * 0.7548777f + (py + drift) * 0.5698403f;
       return t - floorf(t);

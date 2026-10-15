@@ -2272,6 +2272,13 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
         }
       } else if (d && mod_mode) {
         mod_slot ^= 1;  // MOD1 <-> MOD2
+      } else if (d && !focus_mod && d == tracks[track].mix && cursor == MixDevice::MUTE) {
+        // CLOTH's MUTE: a click switches it (no grab and turn); it fades
+        d->val[cursor] ^= 1;
+        editing = false;
+        d->Refresh(cursor);
+        Mirror(d, cursor);
+        r_click_at = 0;
       } else {
         editing = !editing;
         edit_mode = false;
@@ -2627,7 +2634,8 @@ FLASHMEM void AppLoom::DoubleClick(loom::Device* d, int p) {
     const bool fade = src && ((d == tr.reel && p == ReelDevice::XFADE) || (d == tr.player && p == PlayerDevice::XFADE));
     // RANDOM's VARI to 0: the pattern frozen as it is
     const bool freeze = focus_mod && !memcmp(d->def.tag, "RND", 4) && p == RandomMod::P_VARI;
-    const int16_t target = fade || freeze ? 0 : pd.def;
+    const bool level = !focus_mod && d == tr.mix && p == MixDevice::LEVEL;  // CLOTH's LEVEL: 100, as it comes
+    const int16_t target = fade || freeze ? 0 : level ? 100 : pd.def;
     if (v != target) { dc_dev = d; dc_p = p; dc_prev = v; v = target; }
     else if (dc_dev == d && dc_p == p) v = dc_prev;  // back to where it was
     else return;
