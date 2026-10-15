@@ -634,13 +634,18 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
     if (sh_amt_target <= 0.0f && sh_amt < 1e-3f) sh_amt = 0.0f;
     const bool shim_on = sh && sh_amt > 0.0f;
     if (shim_on) {
+      // a shifter a side, as Eventide's (the left tail through A, the right
+      // through B): the same interval detuned ~7 cents apart (a slow,
+      // wide chorus: the same shift both sides built a static mass);
+      // OCT+5: the octave left, the fifth right
+      constexpr float lo = 0.9959650f, hi = 1.0040519f;  // -7 / +7 cents
       static const float RATIO[SHIM_INTERVALS][2] = {
-        {2.0f, 0.0f}, {1.4983071f, 0.0f}, {2.9966142f, 0.0f}, {1.3348399f, 0.0f}, {0.5f, 0.0f}, {2.0f, 1.4983071f}};
+        {2.0f * lo, 2.0f * hi}, {1.4983071f * lo, 1.4983071f * hi}, {2.9966142f * lo, 2.9966142f * hi},
+        {1.3348399f * lo, 1.3348399f * hi}, {0.5f * lo, 0.5f * hi}, {2.0f * lo, 1.4983071f * hi}};
       const float* ra = RATIO[sh_mode];
-      const int nv = ra[1] > 0.0f ? 2 : 1;
-      // (the guard only once the tail is loud: past 0.3 it holds it there)
+      // (the guard only once the tail is loud: past 0.15 it holds it there)
       const float guard = sh_env > 0.15f ? 0.15f / sh_env : 1.0f;
-      const float g = sh_amt * 0.8f * guard * (nv == 2 ? 0.7f : 1.0f);
+      const float g = sh_amt * 0.8f * guard;
       float pk = 0.0f;
       for (int k = 0; k < HALF; k++) {
         for (int c = 0; c < 2; c++) {
@@ -653,11 +658,12 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
           pk = std::max(pk, fabsf(sh_tail[c][k]));
         }
         float o[2] = {0.0f, 0.0f};
-        for (int v = 0; v < nv; v++) {
-          float& d = sh_d[v];
-          d += 1.0f - ra[v];  // up: the heads catch up with the writing
+        for (int c = 0; c < 2; c++) {  // side c through its own shifter
+          float& d = sh_d[c];
+          d += 1.0f - ra[c];  // up: the heads catch up with the writing
           if (d < 2.0f) d += SH_WIN;
           if (d >= 2.0f + SH_WIN) d -= SH_WIN;
+          const int16_t* b = sh + c * SH_LEN;
           for (int hd = 0; hd < 2; hd++) {
             float dd = d + hd * (SH_WIN * 0.5f);
             if (dd >= 2.0f + SH_WIN) dd -= SH_WIN;
@@ -667,10 +673,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
             if (rp < 0.0f) rp += SH_LEN;
             const int i0 = int(rp), i1 = i0 + 1 < SH_LEN ? i0 + 1 : 0;
             const float fr = rp - i0;
-            for (int c = 0; c < 2; c++) {
-              const int16_t* b = sh + c * SH_LEN;
-              o[c] += wgt * (b[i0] + fr * (b[i1] - b[i0])) * (1.0f / RV_Q);
-            }
+            o[c] += wgt * (b[i0] + fr * (b[i1] - b[i0])) * (1.0f / RV_Q);
           }
         }
         if (++sh_w >= SH_LEN) sh_w = 0;
