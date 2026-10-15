@@ -825,7 +825,7 @@ PROGMEM static const DeviceDef TREADLE_DEF = {
     {"PLAY", 0, 3, 0, LIST, 4, 0, 0, {"FWD", "REV", "PING", "DRUNK"}},
     {"X", 0, 100, 50, UNI},
     {"Y", 0, 100, 50, UNI},
-    {"CHAOS", -32, 32, 0, BI},  // (-: each step that sounds a chance in 32 to be left out; +: that share of the silent ones filled in)
+    {"CHAOS", -32, 32, 0, BI},  // (-: each step that sounds a chance in 32 to be left out; +: that share of them added)
     {"RATE", 0, 100, 74, UNI, 0, 2, 1, {}, {"FREE", "CLOCK"}},  // a step; on the clock (74: 1/16)
   },
   {"FILL", "MAP"}
@@ -918,14 +918,16 @@ FLASHMEM int TreadleMod::FillScore(int part, int s, int len) const {
   return sc;
 }
 
-// CHAOS above 0: fills that share of the part's silent steps (all at
-// 32), the ones a drummer would play first, with a little chance in
-// which, so each run through differs
+// CHAOS above 0: adds steps, as many as that share of the steps the part
+// plays (as many again at 32: the fill sets how busy, CHAOS only varies
+// it; no steps, nothing added), the ones a drummer would play first,
+// with a little chance in which, so each run through differs
 FLASHMEM void TreadleMod::Fill(int part, int len, int ch) {
-  int sc[32], idx[32], n = 0;
+  int sc[32], idx[32], n = 0, hits = 0;
   for (int k = 0; k < len; k++)
-    if (!Hits(part, Level(part, k))) { idx[n] = k; sc[n++] = FillScore(part, k, len) + int(random(50)); }
-  const int want = (n * ch + 16) / 32;
+    if (Hits(part, Level(part, k))) hits++;
+    else { idx[n] = k; sc[n++] = FillScore(part, k, len) + int(random(50)); }
+  const int want = (hits * ch + 16) / 32;
   for (int i = 0; i < want && i < n; i++) {
     int best = i;
     for (int j = i + 1; j < n; j++) if (sc[j] > sc[best]) best = j;
