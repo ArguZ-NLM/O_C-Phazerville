@@ -170,6 +170,7 @@ private:
   float osc_c = 1.0f, osc_s = 0.0f;
   float hb[2][8][4] = {};
   float hb_d[2] = {}, hb_fb[2] = {};
+  float side_g[2] = {1.0f, 1.0f};  // +1 up, -1 down: glides when SIDE changes (no click)
   float mix_now = 0.0f;
   // Olli Niemitalo's coefficients (squared): 90 degrees apart within ~0.1
   // degree from ~20 Hz to ~20 kHz at 48 kHz
@@ -371,7 +372,8 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
         const float red = hb_d[c];  // the first chain a sample later
         hb_d[c] = re;
         const bool up = sh_side == SIDE_UP || (sh_side == SIDE_BOTH && c == 0);
-        const float sh = up ? red * osc_c + im * osc_s : red * osc_c - im * osc_s;  // (measured: + is up)
+        side_g[c] += 0.003f * ((up ? 1.0f : -1.0f) - side_g[c]);
+        const float sh = red * osc_c + side_g[c] * im * osc_s;  // (measured: + is up)
         hb_fb[c] = sh;
         o2[c] += mix_now * (sh - o2[c]);
       }

@@ -4511,14 +4511,16 @@ PROGMEM static const DeviceDef DIRT_DEF = {
 // (left) for ever, in octaves a second; SHCLK / PHCLK: the same on the
 // clock (a turn / an octave a note value). SHIFT: SIDE, which way the
 // sound goes (BOTH: up left, down right); PHASE: STAGE, 4 .. 20
-// all-passes, and RESO
+// all-passes, and RESO. SIDE / STAGE, FDBK / RESO and MIX: modes are
+// variations, drawn anew on each beat (SIDE: the chance it changes; STAGE:
+// +- 2 n stages; FDBK / RESO, MIX: +- 5 n %)
 PROGMEM static const DeviceDef HEDDLE_DEF = {
   "HEDDLE", "HDL", 4, {"", ""},
   {
     {"SHIFT", -100, 100, 0, BI, 0, 4, 0, {}, {"SHIFT", "SHCLK", "PHASE", "PHCLK"}},
-    {"SIDE", 0, 16, 0, UNI},
-    {"FDBK", 0, 100, 0, UNI},
-    {"MIX", 0, 100, 100, UNI},
+    {"SIDE", 0, 16, 0, UNI, 0, 11, 0},
+    {"FDBK", 0, 100, 0, UNI, 0, 21, 0},
+    {"MIX", 0, 100, 100, UNI, 0, 21, 0},
   },
   {""},
 };
@@ -4780,7 +4782,12 @@ public:
                               : 0.05f * powf(40000.0f, abs(v) * 0.01f);
     return v < 0 ? -r : r;
   }
-  int Stages() const { return 4 + 2 * constrain(int(cur[SIDE]), 0, 8); }  // 4, 6 .. 20
+  // as heard: the settings with this beat's variations
+  int Stages() const { return 4 + 2 * constrain(int(cur[SIDE]) + v_stage, 0, 8); }  // 4, 6 .. 20
+  int MaxStages() const { return 4 + 2 * constrain(int(cur[SIDE]) + (Phasing() ? mode[SIDE] : 0), 0, 8); }  // (the CPU)
+  int Side() const { return v_side >= 0 ? v_side : std::min<int>(cur[SIDE], 2); }
+  float Fdbk() const { return constrain(cur[HFDBK] + v_fb, 0.0f, 100.0f); }
+  float Mix() const { return constrain(cur[HMIX] + v_mix, 0.0f, 100.0f); }
   const char* Name(int p) const override {
     if (Phasing() && p == SIDE) return "STAGE";
     if (Phasing() && p == HFDBK) return "RESO";
@@ -4788,6 +4795,8 @@ public:
   }
   int8_t was_phase = -1;  // (switching SHIFT <-> PHASE: SIDE / STAGE start sensible)
   void TempoChanged() override { if (OnClk()) Apply(SHIFT); }
+  void Idle() override;
+  void FormatMode(int p, char* buf, size_t n) const override;
   int Step(int p, int v, int dir) const override {
     if (p == SIDE) return constrain(v + dir, 0, Phasing() ? 8 : 2);
     if (p != SHIFT || !OnClk()) return v + dir;
@@ -4815,6 +4824,11 @@ public:
 private:
   AudioEffectDirt fx;  // (TEXTURE's engine with its own part left clean)
   void DrawPole(int x, int y, int w, int h);
+  void Send();
+  // the variations: drawn on each beat; FDBK and MIX glide there
+  int8_t v_stage = 0, v_side = -1;  // (-1: SIDE as set)
+  float v_fb = 0.0f, v_fb_to = 0.0f, v_mix = 0.0f, v_mix_to = 0.0f;
+  uint32_t v_beat = 0, v_ms = 0;
 };
 
 FLASHMEM void HeddleDevice::Apply(int p) {
@@ -4824,10 +4838,60 @@ FLASHMEM void HeddleDevice::Apply(int p) {
         if (was_phase >= 0) val[SIDE] = cur[SIDE] = Phasing() ? 4 : 0;  // 12 stages / UP
         was_phase = int8_t(Phasing());
       }
-      if (Phasing()) fx.phase(ShiftHz(cur[SHIFT]), Stages(), cur[HFDBK] * 0.009f, cur[HMIX] * 0.01f);
-      else fx.shift(ShiftHz(cur[SHIFT]), std::min<int>(cur[SIDE], 2), cur[HFDBK] * 0.0095f, cur[HMIX] * 0.01f);
+      Send();
       break;
   }
+}
+
+FLASHMEM void HeddleDevice::Send() {
+  if (Phasing()) fx.phase(ShiftHz(cur[SHIFT]), Stages(), Fdbk() * 0.009f, Mix() * 0.01f);
+  else fx.shift(ShiftHz(cur[SHIFT]), Side(), Fdbk() * 0.0095f, Mix() * 0.01f);
+}
+
+// the variations: new ones on each beat, FDBK / RESO and MIX gliding
+// there (~50 ms), SIDE and STAGE at once (the engine glides the side)
+FLASHMEM void HeddleDevice::Idle() {
+  if (!active) return;
+  const uint32_t now = millis();
+  if (now - v_ms < 4) return;
+  const float dt = std::min(0.1f, (now - v_ms) * 0.001f);
+  v_ms = now;
+  bool send = false;
+  if (loom::clock_beat_n != v_beat) {
+    v_beat = loom::clock_beat_n;
+    const auto rnd = [] { return random(-1000, 1001) * 0.001f; };
+    v_fb_to = mode[HFDBK] ? rnd() * mode[HFDBK] * 5.0f : 0.0f;
+    v_mix_to = mode[HMIX] ? rnd() * mode[HMIX] * 5.0f : 0.0f;
+    const int8_t st = Phasing() && mode[SIDE] ? int8_t(random(-mode[SIDE], mode[SIDE] + 1)) : 0;
+    int8_t sd = -1;
+    if (!Phasing() && mode[SIDE]) sd = random(10) < mode[SIDE] ? int8_t(random(3)) : v_side;
+    send = st != v_stage || sd != v_side;
+    v_stage = st;
+    v_side = sd;
+  }
+  if (!mode[SIDE] || Phasing()) { send |= v_side >= 0; v_side = -1; }
+  if (!mode[SIDE] || !Phasing()) { send |= v_stage != 0; v_stage = 0; }
+  if (!mode[HFDBK]) v_fb_to = 0.0f;
+  if (!mode[HMIX]) v_mix_to = 0.0f;
+  const float k = std::min(1.0f, dt * 20.0f);
+  if (v_fb != v_fb_to || v_mix != v_mix_to) {
+    v_fb += (v_fb_to - v_fb) * k;
+    v_mix += (v_mix_to - v_mix) * k;
+    if (fabsf(v_fb - v_fb_to) < 0.05f) v_fb = v_fb_to;
+    if (fabsf(v_mix - v_mix_to) < 0.05f) v_mix = v_mix_to;
+    send = true;
+  }
+  if (send) Send();
+}
+
+// the variations: OFF, then SIDE: the chance a beat it changes, STAGE: +-
+// stages, FDBK / RESO, MIX: +- percent
+FLASHMEM void HeddleDevice::FormatMode(int p, char* buf, size_t n) const {
+  if (p == SHIFT) Device::FormatMode(p, buf, n);
+  else if (mode[p] == 0) snprintf(buf, n, "OFF");
+  else if (p == SIDE && Phasing()) snprintf(buf, n, "+-%d", 2 * mode[p]);
+  else if (p == SIDE) snprintf(buf, n, "%d%%", mode[p] * 10);
+  else snprintf(buf, n, "%d%%", mode[p] * 5);
 }
 
 FLASHMEM void HeddleDevice::Format(int p, char* buf, size_t n) const {
@@ -4886,14 +4950,14 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
   slide += speed * dt;
   slide -= 4.0f * floorf(slide / 4.0f);
   slide += (off - floorf(off)) - (slide - floorf(slide));  // (the same fraction as the stripes)
-  const float sw = std::max(1.0f, roundf((2 + cur[HFDBK] * 5 / 100) * per / 16.0f));
+  const float sw = std::max(1.0f, roundf((2 + int(Fdbk()) * 5 / 100) * per / 16.0f));
   // the fill dots: every line of a stripe gets its share (a square dither
   // left whole slanting lines dark at low MIX: they blinked in and out)
   static const uint8_t ord[4] = {0, 2, 1, 3};
-  const int fill = 1 + cur[HMIX] * 15 / 100;  // 1 .. 16 of 16
+  const int fill = 1 + int(Mix()) * 15 / 100;  // 1 .. 16 of 16
   const bool level = !Phasing();
   for (int px = 0; px < w; px++) {
-    const bool down = !Phasing() && (cur[SIDE] == 1 || (cur[SIDE] == 2 && px >= w / 2));
+    const bool down = !Phasing() && (Side() == 1 || (Side() == 2 && px >= w / 2));
     for (int py = 0; py < h; py++) {
       // where this pixel is across the stripes, in fractions of a pixel:
       // the edges are lit by how much of them the stripe covers (shaded
@@ -4914,7 +4978,7 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
       if (d < int(fill * cover + 0.5f)) gfxPixel(x + px, y + py);
     }
   }
-  if (!Phasing() && cur[SIDE] == 2) gfxLine(x + w / 2, y, x + w / 2, y + h - 1);
+  if (!Phasing() && Side() == 2) gfxLine(x + w / 2, y, x + w / 2, y + h - 1);
 }
 
 /////////////////////////////////////////////////////////////////

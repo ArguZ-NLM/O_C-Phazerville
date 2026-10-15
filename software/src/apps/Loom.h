@@ -832,7 +832,7 @@ FLASHMEM static float WorstCost(const Device* d) {
   if (!strcmp(t, "TEX")) return 8.0f;  // TEXTURE
   if (!strcmp(t, "HDL")) {  // HEDDLE: TEXTURE's engine left clean, the shifter ~1 %, PHASE ~0.6 % a stage (measured)
     const HeddleDevice* x = static_cast<const HeddleDevice*>(d);
-    return 4.0f + (x->Phasing() ? 1.0f + 0.6f * x->Stages() : 1.0f);
+    return 4.0f + (x->Phasing() ? 1.0f + 0.6f * x->MaxStages() : 1.0f);  // (STAGE's variation up)
   }
   if (!strcmp(t, "CHM")) return 7.0f;   // TWILL
   if (!strcmp(t, "SPR")) return 6.0f;   // FIBRE
