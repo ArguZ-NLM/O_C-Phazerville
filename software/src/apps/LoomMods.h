@@ -636,7 +636,7 @@ FLASHMEM float AdsrMod::Shaped(float e, Stage st, float from) const {
 }
 
 FLASHMEM void AdsrMod::FormatMode(int p, char* buf, size_t n) const {
-  if (p == P_SUS) { Modulator::FormatMode(p, buf, n); return; }
+  if (p != P_ATT && p != P_DEC && p != P_REL) { Modulator::FormatMode(p, buf, n); return; }
   const int c = (int(mode[p]) - 10) * 5;
   if (c == 0) snprintf(buf, n, "LIN");
   else snprintf(buf, n, c > 0 ? "EXP%d" : "LOG%d", abs(c));
