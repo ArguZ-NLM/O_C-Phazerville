@@ -3319,14 +3319,15 @@ FLASHMEM void AppLoom::DrawDevice() const {
       else snprintf(buf, sizeof(buf), strlen(src) > 3 ? "%d%s" : "%d %s", mod_slot + 1, src);
       PrintCentred(x, 43, buf);
     } else {
-      // the upper row is the mode's (the left knob): its name for a moment
-      // after it changed, else the setting's name; the number stays below
-      // a setting with named modes (BIT / REDUX, LOW / MID / HIGH ...) shows
-      // that name the whole time it is grabbed
-      const bool named = pd.modes[0][0] != 0;
+      // the upper row: the setting's name, what it is for, until its mode
+      // (the left knob) is turned; from then on the mode it is on (BIT /
+      // REDUX, a variation's +-35%, MORPH's time ...), grabbed or not. The
+      // number stays below. (A device that names it itself, SPRD's bells,
+      // keeps its own.)
       const char* alt = d->AltName(p);
-      const bool show_mode = !alt && ((pd.nmodes && d->ModeShown(p)) || (sel && pd.nmodes
-        && ((editing && (l_held || (named && d->ModeNamed(p)))) || (edit_mode && mode_shown < 1500))));
+      const bool own = strcmp(d->Name(p), pd.name) != 0;
+      const bool show_mode = !alt && pd.nmodes && !own
+        && (d->ModeShown(p) || d->ModeNamed(p) || (sel && ((editing && l_held) || (edit_mode && mode_shown < 1500))));
       char mb[8];
       if (show_mode) d->FormatMode(p, mb, sizeof(mb));
       const char* nm = d->AltShown(p) ? alt : show_mode ? mb : d->Name(p);
