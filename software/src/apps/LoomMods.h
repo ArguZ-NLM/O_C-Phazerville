@@ -506,7 +506,7 @@ FLASHMEM void RandomMod::FormatMode(int p, char* buf, size_t n) const {
 // ADSR: envelope from a gate / trigger / MIDI note
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef ADSR_DEF = {
-  "ADSR", "ENV", 7, {"TRG", "REL"},  // B: let go now
+  "ADSR", "ENV", 8, {"TRG", "REL"},  // B: let go now
   {
     // ATT, DEC and REL: the time (R knob) and, on the L knob, the curve of
     // that stage: LOG50 .. LOG5, LIN (the middle, the default), EXP5 ..
