@@ -804,10 +804,10 @@ FLASHMEM void ClockDevice::DrawMini(int x, int y, int w, int h) {
 
 /////////////////////////////////////////////////////////////////
 // TREADLE: drum patterns. On a loom the treadling is the order the
-// treadles are pressed in, the rhythm of the weave. A map of 25 drum
-// patterns (32 steps each, for a low, a mid and a high part) after Grids
-// (c) 2011-2012 Emilie Gillet, GPL 3 (the pattern data): X / Y move
-// across the map, blending its four nearest patterns; LOW / MID / HIGH set
+// treadles are pressed in, the rhythm of the weave. STYLE: ROCK, FUNK,
+// HIPHP, HOUSE, BREAK, LATIN, DUB, four beats each (BEAT), or MAP: the 25
+// drum patterns of Grids (c) 2011-2012 Emilie Gillet, GPL 3 (the pattern
+// data), each 32 steps for a low, a mid and a high part; LOW / MID / HIGH set
 // how many of each part's steps sound (their L knob: how many steps the
 // part has, 1-32, so they can run against each other), CHAOS changes
 // them as a drummer would, a variation held two run throughs: below 0
@@ -818,6 +818,65 @@ FLASHMEM void ClockDevice::DrawMini(int x, int y, int w, int h) {
 // all full height), then each part's
 // accents alone. Its own box sends one; the other boxes can take the rest.
 /////////////////////////////////////////////////////////////////
+// the styles' beats, two bars of sixteenths for each part (kick, snare,
+// hi-hat): X an accent, x a hit, o an extra one (in from FILL ~55), - a
+// rare one (~80), . none (the steps between come in last, the beats first)
+PROGMEM static const char TRD_STYLES[8][6] = {"MAP", "ROCK", "FUNK", "HIPHP", "HOUSE", "BREAK", "LATIN", "DUB"};
+PROGMEM static const char TRD_BEAT_NAMES[7][4][6] = {
+  {"BEAT", "PUSH", "DRIVE", "SLOW"},  // ROCK
+  {"JB", "GHOST", "SYNC", "LINE"},  // FUNK
+  {"BOOM", "LAZY", "TRAP", "BOUNC"},  // HIPHP
+  {"FOUR", "GARAG", "TECHN", "DISCO"},  // HOUSE
+  {"AMEN", "FUNKY", "THINK", "DNB"},  // BREAK
+  {"BOSSA", "SAMBA", "CLAVE", "DEMBW"},  // LATIN
+  {"1DROP", "STEPR", "ROCKR", "SKA"},  // DUB
+};
+PROGMEM static const char TRD_BEATS[7][4][3][33] = {
+  {  // ROCK
+    {"X.......X.o.....X.......X.x...-.", "....X.......X..-....X.......X.o.", "X-x-X-x-X-x-X-x-X-x-X-x-X-x-X-x-"},  // BEAT
+    {"X.....x.X.......X.....x.X.x.-...", "....X.......X.......X.......X..o", "X-x-X-x-X-x-X-x-X-x-X-x-X-x-X-x-"},  // PUSH
+    {"X.x...x.X.x...x.X.x...x.X.x...x.", "....X.......X.......X.......X.o-", "X.o.X.o.X.o.X.o.X.o.X.o.X.o.X.o."},  // DRIVE
+    {"X.........x.....X.....o...x.....", "........X...............X.....o.", "X.x.x.x.X.x.x.x.X.x.x.x.X.x.x.x."},  // SLOW
+  },
+  {  // FUNK
+    {"X.x.......x..x..X.x.......x...o.", "....X..o.o..X..o....X..o.o..X.o.", "X-x-X-x-X-x-X-x-X-x-X-x-X-x-X-x-"},  // JB
+    {"X.....x...x.....X.....x...x..o..", "....X.o.o.o.X.o.....X.o..o.oX.oo", "X.x.X.x.X.x.X.x.X.x.X.x.X.x.X.x."},  // GHOST
+    {"X..x..x...x..x..X..x..x...x.....", "....X.......X.......X..o....X.o.", "x-x-X-x-x-x-X-x-x-x-X-x-x-x-X-x-"},  // SYNC
+    {"X..x....x.x.....X..x....x.x..x..", "....X..o.o..X.......X..o.o..X..o", "..x...x...x...x...x...x...x...x."},  // LINE
+  },
+  {  // HIPHP
+    {"X......x..X.....X......x..X..x..", "....X.......X.......X.......X..o", "x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x."},  // BOOM
+    {"X.........x.x...X..o......x.....", "....X.......X..o....X.......X...", "x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x."},  // LAZY
+    {"X.....x...x....xX.....x.......x.", "........X...............X.......", "x.x.x.x.x.x.xxxxx.x.x.x.x.xxx.x."},  // TRAP
+    {"X..x..x...x.....X..x..x...x..o..", "....X.......X.......X.......X.o.", "x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x."},  // BOUNC
+  },
+  {  // HOUSE
+    {"X...X...X...X...X...X...X...X...", "....X.......X.......X.......X...", "-.X.-.X.-.X.-.X.-.X.-.X.-.X.-.X."},  // FOUR
+    {"X......x..x.....X......x..x...o.", "....X.......X.......X.......X..o", "..x.x.x...x.x.x...x.x.x...x.x.x."},  // GARAG
+    {"X...X...X...X...X...X...X...X...", "........X...............X.....o.", "xxXxxxXxxxXxxxXxxxXxxxXxxxXxxxXx"},  // TECHN
+    {"X...X...X...X...X...X...X...X...", "....X.......X.......X.......X.o.", "x.X.x.X.x.X.x.X.x.X.x.X.x.X.x.X."},  // DISCO
+  },
+  {  // BREAK
+    {"X.X.......XX......XX......X.....", "....X..x.x..X..x.x..X..x.x....x.", "x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x."},  // AMEN
+    {"X.X.......X..X..X.X.......X..x..", "....X..x.x.oX..x....X..x.x.oX.o.", "x-x-x-x-x-x-x-x-x-x-x-x-x-x-x-x-"},  // FUNKY
+    {"X......xX.X.....X......xX.x..x..", "....X.......X.......X..o....X.o.", "x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x."},  // THINK
+    {"X.........X.......X.......X.....", "....X.......X.......X.......X..o", "x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x."},  // DNB
+  },
+  {  // LATIN
+    {"X..xX..xX..xX..xX..xX..xX..xX..x", "x..x..x...x..x....x..x...x..x...", "x-x-x-x-x-x-x-x-x-x-x-x-x-x-x-x-"},  // BOSSA
+    {"X..xx..xX..xx..xX..xx..xX..xx..x", "x.xx.x.xx.x.x.x.x.xx.x.x.xx.x.x.", "XxxxXxxxXxxxXxxxXxxxXxxxXxxxXxxx"},  // SAMBA
+    {"X.....x.......x.X.....x.......x.", "X..X..X...X.X...X..X..X...X.X...", "x.x.xx.x.xx.x.x.x.x.xx.x.xx.x.x."},  // CLAVE
+    {"X...X...X...X...X...X...X...X...", "...X..X....X..X....X..X....X..X.", "x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x."},  // DEMBW
+  },
+  {  // DUB
+    {"........X...............X.....o.", "........X...............X.....o.", "x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x."},  // 1DROP
+    {"X...X...X...X...X...X...X...X...", "........X...............X.....o.", "..x...x...x...x...x...x...x...x."},  // STEPR
+    {"X.......X.......X.......X.o.....", "....X.......X.......X.......X..o", "x.xxx.xxx.xxx.xxx.xxx.xxx.xxx.xx"},  // ROCKR
+    {"X.......X.......X.......X.....o.", "....X.......X.......X.......X.o.", "..X...X...X...X...X...X...X...X."},  // SKA
+  },
+};
+static constexpr int TRD_NSTYLES = sizeof(TRD_STYLES) / sizeof(TRD_STYLES[0]);
+
 PROGMEM static const DeviceDef TREADLE_DEF = {
   "TREADLE", "TRD", 8, {"RUN", "RST"},  // (A held: stop; B resets)
   {
@@ -825,8 +884,8 @@ PROGMEM static const DeviceDef TREADLE_DEF = {
     {"MID", 0, 100, 50, UNI, 0, 32, 31},
     {"HIGH", 0, 100, 50, UNI, 0, 32, 31},
     {"PLAY", 0, 3, 0, LIST, 4, 0, 0, {"FWD", "REV", "PING", "DRUNK"}},
-    {"X", 0, 100, 50, UNI},
-    {"Y", 0, 100, 50, UNI},
+    {"STYLE", 0, TRD_NSTYLES - 1, 1, UNI},  // MAP, then the styles
+    {"BEAT", 0, 24, 0, UNI},                 // the style's beat (MAP: one of its 25)
     {"CHAOS", -32, 32, 0, BI, 0, 13, 0},  // (-: thins out, +: plays round the groove; mode: the swing, SW50-SW74)
     {"RATE", 0, 100, 74, UNI, 0, 2, 1, {}, {"FREE", "CLOCK"}},  // a step; on the clock (74: 1/16)
   },
@@ -835,12 +894,16 @@ PROGMEM static const DeviceDef TREADLE_DEF = {
 
 class TreadleMod : public Modulator {
 public:
-  enum { P_LOW, P_MID, P_HIGH, P_PLAY, P_X, P_Y, P_CHAOS, P_RATE };
+  enum { P_LOW, P_MID, P_HIGH, P_PLAY, P_STYLE, P_BEAT, P_CHAOS, P_RATE };
   enum { FWD, REV, PING, DRUNK };
   static constexpr int OUTS = 6;  // LOW MID HIGH, then their accents
   TreadleMod() : Modulator(TREADLE_DEF) {}
   void Tick(const ModCtx& ctx) override;
   void Format(int p, char* buf, size_t n) const override;
+  int Step(int p, int v, int dir) const override {
+    if (p == P_BEAT) return constrain(v + dir, 0, Beats(constrain(int(val[P_STYLE]), 0, TRD_NSTYLES - 1)) - 1);
+    return Modulator::Step(p, v, dir);
+  }
   void Action(int a) override { if (a == 0) stopped = false; else if (a == 1) Restart(); }
   bool Stops() const override { return true; }
   void DrawViz(int x, int y, int w, int h) override;
@@ -874,6 +937,9 @@ private:
   int fill_from = 0;
   float gate[OUTS] = {}, lvl[OUTS] = {}, wait[OUTS] = {};  // (wait: swung, the hit comes later)
   int Len(int part) const { return constrain(int(mode[P_LOW + part]) + 1, 1, 32); }
+  static int Beats(int style) { return style == 0 ? 25 : 4; }
+  int Style() const { return constrain(int(cur[P_STYLE]), 0, TRD_NSTYLES - 1); }
+  int Beat() const { return constrain(int(cur[P_BEAT]), 0, Beats(Style()) - 1); }
   int Swing() const { return 50 + 2 * constrain(int(mode[P_CHAOS]), 0, 12); }  // % of two steps the first takes
   int Level(int part, int s) const;  // the map's strength of a part's step s, with CHAOS (0..255)
   bool Hits(int part, int lv) const { return lv > 255 - cur[P_LOW + part] * 255 / 100; }
@@ -883,15 +949,20 @@ private:
   void Thin(int part, int len, int ch);
 };
 
+// a step's strength (0..255): MAP's from its patterns, the styles' from
+// their beats (the steps they leave out lowest, the beats among them
+// higher than the eighths, the eighths than the sixteenths)
 FLASHMEM int TreadleMod::Level(int part, int s) const {
-  const int x = cur[P_X] * 255 / 100, y = cur[P_Y] * 255 / 100;
-  const int i = std::min(3, x >> 6), j = std::min(3, y >> 6);
-  const int off = part * 32 + (s & 31);
-  const int a = grids::drum_map[i][j][off], b = grids::drum_map[i + 1][j][off];
-  const int c = grids::drum_map[i][j + 1][off], d = grids::drum_map[i + 1][j + 1][off];
-  const int qx = (x << 2) & 255, qy = (y << 2) & 255;
-  const int ab = (b * qx + a * (255 - qx)) >> 8, cd = (d * qx + c * (255 - qx)) >> 8;
-  return (cd * qy + ab * (255 - qy)) >> 8;
+  s &= 31;
+  const int st = Style(), bt = Beat();
+  if (st == 0) return grids::drum_map[bt / 5][bt % 5][part * 32 + s];
+  switch (TRD_BEATS[st - 1][bt][part][s]) {
+    case 'X': return 240;
+    case 'x': return 170;
+    case 'o': return 110;
+    case '-': return 50;
+    default: return (s & 3) == 0 ? 40 : (s & 1) == 0 ? 30 : 15;
+  }
 }
 
 // CHAOS above 0: what a drummer plays round a groove, in the figures
@@ -1084,7 +1155,11 @@ FLASHMEM void TreadleMod::Tick(const ModCtx& ctx) {
 }
 
 FLASHMEM void TreadleMod::Format(int p, char* buf, size_t n) const {
+  const int st = constrain(int(val[P_STYLE]), 0, TRD_NSTYLES - 1);
   if (p == P_RATE) FormatRate(p, RateHz(P_RATE, 0.5f, 30.0f), buf, n);
+  else if (p == P_STYLE) snprintf(buf, n, "%s", TRD_STYLES[st]);
+  else if (p == P_BEAT && st == 0) snprintf(buf, n, "%d", constrain(int(val[P_BEAT]), 0, 24) + 1);
+  else if (p == P_BEAT) snprintf(buf, n, "%s", TRD_BEAT_NAMES[st - 1][constrain(int(val[P_BEAT]), 0, 3)]);
   else Device::Format(p, buf, n);
 }
 

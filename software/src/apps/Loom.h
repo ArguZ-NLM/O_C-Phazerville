@@ -3620,7 +3620,7 @@ namespace loom {
   // 14: DRAFT in FIBRE's order SPEED SIZE PITCH POS (was PITCH POS SIZE SPEED)
   // 15: DRAFT page 2 DIFF TONE SPRD MIX (was TONE FDBK SPRD MIX, TONE's mode
   //     the diffusion)
-  constexpr uint8_t SAVE_VERSION = 25;  // 21: TREADLE, a 6th modulator type; 22: PICK, a 7th; 23: TREADLE's LEN per part; 24: TREADLE's CHAOS -32..32; 25: TREADLE's pages
+  constexpr uint8_t SAVE_VERSION = 26;  // 21: TREADLE, a 6th modulator type; 22: PICK, a 7th; 23: TREADLE's LEN per part; 24: TREADLE's CHAOS -32..32; 25: TREADLE's pages; 26: STYLE / BEAT for X / Y
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -3713,9 +3713,13 @@ namespace loom {
     // The fixes above work on that order (TRD_* below), then it moves
     const bool trd_v24 = use && !memcmp(tag, "TRD", 4) && load_version < 25;
     enum { TRD_X, TRD_Y, TRD_CHAOS, TRD_ACCNT, TRD_LOW, TRD_MID, TRD_HIGH, TRD_PLAY, TRD_RATE, TRD_RESET };
-    static constexpr int8_t TRD_V25[10] = {TreadleMod::P_X, TreadleMod::P_Y, TreadleMod::P_CHAOS, -1,
+    static constexpr int8_t TRD_V25[10] = {TreadleMod::P_STYLE, TreadleMod::P_BEAT, TreadleMod::P_CHAOS, -1,
                                            TreadleMod::P_LOW, TreadleMod::P_MID, TreadleMod::P_HIGH, TreadleMod::P_PLAY,
                                            TreadleMod::P_RATE, -1};
+    // before v26 TREADLE had X / Y over the map: now STYLE (MAP) and BEAT,
+    // the map's pattern nearest
+    const bool trd_xy = use && !memcmp(tag, "TRD", 4) && load_version < 26;
+    int old_x = -1, old_y = 50;
     int old_len = -1;
     static constexpr int8_t TRD_MAP[8] = {TRD_X, TRD_Y, TRD_LOW, TRD_CHAOS, TRD_RATE, TRD_RESET, TRD_ACCNT, TRD_PLAY};
     static constexpr int8_t RND_MAP[7] = {5, 0, 6, 3, 1, 2, 4};
@@ -3780,6 +3784,8 @@ namespace loom {
         p = TRD_V25[constrain(p, 0, 9)];
         if (p < 0) { p = q; continue; }
       }
+      if (trd_xy && p == TreadleMod::P_STYLE) { old_x = v; v = 0; amt = amt2 = 0; }
+      if (trd_xy && p == TreadleMod::P_BEAT) { old_y = v; v = 0; amt = amt2 = 0; }
       if (skip_size && p == 5) { p = q; continue; }
       if (spool_order) {
         if (SPOOL_MAP[q] < 0) { old_dub = v; continue; }
@@ -3815,6 +3821,8 @@ namespace loom {
       if (view_mode && p == ReelDevice::VIEW) { d->mode[p] = uint8_t(constrain(v, 0, 9)); d->val[p] = -1; }
       p = q;
     }
+    if (old_x >= 0)
+      d->val[TreadleMod::P_BEAT] = int16_t(((constrain(old_x, 0, 100) + 12) / 25) * 5 + (constrain(old_y, 0, 100) + 12) / 25);
     if (old_len > 0)
       for (int k = TreadleMod::P_LOW; k <= TreadleMod::P_HIGH; k++) d->mode[k] = uint8_t(constrain(old_len, 1, 32) - 1);
     if (old_dub >= 0) d->mode[ReelDevice::MON] = uint8_t(constrain((old_dub + 2) / 5, 0, 20));
