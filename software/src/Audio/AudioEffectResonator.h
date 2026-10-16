@@ -71,6 +71,8 @@ public:
   }
   // the band the last hit went to (from the peak) and its tilt, for the picture
   float HitCut() const { return hit_cut; }
+  void Strike() { strike_req = true; }  // A: the bands struck (they ring without any input), a hit as any other
+  void NewVar() { new_req = true; }     // B: a new variation, as a hit would, without striking
   float HitTone() const { return hit_tone; }
 
   void Reset() {
@@ -95,6 +97,7 @@ private:
   Shape shape = {35.0f, -1.0f, 20.0f, 0.0f, 1.0f};
   float cut_var_ = 0.0f, tone_var_ = 0.0f;
   volatile float hit_cut = 0.0f, hit_tone = 0.0f;  // this hit's moves
+  volatile bool strike_req = false, new_req = false;
   bool reshape = true;
   // the hit detector: the block's peak against a slower level
   float slow = 0.0f;
@@ -162,7 +165,10 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectResonator::update() {  /
   if (holdoff > 0) holdoff--;
   if (pk_in > 0.01f && pk_in > 2.0f * slow && holdoff == 0) { hit = true; holdoff = 18; }
   slow += (pk_in > slow ? 0.3f : 0.03f) * (pk_in - slow);
-  if (hit && (cut_var_ > 0.0f || tone_var_ > 0.0f)) {
+  const bool strike = strike_req, fresh = new_req;
+  strike_req = new_req = false;
+  if (strike) hit = true;
+  if ((hit || fresh) && (cut_var_ > 0.0f || tone_var_ > 0.0f)) {
     hit_cut = cut_var_ > 0.0f ? roundf(Rand() * cut_var_) : 0.0f;  // whole bands: notes of the scale
     hit_tone = Rand() * tone_var_;
     reshape = true;
@@ -183,6 +189,11 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectResonator::update() {  /
   for (int b = 0; b < BANDS; b++) gmax = std::max(gmax, gain[b]);
   memset(sum, 0, sizeof(sum));
   const float q_rel = lite ? 3e-2f : 1e-3f, ring_min = lite ? 1e-3f : 1e-5f;
+  // struck: each band rung by its gain (the shape CUT / SLOPE give), into
+  // its other half so it swings up from nothing (no click)
+  if (strike && gmax > 0.0f)
+    for (int b = 0; b < BANDS; b++)
+      if (coef[b] > 0.0f && gain[b] > gmax * q_rel) lp[b] += 0.08f * gain[b] / gmax / std::max(damp_, 1e-3f);
   for (int side = 0; side < 2; side++) {
     int act[BANDS / 2 + 3], na = 0;
     for (int b = side; b < BANDS; b += 2) {

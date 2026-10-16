@@ -82,6 +82,7 @@ void RingsVoice::Process(const float* in, float* out, float* aux, size_t n) {
   patch.brightness = brightness_;
   patch.damping = damping_;
   patch.position = position_;
+  if (damp_blocks_ > 0) { damp_blocks_ = damp_blocks_ - 1; patch.damping = 0.0f; }  // DAMP
 
   float gated[rings::kMaxBlockSize];
   for (size_t done = 0; done < n;) {

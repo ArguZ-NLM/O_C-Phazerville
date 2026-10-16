@@ -75,6 +75,9 @@ public:
     if (t > 0.0f) tilt_gain = energy(below[1]) / energy(below[xover % 3]);
   }
   void noise(float amt, uint8_t mode) { noise_amt = constrain(amt, 0.0f, 1.0f); noise_mode = mode; }
+  // a burst of the noise (its colour, N.TON, N.DCY), whatever comes in or
+  // NOICE is (a snare-like hit)
+  void noise_burst() { burst_req = true; }
   void noise_decay(float secs) { noise_rel = expf(-1.0f / (std::max(secs, 0.001f) * AUDIO_SAMPLE_RATE_EXACT)); }
   void noise_tone(float t) { // 0..1 -> 100 Hz .. 10 kHz band-pass centre
     const float fc = 100.0f * powf(100.0f, constrain(t, 0.0f, 1.0f));
@@ -155,6 +158,9 @@ private:
   volatile float tilt_lo = 1.0f, tilt_hi = 1.0f, tilt_a = 0.1f, tilt_gain = 1.0f;
   volatile float drive_gain = 1.0f;
   volatile float noise_amt = 0.0f, noise_rel = 0.999f, svf_f = 0.1f;
+  volatile bool burst_req = false;
+  float burst = 0.0f;  // its level now
+  bool burst_up = false;
 
   volatile float shift_hz = 0.0f, shift_fb = 0.0f, shift_mix = 0.0f;
   volatile uint8_t shift_side = SIDE_UP;
@@ -260,6 +266,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
 
   const float drv = drive_, crs = crush_, w = wet_, namt = noise_amt;
   const uint8_t cmode = crush_mode, nmode = noise_mode;
+  if (burst_req) { burst_req = false; burst_up = true; }
   const bool do_bits = crs > 0.0f && cmode != CRUSH_REDUX;
   const bool do_redux = crs > 0.0f && cmode != CRUSH_BIT;
   const float levels = CrushLevels(crs), inv_levels = 1.0f / levels;
@@ -317,6 +324,10 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
     const float open = std::min(1.0f, std::max(0.0f, (det * inv_thr - 1.0f) * (1.0f / (GATE_KNEE - 1.0f))));
     const float want = det * open;
     env_in = want > env_in ? env_in + NOISE_ATTACK * (want - env_in) : env_in * nrel;
+    // a burst: in over ~2 ms, out over N.DCY
+    if (burst_up) { burst += NOISE_ATTACK * 4.0f * (1.0f - burst); if (burst > 0.95f) burst_up = false; }
+    else burst *= nrel;
+    const float nlev = env_in * namt * 2.0f + burst * 0.7f;
 
     // the redux sample-and-hold runs for both channels together
     bool take = true;
@@ -331,7 +342,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
         tilt_z[c] += ta * (v - tilt_z[c]);
         v = (tilt_z[c] * tl + (v - tilt_z[c]) * th) * tg;
       }
-      if (namt > 0.0f) {
+      if (nlev > 1e-5f) {
         float nz = Rand();
         if (nmode == NOISE_PINK) {
           float* b = pink[c];
@@ -354,7 +365,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
         const float hp = nz - svf_lo[c] - svf_bp[c];
         svf_bp[c] += sf * hp;
         svf_lo[c] += sf * svf_bp[c];
-        v += svf_bp[c] * env_in * namt * 2.0f;
+        v += svf_bp[c] * nlev;
       }
       v = Fold(v, fld) * fold_gain_now;
       v = Shape(v, drv) * dg;
@@ -460,5 +471,5 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
 
   viz.in = std::max(viz.in, peak_in);
   viz.out = std::max(viz.out, peak_out);
-  viz.noise = std::max(viz.noise, env_in * namt);
+  viz.noise = std::max(viz.noise, std::max(env_in * namt, burst * 0.35f));
 }

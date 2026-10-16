@@ -16,6 +16,23 @@
 // band back to the level it had before (at most +12 dB, held through
 // silence), so squashing changes the feel, not the volume; the band's level
 // comes after that. All levels at 0 dB and no squashing pass audio through.
+// DUCK: a dip in level struck by a trigger (a kick pumping a sound): down
+// to a tenth in ~3 ms, back up over ~0.2 s (from the audio interrupt; Duck()
+// from anywhere)
+struct DuckEnv {
+  volatile bool req = false;
+  float d = 0.0f;
+  bool att = false;
+  void Duck() { req = true; }
+  bool Active() const { return req || att || d > 1e-4f; }
+  float Next() {  // this sample's gain
+    if (req) { req = false; att = true; }
+    if (att) { d += (1.0f - d) * 0.008f; if (d > 0.97f) att = false; }
+    else d -= d * 0.00012f;
+    return 1.0f - 0.9f * d;
+  }
+};
+
 class AudioEffectBandz : public AudioStream {
 public:
   static constexpr int BANDS = 3;
@@ -32,6 +49,7 @@ public:
   // how hard band b is squashed, 0 (off) .. 1
   void split_low(float hz) { f_lo = Coeff(hz); }
   void set_bypass(bool b) { bypass = b; }  // fades to pass through, settings kept
+  DuckEnv duck;  // CLOTH's DUCK (whatever the bands do, bypassed too)
   void split_high(float hz) { f_hi = Coeff(hz); }
   void compress(int b, float c) {
     c = constrain(c, 0.0f, 1.0f);
@@ -111,6 +129,23 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectBandz::update() {  // (O
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   // bypass fades over ~15 ms; nothing to do once it is all the way out
   const float mix_to = bypass ? 0.0f : 1.0f;
+  if ((flat || (mix_to == 0.0f && mixw == 0.0f)) && duck.Active()) {
+    // nothing for the bands to do, but ducking: the dip alone
+    if (flat) mixw = mix_to;
+    audio_block_t* o[2] = {allocate(), allocate()};
+    if (o[0] && o[1]) {
+      for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+        const float g = duck.Next();
+        for (int c = 0; c < 2; c++) o[c]->data[n] = in[c] ? int16_t(lrintf(in[c]->data[n] * g)) : 0;
+      }
+      Capture(o[0], o[1]);
+      transmit(o[0], 0);
+      transmit(o[1], 1);
+    }
+    for (auto b : o) if (b) release(b);
+    for (auto b : in) if (b) release(b);
+    return;
+  }
   if (flat || (mix_to == 0.0f && mixw == 0.0f)) {
     if (flat) mixw = mix_to;
     Capture(in[0], in[1]);
@@ -246,11 +281,14 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectBandz::update() {  // (O
     lim_g = need < lim_g ? need : std::min(need, lim_g + (1.0f - lim_g) * 0.02f);
     const int ramp = need < from ? 32 : AUDIO_BLOCK_SAMPLES;
     const float step = (lim_g - from) / ramp;
+    float dg[AUDIO_BLOCK_SAMPLES];
+    const bool ducking = duck.Active();
+    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) dg[n] = ducking ? duck.Next() : 1.0f;
     for (int c = 0; c < 2; c++) {
       float gg = from;
       for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
         if (n < ramp) gg += step;
-        out[c]->data[n] = ToSample16(yb[c][n] * gg);
+        out[c]->data[n] = ToSample16(yb[c][n] * gg * dg[n]);
       }
     }
   }

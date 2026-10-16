@@ -260,7 +260,7 @@ FLASHMEM void WaveMod::Format(int p, char* buf, size_t n) const {
 // RANDOM: stepped random, optionally a looping pattern
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef RANDOM_DEF = {
-  "RANDOM", "RND", 8, {"STP", ""},
+  "RANDOM", "RND", 8, {"STP", "RST"},  // B: the pattern from its first step
   {
     {"AMNT", 0, 100, 100, UNI},
     {"LEN", 0, 16, 0, UNI},
@@ -288,7 +288,10 @@ public:
   void Tick(const ModCtx& ctx) override;
   void Format(int p, char* buf, size_t n) const override;
   void FormatMode(int p, char* buf, size_t n) const override;
-  void Action(int a) override { if (a == 0) Step(); }
+  void Action(int a) override {
+    if (a == 1 && cur[P_LEN] > 0) pos = uint8_t(cur[P_LEN] - 1);  // (so the step lands on the first)
+    Step();
+  }
   void DrawViz(int x, int y, int w, int h) override;
   bool Pitched() const override { return cur[P_QUANT] != 0; }
   float Stepped() const override { return Shaped(target); }
@@ -503,7 +506,7 @@ FLASHMEM void RandomMod::FormatMode(int p, char* buf, size_t n) const {
 // ADSR: envelope from a gate / trigger / MIDI note
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef ADSR_DEF = {
-  "ADSR", "ENV", 7, {"TRG", ""},
+  "ADSR", "ENV", 7, {"TRG", "REL"},  // B: let go now
   {
     {"ATT", 0, 100, 10, UNI},
     {"DEC", 0, 100, 45, UNI},
@@ -521,7 +524,10 @@ public:
   AdsrMod() : Modulator(ADSR_DEF) {}
   void Tick(const ModCtx& ctx) override;
   void Format(int p, char* buf, size_t n) const override;
-  void Action(int a) override { if (a == 0) { stage = ATTACK; manual = 0.15f; flash = 0.1f; } }
+  void Action(int a) override {
+    if (a == 0) { stage = ATTACK; manual = 0.15f; flash = 0.1f; }
+    else if (stage != IDLE && stage != RELEASE) { stage = RELEASE; rel_from = env; manual = 0.0f; }
+  }
   void DrawViz(int x, int y, int w, int h) override;
 private:
   enum Stage : uint8_t { IDLE, ATTACK, DECAY, SUSTAIN, RELEASE } stage = IDLE;
@@ -623,7 +629,7 @@ FLASHMEM void AdsrMod::Format(int p, char* buf, size_t n) const {
 // FOLLOW: envelope follower on the track's input or output
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef FOLLOW_DEF = {
-  "FOLLOW", "FOL", 6, {"", ""},
+  "FOLLOW", "FOL", 6, {"HOLD", "DROP"},  // A: holds where it is (again: free); B: down to nothing at once
   {
     {"INPUT", 0, 1, 0, LIST, 2, 0, 0, {"IN", "OUT"}},
     {"AMNT", 0, 100, 100, UNI},
@@ -639,17 +645,20 @@ public:
   enum { P_INPUT, P_AMT, P_RISE, P_FALL, P_GAIN, P_OFFS };
   FollowMod() : Modulator(FOLLOW_DEF) {}
   void Tick(const ModCtx& ctx) override;
+  void Action(int a) override { if (a == 0) held = !held; else env = 0.0f; flash = 0.05f; }
+  bool ActionLit(int a) const override { return a == 0 && held; }
   void DrawViz(int x, int y, int w, int h) override;
 private:
   float env = 0.0f;
   float in_hist[HIST] = {};  // the level coming in, alongside hist (the output)
   float in_peak = 0.0f;
+  bool held = false;
 };
 
 FLASHMEM void FollowMod::Tick(const ModCtx& ctx) {
   const float lvl = (cur[P_INPUT] ? ctx.out_level : ctx.in_level) * cur[P_GAIN] * 0.01f;
   const float tau = lvl > env ? Seconds(cur[P_RISE], 0.001f, 1.0f) : Seconds(cur[P_FALL], 0.005f, 3.0f);
-  env += (lvl - env) * std::min(1.0f, ctx.dt / tau);
+  if (!held) env += (lvl - env) * std::min(1.0f, ctx.dt / tau);
   out = env * cur[P_AMT] * 0.01f + cur[P_OFFS] * 0.01f;
   in_peak = std::max(in_peak, std::min(1.0f, lvl));
   // Run() moves hist_pos after this; keep the input in step with it
@@ -683,7 +692,7 @@ volatile uint32_t midi_clocks = 0;
 
 // source: 0 internal, 1 MIDI clock, 2+ trigger sources (TR, CV, MIDI map)
 PROGMEM static const DeviceDef CLOCK_DEF = {
-  "CLOCK", "CLK", 3, {"TAP", ""},
+  "CLOCK", "CLK", 3, {"TAP", "RST"},  // B: the beat from one again (all on the clock with it)
   {
     {"SOURC", 0, TRIG_SOURCES, 0, UNI},
     {"BPM", 30, 300, 120, UNI},
@@ -755,7 +764,7 @@ FLASHMEM void ClockDevice::Tick(const ModCtx& ctx) {
 
 // TAP: tap the tempo on the UP button (internal clock)
 FLASHMEM void ClockDevice::Action(int a) {
-  if (a != 0) return;
+  if (a == 1) { ClockStart(); return; }
   const uint32_t now = micros();
   const uint32_t dt = now - tap_us;
   tap_us = now;

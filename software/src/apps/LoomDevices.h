@@ -437,6 +437,7 @@ public:
   float var_now[MAX_PARAMS] = {}, var_to[MAX_PARAMS] = {};
   uint32_t var_beat = 0, var_ms = 0;
   void VarTick();
+  void VarNew() { var_beat = loom::clock_beat_n + 1; }  // new variations at the next tick, as on a beat
   int VarAdd(int p, int v) const {
     if (!Varies(p) || var_now[p] == 0.0f) return v;
     const ParamDef& d = param(p);
@@ -1240,7 +1241,7 @@ FASTRUN __attribute__((optimize("O2"))) void LoomGate::update() {  // (O2: the b
 // MIX: level / pan / mute per track (not an audio stage itself)
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef MIX_DEF = {
-  "CLOTH", "MIX", 8, {"REC", ""},  // (was OUTPUT) the tag stays MIX: saved files use it; REC: BOLT
+  "CLOTH", "MIX", 8, {"REC", "DUCK"},  // B (trigger page; the button is bypass): a dip, a kick pumping the track  // (was OUTPUT) the tag stays MIX: saved files use it; REC: BOLT
   {
     // the chain against the track's source as it came in (0 = only the
     // source, 100 = only the chain): all the effects dialled back at once
@@ -1281,7 +1282,10 @@ public:
   void DrawViz(int x, int y, int w, int h) override;
   bool Muted() const { return cur[MUTE]; }
   // A: TAPE, the whole output to the card (the same on both tracks)
-  void Action(int a) override { if (a == 0 && g_tape) g_tape->Toggle(); }
+  void Action(int a) override {
+    if (a == 0 && g_tape) g_tape->Toggle();
+    if (a == 1) bandz.duck.Duck();
+  }
   bool ActionLit(int a) const override { return a == 0 && g_tape && g_tape->Wanted(); }
   bool HeaderInfo(char* buf, size_t n) const override;
   void SetBypass(bool b) { bandz.set_bypass(b); }  // tone + dynamics stage
@@ -1529,7 +1533,7 @@ FLASHMEM void MixDevice::DrawMini(int x, int y, int w, int h) {
 // INPUT (Source): picks the track's source from the audio inputs
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef INPUT_DEF = {
-  "INPUT", "IN", 4, {"", ""},
+  "INPUT", "IN", 4, {"MUTE", "DUCK"},  // A: off / on (faded); B: a dip, a kick pumping the input
   {
     {"SOURC", 0, 4, 0, UNI},  // L+R, L, R, OFF, and on track B: OUT A (see InputSourceName)
     {"GAIN", 0, 200, 100, UNI},
@@ -1582,9 +1586,14 @@ public:
     processorUsageMaxReset();
   }
   void update() override;
+  void Action(int a) override { if (a == 0) muted = !muted; else duck.Duck(); }
+  bool ActionLit(int a) const override { return a == 0 && muted; }
   volatile float level = 0.0f; // last block's peak, for FOLLOW
 private:
   audio_block_t* queue[4];
+  volatile bool muted = false;
+  float mute_g = 1.0f;  // faded (~3 ms)
+  DuckEnv duck;
   volatile uint8_t source = STEREO;
   volatile float gain = 1.0f, width = 1.0f;
   float peak[2] = {};
@@ -1710,7 +1719,12 @@ FASTRUN __attribute__((optimize("O2"))) void InputDevice::update() {  // (O2: th
           y = m - sd;
         } break;
       }
-      const int32_t gg = g;
+      int32_t gg = g;
+      if (mute_g != (muted ? 0.0f : 1.0f) || duck.Active()) {  // MUTE / DUCK
+        mute_g += ((muted ? 0.0f : 1.0f) - mute_g) * 0.008f;
+        if (fabsf(mute_g - (muted ? 0.0f : 1.0f)) < 1e-4f) mute_g = muted ? 0.0f : 1.0f;
+        gg = int32_t(g * mute_g * (duck.Active() ? duck.Next() : 1.0f));
+      }
       const int32_t xl = (x * gg + 8192) >> 14, yr = (y * gg + 8192) >> 14;  // rounded
       gc |= xl > 32767 || xl < -32768 || yr > 32767 || yr < -32768;
       l[n] = SoftClip16(xl);
@@ -4698,7 +4712,7 @@ FLASHMEM void EchoDevice::DrawMini(int x, int y, int w, int h) {
 // TEXTURE: fold, drive, crush, tilt, envelope-following noise
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef DIRT_DEF = {
-  "TEXTURE", "TEX", 8, {"", ""},
+  "TEXTURE", "TEX", 8, {"NEW", "NOIS"},  // A: new variations now; B: a burst of its noise
   {
     {"DRIVE", 0, 100, 0, UNI, 0, 21, 0},
     {"FOLD", 0, 100, 0, UNI, 0, 21, 0},
@@ -4722,7 +4736,7 @@ PROGMEM static const DeviceDef DIRT_DEF = {
 // variations, drawn anew on each beat (SIDE: the chance it changes; STAGE:
 // +- 2 n stages; FDBK / RESO, MIX: +- 5 n %)
 PROGMEM static const DeviceDef HEDDLE_DEF = {
-  "HEDDLE", "HDL", 4, {"", ""},
+  "HEDDLE", "HDL", 4, {"NEW", "FLIP"},  // A: new variations now; B: the shift / the phaser the other way (again: back)
   {
     {"SHIFT", -100, 100, 0, BI, 0, 4, 0, {}, {"SHIFT", "SHCLK", "PHASE", "PHCLK"}},
     {"SIDE", 0, 16, 0, UNI, 0, 11, 0},
@@ -4737,6 +4751,7 @@ public:
   enum { DRIVE, FOLD, CRUSH, TILT, NOISE, NDECAY, NTONE, WET };
   bool Varies(int p) const override { return p == DRIVE || p == FOLD || p == NDECAY || p == NTONE || p == WET; }
   DirtDevice() : Device(DIRT_DEF) {}
+  void Action(int a) override { if (a == 0) VarNew(); else fx.noise_burst(); }
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
   void Apply(int p) override;
@@ -5027,6 +5042,11 @@ public:
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
   void Apply(int p) override;
+  void Action(int a) override {
+    if (a == 0) v_beat = loom::clock_beat_n + 1;  // (Idle draws them)
+    else { flipped = !flipped; Send(); }
+  }
+  bool ActionLit(int a) const override { return a == 1 && flipped; }
   void Format(int p, char* buf, size_t n) const override;
   void DrawViz(int x, int y, int w, int h) override { DrawPole(x, y, w, h); }
   void DrawMini(int x, int y, int w, int h) override { DrawPole(x, y, w, h); }
@@ -5043,6 +5063,7 @@ private:
   int8_t v_stage = 0, v_side = -1;  // (-1: SIDE as set)
   float v_fb = 0.0f, v_fb_to = 0.0f, v_mix = 0.0f, v_mix_to = 0.0f;
   uint32_t v_beat = 0, v_ms = 0;
+  bool flipped = false;  // FLIP: the other way
 };
 
 FLASHMEM void HeddleDevice::Apply(int p) {
@@ -5058,8 +5079,9 @@ FLASHMEM void HeddleDevice::Apply(int p) {
 }
 
 FLASHMEM void HeddleDevice::Send() {
-  if (Phasing()) fx.phase(ShiftHz(cur[SHIFT]), Stages(), Fdbk() * 0.009f, Mix() * 0.01f);
-  else fx.shift(ShiftHz(cur[SHIFT]), Side(), Fdbk() * 0.0095f, Mix() * 0.01f);
+  const float hz = ShiftHz(cur[SHIFT]) * (flipped ? -1.0f : 1.0f);
+  if (Phasing()) fx.phase(hz, Stages(), Fdbk() * 0.009f, Mix() * 0.01f);
+  else fx.shift(hz, Side(), Fdbk() * 0.0095f, Mix() * 0.01f);
 }
 
 // the variations: new ones on each beat, FDBK / RESO and MIX gliding
@@ -5199,7 +5221,7 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
 // RESONATOR: 48-band resonant filter bank
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef RESONATOR_DEF = {
-  "REED", "RES", 8, {"", ""},  // (was RESONATOR)
+  "REED", "RES", 8, {"HIT", "NEW"},  // (was RESONATOR) A: struck, it rings without any input; B: a new variation
   {
     {"CUT", 0, 100, 70, UNI, 0, 21, 0},
     {"SLOPE", -50, 50, -50, BI, 0, 21, 0},
@@ -5225,6 +5247,7 @@ public:
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
   bool Activate() override { fx.Reset(); active = true; return true; }
+  void Action(int a) override { if (a == 0) fx.Strike(); else fx.NewVar(); }
   void Apply(int p) override { Rebuild(); }
   void Format(int p, char* buf, size_t n) const override;
   void FormatMode(int p, char* buf, size_t n) const override;
@@ -5709,7 +5732,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioRings::update() {  // (O2: the
 }
 
 PROGMEM static const DeviceDef MODAL_DEF = {
-  "BEATER", "MDL", 8, {"HIT", ""},  // (was MODAL)
+  "BEATER", "MDL", 8, {"HIT", "DAMP"},  // B: a choke, the ringing stopped  // (was MODAL)
   {
     {"NOTE", 0, 72, 36, UNI},      // C0 .. C6, C3 in the middle
     {"STRUC", 0, 100, 70, UNI, 0, 21, 0},    // the module's STRUCTURE (SYMQ: the chord)
@@ -5744,7 +5767,10 @@ public:
     active = false;
   }
   void Apply(int p) override;
-  void Action(int a) override { if (a == 0) { fx.voice.Strike(); hit_at = millis() | 1; } }
+  void Action(int a) override {
+    if (a == 0) { fx.voice.Strike(); hit_at = millis() | 1; }
+    else fx.voice.Damp();
+  }
   void Rest(bool on) override { fx.rest = on; }
   bool RestsWhenDry() const override { return true; }  // WET 0: rests (wakes ringing from silence)
   void Format(int p, char* buf, size_t n) const override;
@@ -6062,7 +6088,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioStretch::update() {  // (O2: t
 }
 
 PROGMEM static const DeviceDef STRETCH_DEF = {
-  "DRAFT", "STR", 8, {"FRZ", ""},  // (was STRETCH)
+  "DRAFT", "STR", 8, {"FRZ", "GRAB"},  // B: holds a fresh piece, the sound coming in now  // (was STRETCH)
   {
     // page 1 in FIBRE's places (SPEED where FIBRE has RATE); every mode is
     // a random variation per window, 0..100 % (PITCH: 0..24 semitones)
@@ -6111,7 +6137,11 @@ public:
   // is (no jump): recording, how far back from the record head; frozen, the
   // place in the held sound (on the picture, 0 left .. 100 right)
   void Action(int a) override {
-    if (a != 0) return;
+    if (a == 1) {  // GRAB: let go (if held) and hold again, on what is there now
+      if (frozen) Action(0);
+      Action(0);
+      return;
+    }
     const float h = fx.HeadPos() / AudioStretch::HIST;
     if (!frozen) {  // the place on the picture where it plays now
       float f = h - fx.voice.BackOf(1.0f - val[POS] * 0.01f);

@@ -30,6 +30,7 @@ public:
   }
   void SetModel(int m);
   void Strike() { strike_ = true; }  // a hit by hand: the internal exciter for one block
+  void Damp() { damp_blocks_ = 20; }   // a choke: damped hard for ~60 ms, the ringing stopped
 
 private:
   void* part_ = nullptr;
@@ -38,5 +39,6 @@ private:
   float note_ = 36.0f, structure_ = 0.5f, brightness_ = 0.5f, damping_ = 0.5f, position_ = 0.5f;
   int model_ = MODAL;
   volatile bool strike_ = false;
+  volatile int damp_blocks_ = 0;
   float in_level_ = 0.0f;
 };
