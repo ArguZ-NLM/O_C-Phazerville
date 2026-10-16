@@ -1940,7 +1940,10 @@ FLASHMEM void AppLoom::MainLoop() {
     // USB 'x': the chord asked for, on at 50 ms, off at 1550 ms
     if (chord_at) {
       const uint32_t t = millis() - chord_at;
-      if (!chord_on && t >= 50) { for (int i = 0; i < chord_n; i++) loom::NoteEvent(1, chord[i], 100); chord_on = true; }
+      if (!chord_on && t >= 50) {  // (as a keyboard: the note-taking settings see them too)
+        for (int i = 0; i < chord_n; i++) { loom::NoteEvent(1, chord[i], 100); loom::NoteIn(1, chord[i]); }
+        chord_on = true;
+      }
       if (chord_on && t >= 1550) { for (int i = 0; i < chord_n; i++) loom::NoteEvent(1, chord[i], 0); chord_at = 0; }
     }
     // test notes (USB 'M'), as if from a keyboard, while 'U' captures:
