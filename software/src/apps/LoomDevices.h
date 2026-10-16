@@ -302,13 +302,13 @@ public:
   // the name shown above a setting (some name themselves after their mode)
   // the upper row: a setting with named modes reads its own name (what it
   // is for) until its mode is turned, then the mode it is on (SPEED: FWD /
-  // REV / SYNC); one on a mode other than its first shows it at once
+  // REV / SYNC)
   virtual const char* Name(int p) const {
     const ParamDef& d = param(p);
     if (d.nmodes && d.nmodes <= 4 && mode[p] < 4 && d.modes[mode[p]][0] && ModeNamed(p)) return d.modes[mode[p]];
     return d.name;
   }
-  bool ModeNamed(int p) const { return (mode_named >> p & 1) || mode[p] != param(p).defmode; }
+  bool ModeNamed(int p) const { return mode_named >> p & 1; }
   uint16_t mode_named = 0;  // bit per setting: its mode turned (by hand)
   // a setting taken once per event (a grain's PITCH): it follows a
   // modulator's step, not its glide
@@ -6353,9 +6353,9 @@ FLASHMEM void StretchDevice::DrawMini(int x, int y, int w, int h) {
 
 /////////////////////////////////////////////////////////////////
 // CHIME (RESONATOR slot): six tuned bells on notes of a scale, each two
-// band-passes in a row, so only the notes ring, clean. HITS of them get the
-// sound at once; each hit (or STEP) moves which (HITS' mode); the bells it
-// leaves ring out at their own pitch: chords, or arpeggios with HITS at 1.
+// band-passes in a row, so only the notes ring, clean. ARP: how many of them get the
+// sound at once; each hit (or STEP) moves which (ARP's mode); the bells it
+// leaves ring out at their own pitch: chords, or arpeggios with ARP at 1.
 // ROTA turns all six along the scale, round and round within three periods
 // of it (always in key), MORPH (its mode) how slowly. Page 1 what they
 // play, page 2 the sound.
@@ -6365,7 +6365,7 @@ PROGMEM static const DeviceDef CHIME_DEF = {
   {
     // how many bells ring at once (1 .. 6); mode: what a hit (or STEP)
     // does to which (OFF: nothing, they stay)
-    {"HITS", 1, 6, 6, UNI, 0, 4, 1, {}, {"OFF", "UP", "DOWN", "RAND"}},
+    {"ARP", 1, 6, 6, UNI, 0, 4, 1, {}, {"OFF", "UP", "DOWN", "RAND"}},
     // all six turned along the scale, a step a click, round and round (past
     // the top: in again at the bottom); mode: MORPH, how slowly the sound
     // moves to new notes (ROTA, SPRD, SCALE, NOTE)
@@ -6386,13 +6386,13 @@ PROGMEM static const DeviceDef CHIME_DEF = {
 
 class ChimeDevice : public Device {
 public:
-  enum { HITS, ROTA, SPRD, VARI, NOTE, SCALE, DECAY, WET };
+  enum { ARP, ROTA, SPRD, VARI, NOTE, SCALE, DECAY, WET };
   int RotaW() const { return rota_w; }  // the steps ROTA goes round (three periods of the scale)
   int Step(int p, int v, int dir) const override {
     return p == ROTA ? ((v + dir) % rota_w + rota_w) % rota_w : Device::Step(p, v, dir);
   }
   bool Varies(int p) const override { return p == WET; }
-  // the variations' bars (NOTE, SPRD's MORPH, HITS' moves are no variations)
+  // the variations' bars (NOTE, SPRD's MORPH, ARP's moves are no variations)
   int BarStyle(int p) const override {
     return p == DECAY ? BAR_CENTRE : p == VARI ? BAR_LEFT : Device::BarStyle(p);  // (+-: out from the middle)
   }
@@ -6495,8 +6495,8 @@ FLASHMEM void ChimeDevice::Apply(int p) {
     default: table(harmonic, 8); break;         // HARMO
   }
   a.spread = cur[SPRD];
-  a.notes = constrain(int(cur[HITS]), 1, 6);
-  a.rotate = uint8_t(constrain(int(mode[HITS]), 0, 3));
+  a.notes = constrain(int(cur[ARP]), 1, 6);
+  a.rotate = uint8_t(constrain(int(mode[ARP]), 0, 3));
   rota_w = 3 * std::max(1, a.steps);
   a.rota = cur[ROTA];
   a.step_var = cur[VARI];
@@ -6513,7 +6513,7 @@ FLASHMEM void ChimeDevice::Format(int p, char* buf, size_t n) const {
   static const char* const names[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
   static const char* const scales[SCALES] = {"CHROM", "MAJOR", "MINOR", "PENTA", "mPENT", "FIFTH", "WHOLE",
                                              "QUART", "17ET", "19ET", "SLEND", "PELOG", "BOHLN", "SHRUT", "HARMO"};
-  if (p == HITS) { snprintf(buf, n, "%d/6", val[HITS]); return; }  // bells at once
+  if (p == ARP) { snprintf(buf, n, "%d/6", val[ARP]); return; }  // bells at once
   if (p == ROTA) { snprintf(buf, n, "%d", ((val[ROTA] % rota_w) + rota_w) % rota_w); return; }
   if (p == VARI) { if (val[VARI]) snprintf(buf, n, LOOM_PM "%d", val[VARI]); else snprintf(buf, n, "OFF"); return; }
   if (p == NOTE && mode[NOTE]) {  // MIDI: the note played, and the offset (E3+6)
