@@ -6356,8 +6356,8 @@ FLASHMEM void StretchDevice::DrawMini(int x, int y, int w, int h) {
 // band-passes in a row, so only the notes ring, clean. ARP: how many of them get the
 // sound at once; each hit (or STEP) moves which (ARP's mode); the bells it
 // leaves ring out at their own pitch: chords, or arpeggios with ARP at 1.
-// ROTA turns all six along the scale, round and round within three periods
-// of it (always in key), MORPH (its mode) how slowly. Page 1 what they
+// ROTA turns all six along 21 places of the scale, five octaves of it, round
+// and round (always in key), MORPH (its mode) how slowly. Page 1 what they
 // play, page 2 the sound.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef CHIME_DEF = {
@@ -6369,8 +6369,8 @@ PROGMEM static const DeviceDef CHIME_DEF = {
     // all six turned along the scale, a step a click, round and round (past
     // the top: in again at the bottom); mode: MORPH, how slowly the sound
     // moves to new notes (ROTA, SPRD, SCALE, NOTE)
-    {"ROTA", 0, 71, 0, UNI, 0, 13, 0},
-    {"SPRD", 1, 7, 2, UNI},  // scale steps between the six notes
+    {"ROTA", 0, 20, 0, UNI, 0, 13, 0},
+    {"SPRD", 1, 7, 2, UNI},  // places between the six bells (of the 21)
     // on each hit, notes moved up or down by up to this many steps of the
     // scale, at random; mode: how many of the six (1 .. 6)
     {"VARI", 0, 48, 0, UNI, 0, 6, 5},
@@ -6387,7 +6387,6 @@ PROGMEM static const DeviceDef CHIME_DEF = {
 class ChimeDevice : public Device {
 public:
   enum { ARP, ROTA, SPRD, VARI, NOTE, SCALE, DECAY, WET };
-  int RotaW() const { return rota_w; }  // the steps ROTA goes round (three periods of the scale)
   int Step(int p, int v, int dir) const override {
     return p == ROTA ? ((v + dir) % rota_w + rota_w) % rota_w : Device::Step(p, v, dir);
   }
@@ -6423,7 +6422,7 @@ private:
   Meter out_m;
   uint32_t step_at = 0;
   uint32_t note_seen = 0;
-  int rota_w = 21;
+  static constexpr int rota_w = 21;  // ROTA's places, round and round
   // NOTE on MIDI: the last note played; NOTE's value is then an offset to
   // it, 48 (C3) = none, so it is saved like any setting
   int16_t midi_base = 48;
@@ -6497,7 +6496,6 @@ FLASHMEM void ChimeDevice::Apply(int p) {
   a.spread = cur[SPRD];
   a.notes = constrain(int(cur[ARP]), 1, 6);
   a.rotate = uint8_t(constrain(int(mode[ARP]), 0, 3));
-  rota_w = 3 * std::max(1, a.steps);
   a.rota = cur[ROTA];
   a.step_var = cur[VARI];
   a.var_notes = mode[VARI] + 1;
