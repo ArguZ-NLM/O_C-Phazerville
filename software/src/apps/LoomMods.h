@@ -951,6 +951,9 @@ private:
   int Beat() const { return constrain(int(cur[P_BEAT]), 0, Beats(Style()) - 1); }
   int Swing() const { return 50 + 2 * constrain(int(mode[P_CHAOS]), 0, 12); }  // % of two steps the first takes
   int Level(int part, int s) const;  // the map's strength of a part's step s, with CHAOS (0..255)
+  bool Accent(int part, int s, int lv) const;
+  mutable uint8_t lv_cache[3][32] = {};  // the styles' strengths (Level), for this style and beat
+  mutable int lv_key = -1;
   bool Hits(int part, int lv) const { return lv > 255 - cur[P_LOW + part] * 255 / 100; }
   void Restart() { grid_base = grid_at >= 0 ? grid_at + 1 : 0; step = -1; t = 0.0f; }
   void Advance(int s);
@@ -959,19 +962,43 @@ private:
 };
 
 // a step's strength (0..255): MAP's from its patterns, the styles' from
-// their beats (the steps they leave out lowest, the beats among them
-// higher than the eighths, the eighths than the sixteenths)
+// their beats: each kind of step (X x o - .) has its own band (X 195-250,
+// x 130-190: FILL 50 plays both), and within it every step its own
+// strength, the beats above the eighths above the sixteenths, earlier
+// before later, so FILL brings them in one at a time
 FLASHMEM int TreadleMod::Level(int part, int s) const {
   s &= 31;
   const int st = Style(), bt = Beat();
   if (st == 0) return grids::drum_map[bt / 5][bt % 5][part * 32 + s];
-  switch (TRD_BEATS[st - 1][bt][part][s]) {
-    case 'X': return 240;
-    case 'x': return 170;
-    case 'o': return 110;
-    case '-': return 50;
-    default: return (s & 3) == 0 ? 40 : (s & 1) == 0 ? 30 : 15;
+  const int key = st * 32 + bt;
+  if (key != lv_key) {
+    static const char KINDS[5] = {'X', 'x', 'o', '-', '.'};
+    static const uint8_t HI[5] = {250, 190, 128, 88, 48}, LO[5] = {195, 130, 90, 52, 2};
+    for (int pt = 0; pt < 3; pt++) {
+      const char* row = TRD_BEATS[st - 1][bt][pt];
+      for (int kd = 0; kd < 5; kd++) {
+        int idx[32], n = 0;
+        for (int k = 0; k < 32; k++) {
+          const char c = row[k];
+          if (c == KINDS[kd] || (kd == 4 && c != 'X' && c != 'x' && c != 'o' && c != '-')) idx[n++] = k;
+        }
+        // the stronger places first (the one, the beats, the eighths ...), then earlier
+        auto weight = [](int k) { const int b = k & 15; return b == 0 ? 5 : (b & 7) == 0 ? 4 : (b & 3) == 0 ? 3 : (b & 1) == 0 ? 2 : 1; };
+        std::stable_sort(idx, idx + n, [&](int a, int b) { return weight(a) > weight(b); });
+        for (int i = 0; i < n; i++)
+          lv_cache[pt][idx[i]] = uint8_t(HI[kd] - (i * 2 + 1) * (HI[kd] - LO[kd]) / (2 * n));
+      }
+    }
+    lv_key = key;
   }
+  return lv_cache[part][s];
+}
+
+// an accent: MAP's strong steps, the styles' X
+FLASHMEM bool TreadleMod::Accent(int part, int s, int lv) const {
+  const int st = Style();
+  if (st == 0) return lv > 192;
+  return TRD_BEATS[st - 1][Beat()][part][s & 31] == 'X';
 }
 
 // CHAOS above 0: what a drummer plays round a groove, in the figures
@@ -1038,7 +1065,7 @@ FLASHMEM void TreadleMod::Thin(int part, int len, int ch) {
     if (!Hits(part, lv)) continue;
     const int b = k & 15;
     int keep = b == 0 ? 160 : (b & 7) == 0 ? 120 : (b & 3) == 0 ? 90 : (b & 1) == 0 ? 55 : 20;
-    keep += lv / 4 + (lv > 192 ? 30 : 0);
+    keep += lv / 4 + (Accent(part, k, lv) ? 30 : 0);
     if (part == 1 && (b & 7) == 4) keep += 50;
     idx[n] = k;
     sc[n++] = keep + int(random(40));
@@ -1129,7 +1156,7 @@ FLASHMEM void TreadleMod::Advance(int s) {
     if (!hit && !(add[part] >> (pos[part] & 31) & 1)) continue;
     // every hit full height (triggers want 10 V); the accents (the map's
     // strong steps) also on their own outputs, to drive a level with
-    const bool acc = hit && lv > 192;
+    const bool acc = hit && Accent(part, pos[part], lv);
     gate[part] = g;
     lvl[part] = 1.0f;
     wait[part] = late;
@@ -1187,7 +1214,7 @@ FLASHMEM void TreadleMod::DrawViz(int x, int y, int w, int h) {
       const int lv = Level(part, s), bx = x + 1 + s * bw;
       if (Hits(part, lv)) {
         // (left out by CHAOS this run through: hollow)
-        const int bh = lv > 192 ? rh - 3 : (rh - 3) * 2 / 3;
+        const int bh = Accent(part, s, lv) ? rh - 3 : (rh - 3) * 2 / 3;
         if (drop[part] >> s & 1) gfxFrame(bx, base - bh + 1, std::max(1, bw - 1), bh);
         else gfxRect(bx, base - bh + 1, std::max(1, bw - 1), bh);
       } else if (add[part] >> s & 1) {
