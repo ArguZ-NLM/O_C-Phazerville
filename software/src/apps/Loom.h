@@ -2160,10 +2160,10 @@ FLASHMEM void AppLoom::MainLoop() {
     });
     // what strikes the devices' actions (A, B)
     ForEachDevice([&](loom::Device* d) {
-      if (d->mod_bus != tr.mod_out || !(d->act_trig[0] | d->act_trig[1])) return;
+      if (d->mod_bus != tr.mod_out || !(d->TrigSource(0) | d->TrigSource(1))) return;
       char a0[8], a1[8];
-      loom::FormatTrig(d->act_trig[0], a0, sizeof(a0));
-      loom::FormatTrig(d->act_trig[1], a1, sizeof(a1));
+      loom::FormatTrig(d->TrigSource(0), a0, sizeof(a0));
+      loom::FormatTrig(d->TrigSource(1), a1, sizeof(a1));
       Serial.printf("  %c %s strikes %s %s / %s %s\n", t ? 'R' : 'L', d->def.tag,
         d->def.actions[0], a0, d->def.actions[1], a1);
     });
@@ -2651,9 +2651,10 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
   Device* d = Focused();
   if (!d) { view = CHAIN; return; }
   if (trig_mode) {
-    uint8_t& src = d->act_trig[left ? 0 : 1];
-    src = constrain(src + dir, 0, TRIG_SOURCES - 1);
-    if (Device* tw = Twin(d)) tw->act_trig[left ? 0 : 1] = src;
+    // (a modulator's own trigger setting, ADSR's TRIG, changes with it)
+    const int a = left ? 0 : 1;
+    d->SetTrigSource(a, d->TrigSource(a) + dir);
+    if (Device* tw = Twin(d)) tw->SetTrigSource(a, d->TrigSource(a));
     return;
   }
   if (mod_mode) {
@@ -3203,7 +3204,7 @@ FLASHMEM void AppLoom::DrawDevice() const {
     gfxFrame(0, 10, 128, 32);
     for (int a = 0; a < 2; a++) {
       char src[8], buf[24];
-      FormatTrig(d->act_trig[a], src, sizeof(src));
+      FormatTrig(d->TrigSource(a), src, sizeof(src));
       const char* act = d->def.actions[a][0] ? d->def.actions[a] : "-";
       snprintf(buf, sizeof(buf), "%-5s <- %s", act, src);
       gfxPrint(4, 13 + a * 10, buf);
@@ -3918,7 +3919,17 @@ namespace loom {
     if (use) {
       d->mod_bi = bi;
       d->mod_bi2 = bi2;
-      for (int a = 0; a < 2; a++) d->act_trig[a] = trig[a] < TRIG_SOURCES ? trig[a] : 0;
+      for (int a = 0; a < 2; a++) {
+        d->act_trig[a] = trig[a] < TRIG_SOURCES ? trig[a] : 0;
+        // saved before the trigger page and a modulator's own trigger
+        // setting were one: a source picked on the page moves into the
+        // setting (if that was still free)
+        const int tp = d->TrigParam(a);
+        if (tp >= 0 && d->act_trig[a]) {
+          if (!d->val[tp]) { d->val[tp] = d->cur[tp] = d->act_trig[a]; d->Apply(tp); }
+          d->act_trig[a] = 0;
+        }
+      }
     }
     return true;
   }

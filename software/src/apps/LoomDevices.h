@@ -260,6 +260,25 @@ public:
   int8_t ui_cursor = 0;  // the setting its page was left on (opens there again)
   uint8_t act_trig[2] = {};              // trigger sources for the 2 actions
   bool act_prev[2] = {};
+  // Some modulators pick an action's trigger with one of their own settings
+  // (ADSR's TRIG for TRG, WAVE's RESET for RST ...). For those the trigger
+  // page and the setting are one and the same: this says which setting
+  // (-1: none, the trigger page keeps its own choice in act_trig).
+  virtual int TrigParam(int a) const { return -1; }
+  // the trigger source of action a, wherever it is kept
+  uint8_t TrigSource(int a) const {
+    const int p = TrigParam(a);
+    return p >= 0 ? uint8_t(val[p]) : act_trig[a];
+  }
+  // set it from the trigger page: into the setting if there is one (the
+  // modulator reads that itself, so act_trig stays off and nothing fires
+  // twice), else into act_trig
+  void SetTrigSource(int a, int src) {
+    src = constrain(src, 0, TRIG_SOURCES - 1);
+    const int p = TrigParam(a);
+    if (p >= 0) { act_trig[a] = 0; val[p] = int16_t(src); Refresh(p); }
+    else act_trig[a] = uint8_t(src);
+  }
   const float* mod_bus = nullptr;        // the track's modulator outputs
   // a trigger source as this device sees it: MOD A-H are its track's
   // modulators (a hit once one passes half way), the rest the inputs / MIDI
@@ -528,6 +547,7 @@ FLASHMEM void Device::Modulate() {
 
 FLASHMEM void Device::RunTriggers(uint16_t edges) {
   for (int a = 0; a < 2; a++) {
+    if (TrigParam(a) >= 0) continue;  // (the modulator watches that source itself)
     if (act_trig[a] && SrcEdge(act_trig[a], edges, act_prev[a])) Action(a);
   }
 }

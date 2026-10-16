@@ -186,6 +186,7 @@ class WaveMod : public Modulator {
 public:
   enum { P_RATE, P_AMT, P_PHASE, P_OFFS, P_SHAPE, P_SKEW, P_RESET };
   WaveMod() : Modulator(WAVE_DEF) {}
+  int TrigParam(int a) const override { return a == 1 ? P_RESET : -1; }  // RST is RESET
   void Tick(const ModCtx& ctx) override;
   void Format(int p, char* buf, size_t n) const override;
   void Action(int a) override {
@@ -282,6 +283,7 @@ public:
   // (before 2026-10-14: RATE AMNT SMTH OFFS LEN VARI CLOCK, no QUANT)
   enum { P_AMT, P_LEN, P_VARI, P_OFFS, P_CLOCK, P_RATE, P_SMTH, P_QUANT };
   static constexpr int SCALES = 17, SCALES12 = 9;  // off, 8 on the 12 notes, 8 microtonal
+  int TrigParam(int a) const override { return a == 0 ? P_CLOCK : -1; }  // STP is CLOCK
   RandomMod() : Modulator(RANDOM_DEF) {
     for (auto& s : steps) s = random(1000) * 0.001f;
   }
@@ -534,6 +536,7 @@ public:
   enum { P_ATT, P_DEC, P_SUS, P_REL, P_AMT, P_TRIG, P_LOOP, P_TIME };
   enum { LOOP_ONCE, LOOP_GATE, LOOP_ENDLESS };
   AdsrMod() : Modulator(ADSR_DEF) {}
+  int TrigParam(int a) const override { return a == 0 ? P_TRIG : -1; }  // TRG is TRIG
   void Tick(const ModCtx& ctx) override;
   void Format(int p, char* buf, size_t n) const override;
   void FormatMode(int p, char* buf, size_t n) const override;
@@ -1339,6 +1342,7 @@ public:
   enum { SET_ALL, SET_ODD, SET_EVEN, SET_PRIME, SET_TRIP, SET_FIB, SET_POW2, SETS };
   enum { O_AB, O_A, O_B, O_TICK, O_TOCK, O_FIXED, OUTS = O_FIXED + 8 };
   PickMod() : Modulator(PICK_DEF) {}
+  int TrigParam(int a) const override { return a == 1 ? P_RESET : -1; }  // RST is RESET
   void Tick(const ModCtx& ctx) override;
   int Step(int p, int v, int dir) const override;
   void Format(int p, char* buf, size_t n) const override;
