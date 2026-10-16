@@ -986,6 +986,11 @@ void FASTRUN loop() {
           case '@':  // X held down (let go with the next X press); CARD: deletes the file after 2 s
             OC::ui.Inject(UI::EVENT_BUTTON_DOWN, OC::CONTROL_BUTTON_X, 0, OC::CONTROL_BUTTON_X);
             break;
+          case '`':  // A held long and let go (TWILL: keys note only / note and strike)
+            OC::ui.Inject(UI::EVENT_BUTTON_DOWN, OC::CONTROL_BUTTON_A, 0, 0);
+            OC::ui.Inject(UI::EVENT_BUTTON_LONG_PRESS, OC::CONTROL_BUTTON_A, 0, 0);
+            OC::ui.Inject(UI::EVENT_BUTTON_LONG_RELEASE, OC::CONTROL_BUTTON_A, 0, 0);
+            break;
           case '_':  // L held long and let go (Loom: a device's trigger page)
             OC::ui.Inject(UI::EVENT_BUTTON_DOWN, OC::CONTROL_BUTTON_L, 0, 0);
             OC::ui.Inject(UI::EVENT_BUTTON_LONG_RELEASE, OC::CONTROL_BUTTON_L, 0, 0);
