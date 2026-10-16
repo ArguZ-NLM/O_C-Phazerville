@@ -140,14 +140,16 @@ private:
   }
   // (moved far, a note is folded back by octaves into ~C1 .. 4 kHz)
   float PlaceHz(int p) const {
-    // 20 places spread evenly over five periods of the scale, from two
-    // below the root (NOTE) to three above, each on a note of it; SPRD
-    // places apart, ROTA turning them round (past the top: in again at
-    // the bottom)
-    constexpr int PLACES_W = 20, PERIODS = 5, BELOW = 2;
-    const int st = std::max(1, std::min(24, par.steps));
+    // 20 places spread evenly over the whole range, C1 .. C8 (the
+    // picture's width), each on a note of the scale (its key from NOTE);
+    // SPRD places apart, ROTA turning them round (past the top: in again
+    // at the bottom)
+    constexpr int PLACES_W = 20;
+    const float st = float(std::max(1, std::min(24, par.steps))), per = std::max(1.0f, par.period);
+    const int d_lo = int(ceilf((24 - par.root) * 100.0f / per * st));    // the scale's first note from C1
+    const int d_hi = int(floorf((108 - par.root) * 100.0f / per * st));  // ... its last to C8
     const int k = ((p * par.spread + par.rota) % PLACES_W + PLACES_W) % PLACES_W;
-    const int deg = k * PERIODS * st / PLACES_W - BELOW * st;
+    const int deg = d_lo + (k * (d_hi - d_lo) + (PLACES_W - 1) / 2) / (PLACES_W - 1);
     float hz = Degree(deg + place_var[p]);
     while (hz > 4200.0f) hz *= 0.5f;
     while (hz < 32.0f) hz *= 2.0f;
