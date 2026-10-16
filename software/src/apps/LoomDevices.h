@@ -368,7 +368,7 @@ public:
   virtual bool ListsOnDoubleClick() const { return false; }
   virtual void RestoreMore(const Saved&) {}
   void Nudge(int p, int dir);
-  void NudgeMode(int p, int dir);
+  virtual void NudgeMode(int p, int dir);
   // the lowest mode the L knob can pick now (SHUTTLE streaming: no REV)
   virtual int ModeMin(int p) const { return 0; }
   // the upper row shows the mode instead of the name all the time
@@ -6348,7 +6348,12 @@ PROGMEM static const DeviceDef CHIME_DEF = {
 class ChimeDevice : public Device {
 public:
   enum { NOTE, SPRD, DECAY, ROT, VARI, SCALE, HITS, WET };
-  const char* Name(int p) const override { return p == SCALE ? param(p).name : Device::Name(p); }  // (the tuning: its mode)
+  // SCALE's name until its mode (the tuning) is turned, or is set: then the tuning
+  const char* Name(int p) const override {
+    if (p == SCALE) return tuning_named || mode[SCALE] ? param(p).modes[constrain(int(mode[SCALE]), 0, 3)] : param(p).name;
+    return Device::Name(p);
+  }
+  void NudgeMode(int p, int dir) override { if (p == SCALE) tuning_named = true; Device::NudgeMode(p, dir); }
   bool Varies(int p) const override { return p == WET; }
   // the variations' bars (NOTE, SPRD's MORPH, ROT's count are no variations)
   int BarStyle(int p) const override {
@@ -6382,6 +6387,7 @@ private:
   Meter out_m;
   uint32_t step_at = 0;
   uint32_t note_seen = 0;
+  bool tuning_named = false;
   // NOTE on MIDI: the last note played; NOTE's value is then an offset to
   // it, 48 (C3) = none, so it is saved like any setting
   int16_t midi_base = 48;
