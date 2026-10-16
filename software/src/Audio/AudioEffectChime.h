@@ -307,7 +307,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectChime::update() {  // (O
   // round, so they don't all peak at once
   int fed = 0;
   for (int i = 0; i < VOICES; i++) if (vc[i].hz > 0.0f && vc[i].in_to > 0.0f) fed++;
-  const float strike_k = 0.5f / sqrtf(float(std::max(1, fed)));
+  const float strike_k = 0.7f / sqrtf(float(std::max(1, fed)));
   int struck = 0;
   for (int i = 0; i < VOICES; i++) {
     Voice& v = vc[i];
@@ -382,9 +382,9 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectChime::update() {  // (O
 
   // the level control: a held input builds the rings up far past a pluck
   // (the make-up is for plucks), so the sum is turned down smoothly when
-  // its peaks go over ~-6 dB (down within ~1 ms, back up over ~0.3 s);
+  // its peaks go over ~-3 dB (down within ~1 ms, back up over ~0.3 s);
   // then a soft limit for what gets past, then dry / wet
-  constexpr float AGC_TARGET = 0.5f;
+  constexpr float AGC_TARGET = 0.7f;
   const float env_fall = 0.9995f, g_down = 0.02f, g_up = 0.00007f;
   const float wet = par.wet;
   float peak_out = 0.0f;
