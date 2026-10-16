@@ -515,14 +515,24 @@ PROGMEM static const DeviceDef ADSR_DEF = {
     {"DEC", 0, 100, 45, UNI, 0, 21, 10},
     {"SUS", 0, 100, 60, UNI},
     {"REL", 0, 100, 50, UNI, 0, 21, 10},
-    {"AMNT", 0, 100, 100, UNI},
+    // how far it moves; mode: NORM, or INV: upside down (at rest it sits
+    // at the top and each trigger dips it)
+    {"AMNT", 0, 100, 100, UNI, 0, 2, 0, {}, {"NORM", "INV"}},
     {"TRIG", 0, TRIG_SOURCES - 1, 1, UNI},
+    // 1SHOT: once per trigger (held: SUS until let go); GATE: round and
+    // round (attack, decay, release, again) while the gate is held, then
+    // the last release; ENDLS: round and round all the time
+    {"LOOP", 0, 2, 0, LIST, 3, 0, 0, {"1SHOT", "GATE", "ENDLS"}},
+    // all three times together, x0.1 .. x1.0 (the middle) .. x10, so the
+    // shape stays the same and only gets faster or slower
+    {"TIME", 0, 100, 50, UNI},
   }
 };
 
 class AdsrMod : public Modulator {
 public:
-  enum { P_ATT, P_DEC, P_SUS, P_REL, P_AMT, P_TRIG };
+  enum { P_ATT, P_DEC, P_SUS, P_REL, P_AMT, P_TRIG, P_LOOP, P_TIME };
+  enum { LOOP_ONCE, LOOP_GATE, LOOP_ENDLESS };
   AdsrMod() : Modulator(ADSR_DEF) {}
   void Tick(const ModCtx& ctx) override;
   void Format(int p, char* buf, size_t n) const override;
@@ -548,15 +558,23 @@ private:
   float Shaped(float e, Stage st, float from) const;
   float manual = 0.0f; // the action button holds the gate this long
   float Time(int p) const;
+  float TimeScale() const { return powf(10.0f, (cur[P_TIME] - 50) * 0.02f); }
 };
 
-FLASHMEM float AdsrMod::Time(int p) const { return Seconds(cur[p], 0.001f, 10.0f); }
+// a stage's time in seconds: its own setting (1 ms .. 10 s), times TIME's
+// scale (x0.1 .. x10)
+FLASHMEM float AdsrMod::Time(int p) const { return Seconds(cur[p], 0.001f, 10.0f) * TimeScale(); }
 
 FLASHMEM void AdsrMod::Tick(const ModCtx& ctx) {
   if (Edge(cur[P_TRIG], ctx, 0)) { stage = ATTACK; flash = 0.1f; }
   if (manual > 0.0f) manual -= ctx.dt;
   const bool gate = Gate(cur[P_TRIG]) || manual > 0.0f;
   const float sus = cur[P_SUS] * 0.01f;
+  // LOOP: going round now (GATE: only while the gate is held; ENDLS:
+  // always, so it starts by itself too)
+  const int loop = constrain(int(cur[P_LOOP]), 0, 2);
+  const bool cycling = loop == LOOP_ENDLESS || (loop == LOOP_GATE && gate);
+  if (stage == IDLE && loop == LOOP_ENDLESS) stage = ATTACK;
   switch (stage) {
     case ATTACK:
       env += ctx.dt / Time(P_ATT);
@@ -564,15 +582,20 @@ FLASHMEM void AdsrMod::Tick(const ModCtx& ctx) {
       break;
     case DECAY:
       env -= ctx.dt / Time(P_DEC) * (1.0f - sus);
-      if (env <= sus) { env = sus; stage = gate ? SUSTAIN : RELEASE; rel_from = env; }
+      if (env <= sus) {
+        env = sus;
+        // going round: no sustain, straight on to the release
+        stage = gate && !cycling ? SUSTAIN : RELEASE;
+        rel_from = env;
+      }
       break;
     case SUSTAIN:
       env = sus;
-      if (!gate) { stage = RELEASE; rel_from = env; }
+      if (!gate || cycling) { stage = RELEASE; rel_from = env; }
       break;
     case RELEASE:
       env -= ctx.dt / Time(P_REL);
-      if (env <= 0.0f) { env = 0.0f; stage = IDLE; }
+      if (env <= 0.0f) { env = 0.0f; stage = cycling ? ATTACK : IDLE; }  // (going round: again)
       break;
     default: break;
   }
@@ -608,6 +631,7 @@ FLASHMEM float AdsrMod::Shaped(float e, Stage st, float from) const {
     } break;
     default: break;  // SUSTAIN and IDLE: as they are
   }
+  if (mode[P_AMT]) v = 1.0f - v;  // INV: upside down
   return v * cur[P_AMT] * 0.01f;
 }
 
@@ -663,6 +687,10 @@ FLASHMEM void AdsrMod::Format(int p, char* buf, size_t n) const {
     else snprintf(buf, n, "%d.%ds", int(s), int(s * 10.0f) % 10);
   } else if (p == P_TRIG) {
     FormatTrig(val[P_TRIG], buf, n);
+  } else if (p == P_TIME) {  // the scale: x0.1 .. x10
+    const float k = powf(10.0f, (val[P_TIME] - 50) * 0.02f);
+    if (k < 9.95f) snprintf(buf, n, "x%d.%d", int(k + 0.05f), int((k + 0.05f) * 10.0f) % 10);
+    else snprintf(buf, n, "x%d", int(k + 0.5f));
   } else {
     Device::Format(p, buf, n);
   }
