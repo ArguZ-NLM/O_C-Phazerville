@@ -6374,7 +6374,10 @@ PROGMEM static const DeviceDef CHIME_DEF = {
     // on each hit, notes moved up or down by up to this many steps of the
     // scale, at random; mode: how many of the six (1 .. 6)
     {"VARI", 0, 48, 0, UNI, 0, 6, 5},
-    {"NOTE", 24, 84, 48, UNI, 0, 18, 0},  // the first note, C1 .. C6; mode: KNOB, MIDI (any channel), CH1 .. CH16
+    // the whole series moved along the scale, steps up or down (always in
+    // key); mode: the key: KNOB (C), MIDI (the note played, any channel),
+    // CH1 .. CH16
+    {"NOTE", -40, 40, 0, BI, 0, 18, 0},
     // 7 of 12 notes, then 8 microtonal (see Apply); mode: how the 12-note
     // ones are tuned (the microtonal ones bring their own)
     {"SCALE", 0, 14, 3, UNI, 0, 4, 0, {}, {"EQUAL", "JUST", "PYTH", "MEANT"}},
@@ -6423,10 +6426,8 @@ private:
   uint32_t step_at = 0;
   uint32_t note_seen = 0;
   static constexpr int rota_w = 20;  // ROTA's places, round and round
-  // NOTE on MIDI: the last note played; NOTE's value is then an offset to
-  // it, 48 (C3) = none, so it is saved like any setting
+  // NOTE on MIDI: the last note played, the key
   int16_t midi_base = 48;
-  int8_t note_mode_was = -1;  // (-1: not seen yet, as after loading)
   static int FoldNote(int nt) { while (nt < 24) nt += 12; while (nt > 84) nt -= 12; return nt; }
   float Decay(int v) const { return 0.02f * powf(600.0f, v * 0.01f); }  // 20 ms .. 12 s
   static float Blend(int v) { return constrain((40 - v) / 40.0f, 0.0f, 1.0f); }  // below 40: more and more of the wide pass
@@ -6462,12 +6463,9 @@ FLASHMEM void ChimeDevice::Apply(int p) {
   static const float shruti[22] = {0, 90.2f, 111.7f, 182.4f, 203.9f, 294.1f, 315.6f, 386.3f, 407.8f, 498.0f, 519.6f,
                                    590.2f, 611.7f, 702.0f, 792.2f, 813.7f, 884.4f, 905.9f, 996.1f, 1017.6f, 1088.3f, 1109.8f};
   static const float harmonic[8] = {0, 203.91f, 386.31f, 551.32f, 701.96f, 840.53f, 968.83f, 1088.27f};
-  if (p == NOTE) {  // NOTE turned to MIDI: the offset starts at none
-    if (note_mode_was == 0 && mode[NOTE]) { val[NOTE] = 48; cur[NOTE] = Modulated(NOTE); }
-    note_mode_was = mode[NOTE] ? 1 : 0;
-  }
   AudioEffectChime::Params a;
-  a.root = mode[NOTE] ? FoldNote(midi_base + cur[NOTE] - 48) : cur[NOTE];
+  a.root = mode[NOTE] ? FoldNote(midi_base) : 48;  // the key: C, or the note played
+  a.offset = cur[NOTE];
   const int sc = constrain(int(cur[SCALE]), 0, SCALES - 1);
   a.steps = 0;
   a.period = 1200.0f;
@@ -6514,11 +6512,10 @@ FLASHMEM void ChimeDevice::Format(int p, char* buf, size_t n) const {
   if (p == ARP) { snprintf(buf, n, "%d/6", val[ARP]); return; }  // bells at once
   if (p == ROTA) { snprintf(buf, n, "%d", ((val[ROTA] % rota_w) + rota_w) % rota_w); return; }
   if (p == VARI) { if (val[VARI]) snprintf(buf, n, LOOM_PM "%d", val[VARI]); else snprintf(buf, n, "OFF"); return; }
-  if (p == NOTE && mode[NOTE]) {  // MIDI: the note played, and the offset (E3+6)
-    const int off = val[NOTE] - 48;
-    if (off) snprintf(buf, n, "%s%d%+d", names[midi_base % 12], midi_base / 12 - 1, off);
-    else snprintf(buf, n, "%s%d", names[midi_base % 12], midi_base / 12 - 1);
-  } else if (p == NOTE) snprintf(buf, n, "%s%d", names[val[NOTE] % 12], val[NOTE] / 12 - 1);
+  if (p == NOTE) {  // the key and the offset in steps of the scale (C+3, E+0)
+    const int key = mode[NOTE] ? midi_base % 12 : 0;
+    snprintf(buf, n, "%s%+d", names[key], val[NOTE]);
+  }
   else if (p == SCALE) snprintf(buf, n, "%s", scales[constrain(int(val[SCALE]), 0, SCALES - 1)]);
   else if (p == DECAY) {
     const float t = Decay(val[DECAY]);
