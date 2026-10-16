@@ -37,7 +37,8 @@ public:
   enum Rotate : uint8_t { ROT_OFF, ROT_UP, ROT_DOWN, ROT_RAND };
 
   struct Params {
-    int root = 48;           // MIDI note the bells are on (KEY, or the note played): all of them move with it
+    int root = 48;           // MIDI note of the key (KEY)
+    int offset = 0;          // the note played (KEY on MIDI): that many steps of the scale from the key
     uint8_t bells = 0x3F;    // which of the six ring (bit per bell: ARP's count, SPRD's mode), turned by the hits
     // the scale: its steps in cents over the root, repeating every period
     // (1200: the octave; Bohlen-Pierce: 1902, the twelfth)
@@ -152,7 +153,7 @@ private:
     const int d_lo = -2 * int(st), d_hi = 5 * int(st);
     const int k = ((p * par.spread + par.rota) % PLACES_W + PLACES_W) % PLACES_W;
     const int deg = d_lo + (k * (d_hi - d_lo) + (PLACES_W - 1) / 2) / (PLACES_W - 1);
-    float hz = Degree(deg + place_var[p]);
+    float hz = Degree(deg + par.offset + place_var[p]);
     const float pr = powf(2.0f, per / 1200.0f);  // a period up (2: the octave)
     while (hz > 4200.0f) hz /= pr;
     while (hz < 32.0f) hz *= pr;
