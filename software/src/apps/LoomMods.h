@@ -649,7 +649,9 @@ FLASHMEM void AdsrMod::DrawViz(int x, int y, int w, int h) {
   // a level as drawn: the stage's own curve, the release from SUS
   auto yy = [&](float e, Stage st) { return top + hh - int(Shaped(e, st, cur[P_SUS] * 0.01f) * hh + 0.5f); };
   const int wa = 2 + cur[P_ATT] * (seg - 2) / 100, wd = 2 + cur[P_DEC] * (seg - 2) / 100;
-  const int wr = 2 + cur[P_REL] * (seg - 2) / 100, wsus = ww - wa - wd - wr - 1;
+  // the release gets up to twice an attack's room, taken from the
+  // sustain's stretch (which keeps at least 6 pixels)
+  const int wr = 2 + cur[P_REL] * (2 * seg - 8) / 100, wsus = ww - wa - wd - wr - 1;
   const float sus = cur[P_SUS] * 0.01f;
   gfxDottedLine(x, top + hh, x + ww - 1, top + hh, 3);
   // the shape, column by column
