@@ -3172,6 +3172,11 @@ FLASHMEM void AppLoom::DrawDevice() const {
       if (d->def.actions[a][0]) room += 6 + (strcmp(d->def.actions[a], "RUN") ? 6 * int(strlen(d->def.actions[a])) : 5);
     if (mod_mode ? end > 62 : room > 101) {
       snprintf(buf, sizeof(buf), "%c %s", 'A' + mod_cursor, ShownTag(d->def.tag));
+      // Still too long (a shared modulator's "A+B" in front and two
+      // four-letter actions, FOLLOW's HOLD and DROP): only its letter, so
+      // the actions stay clear of the clock mark and the page number. The
+      // type is plain from the page itself.
+      if (!mod_mode && room - end + name_x + 6 * int(strlen(buf)) > 101) snprintf(buf, sizeof(buf), "%c", 'A' + mod_cursor);
       act_x = name_x + 6 * int(strlen(buf)) + 6;
     } else {
       act_x = end + 6;
