@@ -962,31 +962,34 @@ private:
 };
 
 // a step's strength (0..255): MAP's from its patterns, the styles' from
-// their beats: each kind of step (X x o - .) has its own band (X 195-250,
-// x 130-190: FILL 50 plays both), and within it every step its own
-// strength, the beats above the eighths above the sixteenths, earlier
-// before later, so FILL brings them in one at a time
+// their beats: every step its own strength, so FILL brings them in one at
+// a time, evenly: the core (X, x) up to FILL 50, the rest above
 FLASHMEM int TreadleMod::Level(int part, int s) const {
   s &= 31;
   const int st = Style(), bt = Beat();
   if (st == 0) return grids::drum_map[bt / 5][bt % 5][part * 32 + s];
   const int key = st * 32 + bt;
   if (key != lv_key) {
-    static const char KINDS[5] = {'X', 'x', 'o', '-', '.'};
-    static const uint8_t HI[5] = {250, 190, 128, 88, 48}, LO[5] = {195, 130, 90, 52, 2};
+    // the core (X, then x) over 130 .. 250 (FILL up to 50), the rest (o,
+    // then -, then the steps left out) over 2 .. 128 (FILL 50 .. 100); in
+    // each kind the stronger places first, then earlier
+    auto kind = [](char c) { return c == 'X' ? 0 : c == 'x' ? 1 : c == 'o' ? 2 : c == '-' ? 3 : 4; };
+    auto weight = [](int k) { const int b = k & 15; return b == 0 ? 5 : (b & 7) == 0 ? 4 : (b & 3) == 0 ? 3 : (b & 1) == 0 ? 2 : 1; };
     for (int pt = 0; pt < 3; pt++) {
       const char* row = TRD_BEATS[st - 1][bt][pt];
-      for (int kd = 0; kd < 5; kd++) {
-        int idx[32], n = 0;
-        for (int k = 0; k < 32; k++) {
-          const char c = row[k];
-          if (c == KINDS[kd] || (kd == 4 && c != 'X' && c != 'x' && c != 'o' && c != '-')) idx[n++] = k;
-        }
-        // the stronger places first (the one, the beats, the eighths ...), then earlier
-        auto weight = [](int k) { const int b = k & 15; return b == 0 ? 5 : (b & 7) == 0 ? 4 : (b & 3) == 0 ? 3 : (b & 1) == 0 ? 2 : 1; };
-        std::stable_sort(idx, idx + n, [&](int a, int b) { return weight(a) > weight(b); });
-        for (int i = 0; i < n; i++)
-          lv_cache[pt][idx[i]] = uint8_t(HI[kd] - (i * 2 + 1) * (HI[kd] - LO[kd]) / (2 * n));
+      int idx[32];
+      for (int k = 0; k < 32; k++) idx[k] = k;
+      std::stable_sort(idx, idx + 32, [&](int a, int b) {
+        const int ka = kind(row[a]), kb = kind(row[b]);
+        return ka != kb ? ka < kb : weight(a) > weight(b);
+      });
+      int ncore = 0;
+      while (ncore < 32 && kind(row[idx[ncore]]) <= 1) ncore++;
+      for (int i = 0; i < 32; i++) {
+        const bool core = i < ncore;
+        const int n = core ? ncore : 32 - ncore, j = core ? i : i - ncore;
+        const int hi = core ? 250 : 128, lo = core ? 130 : 2;
+        lv_cache[pt][idx[i]] = uint8_t(hi - (j * 2 + 1) * (hi - lo) / (2 * std::max(1, n)));
       }
     }
     lv_key = key;
