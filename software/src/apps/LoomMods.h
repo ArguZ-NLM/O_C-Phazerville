@@ -283,7 +283,6 @@ public:
   // (before 2026-10-14: RATE AMNT SMTH OFFS LEN VARI CLOCK, no QUANT)
   enum { P_AMT, P_LEN, P_VARI, P_OFFS, P_CLOCK, P_RATE, P_SMTH, P_QUANT };
   static constexpr int SCALES = 17, SCALES12 = 9;  // off, 8 on the 12 notes, 8 microtonal
-  int TrigParam(int a) const override { return a == 0 ? P_CLOCK : -1; }  // STP is CLOCK
   RandomMod() : Modulator(RANDOM_DEF) {
     for (auto& s : steps) s = random(1000) * 0.001f;
   }
