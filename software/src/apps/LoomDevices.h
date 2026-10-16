@@ -6332,12 +6332,14 @@ PROGMEM static const DeviceDef CHIME_DEF = {
     // the notes fed turned along the six by hand, a place a click (round
     // and round; modulated: they spin); mode: how many of the six (1 .. 6)
     {"ROT", 0, 5, 0, UNI, 0, 6, 5},
-    // how the 12-note scales are tuned (the microtonal ones bring their
-    // own); mode: variation per hit, +- n steps of the scale
-    {"TUNE", 0, 3, 0, LIST, 4, 13, 0, {"EQUAL", "JUST", "PYTH", "MEANT"}},
+    // on each hit, notes moved up or down by up to this many steps of the
+    // scale, at random; mode: how many of the six (1 .. 6)
+    {"VARI", 0, 48, 0, UNI, 0, 6, 5},
+    // 7 of 12 notes, then 8 microtonal (see Apply); mode: how the 12-note
+    // ones are tuned (the microtonal ones bring their own)
+    {"SCALE", 0, 14, 3, UNI, 0, 4, 0, {}, {"EQUAL", "JUST", "PYTH", "MEANT"}},
     // which way a hit (or STEP) turns them (OFF: hits don't, STEP turns up)
     {"HITS", 0, 3, 0, LIST, 4, 0, 0, {"OFF", "UP", "DOWN", "RAND"}},
-    {"SCALE", 0, 14, 3, UNI},    // 7 of 12 notes, then 8 microtonal (see Apply)
     {"WET", 0, 100, 100, UNI, 0, 21, 0},
   },
   {"", ""},
@@ -6345,13 +6347,14 @@ PROGMEM static const DeviceDef CHIME_DEF = {
 
 class ChimeDevice : public Device {
 public:
-  enum { NOTE, SPRD, DECAY, ROT, TUNE, HITS, SCALE, WET };
+  enum { NOTE, SPRD, DECAY, ROT, VARI, SCALE, HITS, WET };
+  const char* Name(int p) const override { return p == SCALE ? param(p).name : Device::Name(p); }  // (the tuning: its mode)
   bool Varies(int p) const override { return p == WET; }
   // the variations' bars (NOTE, SPRD's MORPH, ROT's count are no variations)
   int BarStyle(int p) const override {
-    return p == TUNE || p == DECAY ? BAR_CENTRE : Device::BarStyle(p);  // (+-: out from the middle)
+    return p == DECAY ? BAR_CENTRE : p == VARI ? BAR_LEFT : Device::BarStyle(p);  // (+-: out from the middle)
   }
-  static constexpr int SCALES = 15, SCALES12 = 7;  // the first 7 on the 12 notes (TUNE)
+  static constexpr int SCALES = 15, SCALES12 = 7;  // the first 7 on the 12 notes (tuned: SCALE's mode)
   ChimeDevice() : Device(CHIME_DEF) {}
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
@@ -6393,7 +6396,7 @@ private:
 };
 
 // the scale as steps in cents: the first seven pick from the 12 notes,
-// tuned by TUNE; the rest are microtonal with their own steps
+// tuned by SCALE's mode; the rest are microtonal with their own steps
 FLASHMEM void ChimeDevice::Apply(int p) {
   static const uint16_t masks[SCALES12] = {
     0xFFF,                                                                   // CHROM
@@ -6437,7 +6440,7 @@ FLASHMEM void ChimeDevice::Apply(int p) {
     a.steps = n;
   };
   if (sc < SCALES12) {
-    const float* tn = tunings[constrain(int(cur[TUNE]), 0, 3)];
+    const float* tn = tunings[constrain(int(mode[SCALE]), 0, 3)];
     for (int s = 0; s < 12; s++) if (masks[sc] >> s & 1) a.step[a.steps++] = tn[s];
   } else switch (sc) {
     case 7: equal(24, 1200.0f); break;          // QUART: quarter tones
@@ -6453,7 +6456,8 @@ FLASHMEM void ChimeDevice::Apply(int p) {
   a.notes = mode[ROT] + 1;
   a.rotate = uint8_t(constrain(int(cur[HITS]), 0, 3));
   a.turn = constrain(int(cur[ROT]), 0, 5);
-  a.step_var = mode[TUNE];
+  a.step_var = cur[VARI];
+  a.var_notes = mode[VARI] + 1;
   a.decay = Decay(cur[DECAY]);
   a.blend = Blend(cur[DECAY]);
   a.decay_var = mode[DECAY] * 0.1f;  // up to x2 / 2
@@ -6467,6 +6471,7 @@ FLASHMEM void ChimeDevice::Format(int p, char* buf, size_t n) const {
   static const char* const scales[SCALES] = {"CHROM", "MAJOR", "MINOR", "PENTA", "mPENT", "FIFTH", "WHOLE",
                                              "QUART", "17ET", "19ET", "SLEND", "PELOG", "BOHLN", "SHRUT", "HARMO"};
   if (p == ROT) { snprintf(buf, n, "%d", val[ROT] + 1); return; }  // the place the notes start at
+  if (p == VARI) { if (val[VARI]) snprintf(buf, n, LOOM_PM "%d", val[VARI]); else snprintf(buf, n, "OFF"); return; }
   if (p == NOTE && mode[NOTE]) {  // MIDI: the note played, and the offset (E3+6)
     const int off = val[NOTE] - 48;
     if (off) snprintf(buf, n, "%s%d%+d", names[midi_base % 12], midi_base / 12 - 1, off);
@@ -6507,8 +6512,7 @@ FLASHMEM void ChimeDevice::FormatMode(int p, char* buf, size_t n) const {
     if (mode[DECAY] == 0) snprintf(buf, n, "OFF");
     else snprintf(buf, n, LOOM_PM "%d%%", int((powf(2.0f, mode[DECAY] * 0.1f) - 1.0f) * 100.0f + 0.5f));
   }
-  else if (p == TUNE && mode[p] == 0) snprintf(buf, n, "OFF");
-  else if (p == TUNE) snprintf(buf, n, LOOM_PM "%d", mode[p]);
+  else if (p == VARI) snprintf(buf, n, "%d/6", mode[VARI] + 1);  // notes moved on each hit
   else Device::FormatMode(p, buf, n);
 }
 

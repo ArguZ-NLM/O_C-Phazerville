@@ -47,7 +47,8 @@ public:
     int notes = 6;           // places on at once
     uint8_t rotate = ROT_OFF;  // which way a hit / STEP turns them
     int turn = 0;              // and turned by hand (the knob), places on
-    int step_var = 0;        // scale steps, every new note at random
+    int step_var = 0;        // scale steps up or down, at random on each hit ...
+    int var_notes = 6;       // ... for this many of the six, picked at random
     float tone = 0.0f;       // -50..50: tilt low <-> high places, and above 0 some of the first pass
     float tone_var = 0.0f;
     float decay = 2.0f;      // s to -60 dB
@@ -136,8 +137,12 @@ private:
     const float cents = per * par.period + par.step[k - per * n];
     return 440.0f * powf(2.0f, (par.root - 69) / 12.0f + cents / 1200.0f);
   }
+  // (moved far, a note is folded back by octaves into ~C1 .. 4 kHz)
   float PlaceHz(int p) const {
-    return std::min(7000.0f, Degree(p * par.spread + place_var[p]));
+    float hz = Degree(p * par.spread + place_var[p]);
+    while (hz > 4200.0f) hz *= 0.5f;
+    while (hz < 32.0f) hz *= 2.0f;
+    return hz;
   }
   void Tune(Voice& v, float hz, float dec) {
     v.hz = hz;
@@ -254,9 +259,15 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectChime::update() {  // (O
   }
   if (hit || step) {
     for (int p = 0; p < PLACES; p++) {
-      place_var[p] = par.step_var ? int(roundf(Rand() * par.step_var)) : 0;
+      place_var[p] = 0;
       place_dec[p] = par.decay_var > 0.0f ? powf(2.0f, Rand() * par.decay_var) : 1.0f;
     }
+    // VARI: that many of the six, at random, each moved its own way
+    for (int k = 0, left = constrain(par.var_notes, 1, PLACES); par.step_var && left > 0 && k < PLACES; k++)
+      if (int((Rand() + 1.0f) * 0.5f * (PLACES - k)) < left) {
+        place_var[k] = int(roundf(Rand() * par.step_var));
+        left--;
+      }
     hit_tone = Rand() * par.tone_var;
     retune = true;
   }
