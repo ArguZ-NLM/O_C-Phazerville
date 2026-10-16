@@ -3310,7 +3310,7 @@ FLASHMEM void AppLoom::DrawDevice() const {
       const bool named = pd.modes[0][0] != 0;
       const char* alt = d->AltName(p);
       const bool show_mode = !alt && ((pd.nmodes && d->ModeShown(p)) || (sel && pd.nmodes
-        && ((editing && (l_held || named)) || (edit_mode && mode_shown < 1500))));
+        && ((editing && (l_held || (named && d->ModeNamed(p)))) || (edit_mode && mode_shown < 1500))));
       char mb[8];
       if (show_mode) d->FormatMode(p, mb, sizeof(mb));
       const char* nm = d->AltShown(p) ? alt : show_mode ? mb : d->Name(p);

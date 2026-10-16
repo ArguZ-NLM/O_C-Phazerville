@@ -371,7 +371,7 @@ public:
   virtual bool ListsOnDoubleClick() const { return false; }
   virtual void RestoreMore(const Saved&) {}
   void Nudge(int p, int dir);
-  void NudgeMode(int p, int dir);
+  virtual void NudgeMode(int p, int dir);
   // the lowest mode the L knob can pick now (SHUTTLE streaming: no REV)
   virtual int ModeMin(int p) const { return 0; }
   // the upper row shows the mode instead of the name all the time
@@ -6370,9 +6370,9 @@ PROGMEM static const DeviceDef CHIME_DEF = {
     // the top: in again at the bottom); mode: MORPH, how slowly the sound
     // moves to new notes (ROTA, SPRD, SCALE, NOTE)
     {"ROTA", 0, 19, 0, UNI, 0, 13, 0},
-    // places between the six bells (of the 20); mode: which of them may
-    // ring (all, or a set of them, as sliders up and down)
-    {"SPRD", 1, 7, 2, UNI, 0, 16, 0},
+    // places between the six bells (of the 20); mode: how ARP's count of
+    // them is spread over the six (as sliders up and down): 1 2 3, 1 3 5 ...
+    {"SPRD", 1, 7, 2, UNI, 0, 20, 0},
     // on each hit, notes moved up or down by up to this many steps of the
     // scale, at random; mode: how many of the six (1 .. 6)
     {"VARI", 0, 48, 0, UNI, 0, 6, 5},
@@ -6391,8 +6391,33 @@ PROGMEM static const DeviceDef CHIME_DEF = {
 class ChimeDevice : public Device {
 public:
   enum { ARP, ROTA, SPRD, VARI, NOTE, SCALE, DECAY, WET };  // (NOTE: KEY)
-  static constexpr uint8_t BELLS[16] = {0x3F, 0x21, 0x12, 0x0C, 0x09, 0x0A, 0x24, 0x15, 0x2A, 0x16, 0x0B, 0x29,
-                                        0x07, 0x38, 0x33, 0x1E};  // ALL, 1 6, 2 5, 3 4, 1 4, 2 4, 3 6, 1 3 5, 2 4 6, 2 3 5, 1 2 4, 1 4 6, 1 2 3, 4 5 6, 1 2 5 6, 2 3 4 5
+  // ARP's count of bells spread over the six: the ways to pick that many, in
+  // order (1 2, 1 3 .. 5 6), the first side by side
+  static int Ways(int n) { static const uint8_t w[7] = {1, 6, 15, 20, 15, 6, 1}; return w[constrain(n, 0, 6)]; }
+  static uint8_t Bells(int n, int way) {
+    way = constrain(way, 0, Ways(n) - 1);
+    for (int k = 0, m = 0; m < 64; m++) {  // (masks in the order of their lists of bells)
+      const int b = Lex(m);
+      if (__builtin_popcount(b) == n && k++ == way) return uint8_t(b);
+    }
+    return 0x3F;
+  }
+  static int Lex(int m) {  // the m-th set of bells, sets read as their bells low to high, in that order
+    static uint8_t order[64];
+    static bool made = false;
+    if (!made) {
+      for (int i = 0; i < 64; i++) order[i] = uint8_t(i);
+      auto key = [](int b) { uint32_t k = 0; for (int i = 0; i < 6; i++) if (b >> i & 1) k = k * 8 + uint32_t(i + 1); int c = __builtin_popcount(b); for (; c < 6; c++) k *= 8; return k; };
+      std::sort(order, order + 64, [&](uint8_t a, uint8_t b) { return key(a) < key(b); });
+      made = true;
+    }
+    return order[m];
+  }
+  int Way() const { return constrain(int(mode[SPRD]), 0, Ways(int(cur[ARP])) - 1); }
+  void NudgeMode(int p, int dir) override {
+    Device::NudgeMode(p, dir);
+    if (p == SPRD && mode[SPRD] >= Ways(int(cur[ARP]))) { mode[SPRD] = uint8_t(Ways(int(cur[ARP])) - 1); Apply(SPRD); }
+  }
   int Step(int p, int v, int dir) const override {
     return p == ROTA ? ((v + dir) % rota_w + rota_w) % rota_w : Device::Step(p, v, dir);
   }
@@ -6439,8 +6464,6 @@ private:
   }
 };
 
-constexpr uint8_t ChimeDevice::BELLS[16];
-
 // the scale as steps in cents: the first seven pick from the 12 notes,
 // tuned by SCALE's mode; the rest are microtonal with their own steps
 FLASHMEM void ChimeDevice::Apply(int p) {
@@ -6469,7 +6492,7 @@ FLASHMEM void ChimeDevice::Apply(int p) {
   static const float harmonic[8] = {0, 203.91f, 386.31f, 551.32f, 701.96f, 840.53f, 968.83f, 1088.27f};
   AudioEffectChime::Params a;
   a.root = 48 + (mode[NOTE] ? midi_base % 12 : constrain(int(cur[NOTE]), 0, 11));  // the key: KEY, or the note played
-  a.bells = BELLS[constrain(int(mode[SPRD]), 0, 15)];
+  a.bells = Bells(constrain(int(cur[ARP]), 1, 6), Way());
   const int sc = constrain(int(cur[SCALE]), 0, SCALES - 1);
   a.steps = 0;
   a.period = 1200.0f;
@@ -6538,8 +6561,8 @@ FLASHMEM void ChimeDevice::Idle() {
 }
 
 FLASHMEM void ChimeDevice::FormatMode(int p, char* buf, size_t n) const {
-  if (p == SPRD) {  // the bells that may ring
-    const uint8_t b = BELLS[constrain(int(mode[SPRD]), 0, 15)];
+  if (p == SPRD) {  // how the bells are spread
+    const uint8_t b = Bells(constrain(int(cur[ARP]), 1, 6), Way());
     if (b == 0x3F) { snprintf(buf, n, "ALL"); return; }
     char t[12]; int k = 0;
     for (int i = 0; i < 6; i++) if (b >> i & 1) { if (k) t[k++] = ' '; t[k++] = char('1' + i); }

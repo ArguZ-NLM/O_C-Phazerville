@@ -38,7 +38,7 @@ public:
 
   struct Params {
     int root = 48;           // MIDI note of the key (the scale's first note)
-    uint8_t bells = 0x3F;    // which of the six may ring (bit per bell; SPRD's mode)
+    uint8_t bells = 0x3F;    // which of the six ring (bit per bell: ARP's count, SPRD's mode), turned by the hits
     // the scale: its steps in cents over the root, repeating every period
     // (1200: the octave; Bohlen-Pierce: 1902, the twelfth)
     float step[24] = {0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100};
@@ -177,14 +177,11 @@ private:
 // already has it, or the quietest free one; the rest stop being fed and
 // ring out
 FASTRUN void AudioEffectChime::Assign() {
-  // the bells that may ring (SPRD's mode), in order; the hits move
-  // through those alone
-  int list[PLACES], cnt = 0;
-  for (int p = 0; p < PLACES; p++) if (par.bells >> p & 1) list[cnt++] = p;
-  if (!cnt) for (int p = 0; p < PLACES; p++) list[cnt++] = p;
-  const int n = constrain(par.notes, 1, cnt);
+  // the bells that ring (ARP's count spread as SPRD's mode sets), the
+  // whole pattern turned round the six by the hits
   bool on[PLACES] = {};
-  for (int j = 0; j < n; j++) on[list[((rot + j) % cnt + cnt) % cnt]] = true;
+  const uint8_t bells = par.bells ? par.bells : 0x3F;
+  for (int b = 0; b < PLACES; b++) if (bells >> b & 1) on[((b + rot) % PLACES + PLACES) % PLACES] = true;
   viz.on = 0;
   for (int p = 0; p < PLACES; p++) {
     viz.place_hz[p] = PlaceHz(p);
