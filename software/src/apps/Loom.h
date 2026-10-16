@@ -805,6 +805,7 @@ FLASHMEM void AppLoom::Mirror(loom::Device* d, int p) const {
     tw->val[p] = d->val[p];
   }
   tw->mode[p] = d->mode[p];
+  tw->mode_named = uint16_t((tw->mode_named & ~(1u << p)) | (d->mode_named & (1u << p)));
   tw->mod_amt[p] = d->mod_amt[p];
   tw->mod_in[p] = d->mod_in[p];
   tw->mod_bus_sel[p] = d->mod_bus_sel[p];

@@ -1234,7 +1234,7 @@ public:
   // a divider's name is its set once one is chosen (PRIME, FIB ..); DENS
   // keeps its name (its mode is what the dividers count)
   const char* Name(int p) const override {
-    if ((p == P_DIVA || p == P_DIVB) && mode[p] > 0 && mode[p] < SETS) return SET_NAMES[mode[p]];
+    if ((p == P_DIVA || p == P_DIVB) && ModeNamed(p) && mode[p] < SETS) return SET_NAMES[mode[p]];
     if (p == P_DENS) return param(p).name;
     return Modulator::Name(p);
   }

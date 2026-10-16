@@ -300,13 +300,16 @@ public:
   // device (e.g. a number)
   virtual void FormatMode(int p, char* buf, size_t n) const;
   // the name shown above a setting (some name themselves after their mode)
-  // the upper row: a setting with named modes shows the one it is on
-  // (SPEED: FWD / REV / SYNC), so it is seen before turning; else its name
+  // the upper row: a setting with named modes reads its own name (what it
+  // is for) until its mode is turned, then the mode it is on (SPEED: FWD /
+  // REV / SYNC); one on a mode other than its first shows it at once
   virtual const char* Name(int p) const {
     const ParamDef& d = param(p);
-    if (d.nmodes && d.nmodes <= 4 && mode[p] < 4 && d.modes[mode[p]][0]) return d.modes[mode[p]];
+    if (d.nmodes && d.nmodes <= 4 && mode[p] < 4 && d.modes[mode[p]][0] && ModeNamed(p)) return d.modes[mode[p]];
     return d.name;
   }
+  bool ModeNamed(int p) const { return (mode_named >> p & 1) || mode[p] != param(p).defmode; }
+  uint16_t mode_named = 0;  // bit per setting: its mode turned (by hand)
   // a setting taken once per event (a grain's PITCH): it follows a
   // modulator's step, not its glide
   virtual bool Sampled(int p) const { return false; }
@@ -368,7 +371,7 @@ public:
   virtual bool ListsOnDoubleClick() const { return false; }
   virtual void RestoreMore(const Saved&) {}
   void Nudge(int p, int dir);
-  virtual void NudgeMode(int p, int dir);
+  void NudgeMode(int p, int dir);
   // the lowest mode the L knob can pick now (SHUTTLE streaming: no REV)
   virtual int ModeMin(int p) const { return 0; }
   // the upper row shows the mode instead of the name all the time
@@ -616,6 +619,7 @@ FLASHMEM void Device::NudgeMode(int p, int dir) {
   const ParamDef& d = param(p);
   if (!d.nmodes) return;
   mode[p] = constrain(mode[p] + dir, ModeMin(p), d.nmodes - 1);
+  mode_named |= uint16_t(1u << p);
   Apply(p);
 }
 
@@ -6348,12 +6352,6 @@ PROGMEM static const DeviceDef CHIME_DEF = {
 class ChimeDevice : public Device {
 public:
   enum { NOTE, SPRD, DECAY, ROT, VARI, SCALE, HITS, WET };
-  // SCALE's name until its mode (the tuning) is turned, or is set: then the tuning
-  const char* Name(int p) const override {
-    if (p == SCALE) return tuning_named || mode[SCALE] ? param(p).modes[constrain(int(mode[SCALE]), 0, 3)] : param(p).name;
-    return Device::Name(p);
-  }
-  void NudgeMode(int p, int dir) override { if (p == SCALE) tuning_named = true; Device::NudgeMode(p, dir); }
   bool Varies(int p) const override { return p == WET; }
   // the variations' bars (NOTE, SPRD's MORPH, ROT's count are no variations)
   int BarStyle(int p) const override {
@@ -6387,7 +6385,6 @@ private:
   Meter out_m;
   uint32_t step_at = 0;
   uint32_t note_seen = 0;
-  bool tuning_named = false;
   // NOTE on MIDI: the last note played; NOTE's value is then an offset to
   // it, 48 (C3) = none, so it is saved like any setting
   int16_t midi_base = 48;
