@@ -46,7 +46,7 @@ public:
     int spread = 2;          // scale steps between places
     int notes = 6;           // places on at once
     uint8_t rotate = ROT_OFF;  // which way a hit / STEP turns them
-    int rota = 0;              // ROTA: all six turned along the scale, round within its 21
+    int rota = 0;              // ROTA: all six turned along the scale, round within its 20
                                // places (see PlaceHz): always in key
     int step_var = 0;        // scale steps up or down, at random on each hit ...
     int var_notes = 6;       // ... for this many of the six, picked at random
@@ -140,12 +140,14 @@ private:
   }
   // (moved far, a note is folded back by octaves into ~C1 .. 4 kHz)
   float PlaceHz(int p) const {
-    // 21 places spread evenly over five periods of the scale, each on a
-    // note of it (MAJOR: every other one); SPRD places apart, ROTA turning
-    // them round (past the top: in again at the bottom)
-    constexpr int PLACES_W = 21, PERIODS = 5;
+    // 20 places spread evenly over five periods of the scale, from two
+    // below the root (NOTE) to three above, each on a note of it; SPRD
+    // places apart, ROTA turning them round (past the top: in again at
+    // the bottom)
+    constexpr int PLACES_W = 20, PERIODS = 5, BELOW = 2;
+    const int st = std::max(1, std::min(24, par.steps));
     const int k = ((p * par.spread + par.rota) % PLACES_W + PLACES_W) % PLACES_W;
-    const int deg = k * PERIODS * std::max(1, std::min(24, par.steps)) / PLACES_W;
+    const int deg = k * PERIODS * st / PLACES_W - BELOW * st;
     float hz = Degree(deg + place_var[p]);
     while (hz > 4200.0f) hz *= 0.5f;
     while (hz < 32.0f) hz *= 2.0f;
