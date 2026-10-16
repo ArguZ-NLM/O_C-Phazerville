@@ -6366,13 +6366,13 @@ PROGMEM static const DeviceDef CHIME_DEF = {
     // how many bells ring at once (1 .. 6); mode: what a hit (or STEP)
     // does to which (OFF: nothing, they stay)
     {"ARP", 1, 6, 6, UNI, 0, 4, 1, {}, {"OFF", "UP", "DOWN", "RAND"}},
+    // places between the six bells (of the 20); mode: how ARP's count of
+    // them is spread over the six (as sliders up and down): 1 2 3, 1 3 5 ...
+    {"SPRD", 1, 7, 2, UNI, 0, 20, 0},
     // all six turned along the scale, a step a click, round and round (past
     // the top: in again at the bottom); mode: MORPH, how slowly the sound
     // moves to new notes (ROTA, SPRD, SCALE, NOTE)
     {"ROTA", 0, 19, 0, UNI, 0, 13, 0},
-    // places between the six bells (of the 20); mode: how ARP's count of
-    // them is spread over the six (as sliders up and down): 1 2 3, 1 3 5 ...
-    {"SPRD", 1, 7, 2, UNI, 0, 20, 0},
     // on each hit, notes moved up or down by up to this many steps of the
     // scale, at random; mode: how many of the six (1 .. 6)
     {"VARI", 0, 48, 0, UNI, 0, 6, 5},
@@ -6390,7 +6390,22 @@ PROGMEM static const DeviceDef CHIME_DEF = {
 
 class ChimeDevice : public Device {
 public:
-  enum { ARP, ROTA, SPRD, VARI, NOTE, SCALE, DECAY, WET };  // (NOTE: KEY)
+  enum { ARP, SPRD, ROTA, VARI, NOTE, SCALE, DECAY, WET };  // (NOTE: KEY)
+  // SPRD's name, once its mode was turned: the bells it rings (1 3 5, 1256)
+  const char* Name(int p) const override {
+    if (p == SPRD && ModeNamed(SPRD)) { BellsText(spread_name, sizeof(spread_name)); return spread_name; }
+    return Device::Name(p);
+  }
+  void BellsText(char* buf, size_t n) const {
+    const uint8_t b = Bells(constrain(int(cur[ARP]), 1, 6), Way());
+    if (b == 0x3F) { snprintf(buf, n, "ALL"); return; }
+    const bool gaps = __builtin_popcount(b) <= 3;  // (four, five: no gaps, so they fit)
+    char t[12]; int k = 0;
+    for (int i = 0; i < 6; i++) if (b >> i & 1) { if (k && gaps) t[k++] = ' '; t[k++] = char('1' + i); }
+    t[k] = 0;
+    snprintf(buf, n, "%s", t);
+  }
+  mutable char spread_name[8] = {};
   // ARP's count of bells spread over the six: the ways to pick that many, in
   // order (1 2, 1 3 .. 5 6), the first side by side
   static int Ways(int n) { static const uint8_t w[7] = {1, 6, 15, 20, 15, 6, 1}; return w[constrain(n, 0, 6)]; }
@@ -6561,15 +6576,7 @@ FLASHMEM void ChimeDevice::Idle() {
 }
 
 FLASHMEM void ChimeDevice::FormatMode(int p, char* buf, size_t n) const {
-  if (p == SPRD) {  // how the bells are spread
-    const uint8_t b = Bells(constrain(int(cur[ARP]), 1, 6), Way());
-    if (b == 0x3F) { snprintf(buf, n, "ALL"); return; }
-    char t[12]; int k = 0;
-    for (int i = 0; i < 6; i++) if (b >> i & 1) { if (k) t[k++] = ' '; t[k++] = char('1' + i); }
-    t[k] = 0;
-    snprintf(buf, n, "%s", t);
-    return;
-  }
+  if (p == SPRD) { BellsText(buf, n); return; }  // how the bells are spread
   if (p == ROTA) {  // MORPH
     const float t = Morph(mode[ROTA]);
     if (!mode[ROTA]) snprintf(buf, n, "0ms");
