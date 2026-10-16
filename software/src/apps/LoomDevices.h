@@ -6375,9 +6375,10 @@ PROGMEM static const DeviceDef CHIME_DEF = {
     // the top: in again at the bottom); mode: MORPH, how slowly the sound
     // moves to new notes (ROTA, SPRD, SCALE, NOTE)
     {"ROTA", 0, 19, 0, UNI, 0, 13, 0},
-    // on each hit, bells take their note from another set, up to this far
-    // away in SCALE's list (a microtonal set: up or down this many of its
-    // steps), at random; mode: how many of the six (1 .. 6)
+    // on each hit, bells move up or down by up to this many notes of the
+    // set's family (its notes and the ones that colour it: a chord's 9th,
+    // 11th, 13th; a scale, a microtonal set: its own), at random; mode: how
+    // many of the six (1 .. 6)
     {"VARI", 0, 15, 0, UNI, 0, 6, 5},
     // the root (key), semitones from C3; mode: KNOB, MIDI (any channel),
     // CH1 .. CH16: the note played is the root, this added to it (the whole
@@ -6386,7 +6387,7 @@ PROGMEM static const DeviceDef CHIME_DEF = {
     // the notes the bells are on (see Apply): chords and scales on the 12
     // notes, then 8 microtonal; mode: how the 12-note ones are tuned (the
     // microtonal ones bring their own)
-    {"SCALE", 0, 23, 0, UNI, 0, 4, 0, {}, {"EQUAL", "JUST", "PYTH", "MEANT"}},
+    {"SCALE", 0, 29, 0, UNI, 0, 4, 0, {}, {"EQUAL", "JUST", "PYTH", "MEANT"}},
     {"DCAY", 0, 100, 66, UNI, 0, 11, 0},  // 20 ms .. 12 s to fade away (low: the wide pass blended in, a filter); mode: variation per hit
     {"WET", 0, 100, 100, UNI, 0, 21, 0},
   },
@@ -6446,7 +6447,7 @@ public:
   int BarStyle(int p) const override {
     return p == DECAY ? BAR_CENTRE : p == VARI ? BAR_LEFT : Device::BarStyle(p);  // (+-: out from the middle)
   }
-  static constexpr int SCALES = 24, SCALES12 = 16;  // the first 16 on the 12 notes (tuned: SCALE's mode)
+  static constexpr int SCALES = 30, SCALES12 = 22;  // the first 22 on the 12 notes (tuned: SCALE's mode)
   ChimeDevice() : Device(CHIME_DEF) {}
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
@@ -6516,6 +6517,12 @@ FLASHMEM void ChimeDevice::Apply(int p) {
     (1 << 0) | (1 << 4) | (1 << 7) | (1 << 10),               // DOM7
     (1 << 0) | (1 << 2) | (1 << 4) | (1 << 7),                // ADD9
     (1 << 0) | (1 << 2) | (1 << 3) | (1 << 7) | (1 << 10),     // MIN9
+    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 7) | (1 << 11),  // MAJ9
+    (1 << 0) | (1 << 2) | (1 << 3) | (1 << 5) | (1 << 7) | (1 << 10),  // MIN11
+    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 7) | (1 << 10),  // DOM9
+    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 7) | (1 << 9),  // 6/9
+    (1 << 0) | (1 << 4) | (1 << 6) | (1 << 7) | (1 << 11),  // M7#11: lydian
+    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 7) | (1 << 9) | (1 << 10),  // DOM13
     (1 << 0) | (1 << 7),                                      // FIFTH
     (1 << 0) | (1 << 2) | (1 << 4) | (1 << 5) | (1 << 7) | (1 << 9) | (1 << 11),  // MAJOR scale
     (1 << 0) | (1 << 2) | (1 << 3) | (1 << 5) | (1 << 7) | (1 << 8) | (1 << 10),  // MINOR
@@ -6523,6 +6530,26 @@ FLASHMEM void ChimeDevice::Apply(int p) {
     (1 << 0) | (1 << 2) | (1 << 4) | (1 << 7) | (1 << 9),      // PENTA
     (1 << 0) | (1 << 3) | (1 << 5) | (1 << 7) | (1 << 10),     // mPENT: minor pentatonic
     (1 << 0) | (1 << 2) | (1 << 4) | (1 << 6) | (1 << 8) | (1 << 10),  // WHOLE tones
+  };
+  // VARI's family of each chord: its notes and the ones that colour it,
+  // which the bells may move to (the scales: their own notes)
+  static const uint16_t colours[16] = {
+    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 7) | (1 << 9) | (1 << 11),  // MAJ: + 9 6 maj7
+    (1 << 0) | (1 << 2) | (1 << 3) | (1 << 5) | (1 << 7) | (1 << 10),  // MIN: + 9 11 7
+    (1 << 0) | (1 << 2) | (1 << 5) | (1 << 7) | (1 << 9),  // SUS2: + 4th 6
+    (1 << 0) | (1 << 2) | (1 << 5) | (1 << 7) | (1 << 10),  // SUS4: + 9 7
+    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 6) | (1 << 7) | (1 << 9) | (1 << 11),  // MAJ7: + 9 #11 13
+    (1 << 0) | (1 << 2) | (1 << 3) | (1 << 5) | (1 << 7) | (1 << 9) | (1 << 10),  // MIN7: dorian
+    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 7) | (1 << 9) | (1 << 10),  // DOM7: + 9 13
+    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 7) | (1 << 9) | (1 << 11),  // ADD9
+    (1 << 0) | (1 << 2) | (1 << 3) | (1 << 5) | (1 << 7) | (1 << 9) | (1 << 10),  // MIN9
+    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 6) | (1 << 7) | (1 << 9) | (1 << 11),  // MAJ9
+    (1 << 0) | (1 << 2) | (1 << 3) | (1 << 5) | (1 << 7) | (1 << 9) | (1 << 10),  // MIN11
+    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 7) | (1 << 9) | (1 << 10),  // DOM9
+    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 7) | (1 << 9) | (1 << 11),  // 6/9
+    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 6) | (1 << 7) | (1 << 9) | (1 << 11),  // M7#11
+    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 7) | (1 << 9) | (1 << 10),  // DOM13
+    (1 << 0) | (1 << 2) | (1 << 5) | (1 << 7) | (1 << 10),  // FIFTH: + 9 4th 7
   };
   // the 12 notes in cents: equal, just (5-limit), Pythagorean, 1/4-comma meantone
   static const float tunings[4][12] = {
@@ -6557,13 +6584,13 @@ FLASHMEM void ChimeDevice::Apply(int p) {
     const float* tn = tunings[constrain(int(mode[SCALE]), 0, 3)];
     for (int s = 0; s < 12; s++) if (masks[sc] >> s & 1) a.step[a.steps++] = tn[s];
   } else switch (sc) {
-    case 16: equal(24, 1200.0f); break;         // QUART: quarter tones
-    case 17: equal(17, 1200.0f); break;         // 17ET
-    case 18: equal(19, 1200.0f); break;         // 19ET
-    case 19: table(slendro, 5); break;          // SLEND
-    case 20: table(pelog, 7); break;            // PELOG
-    case 21: equal(13, 1901.955f); break;       // BOHLN: Bohlen-Pierce, 13 steps of the twelfth (3:1)
-    case 22: table(shruti, 22); break;          // SHRUT
+    case 22: equal(24, 1200.0f); break;         // QUART: quarter tones
+    case 23: equal(17, 1200.0f); break;         // 17ET
+    case 24: equal(19, 1200.0f); break;         // 19ET
+    case 25: table(slendro, 5); break;          // SLEND
+    case 26: table(pelog, 7); break;            // PELOG
+    case 27: equal(13, 1901.955f); break;       // BOHLN: Bohlen-Pierce, 13 steps of the twelfth (3:1)
+    case 28: table(shruti, 22); break;          // SHRUT
     default: table(harmonic, 8); break;         // HARMO
   }
   a.spread = cur[SPRD];
@@ -6571,10 +6598,15 @@ FLASHMEM void ChimeDevice::Apply(int p) {
   a.rotate = uint8_t(constrain(int(mode[ARP]), 0, 3));
   a.rota = cur[ROTA];
   a.step_var = cur[VARI];
-  a.set = sc < SCALES12 ? sc : -1;
-  a.nsets12 = SCALES12;
-  for (int k = 0; k < SCALES12; k++) a.sets12[k] = masks[k];
-  if (sc < SCALES12) { const float* tn = tunings[constrain(int(mode[SCALE]), 0, 3)]; for (int s = 0; s < 12; s++) a.tuning[s] = tn[s]; }
+  if (sc < SCALES12) {  // VARI's family
+    const float* tn = tunings[constrain(int(mode[SCALE]), 0, 3)];
+    const uint16_t c = sc < 16 ? colours[sc] : masks[sc];
+    a.ncolour = 0;
+    for (int s = 0; s < 12; s++) if (c >> s & 1) a.colour[a.ncolour++] = tn[s];
+  } else {
+    for (int k = 0; k < a.steps; k++) a.colour[k] = a.step[k];
+    a.ncolour = a.steps;
+  }
   a.var_notes = mode[VARI] + 1;
   a.decay = Decay(cur[DECAY]);
   a.blend = Blend(cur[DECAY]);
@@ -6586,7 +6618,8 @@ FLASHMEM void ChimeDevice::Apply(int p) {
 
 FLASHMEM void ChimeDevice::Format(int p, char* buf, size_t n) const {
   static const char* const names[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
-  static const char* const scales[SCALES] = {"MAJ", "MIN", "SUS2", "SUS4", "MAJ7", "MIN7", "DOM7", "ADD9", "MIN9", "FIFTH",
+  static const char* const scales[SCALES] = {"MAJ", "MIN", "SUS2", "SUS4", "MAJ7", "MIN7", "DOM7", "ADD9", "MIN9",
+                                             "MAJ9", "MIN11", "DOM9", "6/9", "M7#11", "DOM13", "FIFTH",
                                              "MAJOR", "MINOR", "DORIA", "PENTA", "mPENT", "WHOLE",
                                              "QUART", "17ET", "19ET", "SLEND", "PELOG", "BOHLN", "SHRUT", "HARMO"};
   if (p == ARP) { snprintf(buf, n, "%d/6", val[ARP]); return; }  // bells at once
