@@ -889,7 +889,7 @@ PROGMEM static const DeviceDef TREADLE_DEF = {
     {"CHAOS", -32, 32, 0, BI, 0, 13, 0},  // (-: thins out, +: plays round the groove; mode: the swing, SW50-SW74)
     {"RATE", 0, 100, 74, UNI, 0, 2, 1, {}, {"FREE", "CLOCK"}},  // a step; on the clock (74: 1/16)
   },
-  {"FILL", "MAP"}
+  {"FILL", "GROOVE"}
 };
 
 class TreadleMod : public Modulator {
