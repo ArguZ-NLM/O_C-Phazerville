@@ -813,7 +813,7 @@ FLASHMEM void ClockDevice::DrawMini(int x, int y, int w, int h) {
 // them at random, new each run through: below 0 it leaves steps that
 // sound out, above 0 it fills in steps the way a drummer would; PLAY: forwards, backwards, back and
 // forth, or a drunken walk. Six outputs: the three parts (each hit a short pulse,
-// accents full height, the others lower), then each part's
+// all full height), then each part's
 // accents alone. Its own box sends one; the other boxes can take the rest.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef TREADLE_DEF = {
@@ -1017,11 +1017,11 @@ FLASHMEM void TreadleMod::Advance(int s) {
     const int lv = Level(part, pos[part]);
     const bool hit = Hits(part, lv) && !(drop[part] >> (pos[part] & 31) & 1);
     if (!hit && !(add[part] >> (pos[part] & 31) & 1)) continue;
-    // accents (the map's strong steps) full height, the others lower, the
-    // ones CHAOS adds (ghost notes) lower still
+    // every hit full height (triggers want 10 V); the accents (the map's
+    // strong steps) also on their own outputs, to drive a level with
     const bool acc = hit && lv > 192;
     gate[part] = g;
-    lvl[part] = acc ? 1.0f : hit ? 0.8f : 0.6f;  // (all past half way: they strike)
+    lvl[part] = 1.0f;
     if (acc) { gate[3 + part] = g; lvl[3 + part] = 1.0f; }
     if (part == own_out % 3) flash = 0.06f;
   }
