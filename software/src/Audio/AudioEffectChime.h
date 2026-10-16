@@ -301,6 +301,14 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectChime::update() {  // (O
   // the first pass heard as it is: DCAY low (a filter bank), and TONE above
   // 0 (breathier); at its own level, not the ring's make-up
   const float first = par.blend + std::max(0.0f, par.tone + hit_tone) * 0.006f;
+  // struck: the more bells, the softer each (as a sum, about the level
+  // control's mark: struck together at full they peaked three times over
+  // it, and it turned the ringing down), every other one the other way
+  // round, so they don't all peak at once
+  int fed = 0;
+  for (int i = 0; i < VOICES; i++) if (vc[i].hz > 0.0f && vc[i].in_to > 0.0f) fed++;
+  const float strike_k = 0.5f / sqrtf(float(std::max(1, fed)));
+  int struck = 0;
   for (int i = 0; i < VOICES; i++) {
     Voice& v = vc[i];
     if (v.hz <= 0.0f) continue;
@@ -320,7 +328,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectChime::update() {  // (O
     // less and less). Into the ring's other half, so the sound starts
     // from nothing and swings up (into its heard half, it clicked)
     const float sg = strike_all ? to : g;  // (a key: the notes it is going to)
-    if (strike && sg > 0.0f) lb += sg * 0.25f / std::max(1e-4f, db * mk_to);
+    if (strike && sg > 0.0f) lb += ((struck++ & 1) ? -sg : sg) * strike_k / std::max(1e-4f, db * mk_to);
     v.mk_was = mk_to;
     v.gain_was = v.gain;
     v.pl_was = v.pan_l;
