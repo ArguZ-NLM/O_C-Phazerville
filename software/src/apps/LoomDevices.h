@@ -6378,13 +6378,14 @@ PROGMEM static const DeviceDef CHIME_DEF = {
     // on each hit, notes moved up or down by up to this many steps of the
     // scale, at random; mode: how many of the six (1 .. 6)
     {"VARI", 0, 48, 0, UNI, 0, 6, 5},
-    // the key, semitones from C3; mode: KNOB, MIDI (any channel), CH1 ..
-    // CH16: a note played moves the bells to the nearest note of the scale
-    // in that key (they stay in key)
+    // the root (key), semitones from C3; mode: KNOB, MIDI (any channel),
+    // CH1 .. CH16: the note played is the root, this added to it (the whole
+    // set moves with it, as the SMR's pitch input)
     {"KEY", -24, 24, 0, BI, 0, 18, 0},
-    // 7 of 12 notes, then 8 microtonal (see Apply); mode: how the 12-note
-    // ones are tuned (the microtonal ones bring their own)
-    {"SCALE", 0, 14, 3, UNI, 0, 4, 0, {}, {"EQUAL", "JUST", "PYTH", "MEANT"}},
+    // the notes the bells are on (see Apply): chords and scales on the 12
+    // notes, then 8 microtonal; mode: how the 12-note ones are tuned (the
+    // microtonal ones bring their own)
+    {"SCALE", 0, 23, 0, UNI, 0, 4, 0, {}, {"EQUAL", "JUST", "PYTH", "MEANT"}},
     {"DCAY", 0, 100, 66, UNI, 0, 11, 0},  // 20 ms .. 12 s to fade away (low: the wide pass blended in, a filter); mode: variation per hit
     {"WET", 0, 100, 100, UNI, 0, 21, 0},
   },
@@ -6444,7 +6445,7 @@ public:
   int BarStyle(int p) const override {
     return p == DECAY ? BAR_CENTRE : p == VARI ? BAR_LEFT : Device::BarStyle(p);  // (+-: out from the middle)
   }
-  static constexpr int SCALES = 15, SCALES12 = 7;  // the first 7 on the 12 notes (tuned: SCALE's mode)
+  static constexpr int SCALES = 24, SCALES12 = 16;  // the first 16 on the 12 notes (tuned: SCALE's mode)
   ChimeDevice() : Device(CHIME_DEF) {}
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
@@ -6501,14 +6502,26 @@ private:
 // the scale as steps in cents: the first seven pick from the 12 notes,
 // tuned by SCALE's mode; the rest are microtonal with their own steps
 FLASHMEM void ChimeDevice::Apply(int p) {
+  // the sets of notes, as the bells read them: one after the other from
+  // below the key up, so a chord spreads over the octaves (ROTA walks
+  // through its notes; always in it)
   static const uint16_t masks[SCALES12] = {
-    0xFFF,                                                                   // CHROM
-    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 5) | (1 << 7) | (1 << 9) | (1 << 11),  // MAJOR
+    (1 << 0) | (1 << 4) | (1 << 7),                          // MAJ: the major triad
+    (1 << 0) | (1 << 3) | (1 << 7),                          // MIN
+    (1 << 0) | (1 << 2) | (1 << 7),                          // SUS2
+    (1 << 0) | (1 << 5) | (1 << 7),                          // SUS4
+    (1 << 0) | (1 << 4) | (1 << 7) | (1 << 11),               // MAJ7
+    (1 << 0) | (1 << 3) | (1 << 7) | (1 << 10),               // MIN7
+    (1 << 0) | (1 << 4) | (1 << 7) | (1 << 10),               // DOM7
+    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 7),                // ADD9
+    (1 << 0) | (1 << 2) | (1 << 3) | (1 << 7) | (1 << 10),     // MIN9
+    (1 << 0) | (1 << 7),                                      // FIFTH
+    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 5) | (1 << 7) | (1 << 9) | (1 << 11),  // MAJOR scale
     (1 << 0) | (1 << 2) | (1 << 3) | (1 << 5) | (1 << 7) | (1 << 8) | (1 << 10),  // MINOR
-    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 7) | (1 << 9),                    // PENTA
-    (1 << 0) | (1 << 3) | (1 << 5) | (1 << 7) | (1 << 10),                   // minor pentatonic
-    (1 << 0) | (1 << 7),                                                     // FIFTH: root and fifth
-    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 6) | (1 << 8) | (1 << 10),        // WHOLE tones
+    (1 << 0) | (1 << 2) | (1 << 3) | (1 << 5) | (1 << 7) | (1 << 9) | (1 << 10),  // DORIA: dorian
+    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 7) | (1 << 9),      // PENTA
+    (1 << 0) | (1 << 3) | (1 << 5) | (1 << 7) | (1 << 10),     // mPENT: minor pentatonic
+    (1 << 0) | (1 << 2) | (1 << 4) | (1 << 6) | (1 << 8) | (1 << 10),  // WHOLE tones
   };
   // the 12 notes in cents: equal, just (5-limit), Pythagorean, 1/4-comma meantone
   static const float tunings[4][12] = {
@@ -6525,7 +6538,7 @@ FLASHMEM void ChimeDevice::Apply(int p) {
                                    590.2f, 611.7f, 702.0f, 792.2f, 813.7f, 884.4f, 905.9f, 996.1f, 1017.6f, 1088.3f, 1109.8f};
   static const float harmonic[8] = {0, 203.91f, 386.31f, 551.32f, 701.96f, 840.53f, 968.83f, 1088.27f};
   AudioEffectChime::Params a;
-  a.root = constrain(48 + int(cur[NOTE]), 12, 108);  // the key
+  a.root = constrain((mode[NOTE] ? int(midi_base) : 48) + int(cur[NOTE]), 12, 108);  // the key, or the note played (and KEY)
   a.bells = Bells(constrain(int(cur[ARP]), 1, 6), Way());
   const int sc = constrain(int(cur[SCALE]), 0, SCALES - 1);
   a.steps = 0;
@@ -6543,13 +6556,13 @@ FLASHMEM void ChimeDevice::Apply(int p) {
     const float* tn = tunings[constrain(int(mode[SCALE]), 0, 3)];
     for (int s = 0; s < 12; s++) if (masks[sc] >> s & 1) a.step[a.steps++] = tn[s];
   } else switch (sc) {
-    case 7: equal(24, 1200.0f); break;          // QUART: quarter tones
-    case 8: equal(17, 1200.0f); break;          // 17ET
-    case 9: equal(19, 1200.0f); break;          // 19ET
-    case 10: table(slendro, 5); break;          // SLEND
-    case 11: table(pelog, 7); break;            // PELOG
-    case 12: equal(13, 1901.955f); break;       // BOHLN: Bohlen-Pierce, 13 steps of the twelfth (3:1)
-    case 13: table(shruti, 22); break;          // SHRUT
+    case 16: equal(24, 1200.0f); break;         // QUART: quarter tones
+    case 17: equal(17, 1200.0f); break;         // 17ET
+    case 18: equal(19, 1200.0f); break;         // 19ET
+    case 19: table(slendro, 5); break;          // SLEND
+    case 20: table(pelog, 7); break;            // PELOG
+    case 21: equal(13, 1901.955f); break;       // BOHLN: Bohlen-Pierce, 13 steps of the twelfth (3:1)
+    case 22: table(shruti, 22); break;          // SHRUT
     default: table(harmonic, 8); break;         // HARMO
   }
   a.spread = cur[SPRD];
@@ -6563,28 +6576,21 @@ FLASHMEM void ChimeDevice::Apply(int p) {
   a.decay_var = mode[DECAY] * 0.1f;  // up to x2 / 2
   a.morph = Morph(mode[ROTA]);
   a.wet = cur[WET] * 0.01f;
-  // KEY on MIDI: the note played, as steps of the scale from the key (the
-  // nearest note of it at or below)
-  a.offset = 0;
-  if (mode[NOTE] && a.steps > 0) {
-    const float c = (midi_base - a.root) * 100.0f + 1.0f;
-    const int per = int(floorf(c / a.period));
-    const float rem = c - per * a.period;
-    int i = 0;
-    while (i + 1 < a.steps && a.step[i + 1] <= rem) i++;
-    a.offset = per * a.steps + i;
-  }
   fx.Set(a);
 }
 
 FLASHMEM void ChimeDevice::Format(int p, char* buf, size_t n) const {
   static const char* const names[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
-  static const char* const scales[SCALES] = {"CHROM", "MAJOR", "MINOR", "PENTA", "mPENT", "FIFTH", "WHOLE",
+  static const char* const scales[SCALES] = {"MAJ", "MIN", "SUS2", "SUS4", "MAJ7", "MIN7", "DOM7", "ADD9", "MIN9", "FIFTH",
+                                             "MAJOR", "MINOR", "DORIA", "PENTA", "mPENT", "WHOLE",
                                              "QUART", "17ET", "19ET", "SLEND", "PELOG", "BOHLN", "SHRUT", "HARMO"};
   if (p == ARP) { snprintf(buf, n, "%d/6", val[ARP]); return; }  // bells at once
   if (p == ROTA) { snprintf(buf, n, "%d", ((val[ROTA] % rota_w) + rota_w) % rota_w); return; }
   if (p == VARI) { if (val[VARI]) snprintf(buf, n, LOOM_PM "%d", val[VARI]); else snprintf(buf, n, "OFF"); return; }
-  if (p == NOTE) {  // the key (D3)
+  if (p == NOTE && mode[NOTE]) {  // KEY on MIDI: the note played, and the offset (E3+2)
+    if (val[NOTE]) snprintf(buf, n, "%s%d%+d", names[midi_base % 12], midi_base / 12 - 1, val[NOTE]);
+    else snprintf(buf, n, "%s%d", names[midi_base % 12], midi_base / 12 - 1);
+  } else if (p == NOTE) {  // the key (D3)
     const int nt = 48 + val[NOTE];
     snprintf(buf, n, "%s%d", names[nt % 12], nt / 12 - 1);
   }

@@ -38,7 +38,6 @@ public:
 
   struct Params {
     int root = 48;           // MIDI note of the key (KEY)
-    int offset = 0;          // the note played (KEY on MIDI): that many steps of the scale from the key
     uint8_t bells = 0x3F;    // which of the six ring (bit per bell: ARP's count, SPRD's mode), turned by the hits
     // the scale: its steps in cents over the root, repeating every period
     // (1200: the octave; Bohlen-Pierce: 1902, the twelfth)
@@ -143,17 +142,18 @@ private:
   }
   // (moved far, a note is folded back by octaves into ~C1 .. 4 kHz)
   float PlaceHz(int p) const {
-    // 20 places spread evenly from two periods (octaves) below the root to
-    // five above (C3: C1 .. C8, the picture's width), each on a note of the
-    // scale; SPRD places apart, ROTA turning them round (past the top: in
-    // again at the bottom); a new root moves them all with it, and a bell
-    // past what rings (~C1 .. C8) comes in again a period further in
+    // 20 places: 20 notes of the set one after the other, from two
+    // periods (octaves) below the root up (sets of more than five notes:
+    // ten notes below), so a chord spreads over the octaves; SPRD places
+    // apart, ROTA turning them round (past the top: in again at the
+    // bottom); a bell past what rings (~C1 .. C8) comes in again a period
+    // further in
     constexpr int PLACES_W = 20;
-    const float st = float(std::max(1, std::min(24, par.steps))), per = std::max(1.0f, par.period);
-    const int d_lo = -2 * int(st), d_hi = 5 * int(st);
+    const int st = std::max(1, std::min(24, par.steps));
+    const float per = std::max(1.0f, par.period);
     const int k = ((p * par.spread + par.rota) % PLACES_W + PLACES_W) % PLACES_W;
-    const int deg = d_lo + (k * (d_hi - d_lo) + (PLACES_W - 1) / 2) / (PLACES_W - 1);
-    float hz = Degree(deg + par.offset + place_var[p]);
+    const int deg = k - std::min(2 * st, 10);
+    float hz = Degree(deg + place_var[p]);
     const float pr = powf(2.0f, per / 1200.0f);  // a period up (2: the octave)
     while (hz > 4200.0f) hz /= pr;
     while (hz < 32.0f) hz *= pr;
