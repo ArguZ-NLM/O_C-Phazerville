@@ -1898,6 +1898,21 @@ FLASHMEM void AppLoom::MainLoop() {
       Suspend();
       reload_on_resume = true;
       Resume();
+      // Forget which L knobs were turned, as after a fresh start: every
+      // setting shows its own name again until its mode is turned. (Only
+      // this test command does it; loading a preset on the panel keeps
+      // what the player already turned.)
+      auto fresh = [](Device* d) { if (d) d->mode_named = 0; };
+      for (int t = 0; t < NUM_TRACKS; t++) {
+        Track& tr = tracks[t];
+        for (int s = 0; s < SLOT_COUNT; s++)
+          for (int o = 0; o < MAX_OPTIONS; o++) fresh(tr.inst[s][o]);
+        fresh(tr.input); fresh(tr.reel); fresh(tr.player); fresh(tr.warp); fresh(tr.mix);
+        for (int m = 0; m < NUM_MODS; m++)
+          for (int k = 0; k < MOD_TYPES; k++) fresh(tr.mods[m][k]);
+      }
+      for (int m = 0; m < NUM_MODS; m++)
+        for (int k = 0; k < MOD_TYPES; k++) fresh(shared_mods[m][k]);
       Serial.println("HEAVY: saved settings back");
     }
     // the noise test (USB 'N')
