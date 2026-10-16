@@ -377,6 +377,10 @@ public:
   virtual int ModeMin(int p) const { return 0; }
   // the upper row shows the mode instead of the name all the time
   virtual bool ModeShown(int p) const { return false; }
+  // the setting's name already says which mode it is on, in the device's
+  // own way (TWILL's SPRD names its bells, REPEAT's levels read SEND or
+  // MIX): the upper row keeps that name and never swaps it for the mode
+  virtual bool NameIsMode(int p) const { return false; }
   // a setting whose mode is a second value of its own (REPEAT: ROOM /
   // GLINT, WALL / PRSET): the L knob switches between the two (the bar's
   // left / right half), the R knob changes the one showing; its name here
@@ -3070,6 +3074,7 @@ public:
   int ModeMin(int p) const override { return p == SPEED && mode[FILE_] == 0 ? DIR_FWD : 0; }
   // FILE's number row already says STRM / MEM (the file's name is above)
   const char* Name(int p) const override { return p == FILE_ ? "MODE" : Device::Name(p); }
+  bool NameIsMode(int p) const override { return p == FILE_; }  // (the number row shows STRM / MEM)
   static float MaxSecs() { return BigSecs(); }
   static constexpr size_t MIN_BUF = 11025;  // 0.25 s: the buffer before a file
   // FILE mode MEM on a long file: the section in memory, in file frames
@@ -4337,6 +4342,7 @@ public:
   const char* Name(int p) const override {
     return p == DELAY || p == REVERB ? param(p).modes[mode[p] & 1] : param(p).name;
   }
+  bool NameIsMode(int p) const override { return p == DELAY || p == REVERB; }
   void Action(int a) override;
   bool ActionLit(int a) const override;
   void DrawViz(int x, int y, int w, int h) override;
@@ -6425,6 +6431,7 @@ public:
     if (p == SPRD && ModeNamed(SPRD)) { BellsText(spread_name, sizeof(spread_name)); return spread_name; }
     return Device::Name(p);
   }
+  bool NameIsMode(int p) const override { return p == SPRD; }
   void BellsText(char* buf, size_t n) const {
     const uint8_t b = Bells(constrain(int(cur[ARP]), 1, 6), Way());
     if (b == 0x3F) { snprintf(buf, n, "ALL"); return; }

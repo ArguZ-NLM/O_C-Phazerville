@@ -3337,11 +3337,10 @@ FLASHMEM void AppLoom::DrawDevice() const {
       // the upper row: the setting's name, what it is for, until its mode
       // (the left knob) is turned; from then on the mode it is on (BIT /
       // REDUX, a variation's +-35%, MORPH's time ...), grabbed or not. The
-      // number stays below. (A device that names it itself, SPRD's bells,
-      // keeps its own.)
+      // number stays below. (A setting whose name says its mode already,
+      // SPRD's bells, keeps that name.)
       const char* alt = d->AltName(p);
-      const bool own = strcmp(d->Name(p), pd.name) != 0;
-      const bool show_mode = !alt && pd.nmodes && !own
+      const bool show_mode = !alt && pd.nmodes && !d->NameIsMode(p)
         && (d->ModeShown(p) || d->ModeNamed(p) || (sel && ((editing && l_held) || (edit_mode && mode_shown < 1500))));
       char mb[8];
       if (show_mode) d->FormatMode(p, mb, sizeof(mb));

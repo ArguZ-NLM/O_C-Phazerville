@@ -1277,6 +1277,7 @@ public:
     if (p == P_DENS) return param(p).name;
     return Modulator::Name(p);
   }
+  bool NameIsMode(int p) const override { return p == P_DIVA || p == P_DIVB; }
   void Action(int a) override { if (a == 0) stopped = false; else if (a == 1) Sync(); }
   bool Stops() const override { return true; }
   void DrawViz(int x, int y, int w, int h) override;
