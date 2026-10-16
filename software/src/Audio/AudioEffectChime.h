@@ -38,7 +38,7 @@ public:
 
   struct Params {
     int root = 48;           // MIDI note of the key (the scale's first note)
-    int offset = 0;          // NOTE: the whole series moved along the scale, steps
+    uint8_t bells = 0x3F;    // which of the six may ring (bit per bell; SPRD's mode)
     // the scale: its steps in cents over the root, repeating every period
     // (1200: the octave; Bohlen-Pierce: 1902, the twelfth)
     float step[24] = {0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100};
@@ -144,16 +144,15 @@ private:
     // 20 places spread evenly over the whole range, C1 .. C8 (the
     // picture's width), each on a note of the scale (in its key); SPRD
     // places apart, ROTA turning them round (past the top: in again at the
-    // bottom); NOTE's offset moves them all along the scale, and a bell it
-    // takes past what rings (~C1 .. C8) comes in again a period (octave)
-    // further in, still in the scale
+    // bottom); a bell past what rings (~C1 .. C8) comes in again a period
+    // (octave) further in, still in the scale
     constexpr int PLACES_W = 20;
     const float st = float(std::max(1, std::min(24, par.steps))), per = std::max(1.0f, par.period);
     const int d_lo = int(ceilf((24 - par.root) * 100.0f / per * st));    // the scale's first note from C1
     const int d_hi = int(floorf((108 - par.root) * 100.0f / per * st));  // ... its last to C8
     const int k = ((p * par.spread + par.rota) % PLACES_W + PLACES_W) % PLACES_W;
     const int deg = d_lo + (k * (d_hi - d_lo) + (PLACES_W - 1) / 2) / (PLACES_W - 1);
-    float hz = Degree(deg + par.offset + place_var[p]);
+    float hz = Degree(deg + place_var[p]);
     const float pr = powf(2.0f, per / 1200.0f);  // a period up (2: the octave)
     while (hz > 4200.0f) hz /= pr;
     while (hz < 32.0f) hz *= pr;
@@ -178,9 +177,14 @@ private:
 // already has it, or the quietest free one; the rest stop being fed and
 // ring out
 FASTRUN void AudioEffectChime::Assign() {
-  const int n = constrain(par.notes, 1, PLACES);
+  // the bells that may ring (SPRD's mode), in order; the hits move
+  // through those alone
+  int list[PLACES], cnt = 0;
+  for (int p = 0; p < PLACES; p++) if (par.bells >> p & 1) list[cnt++] = p;
+  if (!cnt) for (int p = 0; p < PLACES; p++) list[cnt++] = p;
+  const int n = constrain(par.notes, 1, cnt);
   bool on[PLACES] = {};
-  for (int j = 0; j < n; j++) on[((rot + j) % PLACES + PLACES) % PLACES] = true;
+  for (int j = 0; j < n; j++) on[list[((rot + j) % cnt + cnt) % cnt]] = true;
   viz.on = 0;
   for (int p = 0; p < PLACES; p++) {
     viz.place_hz[p] = PlaceHz(p);
