@@ -6324,7 +6324,7 @@ FLASHMEM void StretchDevice::DrawMini(int x, int y, int w, int h) {
 // ring out at their own pitch: chords, or arpeggios with ROT's mode at 1/6.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef CHIME_DEF = {
-  "TWILL", "CHM", 8, {"STEP", ""},  // (was CHIME)
+  "TWILL", "CHM", 8, {"STEP", "HIT"},  // (was CHIME) B: struck, they ring without any input
   {
     {"NOTE", 24, 84, 48, UNI, 0, 18, 0},  // the first note, C1 .. C6; mode: KNOB, MIDI (any channel), CH1 .. CH16
     {"SPRD", 1, 7, 2, UNI, 0, 13, 0},  // scale steps between the six notes; mode: MORPH, how slowly new notes take over
@@ -6356,7 +6356,10 @@ public:
   AudioStream* out() override { return &fx; }
   bool Activate() override { fx.Reset(); active = true; ApplyAll(); return true; }
   void Apply(int p) override;
-  void Action(int a) override { if (a == 0) { fx.Step(); step_at = millis() | 1; } }
+  void Action(int a) override {
+    if (a == 0) fx.Step(); else fx.Strike();
+    step_at = millis() | 1;
+  }
   void Idle() override;
   void Format(int p, char* buf, size_t n) const override;
   void FormatMode(int p, char* buf, size_t n) const override;

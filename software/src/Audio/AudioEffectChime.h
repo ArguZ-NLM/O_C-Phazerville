@@ -75,6 +75,7 @@ public:
     AudioInterrupts();
   }
   void Step() { step_req = true; }  // A, a gate: rotate now
+  void Strike() { strike_req = true; }  // B: a mallet on the chimes (they ring without any input)
   void Reset() {
     for (auto& v : vc) v = Voice{};
     for (auto& f : fading) f.g = 0.0f;
@@ -109,7 +110,7 @@ private:
   audio_block_t* input_queue_array[2];
   Params par;
   Voice vc[VOICES];
-  volatile bool step_req = false;
+  volatile bool step_req = false, strike_req = false;
   bool retune = true;
   int rot = 0;
   float hit_tone = 0.0f;
@@ -224,6 +225,17 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectChime::update() {  // (O
     const float dr = in[1] ? in[1]->data[n] * q15 : 0.0f;
     x[n] = 0.5f * (dl + dr);
     pk_in = std::max(pk_in, fabsf(x[n]));
+  }
+  // struck: a short burst of noise falling away (~1 ms), as a mallet,
+  // heard as a hit like any other
+  if (strike_req) {
+    strike_req = false;
+    for (int n = 0; n < 48; n++) {
+      x[n] += 0.7f * (1.0f - n / 48.0f) * Rand();
+      pk_in = std::max(pk_in, fabsf(x[n]));
+    }
+    holdoff = 0;
+    slow = 0.0f;
   }
 
   // a hit: the level jumps well over where it has been (at most one every
