@@ -177,15 +177,12 @@ private:
 // already has it, or the quietest free one; the rest stop being fed and
 // ring out
 FASTRUN void AudioEffectChime::Assign() {
-  // the bells chosen (DIR's count spread as SPRD's mode sets) are the only
-  // ones that ring: all together (DIR OFF), or one at a time, the hits
-  // moving through them (UP, DOWN, RAND)
+  // the bells chosen (DIR's count spread as SPRD's mode sets) ring
+  // together; each hit moves the whole pattern a place round the six (UP:
+  // 2 6 -> 3 1, DOWN back, RAND anywhere; OFF: it stays)
   bool on[PLACES] = {};
   const uint8_t bells = par.bells ? par.bells : 0x3F;
-  int list[PLACES], cnt = 0;
-  for (int b = 0; b < PLACES; b++) if (bells >> b & 1) list[cnt++] = b;
-  if (par.rotate == ROT_OFF) for (int i = 0; i < cnt; i++) on[list[i]] = true;
-  else on[list[(rot % cnt + cnt) % cnt]] = true;
+  for (int b = 0; b < PLACES; b++) if (bells >> b & 1) on[((b + rot) % PLACES + PLACES) % PLACES] = true;
   viz.on = 0;
   for (int p = 0; p < PLACES; p++) {
     viz.place_hz[p] = PlaceHz(p);
@@ -269,13 +266,10 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectChime::update() {  // (O
   if ((hit || step) && par.rotate != ROT_OFF) {  // (OFF: they stay, STEP too)
     switch (par.rotate) {
       case ROT_DOWN: rot--; break;
-      case ROT_RAND: {  // another of the chosen bells
-        const int cnt = std::max(1, __builtin_popcount(par.bells ? par.bells : 0x3F));
-        if (cnt > 1) rot += 1 + int((Rand() + 1.0f) * 0.5f * (cnt - 1)) % (cnt - 1);
-      } break;
+      case ROT_RAND: rot += 1 + int((Rand() + 1.0f) * 0.5f * (PLACES - 1)) % (PLACES - 1); break;  // (somewhere else)
       default: rot++; break;  // UP
     }
-    rot = (rot % 60 + 60) % 60;  // (60: round any count of chosen bells evenly)
+    rot = (rot % PLACES + PLACES) % PLACES;
   }
   if (hit || step) {
     for (int p = 0; p < PLACES; p++) {

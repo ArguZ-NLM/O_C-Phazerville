@@ -6354,9 +6354,9 @@ FLASHMEM void StretchDevice::DrawMini(int x, int y, int w, int h) {
 /////////////////////////////////////////////////////////////////
 // CHIME (RESONATOR slot): six tuned bells on notes of a scale, each two
 // band-passes in a row, so only the notes ring, clean. DIR: how many of
-// them are chosen (SPRD's mode: which); DIR's mode: they ring together
-// (OFF), or one at a time, each hit moving on through them (UP, DOWN,
-// RAND); the bells left ring out at their own pitch.
+// them ring together (SPRD's mode: which); DIR's mode: each hit moves the
+// whole pattern a place round the six (UP, DOWN, RAND; OFF: it stays);
+// the bells left ring out at their own pitch.
 // ROTA turns all six along 20 places of the scale, C1 .. C8, round
 // and round (always in key), MORPH (its mode) how slowly. Page 1 what they
 // play, page 2 the sound.
