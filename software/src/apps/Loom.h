@@ -3620,7 +3620,7 @@ namespace loom {
   // 14: DRAFT in FIBRE's order SPEED SIZE PITCH POS (was PITCH POS SIZE SPEED)
   // 15: DRAFT page 2 DIFF TONE SPRD MIX (was TONE FDBK SPRD MIX, TONE's mode
   //     the diffusion)
-  constexpr uint8_t SAVE_VERSION = 27;  // 21: TREADLE, a 6th modulator type; 22: PICK, a 7th; 23: TREADLE's LEN per part; 24: TREADLE's CHAOS -32..32; 25: TREADLE's pages; 26: STYLE / BEAT for X / Y; 27: TWILL's HITS
+  constexpr uint8_t SAVE_VERSION = 28;  // 21: TREADLE, a 6th modulator type; 22: PICK, a 7th; 23: TREADLE's LEN per part; 24: TREADLE's CHAOS -32..32; 25: TREADLE's pages; 26: STYLE / BEAT for X / Y; 27: TWILL's HITS; 28: TWILL's TONE gone, HITS in its place
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -3679,7 +3679,9 @@ namespace loom {
     const bool tex_heddle = d && !memcmp(tag, "TEX", 4) && !memcmp(d->def.tag, "TEX", 4) && n == 12;
     // until v25 TREADLE had 10 settings (ACCNT, RESET since gone)
     const bool trd10 = d && !memcmp(tag, "TRD", 4) && n == 10 && load_version < 25;
-    const bool use = d && !memcmp(tag, d->def.tag, 4) && (n <= d->num_params() || tex_heddle || trd10);
+    // v27 TWILL had 9 (HITS on a page 3; TONE since gone)
+    const bool chm9 = d && !memcmp(tag, "CHM", 4) && n == 9 && load_version == 27;
+    const bool use = d && !memcmp(tag, d->def.tag, 4) && (n <= d->num_params() || tex_heddle || trd10 || chm9);
     const bool remap_spr = use && !memcmp(tag, "SPR", 4) && n == 7;
     const bool remap_mix = use && !memcmp(tag, "MIX", 4) && n == 7;  // MIX came in first
     const bool reorder_out = use && !memcmp(tag, "MIX", 4) && load_version < 5;
@@ -3720,9 +3722,10 @@ namespace loom {
     // the map's pattern nearest
     const bool trd_xy = use && !memcmp(tag, "TRD", 4) && load_version < 26;
     int old_x = -1, old_y = 50;
-    // before v27 TWILL's ROT was what a hit does (now HITS, on page 3; ROT
-    // turns them by hand)
+    // before v27 TWILL's ROT was what a hit does (now HITS; ROT turns them
+    // by hand); before v28 its 6th was TONE (gone; HITS there now, was 9th)
     const bool chm_rot = use && !memcmp(tag, "CHM", 4) && load_version < 27;
+    const bool chm_tone = use && !memcmp(tag, "CHM", 4) && load_version < 28;
     int old_rot = -1;
     int old_len = -1;
     static constexpr int8_t TRD_MAP[8] = {TRD_X, TRD_Y, TRD_LOW, TRD_CHAOS, TRD_RATE, TRD_RESET, TRD_ACCNT, TRD_PLAY};
@@ -3788,6 +3791,8 @@ namespace loom {
         p = TRD_V25[constrain(p, 0, 9)];
         if (p < 0) { p = q; continue; }
       }
+      if (chm_tone && q == 5) { p = q; continue; }  // TONE
+      if (chm_tone && q == 8) p = ChimeDevice::HITS;
       if (chm_rot && p == ChimeDevice::ROT) { old_rot = v; v = 0; amt = amt2 = 0; }
       if (trd_xy && p == TreadleMod::P_STYLE) { old_x = v; v = 0; amt = amt2 = 0; }
       if (trd_xy && p == TreadleMod::P_BEAT) { old_y = v; v = 0; amt = amt2 = 0; }

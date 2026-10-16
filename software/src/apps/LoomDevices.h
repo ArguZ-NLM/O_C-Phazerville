@@ -6324,7 +6324,7 @@ FLASHMEM void StretchDevice::DrawMini(int x, int y, int w, int h) {
 // ring out at their own pitch: chords, or arpeggios with ROT's mode at 1/6.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef CHIME_DEF = {
-  "TWILL", "CHM", 9, {"STEP", "HIT"},  // (was CHIME) B: struck, they ring without any input
+  "TWILL", "CHM", 8, {"STEP", "HIT"},  // (was CHIME) B: struck, they ring without any input
   {
     {"NOTE", 24, 84, 48, UNI, 0, 18, 0},  // the first note, C1 .. C6; mode: KNOB, MIDI (any channel), CH1 .. CH16
     {"SPRD", 1, 7, 2, UNI, 0, 13, 0},  // scale steps between the six notes; mode: MORPH, how slowly new notes take over
@@ -6335,23 +6335,21 @@ PROGMEM static const DeviceDef CHIME_DEF = {
     // how the 12-note scales are tuned (the microtonal ones bring their
     // own); mode: variation per hit, +- n steps of the scale
     {"TUNE", 0, 3, 0, LIST, 4, 13, 0, {"EQUAL", "JUST", "PYTH", "MEANT"}},
-    // mode: variation per hit, +- 5 n
-    {"TONE", -50, 50, 0, BI, 0, 11, 0},
-    {"SCALE", 0, 14, 3, UNI},    // 7 of 12 notes, then 8 microtonal (see Apply)
-    {"WET", 0, 100, 100, UNI, 0, 21, 0},
     // which way a hit (or STEP) turns them (OFF: hits don't, STEP turns up)
     {"HITS", 0, 3, 0, LIST, 4, 0, 0, {"OFF", "UP", "DOWN", "RAND"}},
+    {"SCALE", 0, 14, 3, UNI},    // 7 of 12 notes, then 8 microtonal (see Apply)
+    {"WET", 0, 100, 100, UNI, 0, 21, 0},
   },
-  {"", "", "STEP"},
+  {"", ""},
 };
 
 class ChimeDevice : public Device {
 public:
-  enum { NOTE, SPRD, DECAY, ROT, TUNE, TONE, SCALE, WET, HITS };
+  enum { NOTE, SPRD, DECAY, ROT, TUNE, HITS, SCALE, WET };
   bool Varies(int p) const override { return p == WET; }
   // the variations' bars (NOTE, SPRD's MORPH, ROT's count are no variations)
   int BarStyle(int p) const override {
-    return p == TUNE || p == TONE || p == DECAY ? BAR_CENTRE : Device::BarStyle(p);  // (+-: out from the middle)
+    return p == TUNE || p == DECAY ? BAR_CENTRE : Device::BarStyle(p);  // (+-: out from the middle)
   }
   static constexpr int SCALES = 15, SCALES12 = 7;  // the first 7 on the 12 notes (TUNE)
   ChimeDevice() : Device(CHIME_DEF) {}
@@ -6456,8 +6454,6 @@ FLASHMEM void ChimeDevice::Apply(int p) {
   a.rotate = uint8_t(constrain(int(cur[HITS]), 0, 3));
   a.turn = constrain(int(cur[ROT]), 0, 5);
   a.step_var = mode[TUNE];
-  a.tone = cur[TONE];
-  a.tone_var = mode[TONE] * 5.0f;
   a.decay = Decay(cur[DECAY]);
   a.blend = Blend(cur[DECAY]);
   a.decay_var = mode[DECAY] * 0.1f;  // up to x2 / 2
@@ -6511,9 +6507,8 @@ FLASHMEM void ChimeDevice::FormatMode(int p, char* buf, size_t n) const {
     if (mode[DECAY] == 0) snprintf(buf, n, "OFF");
     else snprintf(buf, n, LOOM_PM "%d%%", int((powf(2.0f, mode[DECAY] * 0.1f) - 1.0f) * 100.0f + 0.5f));
   }
-  else if ((p == TUNE || p == TONE) && mode[p] == 0) snprintf(buf, n, "OFF");
+  else if (p == TUNE && mode[p] == 0) snprintf(buf, n, "OFF");
   else if (p == TUNE) snprintf(buf, n, LOOM_PM "%d", mode[p]);
-  else if (p == TONE) snprintf(buf, n, LOOM_PM "%d", mode[p] * 5);
   else Device::FormatMode(p, buf, n);
 }
 
