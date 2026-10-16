@@ -6361,7 +6361,7 @@ FLASHMEM void StretchDevice::DrawMini(int x, int y, int w, int h) {
 // play, page 2 the sound.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef CHIME_DEF = {
-  "TWILL", "CHM", 8, {"HIT", "STEP"},  // (was CHIME) A: struck, they ring without any input; B: ROTA a place on
+  "TWILL", "CHM", 8, {"HIT", "ROTA"},  // (was CHIME) A: struck, they ring without any input; B: ROTA a place on (ARP's direction)
   {
     // how many bells ring at once (1 .. 6); mode: what a hit (or STEP)
     // does to which (OFF: nothing, they stay)
