@@ -6375,9 +6375,10 @@ PROGMEM static const DeviceDef CHIME_DEF = {
     // the top: in again at the bottom); mode: MORPH, how slowly the sound
     // moves to new notes (ROTA, SPRD, SCALE, NOTE)
     {"ROTA", 0, 19, 0, UNI, 0, 13, 0},
-    // on each hit, notes moved up or down by up to this many steps of the
-    // scale, at random; mode: how many of the six (1 .. 6)
-    {"VARI", 0, 48, 0, UNI, 0, 6, 5},
+    // on each hit, bells take their note from another set, up to this far
+    // away in SCALE's list (a microtonal set: up or down this many of its
+    // steps), at random; mode: how many of the six (1 .. 6)
+    {"VARI", 0, 15, 0, UNI, 0, 6, 5},
     // the root (key), semitones from C3; mode: KNOB, MIDI (any channel),
     // CH1 .. CH16: the note played is the root, this added to it (the whole
     // set moves with it, as the SMR's pitch input)
@@ -6570,6 +6571,10 @@ FLASHMEM void ChimeDevice::Apply(int p) {
   a.rotate = uint8_t(constrain(int(mode[ARP]), 0, 3));
   a.rota = cur[ROTA];
   a.step_var = cur[VARI];
+  a.set = sc < SCALES12 ? sc : -1;
+  a.nsets12 = SCALES12;
+  for (int k = 0; k < SCALES12; k++) a.sets12[k] = masks[k];
+  if (sc < SCALES12) { const float* tn = tunings[constrain(int(mode[SCALE]), 0, 3)]; for (int s = 0; s < 12; s++) a.tuning[s] = tn[s]; }
   a.var_notes = mode[VARI] + 1;
   a.decay = Decay(cur[DECAY]);
   a.blend = Blend(cur[DECAY]);

@@ -49,8 +49,13 @@ public:
     uint8_t rotate = ROT_OFF;  // which way a hit / STEP turns them
     int rota = 0;              // ROTA: all six turned along the scale, round within its 20
                                // places (see PlaceHz): always in key
-    int step_var = 0;        // scale steps up or down, at random on each hit ...
+    int step_var = 0;        // VARI: on each hit, sets up to this far away (or, microtonal: steps) ...
     int var_notes = 6;       // ... for this many of the six, picked at random
+    // VARI's sets to borrow from: the 12-note ones (bit per note) and their
+    // tuning; set: the one playing (-1: a microtonal one, VARI moves steps)
+    uint16_t sets12[16] = {};
+    int nsets12 = 0, set = -1;
+    float tuning[12] = {0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100};
     float tone = 0.0f;       // -50..50: tilt low <-> high places, and above 0 some of the first pass
     float tone_var = 0.0f;
     float decay = 2.0f;      // s to -60 dB
@@ -119,7 +124,7 @@ private:
   bool retune = true;
   int rot = 0;
   float hit_tone = 0.0f;
-  int place_var[PLACES] = {};  // this hit's PITCH variation per place
+  int place_var[PLACES] = {};  // this hit's variation per place: another set (offset in the list), or steps
   float place_dec[PLACES] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};  // and DCAY's
   float slow = 0.0f;
   int holdoff = 0;
@@ -152,8 +157,20 @@ private:
     const int st = std::max(1, std::min(24, par.steps));
     const float per = std::max(1.0f, par.period);
     const int k = ((p * par.spread + par.rota) % PLACES_W + PLACES_W) % PLACES_W;
-    const int deg = k - std::min(2 * st, 10);
-    float hz = Degree(deg + place_var[p]);
+    float hz;
+    if (place_var[p] && par.set >= 0 && par.nsets12 > 0) {
+      // borrowed: the note at the same place in another set
+      const int alt = constrain(par.set + place_var[p], 0, par.nsets12 - 1);
+      float stp[12];
+      int n = 0;
+      for (int s = 0; s < 12; s++) if (par.sets12[alt] >> s & 1) stp[n++] = par.tuning[s];
+      n = std::max(1, n);
+      const int d = k - std::min(2 * n, 10);
+      const int pe = d >= 0 ? d / n : -((-d + n - 1) / n);
+      hz = 440.0f * powf(2.0f, (par.root - 69) / 12.0f + (pe * 1200.0f + stp[d - pe * n]) / 1200.0f);
+    } else {
+      hz = Degree(k - std::min(2 * st, 10) + place_var[p]);
+    }
     const float pr = powf(2.0f, per / 1200.0f);  // a period up (2: the octave)
     while (hz > 4200.0f) hz /= pr;
     while (hz < 32.0f) hz *= pr;
@@ -280,7 +297,13 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectChime::update() {  // (O
     // VARI: that many of the six, at random, each moved its own way
     for (int k = 0, left = constrain(par.var_notes, 1, PLACES); par.step_var && left > 0 && k < PLACES; k++)
       if (int((Rand() + 1.0f) * 0.5f * (PLACES - k)) < left) {
-        place_var[k] = int(roundf(Rand() * par.step_var));
+        if (par.set >= 0) {  // another set: up to step_var away, never this one
+          int off = 0;
+          while (off == 0) off = int(roundf(Rand() * par.step_var));
+          place_var[k] = off;
+        } else {
+          place_var[k] = int(roundf(Rand() * par.step_var));
+        }
         left--;
       }
     hit_tone = Rand() * par.tone_var;
