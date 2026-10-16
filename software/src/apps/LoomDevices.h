@@ -6365,7 +6365,7 @@ PROGMEM static const DeviceDef CHIME_DEF = {
   {
     // how many bells ring at once (1 .. 6); mode: what a hit (or STEP)
     // does to which (OFF: nothing, they stay)
-    {"ARP", 1, 6, 6, UNI, 0, 4, 1, {}, {"OFF", "UP", "DOWN", "RAND"}},
+    {"DIR", 1, 6, 6, UNI, 0, 4, 1, {}, {"OFF", "UP", "DOWN", "RAND"}},
     // places between the six bells (of the 20); mode: how ARP's count of
     // them is spread over the six (as sliders up and down): 1 2 3, 1 3 5 ...
     {"SPRD", 1, 7, 2, UNI, 0, 20, 0},
