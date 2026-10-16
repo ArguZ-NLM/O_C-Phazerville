@@ -6577,9 +6577,10 @@ FLASHMEM void ChimeDevice::Idle() {
   const int ch = mode[NOTE] - 1;  // 0: any
   if (midi_note_seq[ch] == note_seen) return;
   note_seen = midi_note_seq[ch];
-  if (midi_note[ch] == midi_base) return;
-  midi_base = int16_t(midi_note[ch]);
-  Refresh(NOTE);
+  // each key played strikes them (the same one again too), on its note
+  if (midi_note[ch] != midi_base) { midi_base = int16_t(midi_note[ch]); Refresh(NOTE); }
+  fx.StrikeNew();
+  step_at = millis() | 1;
 }
 
 FLASHMEM void ChimeDevice::FormatMode(int p, char* buf, size_t n) const {

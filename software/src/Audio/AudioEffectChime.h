@@ -80,6 +80,7 @@ public:
   }
   void Step() { step_req = true; }  // A, a gate: rotate now
   void Strike() { strike_req = true; }  // B: a mallet on the chimes (they ring without any input)
+  void StrikeNew() { strike_req = strike_new = true; }  // a key played: the new notes struck at once, MORPH or not
   void Reset() {
     for (auto& v : vc) v = Voice{};
     for (auto& f : fading) f.g = 0.0f;
@@ -114,7 +115,7 @@ private:
   audio_block_t* input_queue_array[2];
   Params par;
   Voice vc[VOICES];
-  volatile bool step_req = false, strike_req = false;
+  volatile bool step_req = false, strike_req = false, strike_new = false;
   bool retune = true;
   int rot = 0;
   float hit_tone = 0.0f;
@@ -248,8 +249,8 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectChime::update() {  // (O
     pk_in = std::max(pk_in, fabsf(x[n]));
   }
   // struck (below, each note the six are on rung at once), a hit like any other
-  const bool strike = strike_req;
-  strike_req = false;
+  const bool strike = strike_req, strike_all = strike_new;
+  strike_req = strike_new = false;
 
   // a hit: the level jumps well over where it has been (at most one every
   // ~50 ms); with ROTATE it moves the places on, and it gets its own
@@ -319,7 +320,8 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectChime::update() {  // (O
     // fed (MORPH: a note coming in rings softly at first, one going out
     // less and less). Into the ring's other half, so the sound starts
     // from nothing and swings up (into its heard half, it clicked)
-    if (strike && g > 0.0f) lb += g * 0.25f / std::max(1e-4f, db * mk_to);
+    const float sg = strike_all ? to : g;  // (a key: the notes it is going to)
+    if (strike && sg > 0.0f) lb += sg * 0.25f / std::max(1e-4f, db * mk_to);
     v.mk_was = mk_to;
     v.gain_was = v.gain;
     v.pl_was = v.pan_l;
