@@ -6352,40 +6352,40 @@ FLASHMEM void StretchDevice::DrawMini(int x, int y, int w, int h) {
 }
 
 /////////////////////////////////////////////////////////////////
-// CHIME (RESONATOR slot): six tuned resonators on notes of a scale, each
-// two band-passes in a row, so only the notes ring, clean. A spotlight
-// on some of the six (SPOT, and how many: its mode) gets the sound; hits
-// (or STEP) move it (MOVE); the notes it leaves ring out at their own
-// pitch: chords, or arpeggios with SPOT at 1/6. Page 1 the sound, page 2
-// what a hit does (and WET).
+// CHIME (RESONATOR slot): six tuned bells on notes of a scale, each two
+// band-passes in a row, so only the notes ring, clean. HITS of them get the
+// sound at once; each hit (or STEP) moves which (HITS' mode); the bells it
+// leaves ring out at their own pitch: chords, or arpeggios with HITS at 1.
+// ROT turns all six along the scale (always in key). Page 1 what they
+// play, page 2 the sound.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef CHIME_DEF = {
   "TWILL", "CHM", 8, {"STEP", "HIT"},  // (was CHIME) B: struck, they ring without any input
   {
+    // how many bells ring at once (1 .. 6); mode: what a hit (or STEP)
+    // does to which (OFF: hits nothing, STEP one up)
+    {"HITS", 1, 6, 6, UNI, 0, 4, 1, {}, {"OFF", "UP", "DOWN", "RAND"}},
+    // all six turned along the scale, steps up or down
+    {"ROT", -24, 24, 0, BI},
+    {"SPRD", 1, 7, 2, UNI, 0, 13, 0},  // scale steps between the six notes; mode: MORPH, how slowly new notes take over
+    // on each hit, notes moved up or down by up to this many steps of the
+    // scale, at random; mode: how many of the six (1 .. 6)
+    {"VARI", 0, 48, 0, UNI, 0, 6, 5},
     {"NOTE", 24, 84, 48, UNI, 0, 18, 0},  // the first note, C1 .. C6; mode: KNOB, MIDI (any channel), CH1 .. CH16
     // 7 of 12 notes, then 8 microtonal (see Apply); mode: how the 12-note
     // ones are tuned (the microtonal ones bring their own)
     {"SCALE", 0, 14, 3, UNI, 0, 4, 0, {}, {"EQUAL", "JUST", "PYTH", "MEANT"}},
-    {"SPRD", 1, 7, 2, UNI, 0, 13, 0},  // scale steps between the six notes; mode: MORPH, how slowly new notes take over
     {"DCAY", 0, 100, 66, UNI, 0, 11, 0},  // 20 ms .. 12 s to fade away (low: the wide pass blended in, a filter); mode: variation per hit
-    // where the spotlight is, moved along the six by hand, a place a click
-    // (round and round; modulated: it travels); mode: how many it covers (1 .. 6)
-    {"SPOT", 0, 5, 0, UNI, 0, 6, 5},
-    // which way a hit (or STEP) moves it (OFF: hits don't, STEP moves it up)
-    {"MOVE", 0, 3, 0, LIST, 4, 0, 0, {"OFF", "UP", "DOWN", "RAND"}},
-    // on each hit, notes moved up or down by up to this many steps of the
-    // scale, at random; mode: how many of the six (1 .. 6)
-    {"VARI", 0, 48, 0, UNI, 0, 6, 5},
     {"WET", 0, 100, 100, UNI, 0, 21, 0},
   },
-  {"", "STRIKE"},
+  {"", "SOUND"},
 };
 
 class ChimeDevice : public Device {
 public:
-  enum { NOTE, SCALE, SPRD, DECAY, SPOT, MOVE, VARI, WET };
+  enum { HITS, ROT, SPRD, VARI, NOTE, SCALE, DECAY, WET };
   bool Varies(int p) const override { return p == WET; }
-  // the variations' bars (NOTE, SPRD's MORPH, SPOT's count are no variations)
+  // the variations' bars (NOTE, SPRD's MORPH, HITS' moves are no variations)
   int BarStyle(int p) const override {
     return p == DECAY ? BAR_CENTRE : p == VARI ? BAR_LEFT : Device::BarStyle(p);  // (+-: out from the middle)
   }
@@ -6395,7 +6395,6 @@ public:
   AudioStream* out() override { return &fx; }
   bool Activate() override { fx.Reset(); active = true; ApplyAll(); return true; }
   void Apply(int p) override;
-  int Step(int p, int v, int dir) const override { return p == SPOT ? ((v + dir) % 6 + 6) % 6 : Device::Step(p, v, dir); }
   void Action(int a) override {
     if (a == 0) fx.Step(); else fx.Strike();
     step_at = millis() | 1;
@@ -6488,9 +6487,9 @@ FLASHMEM void ChimeDevice::Apply(int p) {
     default: table(harmonic, 8); break;         // HARMO
   }
   a.spread = cur[SPRD];
-  a.notes = mode[SPOT] + 1;
-  a.rotate = uint8_t(constrain(int(cur[MOVE]), 0, 3));
-  a.turn = constrain(int(cur[SPOT]), 0, 5);
+  a.notes = constrain(int(cur[HITS]), 1, 6);
+  a.rotate = uint8_t(constrain(int(mode[HITS]), 0, 3));
+  a.shift = cur[ROT];
   a.step_var = cur[VARI];
   a.var_notes = mode[VARI] + 1;
   a.decay = Decay(cur[DECAY]);
@@ -6505,7 +6504,7 @@ FLASHMEM void ChimeDevice::Format(int p, char* buf, size_t n) const {
   static const char* const names[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
   static const char* const scales[SCALES] = {"CHROM", "MAJOR", "MINOR", "PENTA", "mPENT", "FIFTH", "WHOLE",
                                              "QUART", "17ET", "19ET", "SLEND", "PELOG", "BOHLN", "SHRUT", "HARMO"};
-  if (p == SPOT) { snprintf(buf, n, "%d", val[SPOT] + 1); return; }  // where the spotlight starts
+  if (p == HITS) { snprintf(buf, n, "%d/6", val[HITS]); return; }  // bells at once
   if (p == VARI) { if (val[VARI]) snprintf(buf, n, LOOM_PM "%d", val[VARI]); else snprintf(buf, n, "OFF"); return; }
   if (p == NOTE && mode[NOTE]) {  // MIDI: the note played, and the offset (E3+6)
     const int off = val[NOTE] - 48;
@@ -6533,8 +6532,7 @@ FLASHMEM void ChimeDevice::Idle() {
 }
 
 FLASHMEM void ChimeDevice::FormatMode(int p, char* buf, size_t n) const {
-  if (p == SPOT) snprintf(buf, n, "%d/6", mode[SPOT] + 1);  // notes it covers
-  else if (p == SPRD) {  // MORPH
+  if (p == SPRD) {  // MORPH
     const float t = Morph(mode[SPRD]);
     if (!mode[SPRD]) snprintf(buf, n, "0ms");
     else if (t < 1.0f) snprintf(buf, n, "%dms", int(t * 1000.0f + 0.5f));

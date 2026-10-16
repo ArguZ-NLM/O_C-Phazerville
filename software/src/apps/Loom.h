@@ -3680,9 +3680,7 @@ namespace loom {
     const bool tex_heddle = d && !memcmp(tag, "TEX", 4) && !memcmp(d->def.tag, "TEX", 4) && n == 12;
     // until v25 TREADLE had 10 settings (ACCNT, RESET since gone)
     const bool trd10 = d && !memcmp(tag, "TRD", 4) && n == 10 && load_version < 25;
-    // v27 TWILL had 9 (HITS on a page 3; TONE since gone)
-    const bool chm9 = d && !memcmp(tag, "CHM", 4) && n == 9 && load_version == 27;
-    const bool use = d && !memcmp(tag, d->def.tag, 4) && (n <= d->num_params() || tex_heddle || trd10 || chm9);
+    const bool use = d && !memcmp(tag, d->def.tag, 4) && (n <= d->num_params() || tex_heddle || trd10);
     const bool remap_spr = use && !memcmp(tag, "SPR", 4) && n == 7;
     const bool remap_mix = use && !memcmp(tag, "MIX", 4) && n == 7;  // MIX came in first
     const bool reorder_out = use && !memcmp(tag, "MIX", 4) && load_version < 5;
@@ -3723,14 +3721,6 @@ namespace loom {
     // the map's pattern nearest
     const bool trd_xy = use && !memcmp(tag, "TRD", 4) && load_version < 26;
     int old_x = -1, old_y = 50;
-    // before v27 TWILL's ROT was what a hit does (now HITS; ROT turns them
-    // by hand); before v28 its 6th was TONE (gone; HITS there now, was 9th)
-    const bool chm_rot = use && !memcmp(tag, "CHM", 4) && load_version < 27;
-    const bool chm_tone = use && !memcmp(tag, "CHM", 4) && load_version < 28;
-    int old_rot = -1;
-    const bool chm_vari = use && !memcmp(tag, "CHM", 4) && load_version < 29;
-    const bool chm_v30 = use && !memcmp(tag, "CHM", 4) && load_version < 30;
-    int old_tune = -1;
     int old_len = -1;
     static constexpr int8_t TRD_MAP[8] = {TRD_X, TRD_Y, TRD_LOW, TRD_CHAOS, TRD_RATE, TRD_RESET, TRD_ACCNT, TRD_PLAY};
     static constexpr int8_t RND_MAP[7] = {5, 0, 6, 3, 1, 2, 4};
@@ -3795,18 +3785,6 @@ namespace loom {
         p = TRD_V25[constrain(p, 0, 9)];
         if (p < 0) { p = q; continue; }
       }
-      if (chm_tone && q == 5) { p = q; continue; }  // TONE
-      if (chm_tone && q == 8) p = 5;  // (HITS, v28's place)
-      // before v29: TUNE HITS SCALE: now VARI SCALE HITS, TUNE's variation
-      // VARI's value (all six), its tuning SCALE's mode
-      if (chm_vari && p == 4) { old_tune = v; v = int16_t(md); md = 5; amt = amt2 = 0; }
-      else if (chm_vari && p == 5) p = 6;
-      else if (chm_vari && p == 6) p = 5;
-      // before v30: NOTE SPRD DCAY ROT / VARI SCALE HITS WET: now the sound,
-      // then the strike: NOTE SCALE SPRD DCAY / SPOT MOVE VARI WET
-      static constexpr int8_t CHM_V30[8] = {0, 2, 3, 4, 6, 1, 5, 7};
-      if (chm_rot && p == 3) { old_rot = v; v = 0; amt = amt2 = 0; }  // (ROT)
-      if (chm_v30) p = CHM_V30[constrain(p, 0, 7)];
       if (trd_xy && p == TreadleMod::P_STYLE) { old_x = v; v = 0; amt = amt2 = 0; }
       if (trd_xy && p == TreadleMod::P_BEAT) { old_y = v; v = 0; amt = amt2 = 0; }
       if (skip_size && p == 5) { p = q; continue; }
@@ -3844,8 +3822,6 @@ namespace loom {
       if (view_mode && p == ReelDevice::VIEW) { d->mode[p] = uint8_t(constrain(v, 0, 9)); d->val[p] = -1; }
       p = q;
     }
-    if (old_tune >= 0) d->mode[ChimeDevice::SCALE] = uint8_t(constrain(old_tune, 0, 3));
-    if (old_rot >= 0) d->val[ChimeDevice::MOVE] = int16_t(constrain(old_rot, 0, 3));
     if (old_x >= 0)
       d->val[TreadleMod::P_BEAT] = int16_t(((constrain(old_x, 0, 100) + 12) / 25) * 5 + (constrain(old_y, 0, 100) + 12) / 25);
     if (old_len > 0)
