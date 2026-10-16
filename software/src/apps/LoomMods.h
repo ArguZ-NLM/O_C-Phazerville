@@ -508,22 +508,27 @@ FLASHMEM void RandomMod::FormatMode(int p, char* buf, size_t n) const {
 PROGMEM static const DeviceDef ADSR_DEF = {
   "ADSR", "ENV", 7, {"TRG", "REL"},  // B: let go now
   {
-    {"ATT", 0, 100, 10, UNI},
-    {"DEC", 0, 100, 45, UNI},
+    // ATT, DEC and REL: the time (R knob) and, on the L knob, the curve of
+    // that stage: LOG50 .. LOG5, LIN (the middle, the default), EXP5 ..
+    // EXP50. EXP starts slowly and speeds up, LOG starts fast and eases in
+    {"ATT", 0, 100, 10, UNI, 0, 21, 10},
+    {"DEC", 0, 100, 45, UNI, 0, 21, 10},
     {"SUS", 0, 100, 60, UNI},
-    {"REL", 0, 100, 50, UNI},
+    {"REL", 0, 100, 50, UNI, 0, 21, 10},
     {"AMNT", 0, 100, 100, UNI},
     {"TRIG", 0, TRIG_SOURCES - 1, 1, UNI},
-    {"CURVE", -50, 50, 0, BI},
   }
 };
 
 class AdsrMod : public Modulator {
 public:
-  enum { P_ATT, P_DEC, P_SUS, P_REL, P_AMT, P_TRIG, P_CURVE };
+  enum { P_ATT, P_DEC, P_SUS, P_REL, P_AMT, P_TRIG };
   AdsrMod() : Modulator(ADSR_DEF) {}
   void Tick(const ModCtx& ctx) override;
   void Format(int p, char* buf, size_t n) const override;
+  void FormatMode(int p, char* buf, size_t n) const override;
+  // (the bar over a curve's name is a piece sliding end to end: left LOG,
+  // the middle LIN, right EXP)
   void Action(int a) override {
     if (a == 0) { stage = ATTACK; manual = 0.15f; flash = 0.1f; }
     else if (stage != IDLE && stage != RELEASE) { stage = RELEASE; rel_from = env; manual = 0.0f; }
@@ -533,7 +538,14 @@ private:
   enum Stage : uint8_t { IDLE, ATTACK, DECAY, SUSTAIN, RELEASE } stage = IDLE;
   float env = 0.0f;
   float rel_from = 1.0f;  // where the release started, for the picture
-  float Shaped(float e) const;  // CURVE and AMNT applied
+  // a stage's curve, -1 (LOG) .. 0 (straight) .. +1 (EXP), from its L knob
+  float Curve(int p) const { return (int(mode[p]) - 10) * 0.1f; }
+  // q (0..1, how far along a stage is) bent by curve c; 0 and 1 stay put,
+  // so the stages still meet where they did
+  static float Bend(float q, float c);
+  // the envelope's level env (as it moves straight) as heard: the stage it
+  // is in bent by that stage's curve, then AMNT
+  float Shaped(float e, Stage st, float from) const;
   float manual = 0.0f; // the action button holds the gate this long
   float Time(int p) const;
 };
@@ -566,22 +578,52 @@ FLASHMEM void AdsrMod::Tick(const ModCtx& ctx) {
   }
   // a short trigger (no gate held) plays attack-decay, then releases
   if (stage == DECAY && !gate && env <= sus + 0.0001f) { stage = RELEASE; rel_from = env; }
-  out = Shaped(env);
+  out = Shaped(env, stage, rel_from);
 }
 
-// CURVE bends all stages: + exponential, - logarithmic; AMNT scales
-FLASHMEM float AdsrMod::Shaped(float e) const {
-  const float c = cur[P_CURVE] * 0.02f;
-  const float e3 = e * e * e, l3 = 1.0f - (1.0f - e) * (1.0f - e) * (1.0f - e);
-  const float sh = c >= 0.0f ? e + c * (e3 - e) : e - c * (l3 - e);
-  return sh * cur[P_AMT] * 0.01f;
+// EXP (c > 0) bends towards q cubed: slow at first, then fast; LOG (c < 0)
+// the other way round
+FLASHMEM float AdsrMod::Bend(float q, float c) {
+  q = constrain(q, 0.0f, 1.0f);
+  const float q3 = q * q * q, l3 = 1.0f - (1.0f - q) * (1.0f - q) * (1.0f - q);
+  return c >= 0.0f ? q + c * (q3 - q) : q - c * (l3 - q);
+}
+
+// Each stage is bent on its own: the attack from 0 up to 1, the decay from
+// 1 down to SUS, the release from where it started down to 0. A falling
+// stage is bent the same way as a rising one read backwards, so EXP
+// always means "slow, then fast" towards the end of the stage.
+FLASHMEM float AdsrMod::Shaped(float e, Stage st, float from) const {
+  const float sus = cur[P_SUS] * 0.01f;
+  float v = e;
+  switch (st) {
+    case ATTACK: v = Bend(e, Curve(P_ATT)); break;
+    case DECAY: {
+      const float span = std::max(0.0001f, 1.0f - sus);
+      v = 1.0f - span * Bend((1.0f - e) / span, Curve(P_DEC));
+    } break;
+    case RELEASE: {
+      const float top = std::max(0.0001f, from);
+      v = top * (1.0f - Bend(1.0f - e / top, Curve(P_REL)));
+    } break;
+    default: break;  // SUSTAIN and IDLE: as they are
+  }
+  return v * cur[P_AMT] * 0.01f;
+}
+
+FLASHMEM void AdsrMod::FormatMode(int p, char* buf, size_t n) const {
+  if (p == P_SUS) { Modulator::FormatMode(p, buf, n); return; }
+  const int c = (int(mode[p]) - 10) * 5;
+  if (c == 0) snprintf(buf, n, "LIN");
+  else snprintf(buf, n, c > 0 ? "EXP%d" : "LOG%d", abs(c));
 }
 
 // the envelope as a line: attack, decay, a stretch of sustain, release, each
 // as long as its setting; a dot rides along it while it plays
 FLASHMEM void AdsrMod::DrawViz(int x, int y, int w, int h) {
   const int ww = w - 8, top = y + 1, hh = h - 3, seg = ww / 4;
-  auto yy = [&](float e) { return top + hh - int(Shaped(e) * hh + 0.5f); };
+  // a level as drawn: the stage's own curve, the release from SUS
+  auto yy = [&](float e, Stage st) { return top + hh - int(Shaped(e, st, cur[P_SUS] * 0.01f) * hh + 0.5f); };
   const int wa = 2 + cur[P_ATT] * (seg - 2) / 100, wd = 2 + cur[P_DEC] * (seg - 2) / 100;
   const int wr = 2 + cur[P_REL] * (seg - 2) / 100, wsus = ww - wa - wd - wr - 1;
   const float sus = cur[P_SUS] * 0.01f;
@@ -590,11 +632,12 @@ FLASHMEM void AdsrMod::DrawViz(int x, int y, int w, int h) {
   int py = -1;
   for (int i = 0; i < ww; i++) {
     float e;
-    if (i < wa) e = float(i) / wa;
-    else if (i < wa + wd) e = 1.0f - (1.0f - sus) * float(i - wa) / wd;
-    else if (i < wa + wd + wsus) e = sus;
-    else e = sus * (1.0f - float(i - wa - wd - wsus) / wr);
-    const int cy = yy(std::max(0.0f, e));
+    Stage st;
+    if (i < wa) { e = float(i) / wa; st = ATTACK; }
+    else if (i < wa + wd) { e = 1.0f - (1.0f - sus) * float(i - wa) / wd; st = DECAY; }
+    else if (i < wa + wd + wsus) { e = sus; st = SUSTAIN; }
+    else { e = sus * (1.0f - float(i - wa - wd - wsus) / wr); st = RELEASE; }
+    const int cy = yy(std::max(0.0f, e), st);
     if (py >= 0) gfxLine(x + i - 1, py, x + i, cy); else gfxPixel(x + i, cy);
     py = cy;
   }
