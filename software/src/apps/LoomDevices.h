@@ -6364,7 +6364,7 @@ PROGMEM static const DeviceDef CHIME_DEF = {
   "TWILL", "CHM", 8, {"STEP", "HIT"},  // (was CHIME) B: struck, they ring without any input
   {
     // how many bells ring at once (1 .. 6); mode: what a hit (or STEP)
-    // does to which (OFF: hits nothing, STEP one up)
+    // does to which (OFF: nothing, they stay)
     {"HITS", 1, 6, 6, UNI, 0, 4, 1, {}, {"OFF", "UP", "DOWN", "RAND"}},
     // all six turned along the scale, a step a click, round and round (past
     // the top: in again at the bottom); mode: MORPH, how slowly the sound

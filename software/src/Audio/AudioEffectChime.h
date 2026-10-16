@@ -249,14 +249,14 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectChime::update() {  // (O
   slow += (pk_in > slow ? 0.3f : 0.03f) * (pk_in - slow);
   const bool step = step_req;
   step_req = false;
-  if ((hit && par.rotate != ROT_OFF) || step) {
+  if ((hit || step) && par.rotate != ROT_OFF) {  // (OFF: they stay, STEP too)
     switch (par.rotate) {
       case ROT_DOWN: rot--; break;
       case ROT_RAND: {
         const int was = rot;
         while (PLACES > 1 && rot == was) rot = int((Rand() + 1.0f) * 0.5f * PLACES) % PLACES;
       } break;
-      default: rot++; break;  // UP (and STEP while ROTATE is off)
+      default: rot++; break;  // UP
     }
     rot = (rot % PLACES + PLACES) % PLACES;
   }
