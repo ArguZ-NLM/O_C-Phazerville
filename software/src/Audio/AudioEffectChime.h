@@ -45,7 +45,8 @@ public:
     float period = 1200.0f;
     int spread = 2;          // scale steps between places
     int notes = 6;           // places on at once
-    uint8_t rotate = ROT_OFF;
+    uint8_t rotate = ROT_OFF;  // which way a hit / STEP turns them
+    int turn = 0;              // and turned by hand (the knob), places on
     int step_var = 0;        // scale steps, every new note at random
     float tone = 0.0f;       // -50..50: tilt low <-> high places, and above 0 some of the first pass
     float tone_var = 0.0f;
@@ -159,7 +160,7 @@ private:
 FASTRUN void AudioEffectChime::Assign() {
   const int n = constrain(par.notes, 1, PLACES);
   bool on[PLACES] = {};
-  for (int j = 0; j < n; j++) on[((rot + j) % PLACES + PLACES) % PLACES] = true;
+  for (int j = 0; j < n; j++) on[((rot + par.turn + j) % PLACES + PLACES) % PLACES] = true;
   viz.on = 0;
   for (int p = 0; p < PLACES; p++) {
     viz.place_hz[p] = PlaceHz(p);
