@@ -6474,7 +6474,7 @@ public:
   void Places(char* buf, size_t n) {  // (USB status)
     AudioEffectChime::Viz v;
     fx.ReadViz(v);
-    int k = snprintf(buf, n, "key %d midi %d scale %d mode %d |", int(cur[NOTE]), int(midi_base), int(cur[SCALE]), int(mode[SCALE]));
+    int k = snprintf(buf, n, "key %d midi %d scale %d mode %d keys %s |", int(cur[NOTE]), int(midi_base), int(cur[SCALE]), int(mode[SCALE]), keys_hit ? "note+hit" : "note");
     for (int p = 0; p < AudioEffectChime::PLACES && k < int(n) - 12; p++)
       k += snprintf(buf + k, n - k, " %d%s", int(v.place_hz[p] + 0.5f), (v.on >> p & 1) ? "*" : "");
   }
