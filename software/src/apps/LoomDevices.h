@@ -6356,7 +6356,8 @@ FLASHMEM void StretchDevice::DrawMini(int x, int y, int w, int h) {
 // band-passes in a row, so only the notes ring, clean. HITS of them get the
 // sound at once; each hit (or STEP) moves which (HITS' mode); the bells it
 // leaves ring out at their own pitch: chords, or arpeggios with HITS at 1.
-// ROT turns all six along the scale (always in key). Page 1 what they
+// ROTA turns all six along the scale, round and round within three periods
+// of it (always in key), MORPH (its mode) how slowly. Page 1 what they
 // play, page 2 the sound.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef CHIME_DEF = {
@@ -6365,9 +6366,11 @@ PROGMEM static const DeviceDef CHIME_DEF = {
     // how many bells ring at once (1 .. 6); mode: what a hit (or STEP)
     // does to which (OFF: hits nothing, STEP one up)
     {"HITS", 1, 6, 6, UNI, 0, 4, 1, {}, {"OFF", "UP", "DOWN", "RAND"}},
-    // all six turned along the scale, steps up or down
-    {"ROT", -24, 24, 0, BI},
-    {"SPRD", 1, 7, 2, UNI, 0, 13, 0},  // scale steps between the six notes; mode: MORPH, how slowly new notes take over
+    // all six turned along the scale, a step a click, round and round (past
+    // the top: in again at the bottom); mode: MORPH, how slowly the sound
+    // moves to new notes (ROTA, SPRD, SCALE, NOTE)
+    {"ROTA", 0, 71, 0, UNI, 0, 13, 0},
+    {"SPRD", 1, 7, 2, UNI},  // scale steps between the six notes
     // on each hit, notes moved up or down by up to this many steps of the
     // scale, at random; mode: how many of the six (1 .. 6)
     {"VARI", 0, 48, 0, UNI, 0, 6, 5},
@@ -6383,7 +6386,11 @@ PROGMEM static const DeviceDef CHIME_DEF = {
 
 class ChimeDevice : public Device {
 public:
-  enum { HITS, ROT, SPRD, VARI, NOTE, SCALE, DECAY, WET };
+  enum { HITS, ROTA, SPRD, VARI, NOTE, SCALE, DECAY, WET };
+  int RotaW() const { return rota_w; }  // the steps ROTA goes round (three periods of the scale)
+  int Step(int p, int v, int dir) const override {
+    return p == ROTA ? ((v + dir) % rota_w + rota_w) % rota_w : Device::Step(p, v, dir);
+  }
   bool Varies(int p) const override { return p == WET; }
   // the variations' bars (NOTE, SPRD's MORPH, HITS' moves are no variations)
   int BarStyle(int p) const override {
@@ -6416,6 +6423,7 @@ private:
   Meter out_m;
   uint32_t step_at = 0;
   uint32_t note_seen = 0;
+  int rota_w = 21;
   // NOTE on MIDI: the last note played; NOTE's value is then an offset to
   // it, 48 (C3) = none, so it is saved like any setting
   int16_t midi_base = 48;
@@ -6489,13 +6497,14 @@ FLASHMEM void ChimeDevice::Apply(int p) {
   a.spread = cur[SPRD];
   a.notes = constrain(int(cur[HITS]), 1, 6);
   a.rotate = uint8_t(constrain(int(mode[HITS]), 0, 3));
-  a.shift = cur[ROT];
+  rota_w = 3 * std::max(1, a.steps);
+  a.rota = cur[ROTA];
   a.step_var = cur[VARI];
   a.var_notes = mode[VARI] + 1;
   a.decay = Decay(cur[DECAY]);
   a.blend = Blend(cur[DECAY]);
   a.decay_var = mode[DECAY] * 0.1f;  // up to x2 / 2
-  a.morph = Morph(mode[SPRD]);
+  a.morph = Morph(mode[ROTA]);
   a.wet = cur[WET] * 0.01f;
   fx.Set(a);
 }
@@ -6505,6 +6514,7 @@ FLASHMEM void ChimeDevice::Format(int p, char* buf, size_t n) const {
   static const char* const scales[SCALES] = {"CHROM", "MAJOR", "MINOR", "PENTA", "mPENT", "FIFTH", "WHOLE",
                                              "QUART", "17ET", "19ET", "SLEND", "PELOG", "BOHLN", "SHRUT", "HARMO"};
   if (p == HITS) { snprintf(buf, n, "%d/6", val[HITS]); return; }  // bells at once
+  if (p == ROTA) { snprintf(buf, n, "%d", ((val[ROTA] % rota_w) + rota_w) % rota_w); return; }
   if (p == VARI) { if (val[VARI]) snprintf(buf, n, LOOM_PM "%d", val[VARI]); else snprintf(buf, n, "OFF"); return; }
   if (p == NOTE && mode[NOTE]) {  // MIDI: the note played, and the offset (E3+6)
     const int off = val[NOTE] - 48;
@@ -6532,9 +6542,9 @@ FLASHMEM void ChimeDevice::Idle() {
 }
 
 FLASHMEM void ChimeDevice::FormatMode(int p, char* buf, size_t n) const {
-  if (p == SPRD) {  // MORPH
-    const float t = Morph(mode[SPRD]);
-    if (!mode[SPRD]) snprintf(buf, n, "0ms");
+  if (p == ROTA) {  // MORPH
+    const float t = Morph(mode[ROTA]);
+    if (!mode[ROTA]) snprintf(buf, n, "0ms");
     else if (t < 1.0f) snprintf(buf, n, "%dms", int(t * 1000.0f + 0.5f));
     else snprintf(buf, n, "%d.%ds", int(t), int(t * 10.0f) % 10);
   } else if (p == NOTE) {

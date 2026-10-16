@@ -46,7 +46,8 @@ public:
     int spread = 2;          // scale steps between places
     int notes = 6;           // places on at once
     uint8_t rotate = ROT_OFF;  // which way a hit / STEP turns them
-    int shift = 0;             // ROT: all six moved along the scale, steps (always in key)
+    int rota = 0;              // ROTA: all six turned along the scale, steps, round within
+                               // three periods of it (21 notes of a 7-note scale): always in key
     int step_var = 0;        // scale steps up or down, at random on each hit ...
     int var_notes = 6;       // ... for this many of the six, picked at random
     float tone = 0.0f;       // -50..50: tilt low <-> high places, and above 0 some of the first pass
@@ -139,7 +140,9 @@ private:
   }
   // (moved far, a note is folded back by octaves into ~C1 .. 4 kHz)
   float PlaceHz(int p) const {
-    float hz = Degree(p * par.spread + par.shift + place_var[p]);
+    const int w = 3 * std::max(1, std::min(24, par.steps));
+    const int k = ((p * par.spread + par.rota) % w + w) % w;  // (past the top: in again at the bottom)
+    float hz = Degree(k + place_var[p]);
     while (hz > 4200.0f) hz *= 0.5f;
     while (hz < 32.0f) hz *= 2.0f;
     return hz;
