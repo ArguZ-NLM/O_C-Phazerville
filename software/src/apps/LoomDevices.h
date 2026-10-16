@@ -315,6 +315,7 @@ public:
   virtual bool Sampled(int p) const { return false; }
   virtual void Action(int a) {}
   virtual bool ActionLit(int a) const { return false; }
+  virtual bool LongA() { return false; }  // A held on the page: true if the device took it
   virtual void DrawViz(int x, int y, int w, int h) {}
   virtual void DrawMini(int x, int y, int w, int h) {}
   virtual void Idle() {}  // main loop, while the device is in use
@@ -6468,6 +6469,8 @@ public:
     parts[1] = 0.0f;
     fx.processorUsageMaxReset();
   }
+  // A held: a key played sets the note only, or the note and a strike
+  bool LongA() override { keys_hit = !keys_hit; keys_at = millis() | 1; return true; }
   void Places(char* buf, size_t n) {  // (USB status)
     AudioEffectChime::Viz v;
     fx.ReadViz(v);
@@ -6482,6 +6485,8 @@ private:
   Meter out_m;
   uint32_t step_at = 0;
   uint32_t note_seen = 0;
+  bool keys_hit = true;   // KEY on MIDI: a key strikes them too
+  uint32_t keys_at = 0;   // (when switched: shown for a moment)
   static constexpr int rota_w = 20;  // ROTA's places, round and round
   // NOTE on MIDI: the last note played, the key
   int16_t midi_base = 48;
@@ -6600,8 +6605,7 @@ FLASHMEM void ChimeDevice::Idle() {
   note_seen = midi_note_seq[ch];
   // each key played strikes them (the same one again too), on its note
   if (midi_note[ch] != midi_base) { midi_base = int16_t(midi_note[ch]); Refresh(NOTE); }
-  fx.StrikeNew();
-  step_at = millis() | 1;
+  if (keys_hit) { fx.StrikeNew(); step_at = millis() | 1; }
 }
 
 FLASHMEM void ChimeDevice::FormatMode(int p, char* buf, size_t n) const {
@@ -6649,6 +6653,14 @@ FLASHMEM void ChimeDevice::DrawViz(int x, int y, int w, int h) {
   const int mx = x + w - 14;
   gfxFrame(mx, y, 12, h);
   DrawVMeter(mx + 1, y + 1, 10, h - 2, out_m.v);
+  if (keys_at && millis() - keys_at < 1500) {  // A held: what a key does now
+    const char* t = keys_hit ? "KEYS: NOTE+HIT" : "KEYS: NOTE ONLY";
+    const int tw = 6 * int(strlen(t)), tx = x + (w - tw) / 2;
+    gfxRect(tx - 3, y + h / 2 - 6, tw + 6, 12);    // (a blank box: filled, then turned black)
+    gfxInvert(tx - 3, y + h / 2 - 6, tw + 6, 12);
+    gfxFrame(tx - 3, y + h / 2 - 6, tw + 6, 12);
+    gfxPrint(tx, y + h / 2 - 3, t);
+  }
 }
 
 FLASHMEM void ChimeDevice::DrawMini(int x, int y, int w, int h) {

@@ -2344,6 +2344,11 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
     g_browser->ToggleAutoplay();
     return;
   }
+  // A held on a device's page: the device's own use of it (TWILL: keys
+  // play the note only, or the note and a strike)
+  if (event.type == UI::EVENT_BUTTON_LONG_PRESS && event.control == OC::CONTROL_BUTTON_UP && view == DEVICE && !focus_mod && !trig_mode) {
+    if (Device* d = Focused()) if (d->LongA()) { if (Device* tw = Twin(d)) tw->LongA(); return; }
+  }
   if (event.type != UI::EVENT_BUTTON_PRESS) return;
 
   if (view == MODS) focus_mod = true;
