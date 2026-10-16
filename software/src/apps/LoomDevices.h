@@ -4344,6 +4344,29 @@ public:
   void CpuMax(float parts[2]) override;
   void TempoChanged() override { if (mode[TIME] != SYNC_FREE) SetTimes(); }
   uint32_t TailMs() const override;
+  // TIME's mode turned: FREE takes the time it was on in sync (in ms), and
+  // back on the clock it snaps to the note value nearest it
+  void NudgeMode(int p, int dir) override {
+    const int was = mode[TIME];
+    Device::NudgeMode(p, dir);
+    if (p != TIME || mode[TIME] == was) return;
+    if (mode[TIME] == SYNC_FREE) {
+      const float secs = DivSeconds(NUM_DIVS - 1 - DivIndex(val[TIME], 20, 6000));
+      val[TIME] = int16_t(constrain(int(secs * 1000.0f + 0.5f), 20, 6000));
+    } else {
+      const float secs = val[TIME] * 0.001f;
+      int best = NUM_DIVS - 1;
+      float err = 1e9f;
+      for (int i = 0; i < NUM_DIVS; i++) {
+        const float d = DivSeconds(i);
+        if (d > MAX_SECS - 0.01f && i < NUM_DIVS - 1) continue;  // (longer than the delay holds)
+        const float e = fabsf(log2f(d / secs));
+        if (e < err) { err = e; best = i; }
+      }
+      val[TIME] = int16_t(DivValue(NUM_DIVS - 1 - best, 20, 6000));
+    }
+    Refresh(TIME);
+  }
   void Parked() override { if (mem_ok) echo.Reset(); }  // no old tail on return
   // a part switched off on its own page (B): bit 0 the delay, bit 1 the
   // reverb; the slot's bypass (chain view) leaves these as they are
