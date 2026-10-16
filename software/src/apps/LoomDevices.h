@@ -6533,7 +6533,7 @@ FLASHMEM void ChimeDevice::DrawViz(int x, int y, int w, int h) {
     if (viz.on >> p & 1) gfxRect(px - 1, base + 2, 3, 3);
     else gfxFrame(px - 1, base + 2, 3, 3);
   }
-  if (step_at && millis() - step_at < 150) gfxInvert(x, y, bw, h);  // STEP pressed
+  if (step_at && millis() - step_at < 150) gfxRect(x + 1, y + 1, 4, 4);  // STEP / HIT: a small mark
   const int mx = x + w - 14;
   gfxFrame(mx, y, 12, h);
   DrawVMeter(mx + 1, y + 1, 10, h - 2, out_m.v);

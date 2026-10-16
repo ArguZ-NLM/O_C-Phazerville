@@ -226,17 +226,9 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectChime::update() {  // (O
     x[n] = 0.5f * (dl + dr);
     pk_in = std::max(pk_in, fabsf(x[n]));
   }
-  // struck: a short burst of noise falling away (~1 ms), as a mallet,
-  // heard as a hit like any other
-  if (strike_req) {
-    strike_req = false;
-    for (int n = 0; n < 48; n++) {
-      x[n] += 0.7f * (1.0f - n / 48.0f) * Rand();
-      pk_in = std::max(pk_in, fabsf(x[n]));
-    }
-    holdoff = 0;
-    slow = 0.0f;
-  }
+  // struck (below, each note the six are on rung at once), a hit like any other
+  const bool strike = strike_req;
+  strike_req = false;
 
   // a hit: the level jumps well over where it has been (at most one every
   // ~50 ms); with ROTATE it moves the places on, and it gets its own
@@ -244,6 +236,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectChime::update() {  // (O
   bool hit = false;
   if (holdoff > 0) holdoff--;
   if (pk_in > 0.01f && pk_in > 2.0f * slow && holdoff == 0) { hit = true; holdoff = 18; }
+  if (strike) hit = true;
   slow += (pk_in > slow ? 0.3f : 0.03f) * (pk_in - slow);
   const bool step = step_req;
   step_req = false;
@@ -294,6 +287,9 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectChime::update() {  // (O
     const float mk_d = (mk_to - mk) * (1.0f / AUDIO_BLOCK_SAMPLES), gn_d = (v.gain - gn) * (1.0f / AUDIO_BLOCK_SAMPLES);
     float pl = v.pl_was < 0.0f ? v.pan_l : v.pl_was, pr = v.pr_was < 0.0f ? v.pan_r : v.pr_was;
     const float pl_d = (v.pan_l - pl) * (1.0f / AUDIO_BLOCK_SAMPLES), pr_d = (v.pan_r - pr) * (1.0f / AUDIO_BLOCK_SAMPLES);
+    // struck: each fed note rung straight to about a quarter of full
+    // level, however long its DCAY (a mallet, not the input's slow build)
+    if (strike && to > 0.0f) bb += (bb >= 0.0f ? 1.0f : -1.0f) * 0.25f / std::max(1e-4f, db * mk_to);
     v.mk_was = mk_to;
     v.gain_was = v.gain;
     v.pl_was = v.pan_l;
