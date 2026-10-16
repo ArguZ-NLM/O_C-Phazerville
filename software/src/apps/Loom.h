@@ -2135,7 +2135,15 @@ FLASHMEM void AppLoom::MainLoop() {
           d->def.tag, d->param(p).name, d->val[p], d->cur[p], d->mod_amt[p], d->mod_bus_sel[p], d->mod_in[p].Pack(),
           d->Bipolar(p) ? 'b' : 'u', d->mod_amt2[p], d->mod_bus2[p], d->Bipolar2(p) ? 'b' : 'u');
       }
-    });    // what strikes the devices' actions (A, B)
+    });
+    // TWILL's six places (Hz, * = getting the sound) and its settings as heard
+    ForEachDevice([&](loom::Device* d) {
+      if (d->mod_bus != tr.mod_out || memcmp(d->def.tag, "CHM", 4)) return;
+      char b[160];
+      static_cast<loom::ChimeDevice*>(d)->Places(b, sizeof(b));
+      Serial.printf("  %c CHM %s\n", t ? 'R' : 'L', b);
+    });
+    // what strikes the devices' actions (A, B)
     ForEachDevice([&](loom::Device* d) {
       if (d->mod_bus != tr.mod_out || !(d->act_trig[0] | d->act_trig[1])) return;
       char a0[8], a1[8];
