@@ -287,9 +287,12 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectChime::update() {  // (O
     const float mk_d = (mk_to - mk) * (1.0f / AUDIO_BLOCK_SAMPLES), gn_d = (v.gain - gn) * (1.0f / AUDIO_BLOCK_SAMPLES);
     float pl = v.pl_was < 0.0f ? v.pan_l : v.pl_was, pr = v.pr_was < 0.0f ? v.pan_r : v.pr_was;
     const float pl_d = (v.pan_l - pl) * (1.0f / AUDIO_BLOCK_SAMPLES), pr_d = (v.pan_r - pr) * (1.0f / AUDIO_BLOCK_SAMPLES);
-    // struck: each fed note rung straight to about a quarter of full
-    // level, however long its DCAY (a mallet, not the input's slow build)
-    if (strike && to > 0.0f) bb += (bb >= 0.0f ? 1.0f : -1.0f) * 0.25f / std::max(1e-4f, db * mk_to);
+    // struck: each note rung to about a quarter of full level, however
+    // long its DCAY (a mallet, not the input's slow build), as far as it is
+    // fed (MORPH: a note coming in rings softly at first, one going out
+    // less and less). Into the ring's other half, so the sound starts
+    // from nothing and swings up (into its heard half, it clicked)
+    if (strike && g > 0.0f) lb += g * 0.25f / std::max(1e-4f, db * mk_to);
     v.mk_was = mk_to;
     v.gain_was = v.gain;
     v.pl_was = v.pan_l;
