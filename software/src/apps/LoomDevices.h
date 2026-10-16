@@ -6361,7 +6361,7 @@ FLASHMEM void StretchDevice::DrawMini(int x, int y, int w, int h) {
 // play, page 2 the sound.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef CHIME_DEF = {
-  "TWILL", "CHM", 8, {"STEP", "HIT"},  // (was CHIME) B: struck, they ring without any input
+  "TWILL", "CHM", 8, {"HIT", "STEP"},  // (was CHIME) A: struck, they ring without any input; B: on to the next bells
   {
     // how many bells ring at once (1 .. 6); mode: what a hit (or STEP)
     // does to which (OFF: nothing, they stay)
@@ -6449,7 +6449,7 @@ public:
   bool Activate() override { fx.Reset(); active = true; ApplyAll(); return true; }
   void Apply(int p) override;
   void Action(int a) override {
-    if (a == 0) fx.Step(); else fx.Strike();
+    if (a == 0) fx.Strike(); else fx.Step();
     step_at = millis() | 1;
   }
   void Idle() override;

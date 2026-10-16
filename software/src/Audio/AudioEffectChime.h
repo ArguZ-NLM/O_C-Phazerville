@@ -78,8 +78,8 @@ public:
     retune = true;
     AudioInterrupts();
   }
-  void Step() { step_req = true; }  // A, a gate: rotate now
-  void Strike() { strike_req = true; }  // B: a mallet on the chimes (they ring without any input)
+  void Step() { step_req = true; }  // B (STEP), a gate: rotate now
+  void Strike() { strike_req = true; }  // A (HIT): a mallet on the chimes (they ring without any input)
   void StrikeNew() { strike_req = strike_new = true; }  // a key played: the new notes struck at once, MORPH or not
   void Reset() {
     for (auto& v : vc) v = Voice{};
