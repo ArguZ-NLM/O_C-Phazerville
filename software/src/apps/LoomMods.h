@@ -810,8 +810,10 @@ FLASHMEM void ClockDevice::DrawMini(int x, int y, int w, int h) {
 // across the map, blending its four nearest patterns; LOW / MID / HIGH set
 // how many of each part's steps sound (their L knob: how many steps the
 // part has, 1-32, so they can run against each other), CHAOS changes
-// them at random, new each run through: below 0 it leaves steps that
-// sound out, above 0 it fills in steps the way a drummer would; PLAY: forwards, backwards, back and
+// them as a drummer would, a variation held two run throughs: below 0
+// it thins the groove out, above 0 it plays round it (pickups, ghost
+// notes, a fill at the end of every other run through); its L knob
+// swings the off steps; PLAY: forwards, backwards, back and
 // forth, or a drunken walk. Six outputs: the three parts (each hit a short pulse,
 // all full height), then each part's
 // accents alone. Its own box sends one; the other boxes can take the rest.
@@ -825,7 +827,7 @@ PROGMEM static const DeviceDef TREADLE_DEF = {
     {"PLAY", 0, 3, 0, LIST, 4, 0, 0, {"FWD", "REV", "PING", "DRUNK"}},
     {"X", 0, 100, 50, UNI},
     {"Y", 0, 100, 50, UNI},
-    {"CHAOS", -32, 32, 0, BI},  // (-: that share of the steps that sound left out, the weakest first; +: that share of them added)
+    {"CHAOS", -32, 32, 0, BI, 0, 13, 0},  // (-: thins out, +: plays round the groove; mode: the swing, SW50-SW74)
     {"RATE", 0, 100, 74, UNI, 0, 2, 1, {}, {"FREE", "CLOCK"}},  // a step; on the clock (74: 1/16)
   },
   {"FILL", "MAP"}
@@ -847,12 +849,13 @@ public:
     static const char names[OUTS][6] = {"LOW", "MID", "HIGH", "ACC.L", "ACC.M", "ACC.H"};
     snprintf(buf, n, "%s", names[constrain(k, 0, OUTS - 1)]);
   }
-  float OutVal(int k) const override { return k >= 0 && k < OUTS && gate[k] > 0.0f ? lvl[k] : 0.0f; }
+  float OutVal(int k) const override { return k >= 0 && k < OUTS && gate[k] > 0.0f && wait[k] <= 0.0f ? lvl[k] : 0.0f; }
   void FormatMode(int p, char* buf, size_t n) const override {
     if (p >= P_LOW && p <= P_HIGH) snprintf(buf, n, "LEN%d", Len(p - P_LOW));
+    else if (p == P_CHAOS) snprintf(buf, n, "SW%d", Swing());
     else Modulator::FormatMode(p, buf, n);
   }
-  int BarStyle(int p) const override { return p >= P_LOW && p <= P_HIGH ? BAR_LEFT : Modulator::BarStyle(p); }
+  int BarStyle(int p) const override { return (p >= P_LOW && p <= P_HIGH) || p == P_CHAOS ? BAR_LEFT : Modulator::BarStyle(p); }
 private:
   int step = -1;           // steps since the start (-1: none yet)
   int pos[3] = {};         // where each part is
@@ -865,14 +868,18 @@ private:
   float t = 0.0f, step_s = 0.125f;
   uint32_t drop[3] = {};   // CHAOS: the steps each part leaves out this run through
   uint32_t add[3] = {};    // and the ones it adds
-  float gate[OUTS] = {}, lvl[OUTS] = {};
+  uint8_t rounds[3] = {};  // each part's run throughs (a variation holds two)
+  int8_t chaos_was[3] = {};
+  bool fill_on = false;    // the snare's fill this run through (the hi-hat holds off)
+  int fill_from = 0;
+  float gate[OUTS] = {}, lvl[OUTS] = {}, wait[OUTS] = {};  // (wait: swung, the hit comes later)
   int Len(int part) const { return constrain(int(mode[P_LOW + part]) + 1, 1, 32); }
+  int Swing() const { return 50 + 2 * constrain(int(mode[P_CHAOS]), 0, 12); }  // % of two steps the first takes
   int Level(int part, int s) const;  // the map's strength of a part's step s, with CHAOS (0..255)
   bool Hits(int part, int lv) const { return lv > 255 - cur[P_LOW + part] * 255 / 100; }
   void Restart() { grid_base = grid_at >= 0 ? grid_at + 1 : 0; step = -1; t = 0.0f; }
   void Advance(int s);
-  int FillScore(int part, int s, int len) const;
-  void Fill(int part, int len, int ch);
+  void Groove(int part, int len, int ch);
   void Thin(int part, int len, int ch);
 };
 
@@ -887,61 +894,63 @@ FLASHMEM int TreadleMod::Level(int part, int s) const {
   return (cd * qy + ab * (255 - qy)) >> 8;
 }
 
-// how much a drummer would play a part's silent step s (more: sooner).
-// The beat first, then the eighths, then the sixteenths, and the map's
-// own leaning; the kick (LOW) leans into its own hits (the eighth and
-// the sixteenth before them) and stays off the snare's and the backbeat;
-// the snare (MID) takes the backbeat, plays ghost notes round its hits
-// and rolls into the end of the part;
-// the hi-hat (HIGH) fills the eighths, then the sixteenths
-FLASHMEM int TreadleMod::FillScore(int part, int s, int len) const {
-  auto on = [&](int pt, int k) { return Hits(pt, Level(pt, ((k % len) + len) % len)); };
-  const int b = s & 15;
-  int sc = (b & 7) == 0 ? 100 : (b & 3) == 0 ? 80 : (b & 1) == 0 ? 55 : 30;
-  sc += Level(part, s) / 4;
-  switch (part) {
-    case 0:  // kick
-      if (on(0, s + 2) && (s & 1) == 0) sc += 40;
-      if (on(0, s + 1)) sc += 25;
-      if (on(1, s)) sc -= 90;
-      if ((b & 7) == 4) sc -= 50;  // (the backbeat is the snare's)
-      break;
-    case 1:  // snare
-      if (on(1, s - 1) || on(1, s + 1)) sc += 35;
-      if (s >= len - 8) sc += 10 + (s - (len - 8)) * 8;
-      if (on(0, s) && (b & 3) == 0) sc -= 60;
-      sc += (b & 7) == 4 ? 40 : (b & 7) == 0 ? -40 : 0;  // the backbeat, not the one
-      sc -= (b & 1) == 0 ? 0 : 10;
-      break;
-    default:  // hi-hat
-      sc += (s & 1) == 0 ? 50 : 0;
-  }
-  return sc;
-}
-
-// CHAOS above 0: adds steps, as many as that share of the steps the part
-// plays (as many again at 32: the fill sets how busy, CHAOS only varies
-// it; no steps, nothing added), the ones a drummer would play first,
-// with a little chance in which, so each run through differs
-FLASHMEM void TreadleMod::Fill(int part, int len, int ch) {
-  int sc[32], idx[32], n = 0, hits = 0;
-  for (int k = 0; k < len; k++)
-    if (Hits(part, Level(part, k))) hits++;
-    else { idx[n] = k; sc[n++] = FillScore(part, k, len) + int(random(50)); }
-  const int want = (hits * ch + 16) / 32;
-  for (int i = 0; i < want && i < n; i++) {
-    int best = i;
-    for (int j = i + 1; j < n; j++) if (sc[j] > sc[best]) best = j;
-    std::swap(sc[i], sc[best]);
-    std::swap(idx[i], idx[best]);
-    add[part] |= 1u << idx[i];
+// CHAOS above 0: what a drummer plays round a groove, in the figures
+// they play, as many steps as that share of the ones the part plays (as
+// many again at 32: the fill sets how busy, CHAOS only varies it; no
+// steps, nothing added), round a beat picked at random:
+//   kick (LOW): the pickup into one of its hits, the push on the "and",
+//     a double into its next hit, the "ba-dum" after one; never on the
+//     snare's hits
+//   snare (MID): a ghost note before or after its hit, a drag (two)
+//     into it; between its hits, ghost notes on the "e" and the "a"
+//   hi-hat (HIGH): the "and", an "and-a" pair, the skip on the "a", a
+//     run of three sixteenths
+FLASHMEM void TreadleMod::Groove(int part, int len, int ch) {
+  auto at = [&](int k) { return ((k % len) + len) % len; };
+  auto on = [&](int pt, int k) { return Hits(pt, Level(pt, at(k))); };
+  int hits = 0;
+  for (int k = 0; k < len; k++) if (on(part, k)) hits++;
+  int budget = (hits * ch + 16) / 32;
+  const int beats = std::max(1, len / 4);
+  for (int tries = 0; budget > 0 && tries < 32; tries++) {
+    const int bt = int(random(beats)) * 4, f = int(random(4));
+    int k[3], n = 0;
+    switch (part) {
+      case 0:
+        if (f == 0 && on(0, bt)) k[n++] = bt - 1;
+        else if (f == 1) k[n++] = bt + 2;
+        else if (f == 2 && on(0, bt + 4)) { k[n++] = bt + 2; k[n++] = bt + 3; }
+        else if (f == 3 && on(0, bt)) k[n++] = bt + 1;
+        break;
+      case 1:
+        if (on(1, bt)) {
+          if (f == 0) k[n++] = bt - 1;
+          else if (f == 1) { k[n++] = bt - 2; k[n++] = bt - 1; }
+          else k[n++] = bt + (f == 2 ? 1 : 3);
+        } else if (f >= 2) {
+          k[n++] = bt + 1;
+          if (f == 3) k[n++] = bt + 3;
+        }
+        break;
+      default:
+        if (f == 0) k[n++] = bt + 2;
+        else if (f == 1) { k[n++] = bt + 2; k[n++] = bt + 3; }
+        else if (f == 2) k[n++] = bt + 3;
+        else { k[n++] = bt + 1; k[n++] = bt + 2; k[n++] = bt + 3; }
+    }
+    bool ok = n > 0;
+    for (int i = 0; i < n && ok; i++)
+      ok = !on(part, k[i]) && !(add[part] >> at(k[i]) & 1) && !(part == 0 && on(1, k[i]));
+    if (!ok) continue;
+    for (int i = 0; i < n; i++) add[part] |= 1u << at(k[i]);
+    budget -= n;
   }
 }
 
 // CHAOS below 0: leaves out that share of the steps the part plays (all
 // at -32), the least needed first: the sixteenths in between, then the
 // eighths, then the beats, the one last; accents, and the snare's
-// backbeat, hold on longer. A little chance in which, as Fill
+// backbeat, hold on longer. A little chance in which
 FLASHMEM void TreadleMod::Thin(int part, int len, int ch) {
   int sc[32], idx[32], n = 0;
   for (int k = 0; k < len; k++) {
@@ -996,12 +1005,30 @@ FLASHMEM void TreadleMod::Advance(int s) {
       }
     }
     if (!end) continue;
-    // CHAOS, new each run through: below 0 it thins out (Thin), above 0
-    // it fills in (Fill)
-    drop[part] = add[part] = 0;
+    // CHAOS: below 0 it thins out (Thin), above 0 it plays round the
+    // groove (Groove); a variation holds two run throughs (anew at once
+    // when CHAOS turns). At the end of the second, a chance (CHAOS in 32)
+    // of a snare fill in the last beat: all four sixteenths, the "and-a",
+    // the "e-and-a" or the one, "and" and "a"
     const int ch = cur[P_CHAOS];
-    if (ch < 0) Thin(part, len, -ch);
-    if (ch > 0) Fill(part, len, ch);
+    rounds[part]++;
+    if (s == 0 || ch != chaos_was[part] || !(rounds[part] & 1)) {
+      drop[part] = add[part] = 0;
+      if (ch < 0) Thin(part, len, -ch);
+      if (ch > 0) Groove(part, len, ch);
+      chaos_was[part] = int8_t(ch);
+      rounds[part] = 0;
+    }
+    if (part == 1) {
+      fill_on = false;
+      if (ch > 0 && (rounds[1] & 1) && len >= 4 && int(random(32)) < ch) {
+        static const uint8_t FILLS[4] = {0b1111, 0b1100, 0b1110, 0b1101};  // (bit 0: the beat's first step)
+        const int f = FILLS[random(4)];
+        fill_from = len - 4;
+        for (int i = 0; i < 4; i++) if (f >> i & 1) add[1] |= 1u << (fill_from + i);
+        fill_on = true;
+      }
+    }
     const int was = play_now[part];
     play_now[part] = uint8_t(play);
     run[part] = 0;
@@ -1013,7 +1040,10 @@ FLASHMEM void TreadleMod::Advance(int s) {
     }
   }
   const float g = constrain(step_s * 0.25f, 0.005f, 0.03f);
+  // swing: every other step a little late
+  const float late = (s & 1) ? (Swing() - 50) * 0.02f * step_s : 0.0f;
   for (int part = 0; part < 3; part++) {
+    if (part == 2 && fill_on && pos[1] >= fill_from) continue;  // (the snare's fill: the hi-hat holds off)
     const int lv = Level(part, pos[part]);
     const bool hit = Hits(part, lv) && !(drop[part] >> (pos[part] & 31) & 1);
     if (!hit && !(add[part] >> (pos[part] & 31) & 1)) continue;
@@ -1022,7 +1052,8 @@ FLASHMEM void TreadleMod::Advance(int s) {
     const bool acc = hit && lv > 192;
     gate[part] = g;
     lvl[part] = 1.0f;
-    if (acc) { gate[3 + part] = g; lvl[3 + part] = 1.0f; }
+    wait[part] = late;
+    if (acc) { gate[3 + part] = g; lvl[3 + part] = 1.0f; wait[3 + part] = late; }
     if (part == own_out % 3) flash = 0.06f;
   }
 }
@@ -1030,7 +1061,10 @@ FLASHMEM void TreadleMod::Advance(int s) {
 FLASHMEM void TreadleMod::Tick(const ModCtx& ctx) {
   const bool synced = Synced(P_RATE);
   if (Restarted() && synced) { grid_at = -1; grid_base = 0; step = -1; }
-  for (float& g : gate) if (g > 0.0f) g -= ctx.dt;
+  for (int k = 0; k < OUTS; k++) {
+    if (wait[k] > 0.0f) wait[k] -= ctx.dt;
+    else if (gate[k] > 0.0f) gate[k] -= ctx.dt;
+  }
   if (stopped) { for (float& g : gate) g = 0.0f; grid_at = -1; return; }
   if (synced && clock_running) {
     const float db = DivBeats(DivIndex(cur[P_RATE], 0, 100));
