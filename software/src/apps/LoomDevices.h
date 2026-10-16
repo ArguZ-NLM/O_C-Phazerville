@@ -6376,9 +6376,10 @@ PROGMEM static const DeviceDef CHIME_DEF = {
     // on each hit, notes moved up or down by up to this many steps of the
     // scale, at random; mode: how many of the six (1 .. 6)
     {"VARI", 0, 48, 0, UNI, 0, 6, 5},
-    // the scale's key, C .. B; mode: KNOB (this), MIDI (the note played,
-    // any channel), CH1 .. CH16
-    {"KEY", 0, 11, 0, UNI, 0, 18, 0},
+    // the note the bells are on, semitones from C3 (they all move with it);
+    // mode: KNOB (this), MIDI (the note played, any channel), CH1 .. CH16:
+    // the note played, this added to it
+    {"KEY", -24, 24, 0, BI, 0, 18, 0},
     // 7 of 12 notes, then 8 microtonal (see Apply); mode: how the 12-note
     // ones are tuned (the microtonal ones bring their own)
     {"SCALE", 0, 14, 3, UNI, 0, 4, 0, {}, {"EQUAL", "JUST", "PYTH", "MEANT"}},
@@ -6506,7 +6507,7 @@ FLASHMEM void ChimeDevice::Apply(int p) {
                                    590.2f, 611.7f, 702.0f, 792.2f, 813.7f, 884.4f, 905.9f, 996.1f, 1017.6f, 1088.3f, 1109.8f};
   static const float harmonic[8] = {0, 203.91f, 386.31f, 551.32f, 701.96f, 840.53f, 968.83f, 1088.27f};
   AudioEffectChime::Params a;
-  a.root = 48 + (mode[NOTE] ? midi_base % 12 : constrain(int(cur[NOTE]), 0, 11));  // the key: KEY, or the note played
+  a.root = constrain((mode[NOTE] ? int(midi_base) : 48) + int(cur[NOTE]), 12, 108);  // KEY, or the note played and KEY
   a.bells = Bells(constrain(int(cur[ARP]), 1, 6), Way());
   const int sc = constrain(int(cur[SCALE]), 0, SCALES - 1);
   a.steps = 0;
@@ -6554,7 +6555,13 @@ FLASHMEM void ChimeDevice::Format(int p, char* buf, size_t n) const {
   if (p == ARP) { snprintf(buf, n, "%d/6", val[ARP]); return; }  // bells at once
   if (p == ROTA) { snprintf(buf, n, "%d", ((val[ROTA] % rota_w) + rota_w) % rota_w); return; }
   if (p == VARI) { if (val[VARI]) snprintf(buf, n, LOOM_PM "%d", val[VARI]); else snprintf(buf, n, "OFF"); return; }
-  if (p == NOTE) snprintf(buf, n, "%s", names[mode[NOTE] ? midi_base % 12 : constrain(int(val[NOTE]), 0, 11)]);  // KEY
+  if (p == NOTE && mode[NOTE]) {  // KEY on MIDI: the note played, and the offset (E3+2)
+    if (val[NOTE]) snprintf(buf, n, "%s%d%+d", names[midi_base % 12], midi_base / 12 - 1, val[NOTE]);
+    else snprintf(buf, n, "%s%d", names[midi_base % 12], midi_base / 12 - 1);
+  } else if (p == NOTE) {  // the note (D3)
+    const int nt = 48 + val[NOTE];
+    snprintf(buf, n, "%s%d", names[nt % 12], nt / 12 - 1);
+  }
   else if (p == SCALE) snprintf(buf, n, "%s", scales[constrain(int(val[SCALE]), 0, SCALES - 1)]);
   else if (p == DECAY) {
     const float t = Decay(val[DECAY]);
