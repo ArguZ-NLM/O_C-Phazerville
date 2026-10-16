@@ -3621,7 +3621,7 @@ namespace loom {
   // 14: DRAFT in FIBRE's order SPEED SIZE PITCH POS (was PITCH POS SIZE SPEED)
   // 15: DRAFT page 2 DIFF TONE SPRD MIX (was TONE FDBK SPRD MIX, TONE's mode
   //     the diffusion)
-  constexpr uint8_t SAVE_VERSION = 29;  // 21: TREADLE, a 6th modulator type; 22: PICK, a 7th; 23: TREADLE's LEN per part; 24: TREADLE's CHAOS -32..32; 25: TREADLE's pages; 26: STYLE / BEAT for X / Y; 27: TWILL's HITS; 28: TWILL's TONE gone, HITS in its place; 29: TWILL's VARI
+  constexpr uint8_t SAVE_VERSION = 30;  // 21: TREADLE, a 6th modulator type; 22: PICK, a 7th; 23: TREADLE's LEN per part; 24: TREADLE's CHAOS -32..32; 25: TREADLE's pages; 26: STYLE / BEAT for X / Y; 27: TWILL's HITS; 28: TWILL's TONE gone, HITS in its place; 29: TWILL's VARI; 30: TWILL sound / strike pages
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -3729,6 +3729,7 @@ namespace loom {
     const bool chm_tone = use && !memcmp(tag, "CHM", 4) && load_version < 28;
     int old_rot = -1;
     const bool chm_vari = use && !memcmp(tag, "CHM", 4) && load_version < 29;
+    const bool chm_v30 = use && !memcmp(tag, "CHM", 4) && load_version < 30;
     int old_tune = -1;
     int old_len = -1;
     static constexpr int8_t TRD_MAP[8] = {TRD_X, TRD_Y, TRD_LOW, TRD_CHAOS, TRD_RATE, TRD_RESET, TRD_ACCNT, TRD_PLAY};
@@ -3801,7 +3802,11 @@ namespace loom {
       if (chm_vari && p == 4) { old_tune = v; v = int16_t(md); md = 5; amt = amt2 = 0; }
       else if (chm_vari && p == 5) p = 6;
       else if (chm_vari && p == 6) p = 5;
-      if (chm_rot && p == ChimeDevice::ROT) { old_rot = v; v = 0; amt = amt2 = 0; }
+      // before v30: NOTE SPRD DCAY ROT / VARI SCALE HITS WET: now the sound,
+      // then the strike: NOTE SCALE SPRD DCAY / SPOT MOVE VARI WET
+      static constexpr int8_t CHM_V30[8] = {0, 2, 3, 4, 6, 1, 5, 7};
+      if (chm_rot && p == 3) { old_rot = v; v = 0; amt = amt2 = 0; }  // (ROT)
+      if (chm_v30) p = CHM_V30[constrain(p, 0, 7)];
       if (trd_xy && p == TreadleMod::P_STYLE) { old_x = v; v = 0; amt = amt2 = 0; }
       if (trd_xy && p == TreadleMod::P_BEAT) { old_y = v; v = 0; amt = amt2 = 0; }
       if (skip_size && p == 5) { p = q; continue; }
@@ -3840,7 +3845,7 @@ namespace loom {
       p = q;
     }
     if (old_tune >= 0) d->mode[ChimeDevice::SCALE] = uint8_t(constrain(old_tune, 0, 3));
-    if (old_rot >= 0) d->val[ChimeDevice::HITS] = int16_t(constrain(old_rot, 0, 3));
+    if (old_rot >= 0) d->val[ChimeDevice::MOVE] = int16_t(constrain(old_rot, 0, 3));
     if (old_x >= 0)
       d->val[TreadleMod::P_BEAT] = int16_t(((constrain(old_x, 0, 100) + 12) / 25) * 5 + (constrain(old_y, 0, 100) + 12) / 25);
     if (old_len > 0)
