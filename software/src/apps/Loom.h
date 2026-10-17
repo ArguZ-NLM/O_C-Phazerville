@@ -3099,7 +3099,7 @@ FLASHMEM void AppLoom::DrawChain() const {
     gfxPrint(8, 56, col == MIX_COL ? PSTR("CLOTH")
                     : (col == SOURCE || col == RESONATOR || col == SPRAY || col == TEXTURE) && d ? d->def.name : SLOT_DEFS[col].name);
   }
-  // bypass (when on) at the right end; the CPU load always left of its place
+  // bypass (when on) at the right end
   const bool bp = !d || tr.shown_bypassed(col);
   const int right = 128 - 6 * 6 - 6;
   if (bp) {
@@ -3116,15 +3116,8 @@ FLASHMEM void AppLoom::DrawChain() const {
     else snprintf(buf, sizeof(buf), "-%02ddB", -v);  // -08dB: always two digits
     gfxPrint(128 - 6 * int(strlen(buf)), 56, buf);
   }
-  if (!audio_hw()) {
-    gfxPrint(right - 24, 56, PSTR("noIO"));
-  } else {
-    char buf[6];
-    snprintf(buf, sizeof(buf), "%d%%", cpu);
-    const int w = 6 * int(strlen(buf));
-    gfxPrint(right - w, 56, buf);
-    if (lite) gfxInvert(right - w - 2, 55, w + 3, 9);  // LITE: the engines run lighter
-  }
+  // (no CPU % here any more: Sascha's call; noIO still shows)
+  if (!audio_hw()) gfxPrint(right - 24, 56, PSTR("noIO"));
   // a SPOOL loop would go (see the SOURCE turn): asked over the whole line,
   // with where to
   if (Asking()) {
