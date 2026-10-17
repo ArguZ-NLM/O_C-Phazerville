@@ -4444,8 +4444,9 @@ private:
   // the soft clip and WALL's filter keep it from running away)
   float FbGain() const { return 1.0f - powf(1.0f - constrain(cur[FEEDBACK], 0, 100) * 0.01f, 1.6f); }
   // what one round really keeps, for the picture: the loop gain and about
-  // what WALL's filter takes away on each pass (a rough figure, ~1 dB)
-  float FbRound() const { return FbGain() * 0.89f; }
+  // what WALL's filter takes away on each pass (a rough figure: it only
+  // cuts the far highs and lows, ~0.3 dB of a full sound)
+  float FbRound() const { return FbGain() * 0.97f; }
 
   void SetTimes();
   void Poll();
@@ -4631,25 +4632,17 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
   const int base = y + h - 1;
   gfxDottedLine(x, base, x + w - 1, base, 2);
   if (view_page == 0) {
-    // page 1, the delay: one time line, 20 ms at the left edge to 6 s (the
-    // longest delay) at the right, spaced logarithmically, so a short delay
-    // and a long one both have room, and the repeats crowd together towards
-    // the right as they would on a tape. Small ticks on the base line mark
-    // 0.1 s and 1 s.
+    // page 1, the delay: one plain time line, 0 at the left edge to 6 s
+    // (the longest delay) at the right, so the repeats sit evenly apart.
     // Filled bars: the heads that play, as tall as DELAY times their level.
     // With SPRD up an outlined bar shows the right side: on top of the left
-    // one at first, moving out a pixel at a time as SPRD goes up (PHASE:
-    // where the right side's echo really is; PING: as tall as that side plays).
+    // one at first, moving out a pixel at a time as SPRD goes up (PING: as
+    // tall as that side plays).
     // Thin lines further on: the repeats through FDBK, each round lower by
     // the FDBK amount; with SPRD up the right side's repeats dotted next to them.
     {
-      constexpr float T0 = 0.02f;
-      const float lspan = logf(MAX_SECS / T0);
       const int tw = w - 4;
-      auto px = [&](float sec) {
-        return x + int(constrain(logf(std::max(sec, T0) / T0) / lspan, 0.0f, 1.0f) * tw);
-      };
-      for (float tick : {0.1f, 1.0f}) gfxLine(px(tick), base - 2, px(tick), base);
+      auto px = [&](float sec) { return x + int(constrain(sec / MAX_SECS, 0.0f, 1.0f) * tw); };
       if (cur[DELAY] > 0) {
         const int bh = std::max(1, (h - 2) * cur[DELAY] / 100);
         const float period = tap_secs[0][TAPS - 1], period_r = tap_secs[1][TAPS - 1];
@@ -4664,13 +4657,9 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
           return away ? int(h0 * (1.0f - sp)) : h0;
         };
         // how far right of the left side's echo the right side's is drawn:
-        // PHASE where it really is (up to about 9 pixels on this line),
-        // PING and DIFF (same time, other place) the same way, by SPRD
-        auto SideOffset = [&](int t, int round) {
-          if (mode[SPREAD] == PHASE)
-            return std::max(0, px(round * period_r + tap_secs[1][t]) - px(round * period + tap_secs[0][t]));
-          return int(sp * 9.0f + 0.5f);
-        };
+        // by SPRD, 0 to 9 pixels, a pixel at a time (the same for every mode
+        // and every round, so it reads as the stereo width, not a time)
+        auto SideOffset = [&](int, int) { return int(sp * 9.0f + 0.5f); };
         for (int t = 0; t < TAPS; t++) {
           if (!HeadOn(t)) continue;
           const int th = std::max(1, int(bh * HeadGain(t)));
