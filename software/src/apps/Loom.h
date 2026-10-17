@@ -341,6 +341,8 @@ private:
   const loom::Device* dc_dev = nullptr;
   int dc_p = -1;
   int16_t dc_prev = 0;
+  uint8_t dc_prev_mode = 0;
+  bool dc_prev_named = false;
   void DoubleClick(loom::Device* d, int p);
   elapsedMicros mod_timer;
   uint8_t chord_releases = 0; // UP/DOWN releases to swallow after UP+DOWN
@@ -2953,8 +2955,29 @@ FLASHMEM void AppLoom::DoubleClick(loom::Device* d, int p) {
     const bool freeze = focus_mod && !memcmp(d->def.tag, "RND", 4) && p == RandomMod::P_VARI;
     const bool level = !focus_mod && d == tr.mix && p == MixDevice::LEVEL;  // CLOTH's LEVEL: 100, as it comes
     const int16_t target = fade || freeze ? 0 : level ? 100 : pd.def;
-    if (v != target) { dc_dev = d; dc_p = p; dc_prev = v; v = target; }
-    else if (dc_dev == d && dc_p == p) v = dc_prev;  // back to where it was
+    // the mode too, and the upper row back to the setting's name (the L
+    // knob's first stop); again: value, mode and label as they were
+    const uint16_t bit = uint16_t(1u << p);
+    const uint8_t mode_to = d->NameStop(p) ? pd.defmode : d->mode[p];
+    const bool at_default = v == target && d->mode[p] == mode_to && (!d->NameStop(p) || !(d->mode_named & bit));
+    if (!at_default) {
+      dc_dev = d; dc_p = p; dc_prev = v; dc_prev_mode = d->mode[p]; dc_prev_named = d->mode_named & bit;
+      v = target;
+      if (d->NameStop(p)) {
+        const bool mode_changed = d->mode[p] != mode_to;
+        d->mode[p] = mode_to;
+        d->mode_named &= uint16_t(~bit);
+        if (mode_changed) d->Apply(p);
+      }
+    } else if (dc_dev == d && dc_p == p) {  // back to where it was
+      v = dc_prev;
+      if (d->NameStop(p)) {
+        const bool mode_changed = d->mode[p] != dc_prev_mode;
+        d->mode[p] = dc_prev_mode;
+        d->mode_named = uint16_t(dc_prev_named ? d->mode_named | bit : d->mode_named & ~bit);
+        if (mode_changed) d->Apply(p);
+      }
+    }
     else return;
   }
   if (src && d == tr.player && (p == PlayerDevice::START || p == PlayerDevice::END))

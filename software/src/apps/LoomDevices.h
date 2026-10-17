@@ -522,6 +522,7 @@ FLASHMEM void Device::Defaults() {
     mod_in[p].SetInput(p); // setting n listens to CV n by default
   }
   mod_bi = mod_bi2 = 0;
+  mode_named = 0;  // every upper row back to its name
 }
 
 FLASHMEM int Device::Modulated(int p) const {
