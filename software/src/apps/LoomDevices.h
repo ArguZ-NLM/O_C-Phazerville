@@ -4319,9 +4319,8 @@ PROGMEM static const DeviceDef ECHO_DEF = {
     // page 1: the delay, page 2: the reverb and TONE
     {"LEVEL", 0, 100, 40, UNI, 0, 2, 1, {}, {"MIX", "SEND"}},  // the delay's; mode: crossfade / added (SEND first)
     {"TIME", 20, 6000, 450, UNI, 0, 2, 0, {}, {"FREE", "CLOCK"}},
-    // mode: how many playback heads: 1HEAD, one echo at TIME (a plain
-    // delay); 2HEAD, a second, quieter one half way, at TIME / 2
-    {"FDBK", 0, 100, 45, UNI, 0, 2, 0, {}, {"1HEAD", "2HEAD"}},
+    // mode: the playback heads, one of HEAD_PATTERNS (named there)
+    {"FDBK", 0, 100, 45, UNI, 0, 13, 0},
     {"SPRD", 0, 100, 40, UNI, 0, 3, 1, {}, {"PHASE", "PING", "DIFF"}},
     // the reverb, after the Tegeler Raummaschine: mix, pre-delay, room
     // (size and decay together), walls (soft: dark and dense .. hard:
@@ -4333,6 +4332,33 @@ PROGMEM static const DeviceDef ECHO_DEF = {
   },
   {"DELAY", "REVRB"},
 };
+
+// REPEAT's playback heads, picked with FDBK's L knob. The last head always
+// sits at TIME, at full level, and is the one that feeds back, so the trail
+// repeats every TIME whatever the pattern. Up to three more heads play
+// before it, each at a share of TIME (0 = not there) and a level of its
+// own, a little quieter, so the echo at TIME stays the main one.
+struct HeadPattern {
+  char name[6];
+  float pos[3];   // where, as a share of TIME (0: no head)
+  float gain[3];  // how loud, 0..1
+};
+static const HeadPattern HEAD_PATTERNS[] = {
+  {"ONE",   {},                        {}},                    // a plain delay
+  {"HALF",  {0.5f},                    {0.6f}},                // eighths on a quarter TIME
+  {"DOTTD", {0.75f},                   {0.6f}},                // a dotted eighth, then the quarter
+  {"TRIPL", {0.667f},                  {0.6f}},                // a triplet feel: long, short
+  {"3RDS",  {0.333f, 0.667f},          {0.45f, 0.6f}},         // even triplets
+  {"QUART", {0.25f, 0.5f, 0.75f},      {0.35f, 0.45f, 0.6f}},  // even sixteenths
+  {"TAPE",  {0.34f, 0.63f},            {0.5f, 0.65f}},         // three heads a little uneven, like an old tape echo
+  {"GOLD",  {0.382f, 0.618f},          {0.5f, 0.6f}},          // the golden section: never quite on the grid
+  {"CLAVE", {0.375f, 0.75f},           {0.55f, 0.65f}},        // 3 + 3 + 2, the tresillo
+  {"QUINT", {0.4f, 0.8f},              {0.5f, 0.65f}},         // quintuplet steps
+  {"SLAP",  {0.125f},                  {0.7f}},                // a slapback just after the sound, then the echo
+  {"FLAM",  {0.9f},                    {0.5f}},                // the echo doubled, a flam
+  {"OPEN",  {0.125f, 0.25f, 0.5f},     {0.4f, 0.5f, 0.6f}},    // the gaps open up: each twice the last
+};
+constexpr int HEAD_N = sizeof(HEAD_PATTERNS) / sizeof(HEAD_PATTERNS[0]);
 
 class EchoDevice : public Device {
 public:
@@ -4406,15 +4432,13 @@ private:
   bool mem_ok = false;
   float tap_secs[2][TAPS] = {};
   Meter tap_m[2][TAPS], tail_m;
-  // The playback heads. The engine has four; REPEAT plays one or two:
-  // the last head always sits at TIME and is the one that feeds back, so
-  // the echoes repeat every TIME. FDBK's mode 2HEAD adds head 2 half way,
-  // a little quieter, so a quarter-note TIME also plays the eighth between.
-  // The other heads stay silent (the engine doesn't even read them).
-  static constexpr int HALF_HEAD = TAPS - 2;
-  static constexpr float HALF_GAIN = 0.6f;
-  bool HeadOn(int t) const { return t == TAPS - 1 || (t == HALF_HEAD && mode[FEEDBACK] == 1); }
-  float HeadGain(int t) const { return t == TAPS - 1 ? 1.0f : HeadOn(t) ? HALF_GAIN : 0.0f; }
+  // The playback heads (see HEAD_PATTERNS): the engine has four, the last
+  // at TIME; the pattern on FDBK's L knob says which of the others play,
+  // where and how loud. The silent ones aren't even read.
+  const HeadPattern& Heads() const { return HEAD_PATTERNS[constrain(int(mode[FEEDBACK]), 0, HEAD_N - 1)]; }
+  bool HeadOn(int t) const { return t == TAPS - 1 || (t < TAPS - 1 && Heads().pos[t] > 0.0f); }
+  float HeadPos(int t) const { return HeadOn(t) && t < TAPS - 1 ? Heads().pos[t] : 1.0f; }
+  float HeadGain(int t) const { return t == TAPS - 1 ? 1.0f : HeadOn(t) ? Heads().gain[t] : 0.0f; }
 
   void SetTimes();
   void Poll();
@@ -4460,11 +4484,12 @@ FLASHMEM void EchoDevice::CpuMax(float parts[2]) {
 FLASHMEM void EchoDevice::SetTimes() {
   const float secs = mode[TIME] == SYNC_FREE ? cur[TIME] * 0.001f
     : DivSeconds(NUM_DIVS - 1 - DivIndex(cur[TIME], 20, 6000));  // (the longest at the top)
-  const float phase = mode[SPREAD] == PHASE ? 1.0f + 0.3f * cur[SPREAD] * 0.01f : 1.0f;
+  // PHASE: the right side's heads up to half as late again (a wide stereo echo)
+  const float phase = mode[SPREAD] == PHASE ? 1.0f + 0.5f * cur[SPREAD] * 0.01f : 1.0f;
   for (int c = 0; c < 2; c++) {
     for (int t = 0; t < TAPS; t++) {
-      // the half-way head at TIME / 2; the silent ones simply at TIME too
-      float s = secs * (t == HALF_HEAD ? 0.5f : 1.0f) * (c ? phase : 1.0f);
+      // each head at its share of TIME (the silent ones simply at TIME)
+      float s = secs * HeadPos(t) * (c ? phase : 1.0f);
       s = std::min(s, MAX_SECS - 0.01f);
       tap_secs[c][t] = s;
       echo.tap(c, t, int(s * AUDIO_SAMPLE_RATE_EXACT));
@@ -4519,7 +4544,7 @@ FLASHMEM void EchoDevice::Apply(int p) {
       Shimmer();
       break;
     case ROOM:     echo.size(v); echo.decay(DecaySecs()); Shimmer(); break;
-    case FEEDBACK: echo.feedback(v); SetTimes(); break;  // (its mode: one head or two)
+    case FEEDBACK: echo.feedback(v); SetTimes(); break;  // (its mode: the head pattern)
     case SPREAD:
       echo.pingpong(mode[SPREAD] == PING ? v : 0.0f);
       echo.diffuse(mode[SPREAD] == DIFFUSE ? v : 0.0f);
@@ -4561,6 +4586,7 @@ FLASHMEM void EchoDevice::Format(int p, char* buf, size_t n) const {
 FLASHMEM void EchoDevice::FormatMode(int p, char* buf, size_t n) const {
   if (p == WALL) snprintf(buf, n, "%s", GLINTS[constrain(int(mode[WALL]), 0, GLINT_N - 1)].name);
   else if (p == ROOM) snprintf(buf, n, mode[ROOM] ? "%d" : "off", mode[ROOM] * 5);
+  else if (p == FEEDBACK) snprintf(buf, n, "%s", Heads().name);
   else Device::FormatMode(p, buf, n);
 }
 
@@ -4595,66 +4621,85 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
   const int base = y + h - 1;
   gfxDottedLine(x, base, x + w - 1, base, 2);
   if (view_page == 0) {
-    // page 1, the delay: a time line from the left edge, zoomed to the
-    // delay: the shortest of 0.25, 0.5, 1, 2, 3 or 6 s that shows about five
-    // echoes (named top right), so short and long delays both read clearly. Filled bars: the heads that play (one, or two with
-    // 2HEAD, the half-way one lower as it is quieter), as tall as DELAY;
-    // with SPRD up an outlined bar next to each shows the right side.
-    // Thin lines further on: the repeats through FDBK, each round shorter
-    // by the FDBK amount; with SPRD up the right side's repeats next to them.
-    if (cur[DELAY] > 0) {
-      const int bh = std::max(1, (h - 2) * cur[DELAY] / 100);
-      const int tw = w - 8;
-      const float period = tap_secs[0][TAPS - 1], period_r = tap_secs[1][TAPS - 1];
-      static const float SPANS[] = {0.25f, 0.5f, 1.0f, 2.0f, 3.0f, MAX_SECS};
-      float span = MAX_SECS;
-      for (float sp : SPANS) if (sp >= 5.0f * std::max(period, period_r)) { span = sp; break; }
-      auto px = [&](float sec) { return x + int(constrain(sec / span, 0.0f, 1.0f) * tw); };
-      {
-        char lb[8];
-        if (span < 1.0f) snprintf(lb, sizeof(lb), "%dms", int(span * 1000.0f + 0.5f));
-        else snprintf(lb, sizeof(lb), "%ds", int(span + 0.5f));
-        gfxPrint(x + w - 1 - int(strlen(lb)) * 6, y + 1, lb);
-      }
-      const float fb = std::min(1.0f, cur[FEEDBACK] * 0.01f);
-      // PING: the repeats bounce - each round mostly on one side, the
-      // other side down by SPRD (left on the even rounds, right on the odd)
-      const bool ping = mode[SPREAD] == PING && cur[SPREAD] > 0;
-      const float pv = ping ? cur[SPREAD] * 0.01f : 0.0f;
-      auto side_h = [&](int h0, int round, bool right) {
-        if (!ping) return h0;
-        const bool away = ((round & 1) != 0) != right;  // not this round's side
-        return away ? int(h0 * (1.0f - pv)) : h0;
+    // page 1, the delay: one time line, 20 ms at the left edge to 6 s (the
+    // longest delay) at the right, spaced logarithmically, so a short delay
+    // and a long one both have room, and the repeats crowd together towards
+    // the right as they would on a tape. Small ticks on the base line mark
+    // 0.1 s and 1 s.
+    // Filled bars: the heads that play, as tall as DELAY times their level.
+    // With SPRD up each one opens into a soft wedge of dots to the right,
+    // wider with more SPRD: PHASE ends it in an outlined bar where the right
+    // side's echo is, PING in a bar as tall as the other side plays, DIFF
+    // lets it fade out like a smear.
+    // Thin lines further on: the repeats through FDBK, each round lower by
+    // the FDBK amount; with SPRD up the right side's repeats dotted next to them.
+    {
+      constexpr float T0 = 0.02f;
+      const float lspan = logf(MAX_SECS / T0);
+      const int tw = w - 4;
+      auto px = [&](float sec) {
+        return x + int(constrain(logf(std::max(sec, T0) / T0) / lspan, 0.0f, 1.0f) * tw);
       };
-      for (int t = 0; t < TAPS; t++) {
-        if (!HeadOn(t)) continue;
-        const int th = std::max(1, int(bh * HeadGain(t)));
-        const int lx = px(tap_secs[0][t]);
-        gfxRect(lx, base - th, 2, th);
-        const int hr = side_h(th, 0, true);
-        if (cur[SPREAD] > 0 && hr > 0) gfxFrame(std::max(lx + 3, px(tap_secs[1][t])), base - hr, 2, hr);
-      }
-      // repeats: the whole pattern again after each period
-      float g = fb;
-      for (int round = 1; round < 16 && period > 0.0f; round++, g *= fb) {
-        if (int(bh * g) < 1) break;
-        bool any = false;
+      for (float tick : {0.1f, 1.0f}) gfxLine(px(tick), base - 2, px(tick), base);
+      if (cur[DELAY] > 0) {
+        const int bh = std::max(1, (h - 2) * cur[DELAY] / 100);
+        const float period = tap_secs[0][TAPS - 1], period_r = tap_secs[1][TAPS - 1];
+        const float fb = std::min(1.0f, cur[FEEDBACK] * 0.01f);
+        const float sp = cur[SPREAD] * 0.01f;
+        // PING: the repeats bounce - each round mostly on one side, the
+        // other side down by SPRD (left on the even rounds, right on the odd)
+        const bool ping = mode[SPREAD] == PING && sp > 0.0f;
+        const bool diff = mode[SPREAD] == DIFFUSE;
+        auto side_h = [&](int h0, int round, bool right) {
+          if (!ping) return h0;
+          const bool away = ((round & 1) != 0) != right;  // not this round's side
+          return away ? int(h0 * (1.0f - sp)) : h0;
+        };
         for (int t = 0; t < TAPS; t++) {
           if (!HeadOn(t)) continue;
-          const int rh = int(bh * g * HeadGain(t));
-          if (rh < 1) continue;
-          const float sec = round * period + tap_secs[0][t];
-          if (sec > span) break;
-          const int lx = px(sec);
-          const int hl = side_h(rh, round, false), hr = side_h(rh, round, true);
-          if (hl > 0) gfxLine(lx, base - hl + 1, lx, base);
-          if (cur[SPREAD] > 0 && hr > 0) {
-            const int rx = std::max(lx + 2, px(round * period_r + tap_secs[1][t]));
-            gfxDottedLine(rx, base - hr + 1, rx, base, 2);
+          const int th = std::max(1, int(bh * HeadGain(t)));
+          const int lx = px(tap_secs[0][t]);
+          gfxRect(lx, base - th, 2, th);
+          if (sp <= 0.0f) continue;
+          // the wedge: at least SPRD's share of 16 pixels, or out to where
+          // the right side's echo really is (PHASE)
+          const int hr = diff ? 0 : side_h(th, 0, true);
+          const int wv = std::max(px(tap_secs[1][t]) - lx, 3 + int(sp * 16.0f));
+          for (int i = 2; i < wv; i++) {
+            const float f = float(i) / wv;
+            // a smooth slope from this echo's height to the right side's
+            const float e = f * f * (3.0f - 2.0f * f);
+            const int hh = int(th + (hr - th) * e + 0.5f);
+            const int cx = lx + i;
+            if (cx >= x + w || hh < 1) continue;
+            gfxPixel(cx, base - hh + 1);  // the edge, solid
+            for (int yy = base - hh + 2; yy <= base; yy++)
+              if (((cx + yy) & 1) == 0) gfxPixel(cx, yy);  // the fill, dotted
           }
-          any = true;
+          if (!diff && hr > 0 && lx + wv < x + w - 1) gfxFrame(lx + wv, base - hr, 2, hr);
         }
-        if (!any) break;
+        // repeats: the whole pattern again after each period
+        float g = fb;
+        for (int round = 1; round < 24 && period > 0.0f; round++, g *= fb) {
+          if (int(bh * g) < 1) break;
+          bool any = false;
+          for (int t = 0; t < TAPS; t++) {
+            if (!HeadOn(t)) continue;
+            const int rh = int(bh * g * HeadGain(t));
+            if (rh < 1) continue;
+            const float sec = round * period + tap_secs[0][t];
+            if (sec > MAX_SECS) break;
+            const int lx = px(sec);
+            const int hl = side_h(rh, round, false), hr = side_h(rh, round, true);
+            if (hl > 0) gfxLine(lx, base - hl + 1, lx, base);
+            if (sp > 0.0f && hr > 0) {
+              const int rx = std::max(lx + 2, px(round * period_r + tap_secs[1][t]));
+              if (rx < x + w) gfxDottedLine(rx, base - hr + 1, rx, base, 2);
+            }
+            any = true;
+          }
+          if (!any) break;
+        }
       }
     }
   } else {
