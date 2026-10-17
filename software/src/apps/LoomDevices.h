@@ -4627,10 +4627,9 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
     // the right as they would on a tape. Small ticks on the base line mark
     // 0.1 s and 1 s.
     // Filled bars: the heads that play, as tall as DELAY times their level.
-    // With SPRD up each one opens into a soft wedge of dots to the right,
-    // wider with more SPRD: PHASE ends it in an outlined bar where the right
-    // side's echo is, PING in a bar as tall as the other side plays, DIFF
-    // lets it fade out like a smear.
+    // With SPRD up an outlined bar shows the right side: on top of the left
+    // one at first, moving out a pixel at a time as SPRD goes up (PHASE:
+    // where the right side's echo really is; PING: as tall as that side plays).
     // Thin lines further on: the repeats through FDBK, each round lower by
     // the FDBK amount; with SPRD up the right side's repeats dotted next to them.
     {
@@ -4649,11 +4648,18 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
         // PING: the repeats bounce - each round mostly on one side, the
         // other side down by SPRD (left on the even rounds, right on the odd)
         const bool ping = mode[SPREAD] == PING && sp > 0.0f;
-        const bool diff = mode[SPREAD] == DIFFUSE;
         auto side_h = [&](int h0, int round, bool right) {
           if (!ping) return h0;
           const bool away = ((round & 1) != 0) != right;  // not this round's side
           return away ? int(h0 * (1.0f - sp)) : h0;
+        };
+        // how far right of the left side's echo the right side's is drawn:
+        // PHASE where it really is (up to about 9 pixels on this line),
+        // PING and DIFF (same time, other place) the same way, by SPRD
+        auto SideOffset = [&](int t, int round) {
+          if (mode[SPREAD] == PHASE)
+            return std::max(0, px(round * period_r + tap_secs[1][t]) - px(round * period + tap_secs[0][t]));
+          return int(sp * 9.0f + 0.5f);
         };
         for (int t = 0; t < TAPS; t++) {
           if (!HeadOn(t)) continue;
@@ -4661,22 +4667,10 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
           const int lx = px(tap_secs[0][t]);
           gfxRect(lx, base - th, 2, th);
           if (sp <= 0.0f) continue;
-          // the wedge: at least SPRD's share of 16 pixels, or out to where
-          // the right side's echo really is (PHASE)
-          const int hr = diff ? 0 : side_h(th, 0, true);
-          const int wv = std::max(px(tap_secs[1][t]) - lx, 3 + int(sp * 16.0f));
-          for (int i = 2; i < wv; i++) {
-            const float f = float(i) / wv;
-            // a smooth slope from this echo's height to the right side's
-            const float e = f * f * (3.0f - 2.0f * f);
-            const int hh = int(th + (hr - th) * e + 0.5f);
-            const int cx = lx + i;
-            if (cx >= x + w || hh < 1) continue;
-            gfxPixel(cx, base - hh + 1);  // the edge, solid
-            for (int yy = base - hh + 2; yy <= base; yy++)
-              if (((cx + yy) & 1) == 0) gfxPixel(cx, yy);  // the fill, dotted
-          }
-          if (!diff && hr > 0 && lx + wv < x + w - 1) gfxFrame(lx + wv, base - hr, 2, hr);
+          // the right side: an outlined bar that sits on the left one at
+          // SPRD 0 and moves out a pixel at a time as SPRD goes up
+          const int hr = side_h(th, 0, true);
+          if (hr > 0) gfxFrame(lx + SideOffset(t, 0), base - hr, 2, hr);
         }
         // repeats: the whole pattern again after each period
         float g = fb;
@@ -4693,7 +4687,7 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
             const int hl = side_h(rh, round, false), hr = side_h(rh, round, true);
             if (hl > 0) gfxLine(lx, base - hl + 1, lx, base);
             if (sp > 0.0f && hr > 0) {
-              const int rx = std::max(lx + 2, px(round * period_r + tap_secs[1][t]));
+              const int rx = lx + SideOffset(t, round);
               if (rx < x + w) gfxDottedLine(rx, base - hr + 1, rx, base, 2);
             }
             any = true;
