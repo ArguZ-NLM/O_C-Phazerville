@@ -92,6 +92,7 @@ public:
     sh_hp2[0] = sh_hp2[1] = 0.0f;
     for (auto& t : sh_tail) for (auto& v : t) v = 0.0f;
     sh_lp[0] = sh_lp[1] = sh_dc[0] = sh_dc[1] = sh_env = 0.0f;
+    sh_up[0] = sh_up[1] = -1;
     for (auto b : dbuf) if (b) memset(b, 0, dlen * sizeof(int16_t));
     for (auto& i : ix) i = 0;
     for (int c = 0; c < 2; c++) lp_z[c] = hp_z[c] = 0.0f;
@@ -235,12 +236,23 @@ private:
   float rv_lp[RL] = {};
   float rv_hi = 1.0f;       // lines 4..7's share: 1 = all 8 lines, 0 = 4 (lite)
   float rv_t[2] = {};  // half rate: the last step's tail
-  // SHIMMER: a pitch shifter at half the rate (two read heads crossfading
-  // over a WIN window, per voice), fed with the last block's tail
-  static constexpr int SH_LEN = 2048, SH_WIN = 1536;
+  // SHIMMER: a pitch shifter at half the rate, fed with the last block's
+  // tail. Per side two read heads play the tail faster (up) or slower
+  // (down) than it was written; each plays a grain of about SH_WIN samples,
+  // fading in and out (sin^2), the two half a grain apart, so one is always
+  // loud while the other jumps back and starts again.
+  // Where a head lands when it starts again matters: on a pure tone (a
+  // TWILL bell) a head landing out of phase with the other one cancels the
+  // tone during the crossfade, about 16 times a second, and the octave turns
+  // into a flat, warbling cluster. So a new grain looks around its landing
+  // place, up to SH_ALIGN samples either way (a whole period down to ~75 Hz),
+  // for the spot that lines up best with what the other head plays now.
+  static constexpr int SH_LEN = 2048, SH_WIN = 1536, SH_ALIGN = 160;
   int16_t* sh = nullptr;       // 2 x SH_LEN: the tail as it came, a ring a side
   int sh_w = 0;
-  float sh_d[2] = {2.0f, 2.0f};  // each voice's delay (its first head), samples
+  float sh_hd[2][2] = {};      // each head's delay behind the writing, samples
+  float sh_hs[2][2] = {};      // where its grain started
+  int8_t sh_up[2] = {-1, -1};  // which way that side shifts (-1: heads not placed yet)
   float sh_tail[2][AUDIO_BLOCK_SAMPLES / 2] = {};
   float sh_lp[2] = {}, sh_dc[2] = {}, sh_hp2[2] = {}, sh_env = 0.0f;
   // the pitched sound waits ~150 ms before it goes back in (as Eventide's
@@ -321,6 +333,26 @@ private:
   }
 
   void ReadTap(int ch, int t, int16_t* out);
+  // a shifter head on side c starting a new grain: the delay in [lo, hi]
+  // whose sound (the 64 samples before it) lines up best with the 64 before
+  // the other head's, plus the other head's fraction, so both read in step
+  float ShPlace(int c, int lo, int hi, float other) const {
+    const int16_t* b = sh + c * SH_LEN;
+    const int ro = sh_w - int(other);
+    int best = (lo + hi) / 2;
+    float bs = -1e30f;
+    for (int dd = lo; dd <= hi; dd++) {
+      const int rn = sh_w - dd;
+      float sc = 0.0f;
+      for (int i = 0; i < 64; i += 2) {
+        int a = rn - i; if (a < 0) a += SH_LEN;
+        int o = ro - i; if (o < 0) o += SH_LEN;
+        sc += float(b[a]) * float(b[o]);
+      }
+      if (sc > bs) { bs = sc; best = dd; }
+    }
+    return float(best) + (other - floorf(other));
+  }
 };
 
 static int16_t rv_pool[2][22868];  // RAM1 (= AudioEffectEcho::RV_TOTAL)
@@ -678,22 +710,42 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
         }
         float o[2] = {0.0f, 0.0f};
         for (int c = 0; c < 2; c++) {  // side c through its own shifter
-          float& d = sh_d[c];
-          d += 1.0f - ra[c];  // up: the heads catch up with the writing
-          if (d < 2.0f) d += SH_WIN;
-          if (d >= 2.0f + SH_WIN) d -= SH_WIN;
+          const float r = ra[c];
+          const int8_t up = r >= 1.0f ? 1 : 0;
+          float* hd = sh_hd[c];
+          float* hs = sh_hs[c];
+          if (sh_up[c] != up) {  // the heads placed afresh: at the start, or the shift turned round
+            sh_up[c] = up;
+            for (int h = 0; h < 2; h++) {
+              hs[h] = up ? 2.0f + SH_WIN : 2.0f;
+              hd[h] = up ? hs[h] - h * (SH_WIN * 0.5f) : hs[h] + h * (SH_WIN * 0.5f);
+            }
+          }
           const int16_t* b = sh + c * SH_LEN;
-          for (int hd = 0; hd < 2; hd++) {
-            float dd = d + hd * (SH_WIN * 0.5f);
-            if (dd >= 2.0f + SH_WIN) dd -= SH_WIN;
-            const float ph = (dd - 2.0f) * (1.0f / SH_WIN);
-            const float wgt = sinf(float(M_PI) * ph);  // the two heads: equal power
-            float rp = float(sh_w) - dd;
+          float acc = 0.0f, wsum = 0.0f;
+          for (int h = 0; h < 2; h++) {
+            hd[h] += 1.0f - r;  // up: the head catches up with the writing; down: falls behind
+            // how far through its grain, 0 .. 1 (up: until it reaches the
+            // writing; down: a grain's length on from where it started)
+            float t = up ? 1.0f - (hd[h] - 2.0f) / (hs[h] - 2.0f) : (hd[h] - hs[h]) * (1.0f / SH_WIN);
+            if (t >= 1.0f) {  // a new grain, in step with the other head
+              hd[h] = up ? ShPlace(c, 2 + SH_WIN - 2 * SH_ALIGN, 2 + SH_WIN, hd[1 - h])
+                         : ShPlace(c, 2, 2 + 2 * SH_ALIGN, hd[1 - h]);
+              hs[h] = hd[h];
+              t = 0.0f;
+            }
+            const float sw = sinf(float(M_PI) * std::max(0.0f, t));
+            const float wgt = sw * sw;
+            float rp = float(sh_w) - hd[h];
             if (rp < 0.0f) rp += SH_LEN;
             const int i0 = int(rp), i1 = i0 + 1 < SH_LEN ? i0 + 1 : 0;
             const float fr = rp - i0;
-            o[c] += wgt * (b[i0] + fr * (b[i1] - b[i0])) * (1.0f / RV_Q);
+            acc += wgt * (b[i0] + fr * (b[i1] - b[i0]));
+            wsum += wgt;
           }
+          // the two heads' weights don't quite add up to 1 once a landing
+          // has moved: divided by their sum, the level stays even
+          o[c] = acc / std::max(wsum, 0.3f) * (1.0f / RV_Q);
         }
         if (++sh_w >= SH_LEN) sh_w = 0;
         if (shd) {  // held back: out what went in dn steps ago
