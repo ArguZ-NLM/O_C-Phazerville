@@ -4384,6 +4384,7 @@ public:
   void Shimmer();  // GLINT to the engine
   const char* AltName(int p) const override { return p == ROOM ? "GLINT" : p == WALL ? "PRSET" : nullptr; }
   int Step(int p, int v, int dir) const override;
+  mutable uint32_t time_turn_ms = 0;  // FREE TIME's last detent: how fast the knob turns
   void Format(int p, char* buf, size_t n) const override;
   void FormatMode(int p, char* buf, size_t n) const override;
   // the LEVELs are named by their mode: SEND or MIX
@@ -4576,7 +4577,15 @@ FLASHMEM void EchoDevice::Apply(int p) {
 FLASHMEM int EchoDevice::Step(int p, int v, int dir) const {
   if (p == TIME && mode[TIME] != SYNC_FREE)
     return DivValue(DivIndex(v, 20, 6000) + dir, 20, 6000);
-  if (p == TIME) return v + dir * std::max(1, v / 32); // ~3% per detent
+  if (p == TIME) {
+    // FREE: about 0.5 % a detent turned slowly (2 ms at 450 ms), and the
+    // quicker the detents come, the bigger: up to x16 spun fast, so a
+    // flick still crosses the range and a slow turn finds the exact time
+    const uint32_t now = millis(), dt = now - time_turn_ms;
+    time_turn_ms = now;
+    const int fast = dt < 25 ? 16 : dt < 45 ? 8 : dt < 70 ? 4 : dt < 110 ? 2 : 1;
+    return v + dir * fast * std::max(1, v / 200);
+  }
   return v + dir;
 }
 
@@ -6760,22 +6769,31 @@ FLASHMEM void ChimeDevice::FormatMode(int p, char* buf, size_t n) const {
   else Device::FormatMode(p, buf, n);
 }
 
-// every resonator as a line at its note (low left, high right, C1 .. C8),
-// as tall as it rings; the six notes as small boxes underneath, filled
-// where the input goes now. The output level on the right.
+// the six notes as small boxes along the bottom (low left, high right,
+// C1 .. C8), filled where the input goes now; every resonator as a line
+// rising from its note's box, as tall as it rings (bold: fed now). One
+// still ringing from earlier notes, with no box under it, is dotted.
+// The output level on the right.
 FLASHMEM void ChimeDevice::DrawViz(int x, int y, int w, int h) {
   fx.ReadViz(viz);
   out_m.Hit(viz.out);
   const int bw = w - 16, base = y + h - 6;
+  int place_x[AudioEffectChime::PLACES];
+  for (int p = 0; p < AudioEffectChime::PLACES; p++)
+    place_x[p] = viz.place_hz[p] > 0.0f ? PitchX(viz.place_hz[p], x, bw) : -100;
   for (int i = 0; i < AudioEffectChime::VOICES; i++) {
     lvl_m[i] = std::max(sqrtf(std::min(1.0f, viz.level[i] * 2.0f)), lvl_m[i] * 0.92f);
     if (viz.hz[i] <= 0.0f) continue;
     const int px = PitchX(viz.hz[i], x, bw);
-    const int lh = int(lvl_m[i] * (h - 8));
-    if (lh > 0) gfxLine(px, base - 1, px, base - 1 - lh);
-    if (viz.fed[i] && lh > 0) gfxLine(px + 1, base - 1, px + 1, base - 1 - lh);  // fed: bold
+    const int lh = int(lvl_m[i] * (h - 6));
+    if (lh <= 0) continue;
+    bool on_box = false;  // a box under it (within a pixel)
+    for (int p = 0; p < AudioEffectChime::PLACES; p++) if (abs(place_x[p] - px) <= 1) on_box = true;
+    const int top = base + 1 - lh;
+    if (!on_box) { gfxDottedLine(px, base + 4, px, top, 2); continue; }
+    gfxLine(px, base + 1, px, top);  // (from the box's top edge up)
+    if (viz.fed[i]) gfxLine(px + 1, base + 1, px + 1, top);  // fed: bold
   }
-  gfxDottedLine(x, base, x + bw - 1, base, 2);
   for (int p = 0; p < AudioEffectChime::PLACES; p++) {
     if (viz.place_hz[p] <= 0.0f) continue;
     const int px = PitchX(viz.place_hz[p], x, bw);
