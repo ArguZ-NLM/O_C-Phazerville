@@ -405,9 +405,11 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectChime::update() {  // (O
 
   // the level control: a held input builds the rings up far past a pluck
   // (the make-up is for plucks), so the sum is turned down smoothly when
-  // its peaks go over ~-3 dB (down within ~1 ms, back up over ~0.3 s);
-  // then a soft limit for what gets past, then dry / wet
-  constexpr float AGC_TARGET = 0.7f;
+  // its peaks go over ~-6 dB (down within ~1 ms, back up over ~0.3 s);
+  // then a soft limit for what gets past, then dry / wet. (At -3 dB the
+  // strikes' overshoot reached full scale, and panned hard on CLOTH the
+  // output limiter had to hold them: -6 leaves that room.)
+  constexpr float AGC_TARGET = 0.5f;
   const float env_fall = 0.9995f, g_down = 0.02f, g_up = 0.00007f;
   const float wet = par.wet;
   float peak_out = 0.0f;
