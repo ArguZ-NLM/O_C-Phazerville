@@ -322,6 +322,17 @@ public:
   // a setting's mode as text; modes past the 4 named ones are shown by the
   // device (e.g. a number)
   virtual void FormatMode(int p, char* buf, size_t n) const;
+  // the unit after a plain number (Device::Format): % for the 0 .. 100 /
+  // 200 and the +-50 / +-100 settings, st for a PITCH in semitones, dB for
+  // the +-12 dB bands; nothing for counts and steps
+  virtual const char* Unit(int p) const {
+    const ParamDef& d = param(p);
+    if (d.kind == UNI && d.min == 0 && (d.max == 100 || d.max == 200)) return "%";
+    if (d.kind == BI && (d.max == 50 || d.max == 100)) return "%";
+    if (d.kind == BI && d.max == 24 && !strcmp(d.name, "PITCH")) return "st";
+    if (d.kind == BI && d.max == 12) return "dB";
+    return "";
+  }
   // the name shown above a setting (some name themselves after their mode)
   // the upper row: a setting with named modes reads its own name (what it
   // is for) until its mode is turned, then the mode it is on (SPEED: FWD /
@@ -331,7 +342,7 @@ public:
     if (d.nmodes && d.nmodes <= 4 && mode[p] < 4 && d.modes[mode[p]][0] && ModeNamed(p)) return d.modes[mode[p]];
     return d.name;
   }
-  bool ModeNamed(int p) const { return mode_named >> p & 1; }
+  bool ModeNamed(int p) const { return true; }  // (now always: the upper row shows the mode; mode_named kept for the files)
   uint16_t mode_named = 0;  // bit per setting: its mode turned (by hand)
   // a setting taken once per event (a grain's PITCH): it follows a
   // modulator's step, not its glide
@@ -720,8 +731,8 @@ FLASHMEM void Device::Format(int p, char* buf, size_t n) const {
   const ParamDef& d = param(p);
   switch (d.kind) {
     case LIST: snprintf(buf, n, "%s", d.labels[constrain(val[p], 0, d.nlabels - 1)]); break;
-    case BI:   snprintf(buf, n, val[p] > 0 ? "+%d" : "%d", val[p]); break;
-    default:   snprintf(buf, n, "%d", val[p]); break;
+    case BI:   snprintf(buf, n, val[p] > 0 ? "+%d%s" : "%d%s", val[p], Unit(p)); break;
+    default:   snprintf(buf, n, "%d%s", val[p], Unit(p)); break;
   }
 }
 
@@ -1424,7 +1435,9 @@ FLASHMEM void MixDevice::Apply(int p) {
 
 // SPLIT shows where the low band ends (the picture above shows both)
 FLASHMEM void MixDevice::Format(int p, char* buf, size_t n) const {
-  if (p == SPLIT) snprintf(buf, n, "%d", int(LO_HZ[constrain(val[SPLIT], 0, 4)]));
+  if (p == SPLIT) snprintf(buf, n, "%dHz", int(LO_HZ[constrain(val[SPLIT], 0, 4)]));
+  else if (p == PAN && !val[PAN]) snprintf(buf, n, "C");  // the middle; L50 .. R50
+  else if (p == PAN) snprintf(buf, n, "%c%d", val[PAN] < 0 ? 'L' : 'R', abs(val[PAN]));
   else if (p >= B_LOW && p <= B_HIGH) snprintf(buf, n, val[p] > 0 ? "+%ddB" : "%ddB", val[p]);
   else Device::Format(p, buf, n);
 }
@@ -1981,9 +1994,9 @@ static void FormatMs(int ms, char* buf, size_t n) {
 // together: 5.04, 12.3, 125
 static void FormatSeconds(uint32_t ms, char* buf, size_t n) {
   const unsigned long s = ms / 1000, r = ms % 1000;
-  if (ms < 10000) snprintf(buf, n, "%lu.%02lu", s, r / 10);
-  else if (ms < 100000) snprintf(buf, n, "%lu.%lu", s, r / 100);
-  else snprintf(buf, n, "%lu", s);
+  if (ms < 10000) snprintf(buf, n, "%lu.%02lus", s, r / 10);
+  else if (ms < 100000) snprintf(buf, n, "%lu.%lus", s, r / 100);
+  else snprintf(buf, n, "%lus", s);
 }
 
 class ReelDevice : public Device {

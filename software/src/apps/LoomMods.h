@@ -724,6 +724,13 @@ public:
   void Action(int a) override { if (a == 0) held = !held; else env = 0.0f; flash = 0.05f; }
   bool ActionLit(int a) const override { return a == 0 && held; }
   void DrawViz(int x, int y, int w, int h) override;
+  // RISE / FALL as times (1 ms .. 1 s, 5 ms .. 3 s; see Tick)
+  void Format(int p, char* buf, size_t n) const override {
+    if (p != P_RISE && p != P_FALL) { Modulator::Format(p, buf, n); return; }
+    const float s = p == P_RISE ? Seconds(val[p], 0.001f, 1.0f) : Seconds(val[p], 0.005f, 3.0f);
+    if (s < 1.0f) snprintf(buf, n, "%dms", int(s * 1000.0f + 0.5f));
+    else snprintf(buf, n, "%d.%ds", int(s), int(s * 10.0f) % 10);
+  }
 private:
   float env = 0.0f;
   float in_hist[HIST] = {};  // the level coming in, alongside hist (the output)

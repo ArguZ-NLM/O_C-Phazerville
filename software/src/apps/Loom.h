@@ -3355,11 +3355,16 @@ FLASHMEM void AppLoom::DrawDevice() const {
       // REDUX, a variation's +-35%, MORPH's time ...), grabbed or not. The
       // number stays below. (A setting whose name says its mode already,
       // SPRD's bells, keeps that name.)
+      // Now always the mode: a setting with modes shows the one it is on
+      // (FREE, ONE, DIFF, a variation's +-35%), never a word for what it
+      // is; only a variation that is off shows the setting's name instead
       const char* alt = d->AltName(p);
-      const bool show_mode = !alt && pd.nmodes && !d->NameIsMode(p)
-        && (d->ModeShown(p) || d->ModeNamed(p) || (sel && ((editing && l_held) || (edit_mode && mode_shown < 1500))));
+      bool show_mode = !alt && pd.nmodes && !d->NameIsMode(p);
       char mb[8];
-      if (show_mode) d->FormatMode(p, mb, sizeof(mb));
+      if (show_mode) {
+        d->FormatMode(p, mb, sizeof(mb));
+        if (!strcasecmp(mb, "OFF") || !strcasecmp(mb, "C off")) show_mode = false;
+      }
       const char* nm = d->AltShown(p) ? alt : show_mode ? mb : d->Name(p);
       PrintCentred(x, 43, nm);
     }
