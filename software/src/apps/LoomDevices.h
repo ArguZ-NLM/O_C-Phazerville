@@ -425,6 +425,9 @@ public:
   // own way (TWILL's SPRD names its bells, REPEAT's levels read SEND or
   // MIX): the upper row keeps that name and never swaps it for the mode
   virtual bool NameIsMode(int p) const { return false; }
+  // its mode only sets the picture (a zoom, a view), no variation of the
+  // sound: the upper row keeps the setting's name (START / END, VIEW)
+  virtual bool ModeIsView(int p) const { return false; }
   // a setting whose mode is a second value of its own (REPEAT: ROOM /
   // GLINT, WALL / PRSET): the L knob switches between the two (the bar's
   // left / right half), the R knob changes the one showing; its name here
@@ -2012,6 +2015,7 @@ public:
     ApplyAll();
   }
   int Step(int p, int v, int dir) const override;
+  bool ModeIsView(int p) const override { return p == START || p == END || p == VIEW; }
   // START / END: a click is already a step of the picture (finer zoomed in)
   int MaxAccel(int p) const override { return p == START || p == END ? 8 : Device::MaxAccel(p); }
   void FormatMode(int p, char* buf, size_t n) const override;
@@ -3162,6 +3166,7 @@ public:
   bool ok() const override { return fx.ready(); }
   void Apply(int p) override;
   int Step(int p, int v, int dir) const override;
+  bool ModeIsView(int p) const override { return p == START || p == END; }
   // START / END: a click is one pixel of the picture at its zoom
   int MaxAccel(int p) const override { return p == START || p == END ? 8 : Device::MaxAccel(p); }
   void Format(int p, char* buf, size_t n) const override;

@@ -3352,7 +3352,7 @@ FLASHMEM void AppLoom::DrawDevice() const {
       // (FREE, ONE, DIFF, a variation's +-35%), never a word for what it
       // is; only a variation that is off shows the setting's name instead
       const char* alt = d->AltName(p);
-      bool show_mode = !alt && pd.nmodes && !d->NameIsMode(p), off = false;
+      bool show_mode = !alt && pd.nmodes && !d->NameIsMode(p) && !d->ModeIsView(p), off = false;
       char mb[8];
       if (show_mode) {
         d->FormatMode(p, mb, sizeof(mb));
