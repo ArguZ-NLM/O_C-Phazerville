@@ -8,7 +8,7 @@
 // Tuned resonators for the Loom CHIME device.
 //
 // Six note places, the notes of a scale SPREAD steps apart from NOTE, even
-// places on the left, odd on the right. A scale is any set of steps in
+// places a little to the left, odd ones a little to the right. A scale is any set of steps in
 // cents (12-note scales in several tunings, or microtonal ones with their
 // own steps and period). The input (L + R) goes into the
 // resonators of the places that are ON: NOTES of them in a row, starting at
@@ -241,8 +241,11 @@ FASTRUN void AudioEffectChime::Assign() {
       Tune(v, hz, place_dec[p]);  // DECAY may have changed
     }
     v.place = p;
-    v.pan_l = (p & 1) ? 0.35f : 1.0f;
-    v.pan_r = (p & 1) ? 1.0f : 0.35f;
+    // even places a little to the left, odd ones a little to the right:
+    // the other side keeps 70 % (about 3 dB), so a chord sounds wide but a
+    // single bell still sits near the middle
+    v.pan_l = (p & 1) ? 0.7f : 1.0f;
+    v.pan_r = (p & 1) ? 1.0f : 0.7f;
     // TONE: the higher places louder (or softer), +-12 dB across
     const float t = (par.tone + hit_tone) * 0.02f;
     v.gain = powf(4.0f, t * (p - 2.5f) / 2.5f);
