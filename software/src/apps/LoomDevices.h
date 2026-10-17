@@ -395,6 +395,16 @@ public:
   virtual bool ListsOnDoubleClick() const { return false; }
   virtual void RestoreMore(const Saved&) {}
   void Nudge(int p, int dir);
+  // the R knob turned: Nudge, in bigger steps the faster the clicks come
+  // (see TurnSpeed); returns the steps taken, to take them back
+  int Turn(int p, int dir);
+  // how many steps one click may take at most when spun fast: a wide
+  // setting (over 150 steps) up to a 50th of its range, others 1 (a list,
+  // note values, files: never skipped)
+  virtual int MaxAccel(int p) const {
+    const ParamDef& d = param(p);
+    return d.kind != LIST && d.max - d.min > 150 ? (d.max - d.min) / 50 : 1;
+  }
   virtual void NudgeMode(int p, int dir);
   // the lowest mode the L knob can pick now (SHUTTLE streaming: no REV)
   virtual int ModeMin(int p) const { return 0; }
@@ -643,6 +653,26 @@ FLASHMEM void Device::Nudge(int p, int dir) {
   val[p] = constrain(v, d.min, d.max);
   last_delta[p] = val[p] - was;  // for a LINKED twin
   Refresh(p);
+}
+
+// how many steps a click takes: from the time since the last click on the
+// same thing (who, p), the same way round. Slow (90 ms and more) one step,
+// quicker ones 2, 4, 8, 16, up to 32 spun fast; never more than cap
+FLASHMEM int TurnSpeed(const void* who, int p, int dir, int cap) {
+  static const void* last_who = nullptr;
+  static int last_p = -1, last_dir = 0;
+  static uint32_t last_ms = 0;
+  const uint32_t now = millis(), dt = now - last_ms;
+  const bool same = last_who == who && last_p == p && (last_dir > 0) == (dir > 0);
+  last_who = who; last_p = p; last_dir = dir; last_ms = now;
+  const int fast = !same ? 1 : dt < 15 ? 32 : dt < 25 ? 16 : dt < 40 ? 8 : dt < 60 ? 4 : dt < 90 ? 2 : 1;
+  return std::max(1, std::min(fast, cap));
+}
+
+FLASHMEM int Device::Turn(int p, int dir) {
+  const int steps = dir * TurnSpeed(this, p, dir, MaxAccel(p));
+  Nudge(p, steps);
+  return steps;
 }
 
 FLASHMEM void Device::NudgeMode(int p, int dir) {
@@ -1969,6 +1999,8 @@ public:
     ApplyAll();
   }
   int Step(int p, int v, int dir) const override;
+  // START / END: a click is already a step of the picture (finer zoomed in)
+  int MaxAccel(int p) const override { return p == START || p == END ? 8 : Device::MaxAccel(p); }
   void FormatMode(int p, char* buf, size_t n) const override;
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
@@ -3117,6 +3149,8 @@ public:
   bool ok() const override { return fx.ready(); }
   void Apply(int p) override;
   int Step(int p, int v, int dir) const override;
+  // START / END: a click is one pixel of the picture at its zoom
+  int MaxAccel(int p) const override { return p == START || p == END ? 8 : Device::MaxAccel(p); }
   void Format(int p, char* buf, size_t n) const override;
   void FormatMode(int p, char* buf, size_t n) const override;
   void Action(int a) override;
@@ -4384,7 +4418,7 @@ public:
   void Shimmer();  // GLINT to the engine
   const char* AltName(int p) const override { return p == ROOM ? "GLINT" : p == WALL ? "PRSET" : nullptr; }
   int Step(int p, int v, int dir) const override;
-  mutable uint32_t time_turn_ms = 0;  // FREE TIME's last detent: how fast the knob turns
+  int MaxAccel(int p) const override { return p == TIME && mode[TIME] != SYNC_FREE ? 1 : Device::MaxAccel(p); }
   void Format(int p, char* buf, size_t n) const override;
   void FormatMode(int p, char* buf, size_t n) const override;
   // the LEVELs are named by their mode: SEND or MIX
@@ -4577,16 +4611,7 @@ FLASHMEM void EchoDevice::Apply(int p) {
 FLASHMEM int EchoDevice::Step(int p, int v, int dir) const {
   if (p == TIME && mode[TIME] != SYNC_FREE)
     return DivValue(DivIndex(v, 20, 6000) + dir, 20, 6000);
-  if (p == TIME) {
-    // FREE: about 0.5 % a detent turned slowly (2 ms at 450 ms), and the
-    // quicker the detents come, the bigger: up to x16 spun fast, so a
-    // flick still crosses the range and a slow turn finds the exact time
-    const uint32_t now = millis(), dt = now - time_turn_ms;
-    time_turn_ms = now;
-    const int fast = dt < 25 ? 16 : dt < 45 ? 8 : dt < 70 ? 4 : dt < 110 ? 2 : 1;
-    return v + dir * fast * std::max(1, v / 200);
-  }
-  return v + dir;
+  return v + dir;  // FREE: 1 ms a click (more spun fast: see Turn)
 }
 
 FLASHMEM void EchoDevice::Format(int p, char* buf, size_t n) const {
@@ -5576,6 +5601,7 @@ private:
   static int DivVal(int i) { return -DivValue(i, 1, 100); }
   float DivBeats() const { return loom::DivBeats(DivOf(cur[RATE])); }
   int Step(int p, int v, int dir) const override;
+  int MaxAccel(int p) const override { return p == RATE && mode[RATE] ? 1 : Device::MaxAccel(p); }  // (on the clock: note values)
   void Clocked() override;
   void TempoChanged() override { Apply(RATE); }
   bool clock_was = false;
@@ -6882,6 +6908,7 @@ public:
   // THRUM: R push on SRC opens the file list
   int FileParam() const override { return Src() == SRC_THRUM ? SRC : -1; }
   int Src() const { return mode[SRC]; }  // where the sound comes from
+  int MaxAccel(int p) const override { return p == 0 ? 1 : Device::MaxAccel(p); }  // SRC: one thrum a click
   int Step(int p, int v, int dir) const override {  // SRC: the thrums in the folder, no further
     if (p != SRC) return v + dir;
     return tcount ? constrain(v + dir, 0, tcount - 1) : v;

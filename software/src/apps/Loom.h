@@ -2628,7 +2628,7 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
       track = idx / COLS;
       col = tracks[track].SlotAt(idx % COLS);
     } else if (col == MIX_COL) {
-      tracks[track].mix->Nudge(MixDevice::LEVEL, dir);
+      tracks[track].mix->Turn(MixDevice::LEVEL, dir);
       Mirror(tracks[track].mix, MixDevice::LEVEL);
     } else if (col == SOURCE) {
       // away from a SPOOL holding a loop: the loop would go. Only asked
@@ -2669,7 +2669,7 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
   }
   if (mod_mode) {
     int8_t& amt = mod_slot ? d->mod_amt2[cursor] : d->mod_amt[cursor];
-    if (!left) amt = constrain(amt + dir, -100, 100);
+    if (!left) amt = constrain(amt + dir * TurnSpeed(&amt, 0, dir, 4), -100, 100);  // (spun fast: up to 4 a click)
     else StepModOption(d, cursor, dir);
     d->Refresh(cursor);
     Mirror(d, cursor);
@@ -2713,13 +2713,13 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
     }
   } else {
     const float before = WorstCost(d);
-    d->Nudge(cursor, dir);
+    const int moved = d->Turn(cursor, dir);  // (more than one step spun fast)
     Mirror(d, cursor);
     edit_mode = false;
     // a costlier setting (BEATER's sympathetic strings) only with room for it
     const float more = (WorstCost(d) - before) * (linked ? 2.0f : 1.0f);
     if (more > 0.0f && col > SOURCE && col < SLOT_COUNT && !Admit(more)) {
-      d->Nudge(cursor, -dir);
+      d->Nudge(cursor, -moved);
       Mirror(d, cursor);
     }
   }

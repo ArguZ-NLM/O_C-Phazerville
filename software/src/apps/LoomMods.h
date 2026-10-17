@@ -84,6 +84,7 @@ protected:
   // RATE setting p in Hz: free (lo..hi) or one cycle per note value
   float RateHz(int p, float lo, float hi) const;
   int Step(int p, int v, int dir) const override;
+  int MaxAccel(int p) const override { return !strcmp(param(p).modes[1], "CLOCK") && mode[p] != SYNC_FREE ? 1 : Device::MaxAccel(p); }
   void FormatRate(int p, float hz, char* buf, size_t n) const;
 };
 
