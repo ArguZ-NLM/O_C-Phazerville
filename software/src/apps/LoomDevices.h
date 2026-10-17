@@ -4516,8 +4516,6 @@ FLASHMEM void EchoDevice::Apply(int p) {
     case TIME:     SetTimes(); break;
     case REVERB:   echo.reverb_mix(v); echo.reverb_send(mode[REVERB] == 1); break;
     case PRE:
-      // (saved before GLINT's interval moved from PRE to WALL: take it along)
-      if (mode[PRE]) { mode[WALL] = mode[PRE]; mode[PRE] = 0; }
       echo.pre_delay(cur[PRE]);
       Shimmer();
       break;

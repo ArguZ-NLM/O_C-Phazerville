@@ -896,7 +896,7 @@ FLASHMEM static float WorstCost(const Device* d) {
   }
   if (!strcmp(t, "ECO")) {  // REPEAT; GLINT on: its pitch shifter (two voices for 12+7)
     const uint8_t* m = d->mode;
-    return 12.0f + (m[EchoDevice::ROOM] ? (m[EchoDevice::PRE] == 5 ? 4.0f : 2.5f) : 0.0f);
+    return 12.0f + (m[EchoDevice::ROOM] ? 4.0f : 0.0f);  // (the costlier two-voice recipes, to be safe)
   }
   if (!strcmp(t, "STR")) return 11.5f;  // DRAFT (with its diffuser)
   if (!strcmp(t, "TEX")) return 8.0f;  // TEXTURE
