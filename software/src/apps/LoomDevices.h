@@ -4439,6 +4439,13 @@ private:
   bool HeadOn(int t) const { return t == TAPS - 1 || (t < TAPS - 1 && Heads().pos[t] > 0.0f); }
   float HeadPos(int t) const { return HeadOn(t) && t < TAPS - 1 ? Heads().pos[t] : 1.0f; }
   float HeadGain(int t) const { return t == TAPS - 1 ? 1.0f : HeadOn(t) ? Heads().gain[t] : 0.0f; }
+  // FDBK's knob to the loop gain: a curve, so the middle of the knob
+  // already gives long trails (50 -> 0.67, 75 -> 0.89, 100 -> 1.0: held,
+  // the soft clip and WALL's filter keep it from running away)
+  float FbGain() const { return 1.0f - powf(1.0f - constrain(cur[FEEDBACK], 0, 100) * 0.01f, 1.6f); }
+  // what one round really keeps, for the picture: the loop gain and about
+  // what WALL's filter takes away on each pass (a rough figure, ~1 dB)
+  float FbRound() const { return FbGain() * 0.89f; }
 
   void SetTimes();
   void Poll();
@@ -4471,7 +4478,10 @@ FLASHMEM uint32_t Device::TailMs() const { return 40; }
 FLASHMEM uint32_t EchoDevice::TailMs() const {
   if (echo.frozen()) return UINT32_MAX;
   const float decay = DecaySecs() * (1.0f + mode[ROOM] * 0.1f) + cur[PRE] * 0.001f;  // (GLINT rings on)
-  const float echoes = tap_secs[0][TAPS - 1] * (1.0f + 8.0f * cur[FEEDBACK] * 0.01f);
+  // rounds until it is ~60 dB down (at most 40)
+  const float r = FbRound();
+  const float rounds = r > 0.001f ? std::min(40.0f, logf(0.001f) / logf(std::min(r, 0.99f))) : 1.0f;
+  const float echoes = tap_secs[0][TAPS - 1] * (1.0f + rounds);
   return uint32_t((decay + echoes) * 1000.0f) + 200;
 }
 
@@ -4544,7 +4554,7 @@ FLASHMEM void EchoDevice::Apply(int p) {
       Shimmer();
       break;
     case ROOM:     echo.size(v); echo.decay(DecaySecs()); Shimmer(); break;
-    case FEEDBACK: echo.feedback(v); SetTimes(); break;  // (its mode: the head pattern)
+    case FEEDBACK: echo.feedback(FbGain()); SetTimes(); break;  // (its mode: the head pattern)
     case SPREAD:
       echo.pingpong(mode[SPREAD] == PING ? v : 0.0f);
       echo.diffuse(mode[SPREAD] == DIFFUSE ? v : 0.0f);
@@ -4643,7 +4653,7 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
       if (cur[DELAY] > 0) {
         const int bh = std::max(1, (h - 2) * cur[DELAY] / 100);
         const float period = tap_secs[0][TAPS - 1], period_r = tap_secs[1][TAPS - 1];
-        const float fb = std::min(1.0f, cur[FEEDBACK] * 0.01f);
+        const float fb = std::min(1.0f, FbRound());  // what each round keeps, as heard
         const float sp = cur[SPREAD] * 0.01f;
         // PING: the repeats bounce - each round mostly on one side, the
         // other side down by SPRD (left on the even rounds, right on the odd)
@@ -4675,7 +4685,7 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
         // repeats: the whole pattern again after each period
         float g = fb;
         for (int round = 1; round < 24 && period > 0.0f; round++, g *= fb) {
-          if (int(bh * g) < 1) break;
+          if (g < 0.016f || int(bh * g) < 1) break;  // quieter than ~-36 dB: not heard in the mix
           bool any = false;
           for (int t = 0; t < TAPS; t++) {
             if (!HeadOn(t)) continue;
