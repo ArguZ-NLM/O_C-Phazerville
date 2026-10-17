@@ -3359,13 +3359,13 @@ FLASHMEM void AppLoom::DrawDevice() const {
       // (FREE, ONE, DIFF, a variation's +-35%), never a word for what it
       // is; only a variation that is off shows the setting's name instead
       const char* alt = d->AltName(p);
-      bool show_mode = !alt && pd.nmodes && !d->NameIsMode(p);
+      bool show_mode = !alt && pd.nmodes && !d->NameIsMode(p), off = false;
       char mb[8];
       if (show_mode) {
         d->FormatMode(p, mb, sizeof(mb));
-        if (!strcasecmp(mb, "OFF") || !strcasecmp(mb, "C off")) show_mode = false;
+        off = !strcasecmp(mb, "OFF") || !strcasecmp(mb, "C off");
       }
-      const char* nm = d->AltShown(p) ? alt : show_mode ? mb : d->Name(p);
+      const char* nm = d->AltShown(p) ? alt : off ? pd.name : show_mode ? mb : d->Name(p);
       PrintCentred(x, 43, nm);
     }
     // has modes (the left knob): a small square at the right end of the
