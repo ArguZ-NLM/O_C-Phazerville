@@ -983,6 +983,9 @@ void FASTRUN loop() {
           case '#':  // A held down (let go with the next A press); SPOOL: saves the loop after 2 s
             OC::ui.Inject(UI::EVENT_BUTTON_DOWN, OC::CONTROL_BUTTON_A, 0, OC::CONTROL_BUTTON_A);
             break;
+          case '{':  // Y held down (let go with the next Y press); Loom: saves after 2 s
+            OC::ui.Inject(UI::EVENT_BUTTON_DOWN, OC::CONTROL_BUTTON_DOWN2, 0, OC::CONTROL_BUTTON_DOWN2);
+            break;
           case '|':  // B held down (let go with the next B press); SPOOL: clears the loop after 3 s
             OC::ui.Inject(UI::EVENT_BUTTON_DOWN, OC::CONTROL_BUTTON_B, 0, OC::CONTROL_BUTTON_B);
             break;
