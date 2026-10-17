@@ -2898,6 +2898,7 @@ FLASHMEM void AppLoom::SetByText(bool want_mode, const char* text) {
     d->val[p] = was;
   }
   if (best_d >= 1e9f) { Serial.printf("SET %s: nothing shows \"%s\"\n", pd.name, text); return; }  // (values can be below 0)
+  if (want_mode) d->mode_named |= uint16_t(1u << p);  // (past the name stop)
   // in knob steps (a stuck step ends it)
   auto walk = [&](int target) {
     for (int guard = 0; guard < 4000; guard++) {
@@ -3348,17 +3349,16 @@ FLASHMEM void AppLoom::DrawDevice() const {
       // REDUX, a variation's +-35%, MORPH's time ...), grabbed or not. The
       // number stays below. (A setting whose name says its mode already,
       // SPRD's bells, keeps that name.)
-      // Now always the mode: a setting with modes shows the one it is on
-      // (FREE, ONE, DIFF, a variation's +-35%), never a word for what it
-      // is; only a variation that is off shows the setting's name instead
+      // The name is the first stop of the L knob (see NameStop): there it
+      // reads the name; turned right, the mode it is on (FREE, ONE, a
+      // variation's +-35%, OFF too). A zoom (START / END) shows only while
+      // it is being turned
       const char* alt = d->AltName(p);
-      bool show_mode = !alt && pd.nmodes && !d->NameIsMode(p) && !d->ModeIsView(p), off = false;
+      const bool show_mode = !alt && pd.nmodes && !d->NameIsMode(p)
+        && (d->ModeIsView(p) ? sel && ((editing && l_held) || (edit_mode && mode_shown < 1500)) : d->ModeNamed(p));
       char mb[8];
-      if (show_mode) {
-        d->FormatMode(p, mb, sizeof(mb));
-        off = !strcasecmp(mb, "OFF") || !strcasecmp(mb, "C off");
-      }
-      const char* nm = d->AltShown(p) ? alt : off ? pd.name : show_mode ? mb : d->Name(p);
+      if (show_mode) d->FormatMode(p, mb, sizeof(mb));
+      const char* nm = d->AltShown(p) ? alt : show_mode ? mb : d->Name(p);
       PrintCentred(x, 43, nm);
     }
     // has modes (the left knob): a small square at the right end of the

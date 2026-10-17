@@ -342,7 +342,7 @@ public:
     if (d.nmodes && d.nmodes <= 4 && mode[p] < 4 && d.modes[mode[p]][0] && ModeNamed(p)) return d.modes[mode[p]];
     return d.name;
   }
-  bool ModeNamed(int p) const { return true; }  // (now always: the upper row shows the mode; mode_named kept for the files)
+  bool ModeNamed(int p) const { return mode_named >> p & 1; }
   uint16_t mode_named = 0;  // bit per setting: its mode turned (by hand)
   // a setting taken once per event (a grain's PITCH): it follows a
   // modulator's step, not its glide
@@ -428,6 +428,12 @@ public:
   // its mode only sets the picture (a zoom, a view), no variation of the
   // sound: the upper row keeps the setting's name (START / END, VIEW)
   virtual bool ModeIsView(int p) const { return false; }
+  // the setting's name is the first stop of its L knob, left of its first
+  // mode: there the upper row reads the name (what it is for), one click
+  // right shows the mode it is on (nothing changes yet), on from there the
+  // modes. Not for the ones whose name is always their mode (REPEAT's
+  // SEND / MIX), a second value (ROOM / GLINT) or a zoom
+  virtual bool NameStop(int p) const { return !ModeIsView(p) && !AltName(p); }
   // a setting whose mode is a second value of its own (REPEAT: ROOM /
   // GLINT, WALL / PRSET): the L knob switches between the two (the bar's
   // left / right half), the R knob changes the one showing; its name here
@@ -692,8 +698,13 @@ FLASHMEM int Device::Turn(int p, int dir) {
 FLASHMEM void Device::NudgeMode(int p, int dir) {
   const ParamDef& d = param(p);
   if (!d.nmodes) return;
+  const uint16_t bit = uint16_t(1u << p);
+  if (NameStop(p)) {
+    if (!(mode_named & bit)) { if (dir > 0) mode_named |= bit; return; }  // the name: right shows the mode
+    if (dir < 0 && mode[p] <= ModeMin(p)) { mode_named &= uint16_t(~bit); return; }  // left of the first: the name
+  }
   mode[p] = constrain(mode[p] + dir, ModeMin(p), d.nmodes - 1);
-  mode_named |= uint16_t(1u << p);
+  mode_named |= bit;
   Apply(p);
 }
 
@@ -4453,6 +4464,7 @@ public:
   uint32_t TailMs() const override;
   // TIME's mode turned: FREE takes the time it was on in sync (in ms), and
   // back on the clock it snaps to the note value nearest it
+  bool NameStop(int p) const override { return p != DELAY && p != REVERB && Device::NameStop(p); }
   void NudgeMode(int p, int dir) override {
     const int was = mode[TIME];
     Device::NudgeMode(p, dir);
