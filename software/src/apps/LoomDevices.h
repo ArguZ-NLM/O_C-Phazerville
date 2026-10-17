@@ -4665,7 +4665,7 @@ FLASHMEM void EchoDevice::Format(int p, char* buf, size_t n) const {
 // WALL's mode: GLINT's recipe; ROOM's: how much of it
 FLASHMEM void EchoDevice::FormatMode(int p, char* buf, size_t n) const {
   if (p == WALL) snprintf(buf, n, "%s", GLINTS[constrain(int(mode[WALL]), 0, GLINT_N - 1)].name);
-  else if (p == ROOM) snprintf(buf, n, mode[ROOM] ? "%d" : "off", mode[ROOM] * 5);
+  else if (p == ROOM) snprintf(buf, n, mode[ROOM] ? "%d%%" : "off", mode[ROOM] * 5);
   else if (p == FEEDBACK) snprintf(buf, n, "%s", Heads().name);
   else Device::FormatMode(p, buf, n);
 }
