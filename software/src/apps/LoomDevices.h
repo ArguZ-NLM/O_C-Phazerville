@@ -4595,8 +4595,9 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
   const int base = y + h - 1;
   gfxDottedLine(x, base, x + w - 1, base, 2);
   if (view_page == 0) {
-    // page 1, the delay: a fixed time line from the left edge to 6 s (the
-    // longest delay). Filled bars: the heads that play (one, or two with
+    // page 1, the delay: a time line from the left edge, zoomed to the
+    // delay: the shortest of 0.25, 0.5, 1, 2, 3 or 6 s that shows about five
+    // echoes (named top right), so short and long delays both read clearly. Filled bars: the heads that play (one, or two with
     // 2HEAD, the half-way one lower as it is quieter), as tall as DELAY;
     // with SPRD up an outlined bar next to each shows the right side.
     // Thin lines further on: the repeats through FDBK, each round shorter
@@ -4604,8 +4605,17 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
     if (cur[DELAY] > 0) {
       const int bh = std::max(1, (h - 2) * cur[DELAY] / 100);
       const int tw = w - 8;
-      auto px = [&](float sec) { return x + int(constrain(sec / MAX_SECS, 0.0f, 1.0f) * tw); };
       const float period = tap_secs[0][TAPS - 1], period_r = tap_secs[1][TAPS - 1];
+      static const float SPANS[] = {0.25f, 0.5f, 1.0f, 2.0f, 3.0f, MAX_SECS};
+      float span = MAX_SECS;
+      for (float sp : SPANS) if (sp >= 5.0f * std::max(period, period_r)) { span = sp; break; }
+      auto px = [&](float sec) { return x + int(constrain(sec / span, 0.0f, 1.0f) * tw); };
+      {
+        char lb[8];
+        if (span < 1.0f) snprintf(lb, sizeof(lb), "%dms", int(span * 1000.0f + 0.5f));
+        else snprintf(lb, sizeof(lb), "%ds", int(span + 0.5f));
+        gfxPrint(x + w - 1 - int(strlen(lb)) * 6, y + 1, lb);
+      }
       const float fb = std::min(1.0f, cur[FEEDBACK] * 0.01f);
       // PING: the repeats bounce - each round mostly on one side, the
       // other side down by SPRD (left on the even rounds, right on the odd)
@@ -4634,7 +4644,7 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
           const int rh = int(bh * g * HeadGain(t));
           if (rh < 1) continue;
           const float sec = round * period + tap_secs[0][t];
-          if (sec > MAX_SECS) break;
+          if (sec > span) break;
           const int lx = px(sec);
           const int hl = side_h(rh, round, false), hr = side_h(rh, round, true);
           if (hl > 0) gfxLine(lx, base - hl + 1, lx, base);
