@@ -102,6 +102,8 @@ public:
   void tap(int ch, int t, int samples) {
     tap_[ch][t].target = constrain(samples, MIN_TAP, int(dlen) - 1);
   }
+  // a head's level in the echoes, 0 (off) .. 1
+  void tap_gain(int t, float g) { if (t >= 0 && t < TAPS) tap_gt[t] = constrain(g, 0.0f, 1.0f); }
   void feedback(float f) { fb_target = constrain(f, 0.0f, 1.05f); }
   void delay_mix(float m) { dmix_target = constrain(m, 0.0f, 1.0f); }
   void reverb_mix(float m) { rmix_target = constrain(m, 0.0f, 1.0f); }
@@ -168,7 +170,12 @@ public:
   void update() override;
 
 private:
-  static constexpr float TAP_GAIN[TAPS] = {0.30f, 0.40f, 0.55f, 0.80f};
+  // each head's level: what the UI asks for (tap_gain) and where it is now,
+  // gliding there over ~45 ms so a head coming in or going out never clicks.
+  // A head at 0 isn't read at all (it costs nothing). The last head is the
+  // one that feeds back, so it is always read, whatever its level.
+  volatile float tap_gt[TAPS] = {0.0f, 0.0f, 0.0f, 1.0f};
+  float tap_g[TAPS] = {0.0f, 0.0f, 0.0f, 1.0f};
   static constexpr int XFADE = 4 * AUDIO_BLOCK_SAMPLES; // ~10 ms
 
   // allpasses (float, RAM2): 4 in the delay's feedback path (2 a side),
@@ -451,25 +458,31 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
   int16_t last[2][AUDIO_BLOCK_SAMPLES];
   int16_t blk[AUDIO_BLOCK_SAMPLES];
   int peak_tap[2][TAPS] = {};
+  // each head's level at the start and the end of this block (a ramp in
+  // between): one step of the glide towards what the UI asked for
+  float g0[TAPS], g1[TAPS];
+  for (int t = 0; t < TAPS; t++) {
+    g0[t] = tap_g[t];
+    const float to = tap_gt[t], step = 1.0f / 16.0f;
+    g1[t] = to > g0[t] ? std::min(to, g0[t] + step) : std::max(to, g0[t] - step);
+    if (dly_on) tap_g[t] = g1[t];
+  }
   for (int c = 0; c < 2 && dly_on; c++) {
     float* ts = tsum[c];
+    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) ts[n] = 0.0f;
     for (int t = 0; t < TAPS; t++) {
-      int16_t* dst = (t == TAPS - 1) ? last[c] : blk;
+      const bool fb_head = t == TAPS - 1;
+      if (!fb_head && g0[t] <= 0.0f && g1[t] <= 0.0f) continue;  // a silent head: not read
+      int16_t* dst = fb_head ? last[c] : blk;
       ReadTap(c, t, dst);
-      const float tg = TAP_GAIN[t] * (1.0f / 32768.0f);
+      const float ga = g0[t] * (1.0f / 32768.0f);
+      const float gs = (g1[t] - g0[t]) * (1.0f / 32768.0f) / AUDIO_BLOCK_SAMPLES;
       int pk = 0;
-      if (t == 0) {
-        for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
-          ts[n] = dst[n] * tg;
-          pk = std::max(pk, abs(dst[n]));
-        }
-      } else {
-        for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
-          ts[n] += dst[n] * tg;
-          pk = std::max(pk, abs(dst[n]));
-        }
+      for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+        ts[n] += dst[n] * (ga + gs * n);
+        pk = std::max(pk, abs(dst[n]));
       }
-      peak_tap[c][t] = pk;
+      peak_tap[c][t] = (g0[t] > 0.0f || g1[t] > 0.0f) ? pk : 0;
     }
   }
 

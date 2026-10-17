@@ -4319,8 +4319,9 @@ PROGMEM static const DeviceDef ECHO_DEF = {
     // page 1: the delay, page 2: the reverb and TONE
     {"LEVEL", 0, 100, 40, UNI, 0, 2, 1, {}, {"MIX", "SEND"}},  // the delay's; mode: crossfade / added (SEND first)
     {"TIME", 20, 6000, 450, UNI, 0, 2, 0, {}, {"FREE", "CLOCK"}},
-    // mode: where the four heads sit between 0 and TIME (see HEAD_POS)
-    {"FDBK", 0, 100, 45, UNI, 0, 4, 0, {}, {"EVEN", "TAPE", "SWING", "DOTTD"}},
+    // mode: how many playback heads: 1HEAD, one echo at TIME (a plain
+    // delay); 2HEAD, a second, quieter one half way, at TIME / 2
+    {"FDBK", 0, 100, 45, UNI, 0, 2, 0, {}, {"1HEAD", "2HEAD"}},
     {"SPRD", 0, 100, 40, UNI, 0, 3, 1, {}, {"PHASE", "PING", "DIFF"}},
     // the reverb, after the Tegeler Raummaschine: mix, pre-delay, room
     // (size and decay together), walls (soft: dark and dense .. hard:
@@ -4405,20 +4406,16 @@ private:
   bool mem_ok = false;
   float tap_secs[2][TAPS] = {};
   Meter tap_m[2][TAPS], tail_m;
-  // Where the four heads sit, as a share of TIME, one row per FDBK mode.
-  // The last head is always at TIME itself: it is the one that feeds back,
-  // so the loop's length stays what TIME says. Both sides use the same
-  // row; SPRD (PHASE) stretches the right side's to spread them in stereo.
-  //   EVEN:  sixteenths of TIME, the even grid (1 : 2 : 3 : 4)
-  //   TAPE:  a little uneven, like the hand-set heads of an old tape echo
-  //   SWING: the 1st and 3rd heads late, a triplet swing (2 : 1 a pair)
-  //   DOTTD: dotted values, 3/16, 3/8, 3/4, then TIME
-  static constexpr float HEAD_POS[4][TAPS] = {
-    {0.25f, 0.50f, 0.75f, 1.0f},
-    {0.30f, 0.52f, 0.79f, 1.0f},
-    {0.333f, 0.50f, 0.833f, 1.0f},
-    {0.1875f, 0.375f, 0.75f, 1.0f},
-  };
+  // The playback heads. The engine has four; REPEAT plays one or two:
+  // the last head always sits at TIME and is the one that feeds back, so
+  // the echoes repeat every TIME. FDBK's mode 2HEAD adds head 2 half way,
+  // a little quieter, so a quarter-note TIME also plays the eighth between.
+  // The other heads stay silent (the engine doesn't even read them).
+  static constexpr int HALF_HEAD = TAPS - 2;
+  static constexpr float HALF_GAIN = 0.6f;
+  bool HeadOn(int t) const { return t == TAPS - 1 || (t == HALF_HEAD && mode[FEEDBACK] == 1); }
+  float HeadGain(int t) const { return t == TAPS - 1 ? 1.0f : HeadOn(t) ? HALF_GAIN : 0.0f; }
+
   void SetTimes();
   void Poll();
 };
@@ -4466,10 +4463,12 @@ FLASHMEM void EchoDevice::SetTimes() {
   const float phase = mode[SPREAD] == PHASE ? 1.0f + 0.3f * cur[SPREAD] * 0.01f : 1.0f;
   for (int c = 0; c < 2; c++) {
     for (int t = 0; t < TAPS; t++) {
-      float s = secs * HEAD_POS[constrain(int(mode[FEEDBACK]), 0, 3)][t] * (c ? phase : 1.0f);
+      // the half-way head at TIME / 2; the silent ones simply at TIME too
+      float s = secs * (t == HALF_HEAD ? 0.5f : 1.0f) * (c ? phase : 1.0f);
       s = std::min(s, MAX_SECS - 0.01f);
       tap_secs[c][t] = s;
       echo.tap(c, t, int(s * AUDIO_SAMPLE_RATE_EXACT));
+      echo.tap_gain(t, HeadGain(t));
     }
   }
 }
@@ -4520,7 +4519,7 @@ FLASHMEM void EchoDevice::Apply(int p) {
       Shimmer();
       break;
     case ROOM:     echo.size(v); echo.decay(DecaySecs()); Shimmer(); break;
-    case FEEDBACK: echo.feedback(v); SetTimes(); break;  // (its mode: the heads' places)
+    case FEEDBACK: echo.feedback(v); SetTimes(); break;  // (its mode: one head or two)
     case SPREAD:
       echo.pingpong(mode[SPREAD] == PING ? v : 0.0f);
       echo.diffuse(mode[SPREAD] == DIFFUSE ? v : 0.0f);
@@ -4597,8 +4596,9 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
   gfxDottedLine(x, base, x + w - 1, base, 2);
   if (view_page == 0) {
     // page 1, the delay: a fixed time line from the left edge to 6 s (the
-    // longest delay). Filled bars: the 4 echoes of the left side, as tall as
-    // DELAY; with SPRD up an outlined bar next to each shows the right side.
+    // longest delay). Filled bars: the heads that play (one, or two with
+    // 2HEAD, the half-way one lower as it is quieter), as tall as DELAY;
+    // with SPRD up an outlined bar next to each shows the right side.
     // Thin lines further on: the repeats through FDBK, each round shorter
     // by the FDBK amount; with SPRD up the right side's repeats next to them.
     if (cur[DELAY] > 0) {
@@ -4617,18 +4617,22 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
         return away ? int(h0 * (1.0f - pv)) : h0;
       };
       for (int t = 0; t < TAPS; t++) {
+        if (!HeadOn(t)) continue;
+        const int th = std::max(1, int(bh * HeadGain(t)));
         const int lx = px(tap_secs[0][t]);
-        gfxRect(lx, base - bh, 2, bh);
-        const int hr = side_h(bh, 0, true);
+        gfxRect(lx, base - th, 2, th);
+        const int hr = side_h(th, 0, true);
         if (cur[SPREAD] > 0 && hr > 0) gfxFrame(std::max(lx + 3, px(tap_secs[1][t])), base - hr, 2, hr);
       }
       // repeats: the whole pattern again after each period
       float g = fb;
       for (int round = 1; round < 16 && period > 0.0f; round++, g *= fb) {
-        const int rh = int(bh * g);
-        if (rh < 1) break;
+        if (int(bh * g) < 1) break;
         bool any = false;
         for (int t = 0; t < TAPS; t++) {
+          if (!HeadOn(t)) continue;
+          const int rh = int(bh * g * HeadGain(t));
+          if (rh < 1) continue;
           const float sec = round * period + tap_secs[0][t];
           if (sec > MAX_SECS) break;
           const int lx = px(sec);
@@ -4729,7 +4733,11 @@ FLASHMEM void EchoDevice::DrawMini(int x, int y, int w, int h) {
   const int bh = std::max(1, h * cur[DELAY] / 100);
   const float period = tap_secs[0][TAPS - 1], span = std::max(1.0f, period);
   auto px = [&](float sec) { return x + int(constrain(sec / span, 0.0f, 1.0f) * (w - 1)); };
-  for (int t = 0; t < TAPS; t++) gfxLine(px(tap_secs[0][t]), base - bh + 1, px(tap_secs[0][t]), base);
+  for (int t = 0; t < TAPS; t++) {  // the heads that play
+    if (!HeadOn(t)) continue;
+    const int th = std::max(1, int(bh * HeadGain(t)));
+    gfxLine(px(tap_secs[0][t]), base - th + 1, px(tap_secs[0][t]), base);
+  }
   if (period > 0.0f) {
     const float at = fmodf(millis() * 0.001f, period);
     gfxPixel(px(at), base);
