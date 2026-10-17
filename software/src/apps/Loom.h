@@ -371,6 +371,10 @@ private:
 
   loom::Device* FocusOn(int t) const;
   void SaveFile() const;
+  // Y held on a device's page: just that device into the saved settings,
+  // the rest as it was saved; false if it couldn't (then SaveFile does all)
+  bool SaveDevice(const loom::Device* d) const;
+  mutable bool saved_device = false;  // the last save was one device (its message)
   void LoadFile();
   template <typename F> void ForEachDevice(F f) const;
   loom::Device* Focused() const { return FocusOn(track); }
@@ -2041,7 +2045,13 @@ FLASHMEM void AppLoom::MainLoop() {
   }
   if (save_held && millis() - save_hold >= 2000) {
     save_held = false;
-    SaveFile();  // a short audio stop while the flash is written
+    // on a device's page (a modulator's and the clock's too): SAVE DEVICE,
+    // just that one; anywhere else (weave view, MOD view, CV outputs, MIDI
+    // maps): SAVE STATE, everything. Either way only LOOM.BIN, what Loom
+    // starts with: the presets are never touched
+    loom::Device* d = view == DEVICE ? Focused() : nullptr;
+    saved_device = d && SaveDevice(d);
+    if (!saved_device) SaveFile();  // a short audio stop while the flash is written
     saved_at = millis() | 1;
   }
   {
@@ -3664,6 +3674,7 @@ namespace loom {
   // per device: tag, count, then per setting value/mode/mod amount/
   // mod source/bus select, then bipolar bits and action triggers
   FLASHMEM static void WriteDevice(File& f, const Device* d) {
+    if (d) d->file_at = int32_t(f.position());  // (see SaveDevice)
     uint8_t present = d ? 1 : 0;
     f.write(&present, 1);
     if (!d) return;
@@ -3697,6 +3708,7 @@ namespace loom {
 
   // reads one record; applies it if d is there and of the same kind
   FLASHMEM static bool ReadDevice(File& f, Device* d) {
+    const int32_t at = int32_t(f.position());
     uint8_t present = 0;
     if (f.read(&present, 1) != 1) return false;
     if (!present) return true;
@@ -3718,6 +3730,9 @@ namespace loom {
     // until v25 TREADLE had 10 settings (ACCNT, RESET since gone)
     const bool trd10 = d && !memcmp(tag, "TRD", 4) && n == 10 && load_version < 25;
     const bool use = d && !memcmp(tag, d->def.tag, 4) && (n <= d->num_params() || tex_heddle || trd10);
+    // where its record is, for SaveDevice: only a record it can be written
+    // over in place (its own tag, as many settings as it has now)
+    if (d) d->file_at = use && n == d->num_params() ? at : -1;
     const bool remap_spr = use && !memcmp(tag, "SPR", 4) && n == 7;
     const bool remap_mix = use && !memcmp(tag, "MIX", 4) && n == 7;  // MIX came in first
     const bool reorder_out = use && !memcmp(tag, "MIX", 4) && load_version < 5;
@@ -4055,6 +4070,35 @@ FLASHMEM void AppLoom::SaveFile() const {
   DropNote(DROP_SAVE, 0, 1, uint16_t(std::min<uint32_t>(65535, millis() - save_t0)));
 }
 
+// Y held on a device's page: this device's record in LOOM.BIN written over
+// in place (the rest of the file stays as it was saved). Checked first: the
+// record there must be this device's, with as many settings; if not (never
+// saved, or the file changed), false, and the caller saves everything.
+FLASHMEM bool AppLoom::SaveDevice(const loom::Device* d) const {
+  using namespace loom;
+  if (!d || d->file_at < 0) return false;
+  auto& fs = PhzConfig::myfs;
+  {
+    File f = fs.open(SAVE_FILE, FILE_READ);
+    if (!f) return false;
+    uint8_t present = 0, n = 0;
+    char tag[4] = {};
+    const bool ok = f.seek(d->file_at) && f.read(&present, 1) == 1 && f.read(tag, 4) == 4
+                    && f.read(&n, 1) == 1 && present == 1 && !memcmp(tag, d->def.tag, 4)
+                    && n == d->num_params();
+    f.close();
+    if (!ok) return false;
+  }
+  File f = fs.open(SAVE_FILE, FILE_WRITE_BEGIN);  // (not emptied: written over in place)
+  if (!f) return false;
+  if (!f.seek(d->file_at)) { f.close(); return false; }
+  WriteDevice(f, d);
+  f.close();
+  // SHUTTLE: its file's own settings too (on the card, next to the WAV)
+  for (auto& tr : tracks) if (tr.player == d) tr.player->WriteMeta();
+  return true;
+}
+
 FLASHMEM void AppLoom::LoadFile() {
   delete b_own;  // a loaded state has nothing to go back to
   b_own = nullptr;
@@ -4302,17 +4346,19 @@ FLASHMEM void AppLoom::View() const {
     gfxPrint(k == 2 ? 43 : k ? 43 : 40, 26, k == 2 ? PSTR("STOP...") : k ? PSTR("UNDO...") : PSTR("RESET..."));
     gfxInvert(32, 23, fill, 13);
   }
+  // (what Y saves: one device on its page, the whole state anywhere else)
   if (saved_at && since < 1200) {
-    graphics.clearRect(36, 22, 56, 15);
-    gfxFrame(36, 22, 56, 15);
-    gfxPrint(49, 26, PSTR("SAVED"));
-    gfxInvert(37, 23, 54, 13);
+    graphics.clearRect(26, 22, 76, 15);
+    gfxFrame(26, 22, 76, 15);
+    gfxPrint(saved_device ? 28 : 31, 26, saved_device ? PSTR("DEVICE SAVED") : PSTR("STATE SAVED"));
+    gfxInvert(27, 23, 74, 13);
   } else if (save_held && millis() - save_hold > 250) {
-    const int fill = std::min<int>(52, (millis() - save_hold) * 52 / 2000);
-    graphics.clearRect(36, 22, 56, 15);
-    gfxFrame(36, 22, 56, 15);
-    gfxPrint(46, 26, PSTR("SAVE..."));
-    gfxInvert(38, 24, fill, 11);
+    const bool dev = view == DEVICE && Focused();
+    const int fill = std::min<int>(72, (millis() - save_hold) * 72 / 2000);
+    graphics.clearRect(26, 22, 76, 15);
+    gfxFrame(26, 22, 76, 15);
+    gfxPrint(dev ? 31 : 34, 26, dev ? PSTR("SAVE DEVICE") : PSTR("SAVE STATE"));
+    gfxInvert(28, 24, fill, 11);
   }
 }
 

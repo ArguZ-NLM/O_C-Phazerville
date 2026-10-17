@@ -245,6 +245,10 @@ class Device {
 public:
   const DeviceDef& def;
   int16_t val[MAX_PARAMS] = {};      // what the user set
+  // where this device's record sits in the saved settings (LOOM.BIN), noted
+  // when they are loaded or saved, so Y held on its page can write just this
+  // device there (-1: not known yet, so that save writes everything)
+  mutable int32_t file_at = -1;
   int16_t last_delta[MAX_PARAMS] = {};  // the last change by hand (LINKED moves the twin by it)
   int16_t cur[MAX_PARAMS] = {};      // after modulation; Apply() uses this
   uint8_t mode[MAX_PARAMS] = {};
