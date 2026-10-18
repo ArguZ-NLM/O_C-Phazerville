@@ -6573,7 +6573,7 @@ PROGMEM static const DeviceDef CHIME_DEF = {
     // all six turned along the scale, a step a click, round and round (past
     // the top: in again at the bottom); mode: MORPH, how slowly the sound
     // moves to new notes (ROTA, SPRD, SCALE, NOTE)
-    {"ROTA", -10, 10, 0, BI, 0, 13, 0},  // -10 .. +10: down / up the scale from where they are
+    {"ROTA", -10, 10, 0, BI, 0, 13, 0},  // -10 .. +10: down / up the scale from the middle
     // on each hit, bells move up or down by up to this many notes of the
     // set's family (its notes and the ones that colour it: a chord's 9th,
     // 11th, 13th; a scale, a microtonal set: its own), at random; mode: how
@@ -6794,7 +6794,7 @@ FLASHMEM void ChimeDevice::Apply(int p) {
   a.spread = cur[SPRD];
   a.notes = constrain(int(cur[ARP]), 1, 6);
   a.rotate = uint8_t(constrain(int(mode[ARP]), 0, 3));
-  a.rota = cur[ROTA];
+  a.rota = cur[ROTA] + 9;  // (0: nine places up the 20, the bells in the middle of the range)
   a.step_var = cur[VARI];
   if (sc < SCALES12) {  // VARI's family
     const float* tn = tunings[constrain(int(mode[SCALE]), 0, 3)];
