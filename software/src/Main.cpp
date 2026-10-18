@@ -1018,6 +1018,17 @@ void FASTRUN loop() {
             OC::ui.Inject(UI::EVENT_BUTTON_PRESS, OC::CONTROL_BUTTON_L, 0, 0);
             break;
 #ifdef ENABLE_APP_LOOM
+          case 'r': {  // Loom (scripted videos): recall a preset slot, "r30" = the panel's 30
+            char num[4] = {}; int n = 0;
+            while (Serial.available() > 0 && isdigit(Serial.peek()) && n < 3) num[n++] = char(Serial.read());
+            const int slot = atoi(num);
+            if (slot >= 1 && slot <= OC::PresetEngine::kNumSlots && OC::PresetEngine::SlotUsed(uint8_t(slot - 1))) {
+              OC::PresetEngine::RequestRecall(uint8_t(slot - 1));
+              Serial.printf("RECALL %d\n", slot);
+            } else {
+              Serial.printf("RECALL %d: no such preset\n", slot);
+            }
+          } break;
           case '=': case ':': case 'j': case 'x': case 'f': {
             // 'f': behind the screen (for videos), "fB/TWILL" presses its A, "fB/TWILL/KEY=B2+2" sets a value
             // 'j': jump to a device page, "jA/REPEAT/ROOM"; 'x': hold notes, captured, "x60.64.67"
