@@ -6573,7 +6573,7 @@ PROGMEM static const DeviceDef CHIME_DEF = {
     // all six turned along the scale, a step a click, round and round (past
     // the top: in again at the bottom); mode: MORPH, how slowly the sound
     // moves to new notes (ROTA, SPRD, SCALE, NOTE)
-    {"ROTA", 0, 19, 0, UNI, 0, 13, 0},
+    {"ROTA", -10, 10, 0, BI, 0, 13, 0},  // -10 .. +10: down / up the scale from where they are
     // on each hit, bells move up or down by up to this many notes of the
     // set's family (its notes and the ones that colour it: a chord's 9th,
     // 11th, 13th; a scale, a microtonal set: its own), at random; mode: how
@@ -6640,9 +6640,6 @@ public:
     Device::NudgeMode(p, dir);
     if (p == SPRD && mode[SPRD] >= Ways(int(cur[ARP]))) { mode[SPRD] = uint8_t(Ways(int(cur[ARP])) - 1); Apply(SPRD); }
   }
-  int Step(int p, int v, int dir) const override {
-    return p == ROTA ? ((v + dir) % rota_w + rota_w) % rota_w : Device::Step(p, v, dir);
-  }
   bool Varies(int p) const override { return p == WET; }
   // the variations' bars (NOTE, SPRD's MORPH, ARP's moves are no variations)
   int BarStyle(int p) const override {
@@ -6658,7 +6655,8 @@ public:
     if (a == 0) fx.Strike();
     else {  // STEP: ROTA a place on (ARP DOWN: back; RAND: anywhere), round and round
       const int m = mode[ARP];
-      val[ROTA] = int16_t(m == 3 ? random(rota_w) : ((val[ROTA] + (m == 2 ? -1 : 1)) % rota_w + rota_w) % rota_w);
+      // (-10 .. +10: past one end in again at the other)
+      val[ROTA] = int16_t(m == 3 ? int(random(21)) - 10 : ((val[ROTA] + 10 + (m == 2 ? -1 : 1)) % 21 + 21) % 21 - 10);
       Refresh(ROTA);
     }
     step_at = millis() | 1;
@@ -6691,7 +6689,6 @@ private:
   uint32_t note_seen = 0;
   bool keys_hit = true;   // KEY on MIDI: a key strikes them too
   uint32_t keys_at = 0;   // (when switched: shown for a moment)
-  static constexpr int rota_w = 20;  // ROTA's places, round and round
   // NOTE on MIDI: the last note played, the key
   int16_t midi_base = 48;
   float Decay(int v) const { return 0.02f * powf(600.0f, v * 0.01f); }  // 20 ms .. 12 s
@@ -6824,7 +6821,6 @@ FLASHMEM void ChimeDevice::Format(int p, char* buf, size_t n) const {
                                              "MAJOR", "MINOR", "DORIA", "PENTA", "mPENT", "WHOLE",
                                              "QUART", "17ET", "19ET", "SLEND", "PELOG", "BOHLN", "SHRUT", "HARMO"};
   if (p == ARP) { snprintf(buf, n, "%d/6", val[ARP]); return; }  // bells at once
-  if (p == ROTA) { snprintf(buf, n, "%d", ((val[ROTA] % rota_w) + rota_w) % rota_w); return; }
   if (p == VARI) { if (val[VARI]) snprintf(buf, n, LOOM_PM "%d", val[VARI]); else snprintf(buf, n, "OFF"); return; }
   if (p == NOTE && mode[NOTE]) {  // KEY on MIDI: the note played, and the offset (E3+2)
     if (val[NOTE]) snprintf(buf, n, "%s%d%+d", names[midi_base % 12], midi_base / 12 - 1, val[NOTE]);
