@@ -3313,7 +3313,13 @@ FLASHMEM void AppLoom::DrawDevice() const {
     }
     const bool byp = a == 1 && byp_on;
     // slot devices keep their actions (ECHO: FRZ / CLR) off the header;
-    // the modulators show theirs (RST, STP, TRG)
+    // the modulators show theirs (RST, STP, TRG). Frozen (REPEAT, FIBRE,
+    // DRAFT): FRZ lit, between the page's name and its number
+    if (!focus_mod && a == 0 && d->ActionLit(0) && !strcmp(d->def.actions[0], "FRZ")) {
+      gfxPrint(86, 1, PSTR("FRZ"));
+      gfxInvert(85, 0, 20, 9);
+      continue;
+    }
     const char* label = byp ? PSTR("BYP") : focus_mod ? d->def.actions[a] : "";
     if (!label[0] || (a == 1 && mute_turn)) continue;
     // (a modulator's one action right after its name, A's or B's)

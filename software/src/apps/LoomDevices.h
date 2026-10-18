@@ -4878,10 +4878,7 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
       }
     }
   }
-  if (echo.frozen()) {
-    gfxPrint(x + w - 25, y + 1, PSTR("FRZ"));
-    gfxInvert(x + w - 26, y, 20, 9);
-  }
+  // (frozen: FRZ in the page's top line, Loom.h)
 }
 
 // the delay page in small: the echoes on a 1 s line (longer times fill the
@@ -5863,10 +5860,7 @@ FLASHMEM void SprayDevice::DrawViz(int x, int y, int w, int h) {
       for (int xx = gx + 1; xx < gx + gw - 1; xx++)
         if (bayer[yy & 3][xx & 3] < fill) gfxPixel(xx, yy);
   }
-  if (frozen) {
-    gfxPrint(x + w - 25, y + 1, PSTR("FRZ"));
-    gfxInvert(x + w - 26, y, 20, 9);
-  }
+  // (frozen: FRZ in the page's top line, Loom.h)
 }
 
 FLASHMEM void SprayDevice::DrawMini(int x, int y, int w, int h) {
@@ -6529,10 +6523,7 @@ FLASHMEM void StretchDevice::DrawViz(int x, int y, int w, int h) {
     float f = pos + fx.voice.Scrub();
     gfxDottedLine(pos_x(f), y, pos_x(f), base, 2);
   }
-  if (frozen) {
-    gfxPrint(x + 1, y + 1, PSTR("FRZ"));
-    gfxInvert(x, y, 20, 9);
-  }
+  // (frozen: FRZ in the page's top line, Loom.h)
   gfxFrame(x + w - 4, y, 4, h);
   DrawVMeter(x + w - 4, y, 4, h, out_m.v);
 }
