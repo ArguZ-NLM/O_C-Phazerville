@@ -2161,8 +2161,9 @@ FLASHMEM void AppLoom::MainLoop() {
     Serial.printf("  PLY%c %s\n", t ? 'R' : 'L', dbg);
   }
   if (loom::clock_shuttle >= 0 && loom::shuttles[loom::clock_shuttle])  // the clock on a file: how close its beats are
-    Serial.printf("  CLOCK on SHUTTLE %c: %.2f bpm, beat %.3f, file's %.3f\n", 'A' + loom::clock_shuttle,
-      double(loom::tempo_bpm), double(loom::clock_beat_ph), double(loom::shuttles[loom::clock_shuttle]->HeardBeatPhase()));
+    Serial.printf("  CLOCK on SHUTTLE %c: %d.%02d bpm, beat %d/1000, file's %d/1000\n", 'A' + loom::clock_shuttle,
+      int(loom::tempo_bpm), int(loom::tempo_bpm * 100) % 100, int(loom::clock_beat_ph * 1000),
+      int(loom::shuttles[loom::clock_shuttle]->HeardBeatPhase() * 1000));
   // modulated settings: value, result, both sources (amount, MOD, u/b)
   for (int t = 0; t < loom::NUM_TRACKS; t++) {
     const loom::Track& tr = loom::tracks[t];
