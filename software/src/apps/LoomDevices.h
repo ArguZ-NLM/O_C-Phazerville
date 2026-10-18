@@ -5252,9 +5252,9 @@ public:
     const int idx = DivIndex(abs(v), 1, 100) + dir * s;
     return idx < 0 ? 0 : s * DivValue(idx, 1, 100);
   }
-  float pole = 0.0f;           // the picture's barber pole, where it is (in stripes)
+  float poles[3] = {};         // the picture's barber poles, where each is (in stripes)
   float per_now = 16.0f;       // its stripes' spacing, gliding to the new one
-  float slide = 0.0f;          // how far the dither has moved (px, round 4)
+  float slides[3] = {};        // how far each one's dither has moved (px, round 4)
   uint32_t pole_at = 0;
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
@@ -5408,26 +5408,40 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
   const float per_to = Phasing() ? roundf(24.0f - (Stages() - 4) * 0.875f) : 16.0f;  // 24 .. 10 px
   per_now += (per_to - per_now) * std::min(1.0f, dt * 8.0f);
   if (fabsf(per_to - per_now) < 0.01f) per_now = per_to;
-  const float per = per_now;
-  pole += speed * dt / per;
-  pole -= floorf(pole);
-  const float off = pole * per;  // (px)
-  // the dither's own count, round its 4 px: wrapped with the stripes
-  // (round their spacing) it would jump unless that is a multiple of 4
-  slide += speed * dt;
-  slide -= 4.0f * floorf(slide / 4.0f);
-  slide += (off - floorf(off)) - (slide - floorf(slide));  // (the same fraction as the stripes)
-  const float sw = std::max(1.0f, roundf((2 + int(Fdbk()) * 5 / 100) * per / 16.0f));
+  // PHASE: three poles side by side, black gaps between (gap : pole 2 : 5);
+  // the middle one in front: the outer two further back, so slower (18 %,
+  // 22 %) and finer (a fifth narrower stripes). SHIFT: one, the middle's
+  const bool level = !Phasing();
+  const int gap = level || w < 64 ? 0 : (2 * w + 9) / 19, pole_w = (w - 2 * gap) / 3;
+  static const float k_speed[3] = {0.82f, 1.0f, 0.78f}, k_per[3] = {0.8f, 1.0f, 0.8f};
+  float per[3], off[3], sw[3];
+  for (int k = 0; k < 3; k++) {
+    // (whole pixels once it has glided there, as the middle's)
+    const bool gliding = per_now != per_to;
+    per[k] = k == 1 || !gap ? per_now : gliding ? per_now * k_per[k] : std::max(4.0f, roundf(per_now * k_per[k]));
+    const float sp = speed * k_speed[k];
+    poles[k] += sp * dt / per[k];
+    poles[k] -= floorf(poles[k]);
+    off[k] = poles[k] * per[k];  // (px)
+    // the dither's own count, round its 4 px: wrapped with the stripes
+    // (round their spacing) it would jump unless that is a multiple of 4
+    slides[k] += sp * dt;
+    slides[k] -= 4.0f * floorf(slides[k] / 4.0f);
+    slides[k] += (off[k] - floorf(off[k])) - (slides[k] - floorf(slides[k]));  // (the same fraction as the stripes)
+    sw[k] = std::max(1.0f, roundf((2 + int(Fdbk()) * 5 / 100) * per[k] / 16.0f));
+  }
   // the fill dots: every line of a stripe gets its share (a square dither
   // left whole slanting lines dark at low MIX: they blinked in and out)
   static const uint8_t ord[4] = {0, 2, 1, 3};
   const int fill = 1 + int(Mix()) * 15 / 100;  // 1 .. 16 of 16
-  const bool level = !Phasing();
-  // PHASE: three poles side by side, two black gaps between (gap : pole 1 : 5)
-  const int gap = level || w < 64 ? 0 : (w + 8) / 17, pole_w = (w - 2 * gap) / 3;
   for (int px = 0; px < w; px++) {
-    if (gap && ((px >= pole_w && px < pole_w + gap) || (px >= 2 * pole_w + gap && px < 2 * pole_w + 2 * gap))) continue;
+    int k = 1;
+    if (gap) {
+      if ((px >= pole_w && px < pole_w + gap) || (px >= 2 * pole_w + gap && px < 2 * pole_w + 2 * gap)) continue;
+      k = px < pole_w ? 0 : px < 2 * pole_w + gap ? 1 : 2;
+    }
     const bool down = !Phasing() && (Side() == 1 || (Side() == 2 && px >= w / 2));
+    const int moved = int(floorf(down ? -slides[k] : slides[k]));
     for (int py = 0; py < h; py++) {
       // where this pixel is across the stripes, in fractions of a pixel:
       // the edges are lit by how much of them the stripe covers (shaded
@@ -5435,16 +5449,15 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
       const int cx = px - w / 2, cy = py - h / 2;
       // (PHASE's stripes shallow, 1 in 3, as on a barber pole: steep ones in
       // the wide picture looked to slide sideways rather than rise)
-      float u = level ? cy + (down ? -off : off)
-                      : cx * (1.0f / 3.0f) + cy + off;
-      u -= per * floorf((u + 1.0f) / per);  // (-1 .. per - 1: the leading edge too)
-      float cover = std::min(1.0f, std::max(0.0f, std::min(u + 1.0f, sw - u)));
+      float u = level ? cy + (down ? -off[k] : off[k])
+                      : cx * (1.0f / 3.0f) + cy + off[k];
+      u -= per[k] * floorf((u + 1.0f) / per[k]);  // (-1 .. per - 1: the leading edge too)
+      float cover = std::min(1.0f, std::max(0.0f, std::min(u + 1.0f, sw[k] - u)));
       // (thinly filled: hard edges; half-lit edges came and went, pumping)
       // (slanting: hard edges too, half-lit ones made them ragged)
       if (fill <= 8 || !level) cover = cover >= 0.5f ? 1.0f : 0.0f;
       if (cover <= 0.0f) continue;
       // (the dither travels with its stripe: no dots blinking at the edges)
-      const int moved = int(floorf(down ? -slide : slide));
       const int a = level ? py + moved : px / 3 + py + moved;  // which line
       // where along it: the dots stay in their column, so PHASE's slanting
       // stripes rise (or sink) as a barber pole's do, not slide sideways

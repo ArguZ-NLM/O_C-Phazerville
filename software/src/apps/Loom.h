@@ -3006,6 +3006,7 @@ FLASHMEM void AppLoom::SetByText(bool want_mode, const char* text) {
     Serial.println("SET: not enough CPU, left as it was");
     return;
   }
+  dirty = true;  // (saved like a change on the panel)
   if (want_mode) d->FormatMode(p, buf, sizeof(buf)); else d->Format(p, buf, sizeof(buf));
   Serial.printf("SET %s %s %s\n", pd.name, want_mode ? "mode" : "=", buf);
 }
