@@ -1831,6 +1831,19 @@ FLASHMEM void AppLoom::MainLoop() {
       }
     }
     if (g_tape_request) { g_tape_request = false; g_tape->Toggle(); }  // USB 'T'
+    // the two REPEATs share RAM2 (they don't both fit): every half second a
+    // parked (bypassed, silent) one gives its part back and one in the chain
+    // takes it, whatever order they were set up in (a restart, a preset)
+    {
+      static uint32_t bal_at = 0;
+      if (millis() - bal_at > 500) {
+        bal_at = millis();
+        for (int t = 0; t < NUM_TRACKS; t++)
+          if (EchoDevice* e = Repeat(t)) if (tracks[t].parked >> ECHO & 1) e->Rest(true);
+        for (int t = 0; t < NUM_TRACKS; t++)
+          if (EchoDevice* e = Repeat(t)) if (!(tracks[t].parked >> ECHO & 1)) e->Rest(false);
+      }
+    }
     if (g_midilog_request) { g_midilog_request = false; MidiLogPrint(); }  // USB 'J'
     if (g_droplog_request) { g_droplog_request = false; DropLogPrint(); }  // USB 'O'
     g_tape->Idle();

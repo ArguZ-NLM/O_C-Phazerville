@@ -89,6 +89,7 @@ public:
     free(m); free(p); free(s);
   }
   bool ready() const { return mem && rv && pre && sh && dbuf[0] && dbuf[1]; }
+  bool HoldsRam2() const { return mem || pre || sh; }
   // what it holds, for the status: m r p s d d (a dash: missing)
   void Holds(char* b) const { b[0] = mem ? 'm' : '-'; b[1] = rv ? 'r' : '-'; b[2] = pre ? 'p' : '-'; b[3] = sh ? 's' : '-'; b[4] = dbuf[0] ? 'd' : '-'; b[5] = dbuf[1] ? 'd' : '-'; b[6] = 0; }
 
