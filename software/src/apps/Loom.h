@@ -3224,6 +3224,8 @@ FLASHMEM void AppLoom::DrawDevice() const {
   const bool both = linked || SharedFocus();
   const int name_x = both ? 24 : 12;
   const char* name = mod_mode && name_x + 6 * int(strlen(d->def.name)) > 62 ? ShownTag(d->def.tag) : d->def.name;
+  // frozen (REPEAT, FIBRE, DRAFT): the name reads FREEZE meanwhile
+  if (!focus_mod && !mod_mode && d->ActionLit(0) && !strcmp(d->def.actions[0], "FRZ")) name = PSTR("FREEZE");
   {  // the name would run into the header's info (SHUTTLE + its tempo): its tag
     char hi[24];
     if (!mod_mode && d->HeaderInfo(hi, sizeof(hi)) && name_x + 6 * int(strlen(name)) > 98 - 6 * int(strlen(hi)) - 4)  // (a gap between)
@@ -3314,12 +3316,7 @@ FLASHMEM void AppLoom::DrawDevice() const {
     const bool byp = a == 1 && byp_on;
     // slot devices keep their actions (ECHO: FRZ / CLR) off the header;
     // the modulators show theirs (RST, STP, TRG). Frozen (REPEAT, FIBRE,
-    // DRAFT): FRZ lit, between the page's name and its number
-    if (!focus_mod && a == 0 && d->ActionLit(0) && !strcmp(d->def.actions[0], "FRZ")) {
-      gfxPrint(86, 1, PSTR("FRZ"));
-      gfxInvert(85, 0, 20, 9);
-      continue;
-    }
+    // DRAFT): the name reads FREEZE (above)
     const char* label = byp ? PSTR("BYP") : focus_mod ? d->def.actions[a] : "";
     if (!label[0] || (a == 1 && mute_turn)) continue;
     // (a modulator's one action right after its name, A's or B's)
