@@ -5430,8 +5430,10 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
       // the edges are lit by how much of them the stripe covers (shaded
       // with the dither), so the stripes glide instead of stepping
       const int cx = px - w / 2, cy = py - h / 2;
+      // (PHASE's stripes shallow, 1 in 3, as on a barber pole: steep ones in
+      // the wide picture looked to slide sideways rather than rise)
       float u = level ? cy + (down ? -off : off)
-                      : cx + (down ? -cy : cy) + (down ? -off : off);
+                      : cx * (1.0f / 3.0f) + cy + off;
       u -= per * floorf((u + 1.0f) / per);  // (-1 .. per - 1: the leading edge too)
       float cover = std::min(1.0f, std::max(0.0f, std::min(u + 1.0f, sw - u)));
       // (thinly filled: hard edges; half-lit edges came and went, pumping)
@@ -5439,7 +5441,7 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
       if (cover <= 0.0f) continue;
       // (the dither travels with its stripe: no dots blinking at the edges)
       const int moved = int(floorf(down ? -slide : slide));
-      const int a = level ? py + moved : px + (down ? -py : py) + moved;  // which line
+      const int a = level ? py + moved : px / 3 + py + moved;  // which line
       // where along it: the dots stay in their column, so PHASE's slanting
       // stripes rise (or sink) as a barber pole's do, not slide sideways
       const int t = px;
