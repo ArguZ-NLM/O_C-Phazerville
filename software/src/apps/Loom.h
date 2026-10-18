@@ -3393,7 +3393,7 @@ FLASHMEM void AppLoom::DrawDevice() const {
     // Two dots at the name's ends drowned in the digits
     if (pd.nmodes && !(sel && mod_mode)) {
       constexpr int bx = 1, bw = 30;  // in the column
-      const int n = std::max<int>(1, pd.nmodes), mm = constrain(int(d->mode[p]), 0, n - 1);
+      const int n = std::max<int>(1, d->ModeCount(p)), mm = constrain(int(d->mode[p]), 0, n - 1);
       const float amt = n > 1 ? float(mm) / (n - 1) : 0.0f;
       int a, b;
       switch (d->BarStyle(p)) {
@@ -3404,6 +3404,11 @@ FLASHMEM void AppLoom::DrawDevice() const {
         case Device::BAR_LEFT: {  // a variation's amount, from the left (off: a mark)
           a = x + bx;
           b = a + std::max(0, int(amt * (bw - 1) + 0.5f));
+        } break;
+        case Device::BAR_ZOOM: {  // a zoom: from the middle out (all: 4 px), full width zoomed in most
+          const int h = 2 + int(amt * (bw / 2 - 2) + 0.5f);
+          a = x + bx + bw / 2 - h;
+          b = x + bx + bw / 2 + h - 1;
         } break;
         case Device::BAR_CENTRE: {  // +- amount, out from the middle (off: the middle)
           const int h = int(amt * (bw / 2 - 1) + 0.5f);

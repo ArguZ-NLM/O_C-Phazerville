@@ -441,8 +441,12 @@ public:
   // the bar over the name: the mode's part (BAR_PARTS), which of the two
   // shows (BAR_HALVES), or a variation's amount growing from the left /
   // the middle (HEDDLE's FDBK / its ± STAGE)
-  enum { BAR_PARTS, BAR_HALVES, BAR_LEFT, BAR_CENTRE };
-  virtual int BarStyle(int p) const { return AltName(p) ? BAR_HALVES : Varies(p) ? BAR_CENTRE : BAR_PARTS; }
+  // (BAR_ZOOM: a zoom, from the middle outwards, wider the closer it looks)
+  enum { BAR_PARTS, BAR_HALVES, BAR_LEFT, BAR_CENTRE, BAR_ZOOM };
+  virtual int BarStyle(int p) const { return ModeIsView(p) ? BAR_ZOOM : AltName(p) ? BAR_HALVES : Varies(p) ? BAR_CENTRE : BAR_PARTS; }
+  // how many modes the setting has right now (the bar's parts); TWILL's
+  // SPRD: as many as DIR's bells allow
+  virtual int ModeCount(int p) const { return param(p).nmodes; }
   // a variation up or down by a percentage: "±35%" (the font's ± is char 127, LOOM_PM)
   static void FormatVar(char* buf, size_t n, int pct) { snprintf(buf, n, LOOM_PM "%d%%", pct); }
   uint16_t alt_on = 0;  // which of those show their second value (the page's, not saved)
@@ -2336,6 +2340,31 @@ FLASHMEM void ReelDevice::DrawViz(int x, int y, int w, int h) {
       graphics.clearRect(cl, y + 1, cr - cl + 1, h - 2);
       gfxLine(ex, y, ex, base);
     }
+    // the seam, as on SHUTTLE: CROSS an X over START and END (inside them
+    // when there is no room around), INOUT a dip (down into END, up after
+    // START); dotted
+    const size_t n = fx.Length();
+    const size_t ea = size_t(a * n), eb = size_t(std::min(b, 1.0f) * n);
+    if (n && eb > ea) {
+      const float fv = cur[XFADE] * 0.01f;
+      const float seam = 16.0f + fv * fv * AUDIO_SAMPLE_RATE_EXACT;
+      size_t hh = 0, f = 0;
+      if (mode[XFADE] == 0) AudioEffectReel::XfPlan(seam, ea, eb - ea, n, hh, f);
+      else f = std::min<size_t>(size_t(seam), (eb - ea) / 4);
+      auto sx = [&](long fr) { return x + int(double(fr) * (w - 1) / double(n)); };
+      auto ramp = [&](long f0, long f1, bool up) {
+        const int x0 = sx(f0), x1 = sx(f1);
+        if (x1 <= x0) return;
+        for (int px = std::max(x, x0); px <= std::min(x + w - 1, x1); px += 2) {
+          const float t = float(px - x0) / float(x1 - x0);
+          gfxPixel(px, y + 1 + int((up ? 1.0f - t : t) * (h - 3)));
+        }
+      };
+      const long A = long(ea), Bn = long(eb), H = long(hh), Fl = long(f);
+      if (hh > 1) { ramp(Bn - H, Bn + H, false); ramp(A - H, A + H, true); }
+      else if (mode[XFADE] == 0) { ramp(Bn - Fl, Bn, false); ramp(Bn - Fl, Bn, true); ramp(A, A + Fl, true); ramp(A, A + Fl, false); }
+      else { ramp(Bn - Fl, Bn, false); ramp(A, A + Fl, true); }
+    }
   }
   // the head: recording, a solid line at the end of what is there; playing,
   // a thin gap through the wave
@@ -4227,9 +4256,12 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
       if (h > 1) {
         ramp(eb - h, eb + h, false);  // out, centred on END
         ramp(ea - h, ea + h, true);   // in, centred on START
-      } else {
-        ramp(eb - f, eb, false);      // out, into END
-        ramp(ea, ea + f, true);       // in, after START
+      } else if (mode[XFADE] == 0) {  // CROSS with no room around the edges: still an X, inside them
+        ramp(eb - f, eb, false); ramp(eb - f, eb, true);
+        ramp(ea, ea + f, true);  ramp(ea, ea + f, false);
+      } else {                        // INOUT: a dip, down into END and up after START
+        ramp(eb - f, eb, false);
+        ramp(ea, ea + f, true);
       }
     }
   }
@@ -6590,6 +6622,7 @@ public:
     return order[m];
   }
   int Way() const { return constrain(int(mode[SPRD]), 0, Ways(int(cur[ARP])) - 1); }
+  int ModeCount(int p) const override { return p == SPRD ? Ways(int(cur[ARP])) : Device::ModeCount(p); }
   void NudgeMode(int p, int dir) override {
     Device::NudgeMode(p, dir);
     if (p == SPRD && mode[SPRD] >= Ways(int(cur[ARP]))) { mode[SPRD] = uint8_t(Ways(int(cur[ARP])) - 1); Apply(SPRD); }
