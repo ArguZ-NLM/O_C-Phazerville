@@ -1018,7 +1018,8 @@ void FASTRUN loop() {
             OC::ui.Inject(UI::EVENT_BUTTON_PRESS, OC::CONTROL_BUTTON_L, 0, 0);
             break;
 #ifdef ENABLE_APP_LOOM
-          case '=': case ':': case 'j': case 'x': {
+          case '=': case ':': case 'j': case 'x': case 'f': {
+            // 'f': behind the screen (for videos), "fB/TWILL" presses its A, "fB/TWILL/KEY=B2+2" sets a value
             // 'j': jump to a device page, "jA/REPEAT/ROOM"; 'x': hold notes, captured, "x60.64.67"
             // the setting under the cursor straight to a value ('=') or mode
             // (':') given as the screen shows it: "=P20", "=3s", ":SHIFT"

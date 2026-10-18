@@ -468,6 +468,7 @@ private:
   void Mirror(loom::Device* d, int p) const;
   void SetByText(bool want_mode, const char* text);
   void GoTo(const char* text);
+  void Behind(const char* text);  // USB 'f': a device's A, or one of its values, without the screen changing
   uint8_t chord[8] = {};  // USB 'x': notes to hold while capturing
   int chord_n = 0;
   uint32_t chord_at = 0;
@@ -1945,6 +1946,7 @@ FLASHMEM void AppLoom::MainLoop() {
       const char r = g_set_request;
       g_set_request = 0;
       if (r == 'j') GoTo(g_set_text);
+      else if (r == 'f') Behind(g_set_text);
       else if (r == 'x') {  // USB "x60.64.67": these notes held 1.5 s, captured (out, A, B), the tracks as they are
         chord_n = 0;
         for (const char* c = g_set_text; *c && chord_n < 8; ) {
@@ -2847,6 +2849,29 @@ FLASHMEM void AppLoom::GoTo(const char* text) {
   cursor = constrain(p, 0, d->num_params() - 1);
   d->ui_cursor = int8_t(cursor);
   Serial.printf("GOTO %c %s %s\n", 'A' + t, d->def.name, d->Name(cursor));
+}
+
+// USB 'f' (scripted videos): "B/TWILL" presses that device's A (TWILL: HIT),
+// "B/TWILL/KEY=B2+2" sets one of its values by the shown text, all while the
+// screen stays on whatever page it shows: the page is borrowed and given back
+// within this loop, before anything is drawn
+FLASHMEM void AppLoom::Behind(const char* text) {
+  using namespace loom;
+  char path[48];
+  snprintf(path, sizeof(path), "%s", text);
+  char* eq = strchr(path, '=');
+  if (eq) *eq++ = 0;
+  const ViewMode v0 = view; const bool fm0 = focus_mod;
+  const int8_t mc0 = mod_cursor, t0 = track, c0 = col, cu0 = cursor;
+  const bool e0 = editing, mm0 = mod_mode, tm0 = trig_mode, em0 = edit_mode;
+  GoTo(path);
+  Device* d = view == DEVICE ? Focused() : nullptr;
+  const int8_t uc0 = d ? d->ui_cursor : 0;
+  if (d && eq) SetByText(false, eq);
+  else if (d) d->Action(0);
+  if (d) d->ui_cursor = uc0;
+  view = v0; focus_mod = fm0; mod_cursor = mc0; track = t0; col = c0; cursor = cu0;
+  editing = e0; mod_mode = mm0; trig_mode = tm0; edit_mode = em0;
 }
 
 FLASHMEM void AppLoom::SetByText(bool want_mode, const char* text) {
