@@ -105,6 +105,7 @@ volatile uint8_t g_heavy_request = 0;   // Loom: stress test (USB 'H' everything
 volatile uint8_t g_capture_request = 0;  // Loom's output capture (USB 'W' / 'U')
 volatile int8_t g_move_request = 0;    // Loom: move the effect under the cursor (USB 'Y' right, 'Z' left; testing)
 volatile uint32_t g_remote_at = 0;      // the last remote-panel key over USB (Loom shows a note)
+volatile bool g_demo = false;           // demo mode ('d'): driven by a script for a video, no remote frame
 volatile uint8_t g_notes_request = 0;    // Loom: test notes, captured (USB 'M'; 'm' both tracks)
 volatile char g_set_request = 0;        // Loom: '=' a value / ':' a mode by its shown text (USB, testing)
 char g_set_text[24] = "";
@@ -826,6 +827,10 @@ void FASTRUN loop() {
           }
           case 'J':  // Loom: the last MIDI messages in
             g_midilog_request = true;
+            break;
+          case 'd':  // Loom demo mode on / off: a script drives it for a video, so no blinking frame
+            g_demo = !g_demo;
+            Serial.printf("DEMO %s\n", g_demo ? "on" : "off");
             break;
           case 'T':  // Loom: start / stop a TAPE take (as holding A on OUTPUT)
             g_tape_request = true;

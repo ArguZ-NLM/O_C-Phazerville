@@ -4325,7 +4325,8 @@ FLASHMEM void AppLoom::View() const {
   else DrawChain();
   // driven from the computer: a frame round the screen, blinking, for 10 s
   // after the last remote key, so the knobs are left alone meanwhile
-  if (g_remote_at && millis() - g_remote_at < 10000 && (millis() / 250) % 2) {
+  // (not in demo mode: a script films it)
+  if (!g_demo && g_remote_at && millis() - g_remote_at < 10000 && (millis() / 250) % 2) {
     gfxFrame(0, 0, 128, 64);
     gfxFrame(1, 1, 126, 62);
   }
