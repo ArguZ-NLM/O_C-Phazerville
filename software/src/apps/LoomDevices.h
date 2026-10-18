@@ -4525,11 +4525,9 @@ public:
   // parked: its RAM2 memory given back (two REPEATs don't fit there at
   // once); back in the chain (or after a failed try): taken again
   void Rest(bool on) override {
-    if (on) { if (!shrunk && echo.HoldsRam2()) { echo.Shrink(); shrunk = true; } return; }
-    if (shrunk || !mem_ok) {
-      shrunk = false;
-      if (!echo.ready()) { mem_ok = echo.Acquire(); ApplyAll(); }
-    }
+    // (by what it holds, not by a note of what was done: a resume takes it all again)
+    if (on) { if (echo.HoldsRam2()) { echo.Shrink(); shrunk = true; } return; }
+    if (!echo.ready()) { shrunk = false; mem_ok = echo.Acquire(); ApplyAll(); }
   }
   bool shrunk = false;
   // a part switched off on its own page (B): bit 0 the delay, bit 1 the
