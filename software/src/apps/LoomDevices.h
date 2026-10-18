@@ -5423,7 +5423,10 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
   static const uint8_t ord[4] = {0, 2, 1, 3};
   const int fill = 1 + int(Mix()) * 15 / 100;  // 1 .. 16 of 16
   const bool level = !Phasing();
+  // PHASE: three poles side by side, two black gaps between (gap : pole 1 : 5)
+  const int gap = level || w < 64 ? 0 : (w + 8) / 17, pole_w = (w - 2 * gap) / 3;
   for (int px = 0; px < w; px++) {
+    if (gap && ((px >= pole_w && px < pole_w + gap) || (px >= 2 * pole_w + gap && px < 2 * pole_w + 2 * gap))) continue;
     const bool down = !Phasing() && (Side() == 1 || (Side() == 2 && px >= w / 2));
     for (int py = 0; py < h; py++) {
       // where this pixel is across the stripes, in fractions of a pixel:
