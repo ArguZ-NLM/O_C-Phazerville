@@ -4907,7 +4907,7 @@ PROGMEM static const DeviceDef DIRT_DEF = {
     {"NOICE", 0, 100, 0, UNI, 0, 3, 1, {}, {"WHITE", "PINK", "DUST"}},
     {"N.DCY", 0, 100, 40, UNI, 0, 21, 0},
     {"N.TON", 0, 100, 50, UNI, 0, 21, 0},
-    {"WET", 0, 100, 100, UNI, 0, 21, 0},
+    {"MIX", 0, 100, 100, UNI, 0, 21, 0},
   },
   {"", ""},
 };
@@ -5418,7 +5418,7 @@ PROGMEM static const DeviceDef RESONATOR_DEF = {
     {"PITCH", -24, 24, 0, BI, 0, 25, 0},
     {"TONE", -50, 50, 0, BI, 0, 11, 0},
     {"SCALE", 0, 3, 0, LIST, 4, 0, 0, {"CHROM", "MAJOR", "MINOR", "PENTA"}},
-    {"WET", 0, 100, 100, UNI, 0, 21, 0},
+    {"MIX", 0, 100, 100, UNI, 0, 21, 0},
   }
 };
 
@@ -5928,7 +5928,7 @@ PROGMEM static const DeviceDef MODAL_DEF = {
     {"POS", 0, 100, 25, UNI, 0, 21, 0},      // where it is struck
     {"SPRD", 0, 100, 70, UNI, 0, 21, 0},     // odd / even apart
     {"MODEL", 0, RingsVoice::MODELS - 1, 0, UNI},
-    {"WET", 0, 100, 100, UNI, 0, 21, 0},
+    {"MIX", 0, 100, 100, UNI, 0, 21, 0},
   },
   {"", ""},
 };
@@ -6575,7 +6575,7 @@ PROGMEM static const DeviceDef CHIME_DEF = {
     // microtonal ones bring their own)
     {"SCALE", 0, 29, 0, UNI, 0, 4, 0, {}, {"EQUAL", "JUST", "PYTH", "MEANT"}},
     {"DCAY", 0, 100, 66, UNI, 0, 11, 0},  // 20 ms .. 12 s to fade away (low: the wide pass blended in, a filter); mode: variation per hit
-    {"WET", 0, 100, 100, UNI, 0, 21, 0},
+    {"MIX", 0, 100, 100, UNI, 0, 21, 0},
   },
   {"", "SOUND"},
 };
