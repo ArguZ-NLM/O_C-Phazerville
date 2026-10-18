@@ -133,12 +133,24 @@ public:
   // right shifter (cents), how long the tail waits before them (ms) and how
   // much of its low / mid / high band goes round again (0..1)
   void shimmer(float amount) { sh_amt_target = constrain(amount, 0.0f, 1.0f); }
+  // a new recipe: while the shimmer is silent, at once; while it sounds, it
+  // waits until the recipe has stayed the same for ~1/4 s (a knob turned
+  // through DEEP, DOVE, DRIFT on its way to DUST: only DUST), then the
+  // shimmer's feed fades out (~40 ms), the recipe changes and it fades in
+  // again (~100 ms): no cut, no jump in pitch or delay
   void shimmer_recipe(float cents_l, float cents_r, float ms, float lo, float mid, float hi, float fb) {
-    sh_fb = constrain(fb, 0.0f, 1.2f);
-    sh_ra[0] = exp2f(cents_l / 1200.0f);
-    sh_ra[1] = exp2f(cents_r / 1200.0f);
-    shd_n = constrain(int(ms * 0.001f * AUDIO_SAMPLE_RATE_EXACT * 0.5f), 1, SHD_LEN - 1);
-    sh_lv[0] = lo; sh_lv[1] = mid; sh_lv[2] = hi;
+    Recipe r;
+    r.fb = constrain(fb, 0.0f, 1.2f);
+    r.ra[0] = exp2f(cents_l / 1200.0f);
+    r.ra[1] = exp2f(cents_r / 1200.0f);
+    r.dn = constrain(int(ms * 0.001f * AUDIO_SAMPLE_RATE_EXACT * 0.5f), 1, SHD_LEN - 1);
+    r.lv[0] = lo; r.lv[1] = mid; r.lv[2] = hi;
+    if (sh_amt <= 0.0f && sh_amt_target <= 0.0f) { UseRecipe(r); pend = false; return; }
+    if (!pend && r.Same(Current())) return;            // (PRE / ROOM call it again: nothing new)
+    if (pend && r.Same(pend_r)) return;
+    __disable_irq();
+    pend_r = r; pend_age = 0; pend = true;
+    __enable_irq();
   }
   // a part switched off: its input closes, the dry passes whole and what
   // it holds rings out
@@ -279,6 +291,21 @@ private:
   volatile float sh_ra[2] = {2.0f, 2.0f};  // the shifters' ratios, left / right
   volatile float sh_lv[3] = {0.4f, 0.9f, 0.8f};  // low / mid / high round again
   volatile float sh_fb = 0.8f;  // how strongly it goes round
+  struct Recipe {
+    float fb = 0.0f, ra[2] = {1.0f, 1.0f}, lv[3] = {0.0f, 0.0f, 0.0f}; int dn = 1;
+    bool Same(const Recipe& o) const {
+      return fb == o.fb && ra[0] == o.ra[0] && ra[1] == o.ra[1] && dn == o.dn && lv[0] == o.lv[0] && lv[1] == o.lv[1] && lv[2] == o.lv[2];
+    }
+  };
+  Recipe Current() const { Recipe r; r.fb = sh_fb; r.ra[0] = sh_ra[0]; r.ra[1] = sh_ra[1]; r.dn = shd_n; for (int i = 0; i < 3; i++) r.lv[i] = sh_lv[i]; return r; }
+  void UseRecipe(const Recipe& r) {
+    sh_fb = r.fb; sh_ra[0] = r.ra[0]; sh_ra[1] = r.ra[1]; shd_n = r.dn;
+    for (int i = 0; i < 3; i++) sh_lv[i] = r.lv[i];
+  }
+  Recipe pend_r;
+  volatile bool pend = false;
+  int pend_age = 0;     // blocks the pending recipe has stayed the same
+  float sh_xf = 1.0f;   // the shimmer feed's fade for a recipe change
   volatile float sh_amt_target = 0.0f;
   float sh_amt = 0.0f;
   bool rv_hi_cold = false;  // lines 4..7 were left out: cleared before they come back
@@ -700,6 +727,16 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
     // held only by the guard: massive)
     float shim[2][HALF];
     sh_amt += 0.1f * (sh_amt_target - sh_amt);
+    // a recipe change (see shimmer_recipe): wait ~1/4 s of no change, fade
+    // out, change it (the heads placed afresh for it), fade in
+    if (pend) {
+      if (++pend_age > 86) {
+        sh_xf -= 0.07f;
+        if (sh_xf <= 0.0f) { sh_xf = 0.0f; UseRecipe(pend_r); pend = false; sh_up[0] = sh_up[1] = -1; }
+      }
+    } else if (sh_xf < 1.0f) {
+      sh_xf = std::min(1.0f, sh_xf + 0.03f);
+    }
     if (sh_amt_target <= 0.0f && sh_amt < 1e-3f) sh_amt = 0.0f;
     const bool shim_on = sh && sh_amt > 0.0f;
     if (shim_on) {
@@ -711,7 +748,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
       // (the guard only once the tail is loud: past 0.25 it holds it there;
       // x1 and 0.15 were too quiet a shimmer)
       const float guard = sh_env > 0.25f ? 0.25f / sh_env : 1.0f;
-      const float g = sh_amt * sh_fb * 1.5f * guard;
+      const float g = sh_amt * sh_fb * 1.5f * guard * sh_xf;
       float pk = 0.0f;
       for (int k = 0; k < HALF; k++) {
         for (int c = 0; c < 2; c++) {
