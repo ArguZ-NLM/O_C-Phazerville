@@ -4522,6 +4522,16 @@ public:
     Refresh(TIME);
   }
   void Parked() override { if (mem_ok) echo.Reset(); }  // no old tail on return
+  // parked: its RAM2 memory given back (two REPEATs don't fit there at
+  // once); back in the chain (or after a failed try): taken again
+  void Rest(bool on) override {
+    if (on) { if (mem_ok && !shrunk) { echo.Shrink(); shrunk = true; } return; }
+    if (shrunk || !mem_ok) {
+      shrunk = false;
+      if (!echo.ready()) { mem_ok = echo.Acquire(); ApplyAll(); }
+    }
+  }
+  bool shrunk = false;
   // a part switched off on its own page (B): bit 0 the delay, bit 1 the
   // reverb; the slot's bypass (chain view) leaves these as they are
   uint8_t off = 0;

@@ -76,6 +76,18 @@ public:
     }
   }
 
+  // parked (bypassed and silent): give back what sits in RAM2 (the
+  // network's state, the pre-delay, the shifter's ring: ~47 KB), so the
+  // other track's REPEAT finds room; Acquire takes it again. (Called from
+  // the main loop: update() runs in the audio interrupt, never halfway
+  // while this runs, and finds the pointers either all there or gone)
+  void Shrink() {
+    float* m = mem; float* p = pre; int16_t* s = sh;
+    __disable_irq();
+    mem = nullptr; pre = nullptr; sh = nullptr;
+    __enable_irq();
+    free(m); free(p); free(s);
+  }
   bool ready() const { return mem && rv && pre && sh && dbuf[0] && dbuf[1]; }
   // what it holds, for the status: m r p s d d (a dash: missing)
   void Holds(char* b) const { b[0] = mem ? 'm' : '-'; b[1] = rv ? 'r' : '-'; b[2] = pre ? 'p' : '-'; b[3] = sh ? 's' : '-'; b[4] = dbuf[0] ? 'd' : '-'; b[5] = dbuf[1] ? 'd' : '-'; b[6] = 0; }
