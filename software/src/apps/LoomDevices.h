@@ -172,6 +172,9 @@ inline int64_t ClockGrid(float div_beats) {
 // follows MIDI): synced modulators hold while stopped and begin again from
 // the top on start
 bool clock_running = true;
+// the clock following a track's SHUTTLE (CLOCK's SOURCE SHU A / SHU B): that
+// track (0 / 1), -1 none. That SHUTTLE leads, so its SYNC doesn't follow back
+int8_t clock_shuttle = -1;
 uint8_t clock_starts = 0;  // counts starts; each modulator notices a new one
 inline void ClockStart() { clock_running = true; clock_starts++; }
 inline void ClockStop() { clock_running = false; }
@@ -3320,6 +3323,19 @@ public:
   int FileParam() const override { return FILE_; }
   void OpenBrowser() override;
   void Picked(const char* folder, const char* name) override;
+  // the clock following this file (CLOCK's SOURCE SHU A / B)
+  int8_t track = -1;
+  // the tempo heard: the file's at this SPEED, either way (0: none found, or
+  // not playing)
+  float HeardBpm() const { return bpm > 0.0f && Playing() ? bpm * cur[SPEED] * 0.01f : 0.0f; }
+  // where the head is in the file's beat, 0..1 as heard (backwards too: a
+  // beat falls where the head crosses one, the hit's frame); -1: no tempo
+  float HeardBeatPhase() const {
+    if (bpm <= 0.0f || !Playing()) return -1.0f;
+    double b = (double(HeadFrame()) - bpm_phase) / BeatFrames();
+    if (mode[SPEED] == DIR_REV) b = -b;
+    return float(b - floor(b));
+  }
 
 private:
   AudioPlayStream stream;  // before fx: the audio update order follows the signal
@@ -3381,7 +3397,7 @@ private:
   // SYNC: how much faster the file plays so its tempo is the clock's (1:
   // not synced, or no tempo found); SPEED then multiplies that
   float SyncRatio() const {
-    return mode[SPEED] == DIR_SYNC && bpm > 0.0f ? tempo_bpm / bpm : 1.0f;
+    return mode[SPEED] == DIR_SYNC && bpm > 0.0f && clock_shuttle != track ? tempo_bpm / bpm : 1.0f;
   }
   float synced_at = 0.0f, synced_bpm = 0.0f;  // the clock tempo / file tempo SPEED was set for
   // the head, in frames of the whole file
@@ -3411,6 +3427,9 @@ private:
   void Window();
   size_t SnapQuiet(size_t at) const;
 };
+
+// both tracks' SHUTTLEs, for the clock (set when the tracks are made)
+PlayerDevice* shuttles[2] = {nullptr, nullptr};
 
 // the WAVs in the current folder, sorted by name; a card put in after
 // power-up is picked up here

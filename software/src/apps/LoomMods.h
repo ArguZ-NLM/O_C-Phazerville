@@ -773,11 +773,14 @@ FLASHMEM void FollowMod::DrawViz(int x, int y, int w, int h) {
 // MIDI clock pulses seen by the app's MIDI reader
 volatile uint32_t midi_clocks = 0;
 
-// source: 0 internal, 1 MIDI clock, 2+ trigger sources (TR, CV, MIDI map)
+// source: 0 internal, 1 MIDI clock, 2+ trigger sources (TR, CV, MIDI map),
+// then SHU A / SHU B: the file playing in that track's SHUTTLE, its tempo
+// as heard (SPEED, backwards too) and its beats where its hits are
+constexpr int CLK_SHU = TRIG_SOURCES + 1;  // SHU A; + 1: SHU B
 PROGMEM static const DeviceDef CLOCK_DEF = {
   "CLOCK", "CLK", 3, {"TAP", "RST"},  // B: the beat from one again (all on the clock with it)
   {
-    {"SOURC", 0, TRIG_SOURCES, 0, UNI},
+    {"SOURC", 0, CLK_SHU + 1, 0, UNI},
     {"BPM", 30, 300, 120, UNI},
     {"PPQN", 0, 3, 0, LIST, 4, 0, 0, {"1", "2", "4", "24"}},
   }
@@ -794,6 +797,7 @@ public:
   void DrawMini(int x, int y, int w, int h) override;
   bool external() const { return cur[P_SOURCE] != 0; }
   bool midi() const { return cur[P_SOURCE] == 1; }
+  int Shuttle() const { return cur[P_SOURCE] >= CLK_SHU ? cur[P_SOURCE] - CLK_SHU : -1; }  // its track, -1 none
   bool Waiting() const { return external() && !have_measure; }
   int Beat() const { return beat; }
 private:
@@ -825,6 +829,11 @@ FLASHMEM void ClockDevice::Tick(const ModCtx& ctx) {
       midi_mark = c;
       midi_mark_us = now;
     }
+  } else if (src >= CLK_SHU) {
+    // a SHUTTLE's file: held at the last tempo while it doesn't play
+    const PlayerDevice* p = shuttles[src - CLK_SHU];
+    const float b = p ? p->HeardBpm() : 0.0f;
+    if (b >= 10.0f && b <= 400.0f) { measured = b; have_measure = true; }
   } else if (src >= 2) {
     if (SrcEdge(src - 1, ctx.edges, prev_gate[0])) {
       const uint32_t dt = now - last_edge_us;
@@ -839,6 +848,17 @@ FLASHMEM void ClockDevice::Tick(const ModCtx& ctx) {
   // beat blink for the picture, and a 0..1 ramp per beat as output
   if (Restarted()) { beat_ph = 0.0f; beat = 0; flash = 0.08f; clock_beat_n = 0; }
   if (clock_running) beat_ph += ctx.dt * tempo_bpm / 60.0f;
+  clock_shuttle = int8_t(Shuttle());
+  if (clock_running && clock_shuttle >= 0 && shuttles[clock_shuttle]) {
+    // the beats pulled onto the file's (gently: a loop's seam jumps)
+    const float fp = shuttles[clock_shuttle]->HeardBeatPhase();
+    if (fp >= 0.0f) {
+      float err = fp - (beat_ph - floorf(beat_ph));
+      err -= floorf(err + 0.5f);  // -0.5 .. 0.5
+      beat_ph += err * std::min(1.0f, ctx.dt * 4.0f);
+      if (beat_ph < 0.0f) beat_ph += 1.0f;
+    }
+  }
   if (beat_ph >= 1.0f) { beat_ph -= floorf(beat_ph); beat = (beat + 1) % 4; flash = 0.08f; clock_beat_n++; }
   out = beat_ph;
   clock_beat_ph = beat_ph;  // for a PLAYER starting on the next beat
@@ -861,6 +881,7 @@ FLASHMEM void ClockDevice::Format(int p, char* buf, size_t n) const {
   if (p == P_SOURCE) {
     if (val[p] == 0) snprintf(buf, n, "INT");
     else if (val[p] == 1) snprintf(buf, n, "MIDI");
+    else if (val[p] >= CLK_SHU) snprintf(buf, n, "SHU %c", 'A' + (val[p] - CLK_SHU));
     else FormatTrig(val[p] - 1, buf, n);
   } else if (p == P_BPM && external()) {
     snprintf(buf, n, "%d", int(tempo_bpm + 0.5f));

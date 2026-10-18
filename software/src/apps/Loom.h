@@ -555,6 +555,8 @@ FLASHMEM void AppLoom::Start() {
     tr.reel->val[ReelDevice::IN] = tr.input->val[0];
     tr.reel->ApplyAll();
     tr.player = new PlayerDevice;
+    tr.player->track = t;
+    shuttles[t] = tr.player;
     tr.player->mod_bus = tr.mod_out;
     tr.player->Defaults();
     tr.warp = new WarpDevice;
@@ -3597,7 +3599,8 @@ FLASHMEM void AppLoom::DrawClockPage() const {
     char buf[20];
     if (p == ClockDevice::P_SOURCE && c->val[p] == 0) snprintf(buf, sizeof(buf), "internal");
     else if (p == ClockDevice::P_SOURCE && c->val[p] == 1) snprintf(buf, sizeof(buf), "MIDI clock");
-    else if (p == ClockDevice::P_PPQN && !c->external()) snprintf(buf, sizeof(buf), "-");
+    else if (p == ClockDevice::P_SOURCE && c->val[p] >= CLK_SHU) snprintf(buf, sizeof(buf), "SHUTTLE %c", 'A' + (c->val[p] - CLK_SHU));
+    else if (p == ClockDevice::P_PPQN && (!c->external() || c->Shuttle() >= 0)) snprintf(buf, sizeof(buf), "-");
     else c->Format(p, buf, sizeof(buf));
     gfxPrint(48, y, buf);
     if (p == cursor) {
