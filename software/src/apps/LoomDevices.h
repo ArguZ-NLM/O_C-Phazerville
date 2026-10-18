@@ -5390,7 +5390,8 @@ FLASHMEM void HeddleDevice::Format(int p, char* buf, size_t n) const {
 FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
   // HEDDLE: a barber pole. Its stripes roll up (shifted up) or down,
   // faster the further SHIFT goes; BOTH: up on the left, down on the
-  // right. SHIFT / SHCLK: level stripes, PHASE / PHCLK: slanting ones.
+  // right. SHIFT / SHCLK: level stripes, PHASE / PHCLK: slanting ones,
+  // moving straight up (or down) too.
   // FDBK / RESO thickens them; MIX fills them in, a dither as FIBRE's
   // wave (0: a faint trace, 100: solid)
   const uint32_t now = millis();
@@ -5439,7 +5440,9 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
       // (the dither travels with its stripe: no dots blinking at the edges)
       const int moved = int(floorf(down ? -slide : slide));
       const int a = level ? py + moved : px + (down ? -py : py) + moved;  // which line
-      const int t = level ? px : px + moved;  // where along it (the dots ride with it)
+      // where along it: the dots stay in their column, so PHASE's slanting
+      // stripes rise (or sink) as a barber pole's do, not slide sideways
+      const int t = px;
       const int d = 4 * ord[(t + a) & 3] + ord[a & 3];
       if (d < int(fill * cover + 0.5f)) gfxPixel(x + px, y + py);
     }
