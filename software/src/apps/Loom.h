@@ -3224,8 +3224,10 @@ FLASHMEM void AppLoom::DrawDevice() const {
   const bool both = linked || SharedFocus();
   const int name_x = both ? 24 : 12;
   const char* name = mod_mode && name_x + 6 * int(strlen(d->def.name)) > 62 ? ShownTag(d->def.tag) : d->def.name;
-  // frozen (REPEAT, FIBRE, DRAFT): the name reads FREEZE meanwhile
-  if (!focus_mod && !mod_mode && d->ActionLit(0) && !strcmp(d->def.actions[0], "FRZ")) name = PSTR("FREEZE");
+  // frozen (REPEAT, FIBRE, DRAFT): the name reads FREEZE meanwhile, blinking
+  // (on and off every 0.6 s, as MUTE)
+  if (!focus_mod && !mod_mode && d->ActionLit(0) && !strcmp(d->def.actions[0], "FRZ"))
+    name = (millis() / 600) % 2 ? PSTR("      ") : PSTR("FREEZE");  // (spaces: REVRB / DELAY stay put)
   {  // the name would run into the header's info (SHUTTLE + its tempo): its tag
     char hi[24];
     if (!mod_mode && d->HeaderInfo(hi, sizeof(hi)) && name_x + 6 * int(strlen(name)) > 98 - 6 * int(strlen(hi)) - 4)  // (a gap between)
