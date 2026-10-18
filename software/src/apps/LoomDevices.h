@@ -4638,7 +4638,7 @@ PROGMEM static const GlintRecipe GLINTS[GLINT_N] = {
   {"DEEP", -1200, 1200, 40, 1.0f, 0.2f, 0.0f, 0.85f},  // Strata: dark, both ways
   {"DOVE", 509, -1202, 380, 0.3f, 0.3f, 1.0f, 1.0f},   // Dove Line: slow, up a fourth / down an octave
   {"DRIFT", -30, -27, 60, 0.7f, 0.95f, 0.75f, 1.0f},   // Mercury Tinctures: sinking slowly
-  {"DUST", -1203, 1205, 50, 0.6f, 0.6f, 1.0f, 1.0f},   // Majestic Dust: octave down / up
+  {"DUST", -1200, 1200, 50, 0.3f, 0.6f, 1.0f, 0.85f},  // Majestic Dust: octave down / up (tamed: exact, half the lows, less round)
   {"GLASS", 2410, 710, 60, 0.15f, 0.55f, 0.55f, 0.7f}, // High Harmonics Too
   {"HALL", -7, 6, 30, 0.6f, 0.6f, 0.55f, 1.0f},        // MicroPitch Down the Hall
   {"HALO", 702, 1209, 90, 0.4f, 0.45f, 0.67f, 0.8f},   // Opiate Halo
