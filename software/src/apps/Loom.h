@@ -2826,6 +2826,19 @@ FLASHMEM void AppLoom::GoTo(const char* text) {
     Serial.printf("GOTO %c MOD %c %s %s\n", 'A' + t, 'A' + i, m ? m->def.name : "(off)", m ? m->Name(cursor) : "");
     return;
   }
+  // the clock: "jA/CLOCK", "jA/CLOCK/SOURC"
+  if (!strcmp(part[1], "CLOCK") || !strcmp(part[1], "CLK")) {
+    focus_mod = true;
+    mod_cursor = int8_t(CLK_CURSOR);
+    track = int8_t(t);
+    editing = mod_mode = trig_mode = edit_mode = false;
+    view = DEVICE;
+    cursor = 0;
+    for (int p = 0; p < tempo_clock->num_params(); p++)
+      if (part[2][0] && (!strcmp(part[2], tempo_clock->param(p).name) || !strncmp(part[2], tempo_clock->param(p).name, 5))) cursor = p;
+    Serial.printf("GOTO CLOCK %s\n", tempo_clock->Name(cursor));
+    return;
+  }
   int found = -1;
   static const char* const tags[COLS] = {"", "", "", "", "", "CLO"};
   for (int c = 0; c < COLS && found < 0; c++) {
