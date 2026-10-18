@@ -3568,6 +3568,10 @@ FLASHMEM void PlayerDevice::BpmStart() {
     bpm_from = EdgeAt(START);
     const size_t e = EdgeAt(END);
     bpm_n = e > bpm_from ? int(std::min<size_t>((e - bpm_from) / IDX_FRAMES, BPM_BINS)) : 0;
+    if (bpm_n < 280) {  // a short loop (or one not on the beats yet, SNAP BEAT waits for them): all of memory
+      bpm_from = 0;
+      bpm_n = int(std::min<size_t>(n / IDX_FRAMES, BPM_BINS));
+    }
   } else {
     bpm_from = EdgeAt(START);
     if (bpm_from + 800 * IDX_FRAMES > n) bpm_from = 0;  // too little after START: from the beginning
