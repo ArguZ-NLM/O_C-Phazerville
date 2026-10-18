@@ -5412,7 +5412,9 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
   // the middle one in front: the outer two further back, so slower (38 %,
   // 44 %) and finer (stripes 0.6 as wide). SHIFT: one, the middle's
   const bool level = !Phasing();
-  const int gap = level || w < 64 ? 0 : (2 * w + 9) / 19, pole_w = (w - 2 * gap) / 3;
+  // (the middle one widest: each outer one 0.6 of it)
+  const int gap = level || w < 64 ? 0 : (2 * w + 9) / 19, side_w = (w - 2 * gap) * 3 / 11;
+  const int mid_end = w - side_w - gap;  // where the middle one ends
   static const float k_speed[3] = {0.62f, 1.0f, 0.56f}, k_per[3] = {0.6f, 1.0f, 0.6f};
   float per[3], off[3], sw[3];
   for (int k = 0; k < 3; k++) {
@@ -5437,8 +5439,8 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
   for (int px = 0; px < w; px++) {
     int k = 1;
     if (gap) {
-      if ((px >= pole_w && px < pole_w + gap) || (px >= 2 * pole_w + gap && px < 2 * pole_w + 2 * gap)) continue;
-      k = px < pole_w ? 0 : px < 2 * pole_w + gap ? 1 : 2;
+      if ((px >= side_w && px < side_w + gap) || (px >= mid_end && px < mid_end + gap)) continue;
+      k = px < side_w ? 0 : px < mid_end ? 1 : 2;
     }
     const bool down = !Phasing() && (Side() == 1 || (Side() == 2 && px >= w / 2));
     const int moved = int(floorf(down ? -slides[k] : slides[k]));
