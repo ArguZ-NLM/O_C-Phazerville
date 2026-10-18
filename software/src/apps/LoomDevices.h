@@ -5260,6 +5260,7 @@ public:
     else { flipped = !flipped; Send(); }
   }
   bool ActionLit(int a) const override { return a == 1 && flipped; }
+  int OctavePos() const { float o = fx.PhasePos() * 8.0f; return int((o - floorf(o)) * 1000.0f); }  // (status)
   void Format(int p, char* buf, size_t n) const override;
   void DrawViz(int x, int y, int w, int h) override { DrawPole(x, y, w, h); }
   void DrawMini(int x, int y, int w, int h) override { DrawPole(x, y, w, h); }
@@ -5305,6 +5306,18 @@ FLASHMEM void HeddleDevice::Idle() {
   if (now - v_ms < 4) return;
   const float dt = std::min(0.1f, (now - v_ms) * 0.001f);
   v_ms = now;
+  if (Phasing() && OnClk() && cur[SHIFT] && loom::clock_running) {
+    // PHCLK: an octave each note value, and it turns over on them (the pole
+    // pulled gently onto the clock's grid, as the clock is onto a file's beats)
+    const double div = DivBeats(DivIndex(abs(int(cur[SHIFT])), 1, 100));
+    float want = float(fmod((double(loom::clock_beat_n) + loom::clock_beat_ph) / div, 1.0));
+    if ((cur[SHIFT] < 0) != flipped) want = 1.0f - want;  // falling
+    float have = fx.PhasePos() * 8.0f;  // (8 octaves round)
+    have -= floorf(have);
+    float err = want - have;
+    err -= floorf(err + 0.5f);
+    fx.PullPhase(err * std::min(1.0f, dt * 4.0f) / 8.0f);
+  }
   bool send = false;
   if (loom::clock_beat_n != v_beat) {
     v_beat = loom::clock_beat_n;

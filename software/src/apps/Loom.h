@@ -2164,6 +2164,12 @@ FLASHMEM void AppLoom::MainLoop() {
     Serial.printf("  CLOCK on SHUTTLE %c: %d.%02d bpm, beat %d/1000, file's %d/1000\n", 'A' + loom::clock_shuttle,
       int(loom::tempo_bpm), int(loom::tempo_bpm * 100) % 100, int(loom::clock_beat_ph * 1000),
       int(loom::shuttles[loom::clock_shuttle]->HeardBeatPhase() * 1000));
+  for (int t = 0; t < loom::NUM_TRACKS; t++)  // HEDDLE's phaser: where it is in its octave
+    for (int c = 0; c < loom::COLS; c++)
+    if (loom::Device* d = loom::tracks[t].at(c)) if (!strcmp(d->def.name, "HEDDLE"))
+    if (auto* h = static_cast<loom::HeddleDevice*>(d)) if (h->active && h->Phasing())
+      Serial.printf("  HEDDLE %c: octave %d/1000, clock beat %lu + %d/1000\n", 'A' + t, h->OctavePos(),
+        (unsigned long)loom::clock_beat_n, int(loom::clock_beat_ph * 1000));
   // modulated settings: value, result, both sources (amount, MOD, u/b)
   for (int t = 0; t < loom::NUM_TRACKS; t++) {
     const loom::Track& tr = loom::tracks[t];

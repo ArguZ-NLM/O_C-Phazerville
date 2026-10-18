@@ -115,6 +115,8 @@ public:
     shift_mix = constrain(depth, 0.0f, 1.0f);
   }
   float PhasePos() const { return ph_pos; }  // (the picture)
+  // on the clock: nudged so its octaves turn over on the note values
+  void PullPhase(float d) { float p = ph_pos + d; ph_pos = p - floorf(p); }
 
   // fold curve, shared with the picture: sin() of the boosted signal folds
   // it back from the edges; crossfaded in so 0 is clean
