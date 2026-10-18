@@ -1755,6 +1755,8 @@ FLASHMEM void AppLoom::WriteOutputs() {
   }
 }
 
+extern "C" char* __brkval;           // the top of the RAM2 heap (Teensy's startup)
+extern "C" unsigned long _heap_end;
 FLASHMEM void AppLoom::MainLoop() {
   // the longest gap between two main loops (USB stats), so it shows when
   // STRETCH's search (from Idle) may fall behind
@@ -2197,6 +2199,18 @@ FLASHMEM void AppLoom::MainLoop() {
         int(parts[0]), int(parts[0] * 10) % 10, int(parts[1]), int(parts[1] * 10) % 10);
     }
     Serial.println();
+  }
+  // REPEAT's memory (m r p s d d, a dash: missing) and RAM2's room
+  for (int t = 0; t < NUM_TRACKS; t++)
+    for (int o = 0; o < MAX_OPTIONS; o++) {
+      Device* d = tracks[t].inst[ECHO][o];
+      if (!d || memcmp(d->def.tag, "ECO", 3)) continue;
+      char h[8]; static_cast<EchoDevice*>(d)->Holds(h);
+      Serial.printf("  %c REPEAT holds %s%s\n", t ? 'R' : 'L', h, d->active ? " (active)" : "");
+    }
+  {
+    char* top = __brkval;
+    Serial.printf("  RAM2 heap left %ld KB (beyond freed blocks)\n", long((char*)&_heap_end - top) / 1024);
   }
   const float mx = mixer->processorUsageMax();
   mixer->processorUsageMaxReset();

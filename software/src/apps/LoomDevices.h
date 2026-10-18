@@ -4477,6 +4477,7 @@ public:
   bool Activate() override;
   void Deactivate() override;
   bool ok() const override { return mem_ok; }
+  void Holds(char* b) const { echo.Holds(b); }
   void Apply(int p) override;
   void Shimmer();  // GLINT to the engine
   const char* AltName(int p) const override { return p == ROOM ? "GLINT" : p == WALL ? "PRSET" : nullptr; }
@@ -4562,7 +4563,8 @@ FLASHMEM EchoDevice::EchoDevice() : Device(ECHO_DEF), echo(ECHO_DELAY_SAMPLES) {
 
 // called while the stream is not patched in, so it isn't updating
 FLASHMEM bool EchoDevice::Activate() {
-  if (active) return mem_ok;
+  if (active && mem_ok) return true;
+  // (again after a failed try: memory may have come free since)
   mem_ok = echo.Acquire();
   ApplyAll();
   active = true;
