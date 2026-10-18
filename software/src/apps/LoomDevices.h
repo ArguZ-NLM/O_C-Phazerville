@@ -5409,11 +5409,11 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
   per_now += (per_to - per_now) * std::min(1.0f, dt * 8.0f);
   if (fabsf(per_to - per_now) < 0.01f) per_now = per_to;
   // PHASE: three poles side by side, black gaps between (gap : pole 2 : 5);
-  // the middle one in front: the outer two further back, so slower (18 %,
-  // 22 %) and finer (a fifth narrower stripes). SHIFT: one, the middle's
+  // the middle one in front: the outer two further back, so slower (38 %,
+  // 44 %) and finer (stripes 0.6 as wide). SHIFT: one, the middle's
   const bool level = !Phasing();
   const int gap = level || w < 64 ? 0 : (2 * w + 9) / 19, pole_w = (w - 2 * gap) / 3;
-  static const float k_speed[3] = {0.82f, 1.0f, 0.78f}, k_per[3] = {0.8f, 1.0f, 0.8f};
+  static const float k_speed[3] = {0.62f, 1.0f, 0.56f}, k_per[3] = {0.6f, 1.0f, 0.6f};
   float per[3], off[3], sw[3];
   for (int k = 0; k < 3; k++) {
     // (whole pixels once it has glided there, as the middle's)
