@@ -5265,8 +5265,9 @@ public:
     return idx < 0 ? 0 : s * DivValue(idx, 1, 100);
   }
   float poles[3] = {};         // the picture's barber poles, where each is (in stripes)
-  float per_now = 16.0f;       // its stripes' spacing, gliding to the new one
+  float per_now = 8.0f;        // the pole's stripes' spacing, gliding to the new one
   float slides[3] = {};        // how far each one's dither has moved (px, round 4)
+  bool side_down[2] = {};      // the sides' way (left, right), kept while PHASE holds them
   uint32_t pole_at = 0;
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
@@ -5400,12 +5401,14 @@ FLASHMEM void HeddleDevice::Format(int p, char* buf, size_t n) const {
 }
 
 FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
-  // HEDDLE: a barber pole. Its stripes roll up (shifted up) or down,
-  // faster the further SHIFT goes; BOTH: up on the left, down on the
-  // right. SHIFT / SHCLK: level stripes, PHASE / PHCLK: slanting ones,
-  // moving straight up (or down) too.
-  // FDBK / RESO thickens them; MIX fills them in, a dither as FIBRE's
-  // wave (0: a faint trace, 100: solid)
+  // HEDDLE: a barber pole in the middle (PHASE) with the space on either
+  // side of it (SHIFT), black gaps between; only the one in use moves
+  // (Sascha, 2026-10-19). SHIFT / SHCLK: the sides' level stripes roll up
+  // (shifted up) or down, faster the further SHIFT goes; BOTH: the left
+  // side up, the right one down. PHASE / PHCLK: the pole's slanting
+  // stripes climb (or sink), as wide as the stages are few.
+  // FDBK / RESO thickens the stripes; MIX fills them in, a dither as
+  // FIBRE's wave (0: a faint trace, 100: solid)
   const uint32_t now = millis();
   const float dt = pole_at ? std::min(0.1f, (now - pole_at) * 0.001f) : 0.0f;
   pole_at = now;
@@ -5414,27 +5417,25 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
   const float raw = Phasing() ? hz * 24.0f  // (octaves a second)
                               : (hz < 0.0f ? -1.0f : 1.0f) * 12.0f * log2f(1.0f + fabsf(hz) * 4.0f);
   const float speed = constrain(raw, -60.0f, 60.0f);
-  // PHASE: the stripes as wide as the stages are few (4: wide, 20: fine),
-  // gliding there and grown / shrunk from the middle of the picture
-  // (whole pixels: a fraction of one makes the edge dots shimmer)
-  // (half the old 24 .. 10: twice the stripes, Sascha's call)
-  const float per_to = Phasing() ? roundf(12.0f - (Stages() - 4) * 0.4375f) : 16.0f;  // 12 .. 5 px
+  // the pole's stripes as wide as the stages are few (4: wide, 20: fine),
+  // gliding there (whole pixels: a fraction of one makes the edge dots
+  // shimmer); on SHIFT it keeps the width it had
+  const float per_to = Phasing() ? roundf(12.0f - (Stages() - 4) * 0.4375f)  // 12 .. 5 px
+                                 : per_now > 0.0f ? per_now : 8.0f;
   per_now += (per_to - per_now) * std::min(1.0f, dt * 8.0f);
   if (fabsf(per_to - per_now) < 0.01f) per_now = per_to;
-  // PHASE: three poles side by side, black gaps between (gap : pole 2 : 5);
-  // the middle one in front: the outer two further back, so slower (38 %,
-  // 44 %) and finer (stripes 0.6 as wide). SHIFT: one, the middle's
-  const bool level = !Phasing();
-  // (the middle one widest: each outer one 0.6 of it)
-  const int gap = level || w < 64 ? 0 : (2 * w + 9) / 19, side_w = (w - 2 * gap) * 3 / 11;
-  const int mid_end = w - side_w - gap;  // where the middle one ends
-  static const float k_speed[3] = {0.62f, 1.0f, 0.56f}, k_per[3] = {0.6f, 1.0f, 0.6f};
+  // the sides, the gaps and the pole (gap : side 2 : 5, the pole 1 : 0.6 of
+  // a side); a narrow picture: the pole alone
+  const int gap = w < 64 ? 0 : (2 * w + 9) / 19, side_w = gap ? (w - 2 * gap) * 3 / 11 : 0;
+  const int mid_end = w - side_w - gap;  // where the pole ends
+  // which way each side rolls (kept while PHASE holds them still: there
+  // SIDE is STAGE)
+  if (!Phasing()) { side_down[0] = Side() == 1; side_down[1] = Side() >= 1; }
   float per[3], off[3], sw[3];
   for (int k = 0; k < 3; k++) {
-    // (whole pixels once it has glided there, as the middle's)
-    const bool gliding = per_now != per_to;
-    per[k] = k == 1 || !gap ? per_now : gliding ? per_now * k_per[k] : std::max(3.0f, roundf(per_now * k_per[k]));
-    const float sp = speed * k_speed[k];
+    const bool pole = k == 1;
+    per[k] = pole ? per_now : 10.0f;
+    const float sp = pole == Phasing() ? speed : 0.0f;  // (the other one stands)
     poles[k] += sp * dt / per[k];
     poles[k] -= floorf(poles[k]);
     off[k] = poles[k] * per[k];  // (px)
@@ -5455,15 +5456,16 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
       if ((px >= side_w && px < side_w + gap) || (px >= mid_end && px < mid_end + gap)) continue;
       k = px < side_w ? 0 : px < mid_end ? 1 : 2;
     }
-    const bool down = !Phasing() && (Side() == 1 || (Side() == 2 && px >= w / 2));
+    const bool level = k != 1;
+    const bool down = level && side_down[k == 2];
     const int moved = int(floorf(down ? -slides[k] : slides[k]));
     for (int py = 0; py < h; py++) {
       // where this pixel is across the stripes, in fractions of a pixel:
       // the edges are lit by how much of them the stripe covers (shaded
       // with the dither), so the stripes glide instead of stepping
       const int cx = px - w / 2, cy = py - h / 2;
-      // (PHASE's stripes shallow, 1 in 3, as on a barber pole: steep ones in
-      // the wide picture looked to slide sideways rather than rise)
+      // (the pole's stripes shallow, 1 in 3, as on a barber pole: steep ones
+      // in the wide picture looked to slide sideways rather than rise)
       float u = level ? cy + (down ? -off[k] : off[k])
                       : cx * (1.0f / 3.0f) + cy + off[k];
       u -= per[k] * floorf((u + 1.0f) / per[k]);  // (-1 .. per - 1: the leading edge too)
@@ -5474,14 +5476,13 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
       if (cover <= 0.0f) continue;
       // (the dither travels with its stripe: no dots blinking at the edges)
       const int a = level ? py + moved : px / 3 + py + moved;  // which line
-      // where along it: the dots stay in their column, so PHASE's slanting
+      // where along it: the dots stay in their column, so the slanting
       // stripes rise (or sink) as a barber pole's do, not slide sideways
       const int t = px;
       const int d = 4 * ord[(t + a) & 3] + ord[a & 3];
       if (d < int(fill * cover + 0.5f)) gfxPixel(x + px, y + py);
     }
   }
-  if (!Phasing() && Side() == 2) gfxLine(x + w / 2, y, x + w / 2, y + h - 1);
 }
 
 /////////////////////////////////////////////////////////////////
