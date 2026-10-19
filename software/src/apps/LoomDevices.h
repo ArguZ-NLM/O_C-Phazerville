@@ -5405,7 +5405,8 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
   // PHASE: the stripes as wide as the stages are few (4: wide, 20: fine),
   // gliding there and grown / shrunk from the middle of the picture
   // (whole pixels: a fraction of one makes the edge dots shimmer)
-  const float per_to = Phasing() ? roundf(24.0f - (Stages() - 4) * 0.875f) : 16.0f;  // 24 .. 10 px
+  // (half the old 24 .. 10: twice the stripes, Sascha's call)
+  const float per_to = Phasing() ? roundf(12.0f - (Stages() - 4) * 0.4375f) : 16.0f;  // 12 .. 5 px
   per_now += (per_to - per_now) * std::min(1.0f, dt * 8.0f);
   if (fabsf(per_to - per_now) < 0.01f) per_now = per_to;
   // PHASE: three poles side by side, black gaps between (gap : pole 2 : 5);
@@ -5420,7 +5421,7 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
   for (int k = 0; k < 3; k++) {
     // (whole pixels once it has glided there, as the middle's)
     const bool gliding = per_now != per_to;
-    per[k] = k == 1 || !gap ? per_now : gliding ? per_now * k_per[k] : std::max(4.0f, roundf(per_now * k_per[k]));
+    per[k] = k == 1 || !gap ? per_now : gliding ? per_now * k_per[k] : std::max(3.0f, roundf(per_now * k_per[k]));
     const float sp = speed * k_speed[k];
     poles[k] += sp * dt / per[k];
     poles[k] -= floorf(poles[k]);
