@@ -193,8 +193,9 @@ private:
   float mix_now = 0.0f;
   // HEDDLE's level kept as it came in (Sascha: SHIFT with FDBK got ~2 dB
   // louder, peaks 3.5 dB; PHASE ~2 dB quieter): the energy in and out,
-  // smoothed, and a gain gliding (~0.1 s) to match them, +-10 dB at most
-  float hl_in = 0.0f, hl_out = 0.0f, hg = 1.0f;
+  // smoothed, and a gain gliding (~0.1 s) to match them, +-10 dB at most;
+  // each side its own (SIDE BOTH: one side came out ~1.5 dB louder)
+  float hl_in[2] = {}, hl_out[2] = {}, hg[2] = {1.0f, 1.0f};
   // Olli Niemitalo's coefficients (squared): 90 degrees apart within ~0.1
   // degree from ~20 Hz to ~20 kHz at 48 kHz
   static constexpr float HB_A[8] = {
@@ -331,7 +332,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
   }
 
   float pre[2][AUDIO_BLOCK_SAMPLES];  // PHASE: the sound before the phasers
-  float e_in = 0.0f, e_out = 0.0f;     // HEDDLE's energy in / out this block (the level match)
+  float e_in[2] = {}, e_out[2] = {};   // HEDDLE's energy in / out this block, per side (the level match)
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
     float x[2] = {in[0] ? in[0]->data[n] * q : 0.0f, in[1] ? in[1]->data[n] * q : 0.0f};
     const float dry[2] = {x[0], x[1]};
@@ -404,7 +405,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
       pre[1][n] = o2[1];
       continue;
     } else if (shifting) {
-      e_in += o2[0] * o2[0] + o2[1] * o2[1];
+      e_in[0] += o2[0] * o2[0]; e_in[1] += o2[1] * o2[1];
       mix_now += 0.002f * (sh_mix_to - mix_now);
       const float oc = osc_c * rc - osc_s * rs;  // the oscillator a step on
       osc_s = osc_c * rs + osc_s * rc;
@@ -431,8 +432,8 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
         hb_fb[c] = sh;
         o2[c] += mix_now * (sw_from + sw_d * (n + 1)) * (sh - o2[c]);
       }
-      e_out += o2[0] * o2[0] + o2[1] * o2[1];
-      o2[0] *= hg; o2[1] *= hg;
+      e_out[0] += o2[0] * o2[0]; e_out[1] += o2[1] * o2[1];
+      o2[0] *= hg[0]; o2[1] *= hg[1];
     }
     for (int c = 0; c < 2; c++) {
       peak_out = std::max(peak_out, fabsf(o2[c]));
@@ -474,9 +475,9 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
         mn += 0.002f * (sh_mix_to - mn);
         // the notches: the sound and its phased copy half and half at the deepest
         const float o0 = pre[c][n] + mn * 0.5f * (sw_from + sw_d * (n + 1)) * (yw[n] - pre[c][n]);
-        e_in += pre[c][n] * pre[c][n];
-        e_out += o0 * o0;
-        const float o = o0 * hg;
+        e_in[c] += pre[c][n] * pre[c][n];
+        e_out[c] += o0 * o0;
+        const float o = o0 * hg[c];
         peak_out = std::max(peak_out, fabsf(o));
         out[c]->data[n] = ToSample16(o);
       }
@@ -486,15 +487,17 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
   }
   // the level match: smoothed energies (~30 ms), the gain gliding (~0.1 s)
   // to their ratio; held through silence; back to 1 with HEDDLE off
-  if (shifting) {
-    if (e_in > 1e-6f * AUDIO_BLOCK_SAMPLES) {
-      hl_in += 0.1f * (e_in - hl_in);
-      hl_out += 0.1f * (e_out - hl_out);
-      if (hl_out > 1e-9f) hg += 0.03f * (constrain(sqrtf(hl_in / hl_out), 0.316f, 3.16f) - hg);
+  for (int c = 0; c < 2; c++) {
+    if (shifting) {
+      if (e_in[c] > 0.5e-6f * AUDIO_BLOCK_SAMPLES) {
+        hl_in[c] += 0.1f * (e_in[c] - hl_in[c]);
+        hl_out[c] += 0.1f * (e_out[c] - hl_out[c]);
+        if (hl_out[c] > 1e-9f) hg[c] += 0.03f * (constrain(sqrtf(hl_in[c] / hl_out[c]), 0.316f, 3.16f) - hg[c]);
+      }
+    } else {
+      hg[c] += 0.05f * (1.0f - hg[c]);
+      hl_in[c] = hl_out[c] = 0.0f;
     }
-  } else {
-    hg += 0.05f * (1.0f - hg);
-    hl_in = hl_out = 0.0f;
   }
   if (shifting) {  // keep the oscillator on the circle
     const float m = 1.0f / sqrtf(osc_c * osc_c + osc_s * osc_s);
