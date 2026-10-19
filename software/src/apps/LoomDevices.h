@@ -5426,7 +5426,8 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
   if (fabsf(per_to - per_now) < 0.01f) per_now = per_to;
   // the sides, the gaps and the pole: the pole a quarter of the width, the
   // gaps close to it, the sides the rest (more room for SHIFT, Sascha); a
-  // narrow picture: the pole alone
+  // narrow picture (the weave view's box): only the one in use, SHIFT's
+  // level stripes or PHASE's pole, the whole width
   const int gap = w < 64 ? 0 : (2 * w + 9) / 19;
   const int side_w = gap ? (w - 2 * gap - w / 4) / 2 : 0;
   const int mid_end = w - side_w - gap;  // where the pole ends
@@ -5455,7 +5456,7 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
   static const uint8_t ord[4] = {0, 2, 1, 3};
   const int fill = 1 + int(Mix()) * 15 / 100;  // 1 .. 16 of 16
   for (int px = 0; px < w; px++) {
-    int k = 1;
+    int k = gap || Phasing() ? 1 : 0;
     if (gap) {
       if ((px >= side_w && px < side_w + gap) || (px >= mid_end && px < mid_end + gap)) continue;
       k = px < side_w ? 0 : px < mid_end ? 1 : 2;
