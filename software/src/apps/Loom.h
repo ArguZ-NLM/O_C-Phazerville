@@ -2999,6 +2999,7 @@ FLASHMEM void AppLoom::SetByText(bool want_mode, const char* text) {
   const int start = want_mode ? d->mode[p] : d->val[p];
   const float before = WorstCost(d);
   walk(best);
+  if (!want_mode) d->SetFromText(p);
   // a costlier setting only with room for it (as with the knobs)
   const float more = (WorstCost(d) - before) * (linked ? 2.0f : 1.0f);
   if (more > 0.0f && !focus_mod && col > SOURCE && col < SLOT_COUNT && !(tracks[track].bypass >> col & 1) && !Admit(more)) {

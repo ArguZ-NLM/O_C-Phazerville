@@ -322,6 +322,8 @@ public:
 
   virtual void Apply(int p) = 0;
   virtual int Step(int p, int v, int dir) const { return v + dir; }
+  // a value set straight from USB '=' (testing, videos): what hangs on it
+  virtual void SetFromText(int) {}
   virtual void Format(int p, char* buf, size_t n) const;
   // a setting's mode as text; modes past the 4 named ones are shown by the
   // device (e.g. a number)
@@ -3210,6 +3212,14 @@ public:
   void Deactivate() override;
   bool ok() const override { return fx.ready(); }
   void Apply(int p) override;
+  // USB '=' on START / END: that edge's exact frame goes there too (it played
+  // on from where the knob had left it); the other edge keeps its own
+  void SetFromText(int p) override {
+    if ((p == START || p == END) && ex_valid && Frames()) {
+      ex_pos[p == END] = uint32_t(uint64_t(val[p]) * Frames() / 10000);
+      Refresh(p);
+    }
+  }
   int Step(int p, int v, int dir) const override;
   bool ModeIsView(int p) const override { return p == START || p == END; }
   // START / END: a click is one pixel of the picture at its zoom
