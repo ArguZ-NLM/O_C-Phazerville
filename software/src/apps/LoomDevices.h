@@ -5424,13 +5424,17 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
                                  : per_now > 0.0f ? per_now : 8.0f;
   per_now += (per_to - per_now) * std::min(1.0f, dt * 8.0f);
   if (fabsf(per_to - per_now) < 0.01f) per_now = per_to;
-  // the sides, the gaps and the pole (gap : side 2 : 5, the pole 1 : 0.6 of
-  // a side); a narrow picture: the pole alone
-  const int gap = w < 64 ? 0 : (2 * w + 9) / 19, side_w = gap ? (w - 2 * gap) * 3 / 11 : 0;
+  // the sides, the gaps and the pole: the pole a quarter of the width, the
+  // gaps close to it, the sides the rest (more room for SHIFT, Sascha); a
+  // narrow picture: the pole alone
+  const int gap = w < 64 ? 0 : (2 * w + 9) / 19;
+  const int side_w = gap ? (w - 2 * gap - w / 4) / 2 : 0;
   const int mid_end = w - side_w - gap;  // where the pole ends
   // which way each side rolls (kept while PHASE holds them still: there
   // SIDE is STAGE)
   if (!Phasing()) { side_down[0] = Side() == 1; side_down[1] = Side() >= 1; }
+  // FDBK / RESO at 100: a pixel more on both sides of every stripe
+  const int fat = Fdbk() >= 100.0f ? 1 : 0;
   float per[3], off[3], sw[3];
   for (int k = 0; k < 3; k++) {
     const bool pole = k == 1;
@@ -5444,7 +5448,7 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
     slides[k] += sp * dt;
     slides[k] -= 4.0f * floorf(slides[k] / 4.0f);
     slides[k] += (off[k] - floorf(off[k])) - (slides[k] - floorf(slides[k]));  // (the same fraction as the stripes)
-    sw[k] = std::max(1.0f, roundf((2 + int(Fdbk()) * 5 / 100) * per[k] / 16.0f));
+    sw[k] = std::max(1.0f, roundf((2 + int(Fdbk()) * 5 / 100) * per[k] / 16.0f)) + 2.0f * fat;
   }
   // the fill dots: every line of a stripe gets its share (a square dither
   // left whole slanting lines dark at low MIX: they blinked in and out)
@@ -5466,8 +5470,8 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
       const int cx = px - w / 2, cy = py - h / 2;
       // (the pole's stripes shallow, 1 in 3, as on a barber pole: steep ones
       // in the wide picture looked to slide sideways rather than rise)
-      float u = level ? cy + (down ? -off[k] : off[k])
-                      : cx * (1.0f / 3.0f) + cy + off[k];
+      float u = (level ? cy + (down ? -off[k] : off[k])
+                       : cx * (1.0f / 3.0f) + cy + off[k]) + fat;  // (fat: grown both ways)
       u -= per[k] * floorf((u + 1.0f) / per[k]);  // (-1 .. per - 1: the leading edge too)
       float cover = std::min(1.0f, std::max(0.0f, std::min(u + 1.0f, sw[k] - u)));
       // (thinly filled: hard edges; half-lit edges came and went, pumping)
