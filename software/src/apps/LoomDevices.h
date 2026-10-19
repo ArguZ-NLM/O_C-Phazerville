@@ -4158,10 +4158,22 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
   const bool zoomed = view_cursor == START || view_cursor == END || view_cursor == XFADE || view_cursor == SNAP;
   const int zm = zoomed ? mode[START] : 0;
   {
-    // the top line: the name, then the zoom (time across) and SD at the right
-    int right = x + w;
-    if (streaming) right -= 14;
-    else if (clipped) right -= 20;
+    // the top line: the name, then the zoom (time across), then one tag at
+    // the right: 16s (too long for memory), MEM (a section held), SD (streamed;
+    // !! blinking when the card fell behind). One tag, its own width kept free:
+    // in between (a section being read in while START moved) the zoom label
+    // ran into MEM
+    char tag[6] = {};
+    if (too_long) snprintf(tag, sizeof(tag), "%ds", int(MaxSecs()));
+    else if (clipped) snprintf(tag, sizeof(tag), "MEM");
+    else if (streaming) {
+      const bool late = stream.Underran();
+      if (!late) snprintf(tag, sizeof(tag), "SD");
+      else if ((millis() / 200) % 2) snprintf(tag, sizeof(tag), "!!");
+    }
+    const int tag_w = streaming && !too_long && !clipped ? 12 : 6 * int(strlen(tag));  // (SD / !! blinking: the same room)
+    int right = x + w - (tag_w ? tag_w + 2 : 0);
+    if (tag[0]) gfxPrint(x + w - 6 * int(strlen(tag)), y, tag);
     char zt[8] = {};
     if (zm > 0) {
       FormatZoom(zm, zt, sizeof(zt));
@@ -4171,12 +4183,6 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
     char nm[24];
     ShortName(names[fi], (right - x) / 6 - 1, nm, sizeof(nm));
     gfxPrint(x, y, nm);
-  }
-  if (too_long) { char t[6]; snprintf(t, sizeof(t), "%ds", int(MaxSecs())); gfxPrint(x + w - 6 * int(strlen(t)), y, t); }
-  else if (clipped) gfxPrint(x + w - 18, y, PSTR("MEM"));
-  if (streaming) {  // streamed from the card; blinks if the card fell behind
-    const bool late = stream.Underran();
-    if (!late || (millis() / 200) % 2) gfxPrint(x + w - 12, y, late ? PSTR("!!") : PSTR("SD"));
   }
   // nothing yet: the file isn't read in until Idle() gets to it (start-up,
   // a new FILE); "can't read" only once a load of this file has failed
