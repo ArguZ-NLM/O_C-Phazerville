@@ -3833,6 +3833,10 @@ FLASHMEM void PlayerDevice::Load(int i) {
       EdgesToSettings();
       ApplyAll();
       MetaBaseline();
+      // (another file picked while one played: this one plays on, as the
+      // other loads do; it stayed silent here)
+      if (play_after && !stream.Playing()) stream.Play();
+      play_after = false;
       return;
     } else {
       lf.seek(lf.position() + sz + (sz & 1));
