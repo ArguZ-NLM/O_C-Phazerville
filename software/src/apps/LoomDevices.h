@@ -5315,7 +5315,7 @@ FLASHMEM void HeddleDevice::Apply(int p) {
   switch (p) {
     case SHIFT: case SIDE: case HFDBK: case HMIX:
       if (was_phase != int8_t(Phasing())) {  // SIDE <-> STAGE: from where it makes sense
-        if (was_phase >= 0) val[SIDE] = cur[SIDE] = Phasing() ? 4 : 0;  // 12 stages / UP
+        if (was_phase >= 0) val[SIDE] = cur[SIDE] = 0;  // PHASE from 4 stages (Sascha) / SHIFT UP
         was_phase = int8_t(Phasing());
       }
       Send();

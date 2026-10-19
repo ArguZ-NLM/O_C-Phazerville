@@ -3231,7 +3231,7 @@ FLASHMEM void AppLoom::DrawChain() const {
   // the jack's level at the right end, for the clipping track or on a
   // SOURCE taking the input (INPUT, SPOOL)
   const int db_t = clip ? clip_t : col == SOURCE && tr.choice[SOURCE] < 2 ? track : -1;
-  if (g_tape->Recording()) {
+  if (g_tape->Recording() && !g_demo) {  // (not in a video's demo mode: the BOLT is recording the take)
     // TAPE running: a blinking dot and its time where the slot's name goes
     // (SLOW blinking in when the card fell behind)
     if ((millis() / 500) % 2) gfxRect(9, 57, 5, 5);
