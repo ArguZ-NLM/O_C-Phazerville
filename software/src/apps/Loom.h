@@ -466,7 +466,15 @@ private:
   uint32_t reset_hold = 0;  // ... since then
   loom::PlayerDevice* meta_page = nullptr;  // the PLAYER whose page is open
   void Mirror(loom::Device* d, int p) const;
-  void SetByText(bool want_mode, const char* text);
+  void SetByText(bool want_mode, const char* text, bool smooth = false);
+  // USB 'w' (videos): a value walked to as a hand dials, a step every
+  // WALK_MS, landing exactly (a set by '=' jumped)
+  static constexpr uint32_t WALK_MS = 70;
+  loom::Device* walk_dev = nullptr;
+  int8_t walk_p = 0;
+  int16_t walk_to = 0;
+  uint32_t walk_at = 0;
+  void WalkIdle();
   void GoTo(const char* text);
   void Behind(const char* text);  // USB 'f': a device's A, or one of its values, without the screen changing
   uint8_t chord[8] = {};  // USB 'x': notes to hold while capturing
@@ -1975,8 +1983,10 @@ FLASHMEM void AppLoom::MainLoop() {
         if (chord_n && g_capture->Start(false, -1, true)) { chord_at = millis() | 1; chord_on = false; }
         else Serial.println("CHORD: no notes / no PSRAM");
       }
+      else if (r == 'w') SetByText(false, g_set_text, true);
       else SetByText(r == ':', g_set_text);
     }
+    WalkIdle();
     // USB 'x': the chord asked for, on at 50 ms, off at 1550 ms
     if (chord_at) {
       const uint32_t t = millis() - chord_at;
@@ -2912,7 +2922,34 @@ FLASHMEM void AppLoom::Behind(const char* text) {
   editing = e0; mod_mode = mm0; trig_mode = tm0; edit_mode = em0;
 }
 
-FLASHMEM void AppLoom::SetByText(bool want_mode, const char* text) {
+FLASHMEM void AppLoom::WalkIdle() {
+  using namespace loom;
+  if (!walk_dev || millis() - walk_at < WALK_MS) return;
+  walk_at = millis();
+  Device* d = walk_dev;
+  const int p = walk_p, now = d->val[p];
+  if (now != walk_to) {
+    d->Nudge(p, walk_to > now ? 1 : -1);
+    Mirror(d, p);
+    const int after = d->val[p];
+    const bool passed = after == now || (walk_to > now ? after > walk_to : after < walk_to);
+    if (!passed && after != walk_to) return;
+    if (passed) {  // (stuck, or a step jumps over it: the last bit straight)
+      d->last_delta[p] = int16_t(walk_to - after);
+      d->val[p] = walk_to;
+      d->Refresh(p);
+      Mirror(d, p);
+    }
+  }
+  d->SetFromText(p);
+  dirty = true;
+  walk_dev = nullptr;
+  char buf[16];
+  d->Format(p, buf, sizeof(buf));
+  Serial.printf("WALKED %s = %s\n", d->param(p).name, buf);
+}
+
+FLASHMEM void AppLoom::SetByText(bool want_mode, const char* text, bool smooth) {
   using namespace loom;
   Device* d = view == DEVICE && !mod_mode && !trig_mode ? Focused() : nullptr;
   if (!d) { Serial.println("SET: open a device page first"); return; }
@@ -2977,6 +3014,11 @@ FLASHMEM void AppLoom::SetByText(bool want_mode, const char* text) {
     d->val[p] = was;
   }
   if (best_d >= 1e9f) { Serial.printf("SET %s: nothing shows \"%s\"\n", pd.name, text); return; }  // (values can be below 0)
+  if (smooth && !want_mode) {  // USB 'w': WalkIdle() turns it there
+    walk_dev = d; walk_p = int8_t(p); walk_to = int16_t(best); walk_at = 0;
+    Serial.printf("WALK %s\n", pd.name);
+    return;
+  }
   if (want_mode) d->mode_named |= uint16_t(1u << p);  // (past the name stop)
   // in knob steps (a stuck step ends it)
   auto walk = [&](int target) {

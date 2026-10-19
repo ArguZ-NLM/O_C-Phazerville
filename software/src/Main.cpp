@@ -776,7 +776,7 @@ void FASTRUN loop() {
         int cmd = Serial.read();
         // the remote panel (keys sent from the computer): Loom shows a
         // sticky note meanwhile, so nobody turns a knob at the same time
-        if (cmd > 0 && strchr("+-uy*[],.<>&!%~=:j", cmd)) g_remote_at = millis() | 1;
+        if (cmd > 0 && strchr("+-uy*[],.<>&!%~=:jw", cmd)) g_remote_at = millis() | 1;
         switch (cmd) {
 #if defined(__IMXRT1062__)
 #ifdef CARD_APP
@@ -1029,7 +1029,7 @@ void FASTRUN loop() {
               Serial.printf("RECALL %d: no such preset\n", slot);
             }
           } break;
-          case '=': case ':': case 'j': case 'x': case 'f': {
+          case '=': case ':': case 'j': case 'x': case 'f': case 'w': {
             // 'f': behind the screen (for videos), "fB/TWILL" presses its A, "fB/TWILL/KEY=B2+2" sets a value
             // 'j': jump to a device page, "jA/REPEAT/ROOM"; 'x': hold notes, captured, "x60.64.67"
             // the setting under the cursor straight to a value ('=') or mode
