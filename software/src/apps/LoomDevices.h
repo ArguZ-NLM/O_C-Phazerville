@@ -3346,6 +3346,7 @@ private:
   char dir[96] = "/LOOM";  // the folder FILE steps through
   // streaming (files too long for fx)
   bool streaming = false, analysing = false;
+  bool play_after = false;  // it was playing when Load began: it plays on once loaded (STRM <-> MEM)
   bool indexing = false;   // streaming, and the level index still being read
   uint32_t indexed_at = 0;
   size_t data_off = 0, done = 0;  // where the samples start in the file; analysis progress
@@ -3711,6 +3712,7 @@ FLASHMEM void PlayerDevice::Deactivate() {
 
 // reads the WAV header, then Idle() fills the buffer
 FLASHMEM void PlayerDevice::Load(int i) {
+  play_after = active && Playing();  // (before the old file stops below)
   WriteMeta();  // what the last file had, before it goes
   fx.CancelPress();  // a start waiting for its beat was for the old file
   stream.CancelPlay();
@@ -3867,6 +3869,10 @@ FLASHMEM void PlayerDevice::Idle() {
       EdgesToSettings();
       ApplyAll();
       MetaBaseline();
+      // (FinishLoad leaves it stopped: a switch to MEM while it played went
+      // silent, with the screen still showing it playing)
+      if (play_after && fx.state() == AudioEffectReel::STOPPED) fx.Press();
+      play_after = false;
     }
     return;
   }
@@ -3885,6 +3891,8 @@ FLASHMEM void PlayerDevice::Idle() {
       EdgesToSettings();
       ApplyAll();
       MetaBaseline();
+      if (play_after && !stream.Playing()) stream.Play();
+      play_after = false;
     }
     return;
   }
