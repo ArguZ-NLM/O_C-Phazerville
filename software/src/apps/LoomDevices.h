@@ -5411,8 +5411,8 @@ FLASHMEM void HeddleDevice::Format(int p, char* buf, size_t n) const {
 }
 
 FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
-  // HEDDLE: a barber pole in the middle (PHASE) with the space on either
-  // side of it (SHIFT), black gaps between; only the one in use moves
+  // HEDDLE: a barber pole in the middle (PHASE) or the space on either
+  // side of it (SHIFT), black gaps between; only the one in use shows
   // (Sascha, 2026-10-19). SHIFT / SHCLK: the sides' level stripes roll up
   // (shifted up) or down, faster the further SHIFT goes; BOTH: the left
   // side up, the right one down. PHASE / PHCLK: the pole's slanting
@@ -5444,8 +5444,12 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
   // which way each side rolls (kept while PHASE holds them still: there
   // SIDE is STAGE)
   if (!Phasing()) { side_down[0] = Side() == 1; side_down[1] = Side() >= 1; }
-  // FDBK / RESO at 100: a pixel more on both sides of every stripe
-  const int fat = Fdbk() >= 100.0f ? 1 : 0;
+  // FDBK / RESO: the stripes thicken in small steps (a row about every
+  // fifth of the way, as far as the spacing allows); from 90 a row more,
+  // at 100 a pixel more on both sides (Sascha)
+  const float fb = Fdbk();
+  const int fat = fb >= 100.0f ? 1 : 0;
+  const int extra = (fb >= 90.0f ? 1 : 0) + fat;
   float per[3], off[3], sw[3];
   for (int k = 0; k < 3; k++) {
     const bool pole = k == 1;
@@ -5459,7 +5463,8 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
     slides[k] += sp * dt;
     slides[k] -= 4.0f * floorf(slides[k] / 4.0f);
     slides[k] += (off[k] - floorf(off[k])) - (slides[k] - floorf(slides[k]));  // (the same fraction as the stripes)
-    sw[k] = std::max(1.0f, roundf((2 + int(Fdbk()) * 5 / 100) * per[k] / 16.0f)) + 2.0f * fat;
+    const float most = std::max(1.0f, floorf(per[k] * 0.45f));  // (keeps a gap between the stripes)
+    sw[k] = 1.0f + floorf(fb * 0.01f * (most - 1.0f) + 0.5f) + float(extra);
   }
   // the fill dots: every line of a stripe gets its share (a square dither
   // left whole slanting lines dark at low MIX: they blinked in and out)
@@ -5470,6 +5475,7 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
     if (gap) {
       if ((px >= side_w && px < side_w + gap) || (px >= mid_end && px < mid_end + gap)) continue;
       k = px < side_w ? 0 : px < mid_end ? 1 : 2;
+      if ((k == 1) != Phasing()) continue;  // only the one in use shows (Sascha)
     }
     const bool level = k != 1;
     const bool down = level && side_down[k == 2];

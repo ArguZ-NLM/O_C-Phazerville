@@ -800,6 +800,16 @@ public:
   int Shuttle() const { return cur[P_SOURCE] >= CLK_SHU ? cur[P_SOURCE] - CLK_SHU : -1; }  // its track, -1 none
   bool Waiting() const { return external() && !have_measure; }
   int Beat() const { return beat; }
+  // SOURCE on the knob: INT, MIDI, SHU A, SHU B, then TR1 .. (the SHUTTLEs
+  // up front, Sascha; the stored numbers stay as they were, so saved
+  // settings keep their meaning)
+  int Step(int p, int v, int dir) const override {
+    if (p != P_SOURCE) return v + dir;
+    const int last = CLK_SHU + 1;
+    auto pos = [&](int x) { return x <= 1 ? x : x >= CLK_SHU ? x - CLK_SHU + 2 : x + 2; };
+    auto at = [&](int i) { return i <= 1 ? i : i <= 3 ? CLK_SHU + i - 2 : i - 2; };
+    return at(constrain(pos(v) + dir, 0, last));
+  }
 private:
   uint8_t beat = 0;
   uint32_t last_edge_us = 0, tap_us = 0;

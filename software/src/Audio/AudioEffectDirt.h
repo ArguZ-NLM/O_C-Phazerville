@@ -167,6 +167,11 @@ private:
   volatile float shift_hz = 0.0f, shift_fb = 0.0f, shift_mix = 0.0f;
   volatile uint8_t shift_side = SIDE_UP;
   volatile bool phasing = false;
+  // SHIFT <-> PHASE: the effect fades out (~5 ms), the engine switches, it
+  // fades back in (switched at once it clicked)
+  bool ph_now = false;     // what runs
+  float sw_g = 1.0f;       // the effect's level for the switch
+  static constexpr float SW_STEP = 0.5f;  // a block's share of the fade
   volatile float ph_rate = 0.0f;
   volatile uint8_t ph_stages = 12;
   float ph_pos = 0.0f;                       // 0..1 through the 8 octaves (the first phaser)
@@ -292,7 +297,15 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
   const uint8_t sh_side = shift_side;
   const bool shifting = sh_mix_to > 0.0f || mix_now > 1e-4f;
   // PHASE: this block's all-pass coefficient and level per phaser
-  const bool ph = phasing;
+  if (phasing != ph_now && sw_g <= 0.0f) {  // faded out: switch, from silence
+    ph_now = phasing;
+    hb_fb[0] = hb_fb[1] = 0.0f;
+    memset(ph_y, 0, sizeof(ph_y));
+  }
+  const float sw_from = sw_g;
+  sw_g = phasing == ph_now ? std::min(1.0f, sw_g + SW_STEP) : std::max(0.0f, sw_g - SW_STEP);
+  const float sw_d = (sw_g - sw_from) / AUDIO_BLOCK_SAMPLES;
+  const bool ph = ph_now;
   float ph_a[PH_STREAMS] = {}, ph_w[PH_STREAMS] = {};
   const int ph_n = lite ? std::min<int>(ph_stages, 8) : ph_stages;
   if (ph && shifting) {
@@ -410,7 +423,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
         side_g[c] += 0.003f * ((up ? 1.0f : -1.0f) - side_g[c]);
         const float sh = red * osc_c + side_g[c] * im * osc_s;  // (measured: + is up)
         hb_fb[c] = sh;
-        o2[c] += mix_now * (sh - o2[c]);
+        o2[c] += mix_now * (sw_from + sw_d * (n + 1)) * (sh - o2[c]);
       }
     }
     for (int c = 0; c < 2; c++) {
@@ -452,7 +465,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
       for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
         mn += 0.002f * (sh_mix_to - mn);
         // the notches: the sound and its phased copy half and half at the deepest
-        const float o = pre[c][n] + mn * 0.5f * (yw[n] - pre[c][n]);
+        const float o = pre[c][n] + mn * 0.5f * (sw_from + sw_d * (n + 1)) * (yw[n] - pre[c][n]);
         peak_out = std::max(peak_out, fabsf(o));
         out[c]->data[n] = ToSample16(o);
       }
