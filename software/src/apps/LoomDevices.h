@@ -5472,7 +5472,8 @@ FLASHMEM void HeddleDevice::DrawPole(int x, int y, int w, int h) {
       float cover = std::min(1.0f, std::max(0.0f, std::min(u + 1.0f, sw[k] - u)));
       // (thinly filled: hard edges; half-lit edges came and went, pumping)
       // (slanting: hard edges too, half-lit ones made them ragged)
-      if (fill <= 8 || !level) cover = cover >= 0.5f ? 1.0f : 0.0f;
+      // (standing still: hard edges too, half-lit ones looked dotted)
+      if (fill <= 8 || !level || Phasing()) cover = cover >= 0.5f ? 1.0f : 0.0f;
       if (cover <= 0.0f) continue;
       // (the dither travels with its stripe: no dots blinking at the edges)
       const int a = level ? py + moved : px / 3 + py + moved;  // which line
