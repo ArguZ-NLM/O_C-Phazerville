@@ -4055,7 +4055,11 @@ FLASHMEM void PlayerDevice::Format(int p, char* buf, size_t n) const {
   } else if (p == START || p == END) {  // seconds into the file
     const size_t fr = Frames();
     if (!fr) { snprintf(buf, n, "%d%%", val[p] / 100); return; }
-    const uint32_t ms = uint32_t(uint64_t(EdgeAt(p)) * 1000 / uint64_t(AUDIO_SAMPLE_RATE_EXACT * rate));
+    // the set value (as every setting shows): its exact frame once there, else
+    // its share of the file (USB '=' tries values out without moving the
+    // live edge, which kept showing the same time for all of them)
+    const size_t at = cur[p] == val[p] ? EdgeAt(p) : size_t(uint64_t(val[p]) * fr / 10000);
+    const uint32_t ms = uint32_t(uint64_t(at) * 1000 / uint64_t(AUDIO_SAMPLE_RATE_EXACT * rate));
     FormatSeconds(ms, buf, n);
   } else if (p == SPEED) {  // SYNC: as it really plays (the file's tempo to the clock's)
     snprintf(buf, n, "%d%%", int(val[p] * SyncRatio() + 0.5f));
