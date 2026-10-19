@@ -1053,6 +1053,10 @@ void FASTRUN loop() {
             break;
           case 0:  // the padding after a command in the same USB report
             break;
+          case 'e':  // the panel's own events, time-stamped, on / off (videos)
+            OC::ui.panel_log = !OC::ui.panel_log;
+            Serial.printf("EVENTS %s\n", OC::ui.panel_log ? "on" : "off");
+            break;
           default:
             capreq = true;
             break;
@@ -1062,6 +1066,14 @@ void FASTRUN loop() {
         display::frame_buffer.capture_request();
         cap_idx = 0;
       }
+    }
+    // the panel's events (USB 'e'): "EV <ms> <type> <control> <value>", type
+    // 1 down 2 press 3 long press 4 long release 5 encoder (UI::EventType);
+    // control: the UiControl bits (encoder: its turn in value)
+    if (OC::ui.panel_log) {
+      OC::Ui::PanelEv ev;
+      while (OC::ui.PanelNext(ev))
+        Serial.printf("EV %lu %u %04x %d\n", (unsigned long)ev.ms, ev.type, ev.control, ev.value);
     }
 
     // check for frame buffer to have capture data ready

@@ -88,6 +88,18 @@ public:
 
   void Poll();
   void Poke();
+
+  // the panel's own events with their time (USB 'e', for videos: what was
+  // played by hand, to replay or time a voice to); remote keys are left out.
+  // Filled in Poll (the interrupt), sent from the main loop
+  struct PanelEv { uint32_t ms; uint8_t type; uint16_t control; int16_t value; };
+  volatile bool panel_log = false;
+  bool PanelNext(PanelEv &e) {
+    if (plog_r_ == plog_w_) return false;
+    e = plog_[plog_r_ % kPanelLog];
+    plog_r_ = plog_r_ + 1;
+    return true;
+  }
   void preempt_screensaver(bool v);
 
   inline bool read_immediate(UiControl control) const {
@@ -194,7 +206,16 @@ private:
 
   UI::EventQueue<kEventQueueDepth> event_queue_;
 
+  static constexpr unsigned kPanelLog = 64;
+  PanelEv plog_[kPanelLog];
+  volatile uint32_t plog_w_ = 0, plog_r_ = 0;
+  bool injecting_ = false;
+
   inline void PushEvent(UI::EventType t, uint16_t c, int16_t v, uint16_t m) {
+    if (panel_log && !injecting_ && plog_w_ - plog_r_ < kPanelLog) {
+      plog_[plog_w_ % kPanelLog] = PanelEv{millis(), uint8_t(t), c, v};
+      plog_w_ = plog_w_ + 1;
+    }
 #ifdef OC_DEBUG_UI
     if (!event_queue_.writable())
       ++DEBUG::UI_queue_overflow;

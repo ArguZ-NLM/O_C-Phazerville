@@ -151,7 +151,9 @@ FLASHMEM void Ui::Inject(UI::EventType type, uint16_t control, int16_t value,
                          uint16_t held) {
   const uint16_t mask = ((type == UI::EVENT_BUTTON_DOWN) ? control : 0) | held;
   noInterrupts();
+  injecting_ = true;  // (not the panel's own: no entry in its log)
   PushEvent(type, control, value, mask);
+  injecting_ = false;
   interrupts();
 }
 
