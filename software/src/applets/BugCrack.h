@@ -407,9 +407,9 @@ private:
 
     bool mix_outs = true;
 
-    // same names as the settings
-    const char *CV_MODE_NAMES_BD[5] = {"tone", "decay", "punch", "drop", "level"};
-    const char *CV_MODE_NAMES_SN[5] = {"tone", "decay", "snap", "blend", "level"};
+    // short names, in the same order as the settings
+    const char *CV_MODE_NAMES_BD[5] = {"ton", "dec", "FM", "dro", "atn"};
+    const char *CV_MODE_NAMES_SN[5] = {"ton", "dec", "FM", "bln", "atn"};
 
     const char *PARAM_LABELS[13] = {
         "Kik Tone", "Kik Decay", "Kik Punch", "Kik Drop", "Kik Level", "Kik CV",
@@ -448,7 +448,6 @@ private:
                 }
                 break;
             case 5: // CV modes
-                // icon next to the name, running into the empty snare side
                 gfxIcon(1, 57, CV_ICON);
                 gfxPrint(10, 55, CV_MODE_NAMES_BD[cv_mode_kick]);
                 break;
@@ -473,9 +472,8 @@ private:
                 }
                 break;
             case 11: // CV modes
-                // icon on the empty kick side, name in the snare column
-                gfxIcon(23, 57, CV_ICON);
-                gfxPrint(32, 55, CV_MODE_NAMES_SN[cv_mode_snare]);
+                gfxIcon(32, 57, CV_ICON);
+                gfxPrint(41, 55, CV_MODE_NAMES_SN[cv_mode_snare]);
                 break;
 
             case 12: // mix outs @ B/D
@@ -483,11 +481,7 @@ private:
                 gfxIcon(50, 55, mix_outs ? CHECK_ON_ICON : CHECK_OFF_ICON);
                 break;
         }
-        if (EditMode()) {
-            if (cursor == 5) gfxInvert(1, 54, 40, 9);
-            else if (cursor == 11) gfxInvert(23, 54, 40, 9);
-            else gfxInvert(1 + (cursor<6?0:31), 54, 31, 9);
-        }
+        if (EditMode()) gfxInvert(1 + (cursor<6?0:31), 54, 31, 9);
 
         // Level indicators
         ForEachChannel(ch)
