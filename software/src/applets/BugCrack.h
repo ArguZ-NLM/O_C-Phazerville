@@ -448,9 +448,9 @@ private:
                 }
                 break;
             case 5: // CV modes
-                // the name takes the whole column; the icon goes on top
-                gfxIcon(1, 15, CV_ICON);
-                gfxPrint(1, 55, CV_MODE_NAMES_BD[cv_mode_kick]);
+                // icon next to the name, running into the empty snare side
+                gfxIcon(1, 57, CV_ICON);
+                gfxPrint(10, 55, CV_MODE_NAMES_BD[cv_mode_kick]);
                 break;
 
             // Snare drum
@@ -473,7 +473,8 @@ private:
                 }
                 break;
             case 11: // CV modes
-                gfxIcon(32, 15, CV_ICON);
+                // icon on the empty kick side, name in the snare column
+                gfxIcon(23, 57, CV_ICON);
                 gfxPrint(32, 55, CV_MODE_NAMES_SN[cv_mode_snare]);
                 break;
 
@@ -482,7 +483,11 @@ private:
                 gfxIcon(50, 55, mix_outs ? CHECK_ON_ICON : CHECK_OFF_ICON);
                 break;
         }
-        if (EditMode()) gfxInvert(1 + (cursor<6?0:31), 54, 31, 9);
+        if (EditMode()) {
+            if (cursor == 5) gfxInvert(1, 54, 40, 9);
+            else if (cursor == 11) gfxInvert(23, 54, 40, 9);
+            else gfxInvert(1 + (cursor<6?0:31), 54, 31, 9);
+        }
 
         // Level indicators
         ForEachChannel(ch)

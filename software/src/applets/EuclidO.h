@@ -279,6 +279,14 @@ private:
             }
         }
 
+        // a new length is waiting: a dot inside the ring at its last step
+        if (next_len_ != n) {
+            const int last = next_len_ - 1;
+            const int dx = step_x[last] + (cx - step_x[last]) / 4;
+            const int dy = step_y[last] + (cy - step_y[last]) / 4;
+            gfxRect(dx - 1, dy - 1, 3, 3);
+        }
+
         // Mode label in center
         const char* label;
         int label_w; // pixel width of label
