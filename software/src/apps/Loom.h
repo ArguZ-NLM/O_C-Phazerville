@@ -3654,14 +3654,15 @@ FLASHMEM void AppLoom::DrawMods() const {
   else gfxPrint(92, 56, PSTR("L:ok"));
 }
 
-// the clock page: one setting per line with room for full names, then the
+// the clock page: one setting per line with room for full names, Loom's
+// version and build (reachable with Z held, also while USB is in), then the
 // four beats and whether it runs
 FLASHMEM void AppLoom::DrawClockPage() const {
   using namespace loom;
   const ClockDevice* c = tempo_clock;
   static const char* const names[3] = {"SOURCE", "BPM", "PPQN"};
   for (int p = 0; p < 3; p++) {
-    const int y = 13 + p * 11;
+    const int y = 12 + p * 10;
     gfxPrint(2, y, names[p]);
     char buf[20];
     if (p == ClockDevice::P_SOURCE && c->val[p] == 0) snprintf(buf, sizeof(buf), "internal");
@@ -3675,12 +3676,15 @@ FLASHMEM void AppLoom::DrawClockPage() const {
       if (editing) gfxInvert(47, y - 1, 6 * int(strlen(buf)) + 1, 9);
     }
   }
+  // "Loom Beta 1 40720f32": 20 characters, the screen's width
+  gfxPrint(2, 43, OC::Strings::VERSION);
+  gfxPrint(2 + 6 * int(strlen(OC::Strings::VERSION)), 43, OC::Strings::BUILD_TAG);
   // four beats, the current one filled while running
   for (int b = 0; b < 4; b++) {
-    gfxFrame(2 + b * 11, 50, 9, 9);
-    if (clock_running && b == c->Beat()) gfxRect(4 + b * 11, 52, 5, 5);
+    gfxFrame(2 + b * 11, 54, 9, 9);
+    if (clock_running && b == c->Beat()) gfxRect(4 + b * 11, 56, 5, 5);
   }
-  gfxPrint(50, 51, !clock_running ? PSTR("stopped") : c->Waiting() ? PSTR("waiting...") : PSTR("running"));
+  gfxPrint(50, 55, !clock_running ? PSTR("stopped") : c->Waiting() ? PSTR("waiting...") : PSTR("running"));
 }
 
 // linked tracks in the top line: L and R with the two squares of the chain

@@ -589,12 +589,20 @@ FLASHMEM void setup() {
       loom::DrawWave();
       loom::DrawTitle();
       {
-        // the version (the build number is on the CARD page); a module
-        // without PSRAM is told here, as Loom's loops, samples, grains and
-        // delays live in it
+        // the version, "BETA 1" from "Loom Beta 1 " (the build number is on
+        // the clock and CARD pages); a module without PSRAM is told here, as
+        // Loom's loops, samples, grains and delays live in it
         char t[24];
-        if (external_psram_size) snprintf(t, sizeof(t), "ALPHA 1");
-        else snprintf(t, sizeof(t), "NO PSRAM!");
+        if (external_psram_size) {
+          const char* v = OC::Strings::VERSION;
+          if (!strncmp(v, "Loom ", 5)) v += 5;
+          int n = 0;
+          for (; v[n] && n < int(sizeof(t)) - 1; n++) t[n] = char(toupper(v[n]));
+          while (n > 0 && t[n - 1] == ' ') n--;
+          t[n] = 0;
+        } else {
+          snprintf(t, sizeof(t), "NO PSRAM!");
+        }
         const int w = 6 * int(strlen(t));
         graphics.clearRect(64 - w / 2 - 3, 54, w + 6, 10);
         graphics.setPrintPos(64 - w / 2, 55);
