@@ -573,11 +573,12 @@ FLASHMEM void setup() {
   OC::PresetEngine::BootRecall();
 
 #ifdef LOOM_ONLY
-  // boot picture: the moving wave with LOOM over it, for 4 s or until a
-  // button is pressed or a knob turned (or a USB command other than a screen
-  // request arrives); that touch only ends the picture. NO PSRAM! stays up
-  // until touched, so it can't be missed
-  if (!start_cal) {
+  // boot picture: the moving wave with LOOM over it, for as long as CLOCK's
+  // BOOT says (off, 1-9 s, until move) or until a button is pressed or a
+  // knob turned (or a USB command other than a screen request arrives); that
+  // touch only ends the picture. NO PSRAM! always shows and stays up until
+  // touched, so it can't be missed
+  if (!start_cal && (loom::boot_screen || !external_psram_size)) {
     uint32_t idle = OC::ui.idle_time();
     elapsedMillis shown = 0;
     size_t cap_idx = 0;
@@ -652,7 +653,7 @@ FLASHMEM void setup() {
       }
       const uint32_t now_idle = OC::ui.idle_time();
       if (now_idle < idle || Serial.available()) break;  // something happened
-      if (external_psram_size && shown > 4000) break;
+      if (external_psram_size && loom::boot_screen < loom::BOOT_UNTIL_MOVE && shown > loom::boot_screen * 1000u) break;
       idle = now_idle;
     }
     for (int o = 0; o < DAC_CHANNEL_COUNT; o++) OC::DAC::set(outs[o], OC::DAC::get_zero_offset(outs[o]));

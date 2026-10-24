@@ -40,6 +40,10 @@
 namespace loom {
 void DrawWave();   // the NLM wave (screensaver, boot picture)
 void DrawTitle();  // a big LOOM in the middle
+// the boot picture (CLOCK's BOOT): 0 off, 1-9 s, BOOT_UNTIL_MOVE until a
+// button or knob is touched; set from the saved settings at start-up
+constexpr uint8_t BOOT_UNTIL_MOVE = 10;
+extern uint8_t boot_screen;
 }
 #endif
 

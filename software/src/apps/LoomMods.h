@@ -773,22 +773,26 @@ FLASHMEM void FollowMod::DrawViz(int x, int y, int w, int h) {
 // MIDI clock pulses seen by the app's MIDI reader
 volatile uint32_t midi_clocks = 0;
 
+// how long the boot picture stays (see OC_apps.h), CLOCK's BOOT setting
+uint8_t boot_screen = 2;
+
 // source: 0 internal, 1 MIDI clock, 2+ trigger sources (TR, CV, MIDI map),
 // then SHU A / SHU B: the file playing in that track's SHUTTLE, its tempo
 // as heard (SPEED, backwards too) and its beats where its hits are
 constexpr int CLK_SHU = TRIG_SOURCES + 1;  // SHU A; + 1: SHU B
 PROGMEM static const DeviceDef CLOCK_DEF = {
-  "CLOCK", "CLK", 3, {"TAP", "RST"},  // B: the beat from one again (all on the clock with it)
+  "CLOCK", "CLK", 4, {"TAP", "RST"},  // B: the beat from one again (all on the clock with it)
   {
     {"SOURC", 0, CLK_SHU + 1, 0, UNI},
     {"BPM", 30, 300, 120, UNI},
     {"PPQN", 0, 3, 0, LIST, 4, 0, 0, {"1", "2", "4", "24"}},
+    {"BOOT", 0, BOOT_UNTIL_MOVE, 2, UNI},  // the boot picture: off, 1-9 s, until move
   }
 };
 
 class ClockDevice : public Modulator {
 public:
-  enum { P_SOURCE, P_BPM, P_PPQN };
+  enum { P_SOURCE, P_BPM, P_PPQN, P_BOOT };
   ClockDevice() : Modulator(CLOCK_DEF) {}
   void Tick(const ModCtx& ctx) override;
   void Format(int p, char* buf, size_t n) const override;
@@ -895,6 +899,10 @@ FLASHMEM void ClockDevice::Format(int p, char* buf, size_t n) const {
     else FormatTrig(val[p] - 1, buf, n);
   } else if (p == P_BPM && external()) {
     snprintf(buf, n, "%d", int(tempo_bpm + 0.5f));
+  } else if (p == P_BOOT) {
+    if (val[p] == 0) snprintf(buf, n, "off");
+    else if (val[p] >= BOOT_UNTIL_MOVE) snprintf(buf, n, "until move");
+    else snprintf(buf, n, "%d s", val[p]);
   } else {
     Device::Format(p, buf, n);
   }
