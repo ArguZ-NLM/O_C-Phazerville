@@ -988,7 +988,7 @@ void FASTRUN loop() {
             OC::ui.Inject(UI::EVENT_ENCODER, OC::CONTROL_ENCODER_L, cmd == '.' ? 1 : -1, 0);
             break;
           // two at once: '&' = A+B (link modes), '!' = Z held + L push
-          // (screensaver), '%' = Z held long and let go (clock page)
+          // (screensaver), '%' = Z held long and let go (clock page and back)
           case '&':
             OC::ui.Inject(UI::EVENT_BUTTON_DOWN, OC::CONTROL_BUTTON_A, 0, OC::CONTROL_BUTTON_B);
             OC::ui.Inject(UI::EVENT_BUTTON_PRESS, OC::CONTROL_BUTTON_A, 0, 0);
@@ -1021,7 +1021,8 @@ void FASTRUN loop() {
           case '^':  // Z held + R push (Loom <-> CARD)
             OC::ui.Inject(UI::EVENT_BUTTON_DOWN, OC::CONTROL_BUTTON_R, 0, OC::CONTROL_BUTTON_Z);
             break;
-          case '%':
+          case '%':  // Z held long (the clock page and back)
+            OC::ui.Inject(UI::EVENT_BUTTON_LONG_PRESS, OC::CONTROL_BUTTON_Z, 0, 0);
             OC::ui.Inject(UI::EVENT_BUTTON_LONG_RELEASE, OC::CONTROL_BUTTON_Z, 0, 0);
             break;
           case '$':  // both encoders pushed together (the preset slots)

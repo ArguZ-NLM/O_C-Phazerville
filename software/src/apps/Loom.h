@@ -2285,14 +2285,15 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
     return;
   }
   if (event.control == OC::CONTROL_BUTTON_Z) {
-    // anywhere in the app: clock start / stop; held: the clock page, on
-    // letting go, and held again: back to where it was opened (as Y does;
-    // the MOD view when it came up at start-up). Z held + an encoder push is
-    // a shortcut, which swallows the release
+    // anywhere in the app: clock start / stop; held (half a second, the
+    // page changes while it is still down): the clock page, and held again:
+    // back to where it was opened (as Y does; the MOD view when it came up
+    // at start-up). Z held + an encoder push is a shortcut; pushed within
+    // the half second it leaves the page as it is
     const bool on_clock = view == DEVICE && focus_mod && mod_cursor == CLK_CURSOR;
     if (event.type == UI::EVENT_BUTTON_PRESS) {
       clock_running ? ClockStop() : ClockStart();
-    } else if (event.type == UI::EVENT_BUTTON_LONG_RELEASE && on_clock) {
+    } else if (event.type == UI::EVENT_BUTTON_LONG_PRESS && on_clock) {
       if (clock_back.on) {
         view = clock_back.view;
         focus_mod = clock_back.focus_mod;
@@ -2303,7 +2304,7 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
         view = MODS;
       }
       editing = mod_mode = false;
-    } else if (event.type == UI::EVENT_BUTTON_LONG_RELEASE) {
+    } else if (event.type == UI::EVENT_BUTTON_LONG_PRESS) {
       clock_back = {true, view, focus_mod, mod_cursor, cursor};
       view = DEVICE;
       focus_mod = true;
