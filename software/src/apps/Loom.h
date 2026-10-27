@@ -968,7 +968,7 @@ FLASHMEM void AppLoom::ChoiceFaded(int t, int s, int option) {
     ApplyBypass(t);
     return;
   }
-  if (tr.next_choice[s] < 0) tr.choice_at[s] = millis() + 20;  // 15 ms fade + a block
+  if (tr.next_choice[s] < 0) tr.choice_at[s] = millis() + FADE_MS + 5;  // the fade + a block
   tr.next_choice[s] = option;
   ApplyBypass(t);
 }
@@ -1234,7 +1234,7 @@ FLASHMEM void AppLoom::BringBackB() {
   memcpy(b.order, k.order, sizeof(b.order));
   b.bypass = k.bypass;
   b.parked = 0;
-  for (auto& at : b.park_at) at = millis() + 40;
+  for (auto& at : b.park_at) at = millis() + FADE_MS + 40;  // (after the fade)
   k.input.Give(b.input);
   k.reel.Give(b.reel);
   k.player.Give(b.player);
@@ -1297,7 +1297,7 @@ FLASHMEM void AppLoom::LinkCopy() {
   memcpy(b.order, a.order, sizeof(b.order));  // the same effect order
   b.bypass = a.bypass;
   b.parked = 0;
-  for (auto& at : b.park_at) at = millis() + 40;
+  for (auto& at : b.park_at) at = millis() + FADE_MS + 40;  // (after the fade)
   Repatch(1 - master);
   if (active) ApplyBypass(1 - master);
   for (int i = 0; i < NUM_MODS; i++) {

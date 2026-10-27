@@ -143,7 +143,7 @@ private:
 // Runs from RAM1 (ITCM) like the other Loom engines.
 FASTRUN __attribute__((optimize("O2"))) void AudioEffectBandz::update() {  // (O2: the build is -Os)
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
-  // bypass fades over ~15 ms; nothing to do once it is all the way out
+  // bypass fades over ~250 ms; nothing to do once it is all the way out
   const float mix_to = bypass ? 0.0f : 1.0f;
   // flat: nothing set; PLUSH just turned off still glides its gain home
   const bool flat = this->flat && fabsf(pl_cg * pl_mk_now - 1.0f) < 1e-4f;
@@ -208,7 +208,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectBandz::update() {  // (O
     ag_step[b] = (ag_to[b] - ag[b]) / AUDIO_BLOCK_SAMPLES;
   }
   float blk_ref[BANDS] = {}, blk_cmp[BANDS] = {};
-  constexpr float mix_step = 1.0f / (0.015f * AUDIO_SAMPLE_RATE_EXACT);
+  constexpr float mix_step = 1.0f / (0.25f * AUDIO_SAMPLE_RATE_EXACT);  // bypass fade, as the slots' (250 ms)
   // no band squashed (only levels) and nothing gliding: the bands' levels
   // and the split only, without the compressors' per-sample work
   bool easy = mixw == mix_to;

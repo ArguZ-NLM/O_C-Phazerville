@@ -1260,9 +1260,11 @@ FASTRUN __attribute__((optimize("O2"))) void LoomMixer::update() {  // (O2: the 
 // Bypass fades. LoomFade sits after every effect slot and mixes the
 // slot's input (dry) with the device's output (wet); LoomGate sits in
 // front of a device whose tail rings out when bypassed (ECHO). Both glide
-// to their targets in ~15 ms and pass blocks through untouched once there.
+// to their targets in FADE_MS and pass blocks through untouched once there.
+// (15 ms until 2026-10-27: a device coming in was heard jumping in)
 /////////////////////////////////////////////////////////////////
-constexpr float FADE_STEP = 1.0f / (0.015f * AUDIO_SAMPLE_RATE_EXACT);
+constexpr uint32_t FADE_MS = 250;
+constexpr float FADE_STEP = 1.0f / (FADE_MS * 0.001f * AUDIO_SAMPLE_RATE_EXACT);
 
 static inline float Glide(float g, float to) {
   return to > g ? std::min(to, g + FADE_STEP) : std::max(to, g - FADE_STEP);
@@ -4739,7 +4741,7 @@ FLASHMEM void EchoDevice::Deactivate() {
   active = false;
 }
 
-FLASHMEM uint32_t Device::TailMs() const { return 40; }
+FLASHMEM uint32_t Device::TailMs() const { return FADE_MS + 40; }  // its fade out, then parked
 
 // the reverb's decay plus a few rounds of echoes; frozen: never
 FLASHMEM uint32_t EchoDevice::TailMs() const {
@@ -4749,7 +4751,7 @@ FLASHMEM uint32_t EchoDevice::TailMs() const {
   const float r = FbRound();
   const float rounds = r > 0.001f ? std::min(40.0f, logf(0.001f) / logf(std::min(r, 0.99f))) : 1.0f;
   const float echoes = tap_secs[0][TAPS - 1] * (1.0f + rounds);
-  return uint32_t((decay + echoes) * 1000.0f) + 200;
+  return uint32_t((decay + echoes) * 1000.0f) + 200 + FADE_MS;
 }
 
 FLASHMEM void EchoDevice::CpuMax(float parts[2]) {
