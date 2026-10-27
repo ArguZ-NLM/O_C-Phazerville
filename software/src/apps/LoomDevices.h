@@ -1341,7 +1341,7 @@ PROGMEM static const DeviceDef MIX_DEF = {
     // the chain against the track's source as it came in (0 = only the
     // source, 100 = only the chain): all the effects dialled back at once
     {"MIX", 0, 100, 100, UNI, 0, 21, 0},
-    {"LEVEL", 0, 200, 80, UNI, 0, 21, 0},  // (a double click: 100) 100: as it comes, 200: twice (a limiter on the output keeps it clean)
+    {"LEVEL", 0, 200, 100, UNI, 0, 21, 0},  // (a double click: 100) 100: as it comes, 200: twice (a limiter on the output keeps it clean)
     {"PAN", -50, 50, 0, BI, 0, 21, 0},
     {"MUTE", 0, 1, 0, LIST, 2, 0, 0, {"off", "ON"}},
     // three bands: the band's level, -12 .. +12 dB; mode: its compressor,
@@ -1363,10 +1363,8 @@ public:
   static constexpr float HI_HZ[5] = {1500.0f, 2000.0f, 3000.0f, 4000.0f, 6000.0f};
   LoomFade* out_fade = nullptr;  // source (dry) against the chain (wet), before the band stage
   explicit MixDevice(int t) : Device(MIX_DEF), track(t) {}
-  void Reset() override {
-    const int16_t pan = val[PAN];
+  void Reset() override {  // pan too: back to the centre
     Defaults();
-    val[PAN] = cur[PAN] = pan;
     ApplyAll();
   }
   AudioStream* in() override { return &bandz; }
@@ -5526,13 +5524,13 @@ PROGMEM static const DeviceDef RESONATOR_DEF = {
     {"CUT", 0, 100, 70, UNI, 0, 21, 0},
     {"SLOPE", -50, 50, -50, BI, 0, 21, 0},
     {"RESO", 0, 100, 20, UNI, 0, 21, 0},
-    {"DCAY", 0, 100, 50, UNI, 0, 2, 0, {}, {"SUST", "CHOKE"}},  // Q 4 .. 1000: from the middle up, the bands ring as pitches
+    {"DCAY", 0, 100, 93, UNI, 0, 2, 0, {}, {"SUST", "CHOKE"}},  // Q 4 .. 1000: from the middle up, the bands ring as pitches; 93 = 1.0 s at the default CUT
     // modes: variation per hit (PITCH: the notes it rings move by up to
     // +- n semitones, in the scale; TONE: its brightness by up to +- 5 n)
     {"PITCH", -24, 24, 0, BI, 0, 25, 0},
     {"TONE", -50, 50, 0, BI, 0, 11, 0},
     {"SCALE", 0, 3, 0, LIST, 4, 0, 0, {"CHROM", "MAJOR", "MINOR", "PENTA"}},
-    {"MIX", 0, 100, 100, UNI, 0, 21, 0},
+    {"MIX", 0, 100, 50, UNI, 0, 21, 0},
   }
 };
 
@@ -6397,7 +6395,7 @@ PROGMEM static const DeviceDef STRETCH_DEF = {
     {"DIFF", 0, 100, 0, UNI, 0, 21, 0},   // the diffuser: clear .. blurred
     {"TONE", -50, 50, 0, BI, 0, 21, 0},   // left lowpass, right highpass
     {"SPRD", 0, 100, 0, UNI, 0, 21, 0},   // stereo spread: the windows wander left / right
-    {"MIX", 0, 100, 100, UNI, 0, 21, 0},
+    {"MIX", 0, 100, 50, UNI, 0, 21, 0},
   },
   {"", ""},
 };
