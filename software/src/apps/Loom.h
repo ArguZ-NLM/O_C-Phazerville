@@ -3849,7 +3849,7 @@ namespace loom {
   // 14: DRAFT in FIBRE's order SPEED SIZE PITCH POS (was PITCH POS SIZE SPEED)
   // 15: DRAFT page 2 DIFF TONE SPRD MIX (was TONE FDBK SPRD MIX, TONE's mode
   //     the diffusion)
-  constexpr uint8_t SAVE_VERSION = 30;  // 21: TREADLE, a 6th modulator type; 22: PICK, a 7th; 23: TREADLE's LEN per part; 24: TREADLE's CHAOS -32..32; 25: TREADLE's pages; 26: STYLE / BEAT for X / Y; 27: TWILL's HITS; 28: TWILL's TONE gone, HITS in its place; 29: TWILL's VARI; 30: TWILL sound / strike pages
+  constexpr uint8_t SAVE_VERSION = 31;  // 31: SPOOL IN MON LEVEL first, CLOTH PLUSH / SPLIT; 21: TREADLE, a 6th modulator type; 22: PICK, a 7th; 23: TREADLE's LEN per part; 24: TREADLE's CHAOS -32..32; 25: TREADLE's pages; 26: STYLE / BEAT for X / Y; 27: TWILL's HITS; 28: TWILL's TONE gone, HITS in its place; 29: TWILL's VARI; 30: TWILL sound / strike pages
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -3971,7 +3971,15 @@ namespace loom {
     // before v11 SPOOL was IN SPEED START END DUB MON LEVEL VIEW: now SPEED
     // START END FADE IN MON LEVEL VIEW, DUB the mode of MON
     const bool spool_order = use && !memcmp(tag, "REL", 4) && load_version < 11;
-    static constexpr int8_t SPOOL_MAP[8] = {4, 0, 1, 2, -1, 5, 6, 7};
+    static constexpr int8_t SPOOL_MAP[8] = {4, 0, 1, 2, -1, 5, 6, 7};  // (into the v11 order)
+    // before v31 SPOOL was SPEED START END FADE IN MON LEVEL VIEW: now IN
+    // MON LEVEL SPEED START END FADE VIEW
+    const bool spool_v31 = use && !memcmp(tag, "REL", 4) && load_version < 31;
+    static constexpr int8_t SPOOL_V31[8] = {ReelDevice::SPEED, ReelDevice::START, ReelDevice::END, ReelDevice::XFADE,
+                                            ReelDevice::IN, ReelDevice::MON, ReelDevice::LEVEL, ReelDevice::VIEW};
+    // before v31 CLOTH's last was SPLIT (value) with PLUSH as its mode (in
+    // 5 % steps): now PLUSH (value, 0..100) with SPLIT as its second value
+    const bool plush_swap = use && !memcmp(tag, "MIX", 4) && load_version < 31;
     int old_dub = -1;
     // before v13 CLOTH's page 2 was band gains (0.5 dB steps; LOW's mode the
     // low split) and one COMP: COMP becomes each band's squash, the gains
@@ -4025,6 +4033,14 @@ namespace loom {
         if (SPOOL_MAP[q] < 0) { old_dub = v; continue; }
         p = SPOOL_MAP[q];
       }
+      if (spool_v31) p = SPOOL_V31[constrain(p, 0, 7)];
+      if (plush_swap && p == MixDevice::PLUSH) {
+        const int16_t split = v;
+        v = int16_t(constrain(int(md), 0, 20) * 5);
+        md = uint8_t(constrain(int(split), 0, 4));
+        amt = amt2 = 0;  // what moved SPLIT would move PLUSH now: off
+        src = 0; bus = bus2 = 0;
+      }
       if (old_bands && p >= 4) { ob_v[p - 4] = v; ob_m[p - 4] = md; }
       if (band_swap && p >= MixDevice::B_LOW && p <= MixDevice::B_HIGH) {
         const int16_t comp = v;
@@ -4068,8 +4084,8 @@ namespace loom {
         d->val[MixDevice::B_LOW + b] = int16_t(constrain((v + (v > 0 ? 1 : v < 0 ? -1 : 0)) / 2, -12, 12));
       }
       static constexpr int16_t SPLIT_OF[3] = {0, 2, 4};  // 120 / 250 / 500 Hz
-      d->val[MixDevice::SPLIT] = SPLIT_OF[ob_m[0] % 3];
-      d->mode[MixDevice::SPLIT] = 0;
+      d->mode[MixDevice::PLUSH] = uint8_t(SPLIT_OF[ob_m[0] % 3]);
+      d->val[MixDevice::PLUSH] = 0;
       // what modulated the old settings would move other things now: off
       for (int p = 4; p < 8; p++) {
         d->mod_amt[p] = d->mod_amt2[p] = 0;

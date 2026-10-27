@@ -1350,9 +1350,10 @@ PROGMEM static const DeviceDef MIX_DEF = {
     {"LOW", -12, 12, 0, BI, 0, 21, 0},
     {"MID", -12, 12, 0, BI, 0, 21, 0},
     {"HIGH", -12, 12, 0, BI, 0, 21, 0},
-    // where the bands divide: 120 / 1.5k .. 500 / 6k; mode: PLUSH, the whole
-    // track squashed and made up, denser and louder (off, 5 .. 100 %)
-    {"SPLIT", 0, 4, 2, UNI, 0, 21, 0},
+    // PLUSH: the whole track squashed and made up, denser and louder (0 =
+    // off .. 100 %); its second value (L knob) SPLIT, where the bands
+    // divide: 120 / 1.5k .. 500 / 6k
+    {"PLUSH", 0, 100, 0, UNI, 0, 5, 2},
   }
 };
 
@@ -1360,9 +1361,10 @@ PROGMEM static const DeviceDef MIX_DEF = {
 // The track's audio runs through the band stage, then into the mixer.
 class MixDevice : public Device {
 public:
-  enum { DRYWET, LEVEL, PAN, MUTE, B_LOW, B_MID, B_HIGH, SPLIT };
+  enum { DRYWET, LEVEL, PAN, MUTE, B_LOW, B_MID, B_HIGH, PLUSH };
   bool Varies(int p) const override { return p == DRYWET || p == LEVEL || p == PAN; }
-  int BarStyle(int p) const override { return p == SPLIT ? BAR_LEFT : Device::BarStyle(p); }  // PLUSH's amount
+  const char* AltName(int p) const override { return p == PLUSH ? "SPLIT" : nullptr; }  // PLUSH / SPLIT
+  int Split() const { return constrain(int(mode[PLUSH]), 0, 4); }
   static constexpr float LO_HZ[5] = {120.0f, 180.0f, 250.0f, 350.0f, 500.0f};
   static constexpr float HI_HZ[5] = {1500.0f, 2000.0f, 3000.0f, 4000.0f, 6000.0f};
   LoomFade* out_fade = nullptr;  // source (dry) against the chain (wet), before the band stage
@@ -1444,10 +1446,10 @@ FLASHMEM void MixDevice::Apply(int p) {
       bandz.compress(p - B_LOW, mode[p] * 0.05f);
       bandz.band_gain(p - B_LOW, float(cur[p]));
       return;
-    case SPLIT:
-      bandz.split_low(LO_HZ[constrain(cur[SPLIT], 0, 4)]);
-      bandz.split_high(HI_HZ[constrain(cur[SPLIT], 0, 4)]);
-      bandz.plush(mode[SPLIT] * 0.05f);
+    case PLUSH:
+      bandz.split_low(LO_HZ[Split()]);
+      bandz.split_high(HI_HZ[Split()]);
+      bandz.plush(cur[PLUSH] * 0.01f);
       return;
     default: break;
   }
@@ -1463,8 +1465,7 @@ FLASHMEM void MixDevice::Apply(int p) {
 
 // SPLIT shows where the low band ends (the picture above shows both)
 FLASHMEM void MixDevice::Format(int p, char* buf, size_t n) const {
-  if (p == SPLIT) snprintf(buf, n, "%dHz", int(LO_HZ[constrain(val[SPLIT], 0, 4)]));
-  else if (p == PAN && !val[PAN]) snprintf(buf, n, "C");  // the middle; L50 .. R50
+  if (p == PAN && !val[PAN]) snprintf(buf, n, "C");  // the middle; L50 .. R50
   else if (p == PAN) snprintf(buf, n, "%c%d", val[PAN] < 0 ? 'L' : 'R', abs(val[PAN]));
   else if (p >= B_LOW && p <= B_HIGH) snprintf(buf, n, val[p] > 0 ? "+%ddB" : "%ddB", val[p]);
   else Device::Format(p, buf, n);
@@ -1475,8 +1476,8 @@ FLASHMEM void MixDevice::FormatMode(int p, char* buf, size_t n) const {
   if (p >= B_LOW && p <= B_HIGH) {
     if (mode[p]) snprintf(buf, n, "C%d%%", mode[p] * 5);
     else snprintf(buf, n, "C off");
-  } else if (p == SPLIT) {  // PLUSH (the bar above shows how much)
-    snprintf(buf, n, mode[SPLIT] ? "PLUSH" : "PL off");
+  } else if (p == PLUSH) {  // SPLIT, where the low band ends (the picture shows both)
+    snprintf(buf, n, "%dHz", int(LO_HZ[Split()]));
   } else {
     Device::FormatMode(p, buf, n);
   }
@@ -1519,9 +1520,9 @@ FLASHMEM void MixDevice::DrawViz(int x, int y, int w, int h) {
   // page 2, above SPLIT: where the bands divide, the high split on top
   if (view_page == 1) {
     const int sx = x + 96 + 4;
-    PrintHz(sx, y + 1, HI_HZ[constrain(cur[SPLIT], 0, 4)]);
+    PrintHz(sx, y + 1, HI_HZ[Split()]);
     gfxDottedLine(sx, y + h / 2, sx + 23, y + h / 2, 2);
-    PrintHz(sx, y + h - 8, LO_HZ[constrain(cur[SPLIT], 0, 4)]);
+    PrintHz(sx, y + h - 8, LO_HZ[Split()]);
     return;
   }
   // output meters with the pan position underneath, on the right
@@ -1599,7 +1600,7 @@ FLASHMEM void MixDevice::DrawSpectrum(int x, int y, int w, int h) {
     if (bh > 0) gfxRect(x + b * bw, y + h - bh, bw - 1, bh);
   }
   // where the 3-band stage splits
-  for (float hz : {LO_HZ[constrain(cur[SPLIT], 0, 4)], HI_HZ[constrain(cur[SPLIT], 0, 4)]}) {
+  for (float hz : {LO_HZ[Split()], HI_HZ[Split()]}) {
     const int sx = x + int(log10f(hz / f0) / log10f(f1 / f0) * SPEC_BARS * bw);
     gfxDottedLine(sx, y, sx, y + h - 1, 3);
   }
@@ -1992,6 +1993,11 @@ FLASHMEM void InputDevice::DrawMini(int x, int y, int w, int h) {
 PROGMEM static const DeviceDef SPOOL_DEF = {
   "SPOOL", "REL", 8, {"REC", "PLAY"},  // tag REL kept for saved files (was REEL); A: REC / DUB, B: PLAY / STOP
   {
+    {"IN", 0, 4, 1, UNI},  // like INPUT's SOURC
+    // the live input passed through; mode (L): DUB, how much of the old loop
+    // stays when overdubbing, 0..100 % in 5 % steps
+    {"MON", 0, 100, 100, UNI, 0, 21, 16},
+    {"LEVEL", 0, 100, 100, UNI, 0, 21, 0},
     // mode (L): LOOP (round and round) or PING (back and forth)
     {"SPEED", -200, 200, 100, BI, 0, 2, 0, {}, {"LOOP", "PING"}},
     // the loop's edges, as PLAYER's: 0..10000 of the recording; mode (L):
@@ -1999,11 +2005,6 @@ PROGMEM static const DeviceDef SPOOL_DEF = {
     {"START", 0, 10000, 0, UNI, 0, 8, 0},
     {"END", 0, 10000, 10000, UNI, 0, 8, 0},
     {"FADE", 0, 100, 20, UNI, 0, 2, 0, {}, {"CROSS", "INOUT"}},  // the loop's seam, as PLAYER's
-    {"IN", 0, 4, 1, UNI},  // like INPUT's SOURC
-    // the live input passed through; mode (L): DUB, how much of the old loop
-    // stays when overdubbing, 0..100 % in 5 % steps
-    {"MON", 0, 100, 100, UNI, 0, 21, 16},
-    {"LEVEL", 0, 100, 100, UNI, 0, 21, 0},
     // the picture only. Mode (L): ALL, LOOP (just START..END), or how much
     // time a closer view shows (REEL_VIEW_MS); value (R): where it looks,
     // HEAD (-1: follows the play head) or a place in the loop, 0..100 %
@@ -2031,7 +2032,7 @@ static void FormatSeconds(uint32_t ms, char* buf, size_t n) {
 
 class ReelDevice : public Device {
 public:
-  enum { SPEED, START, END, XFADE, IN, MON, LEVEL, VIEW };
+  enum { IN, MON, LEVEL, SPEED, START, END, XFADE, VIEW };  // (until v31: SPEED START END FADE IN MON LEVEL VIEW)
   bool Varies(int p) const override { return p == LEVEL; }
   static float MaxSecs() { return BigSecs(); }
   explicit ReelDevice(InputDevice* i) : Device(SPOOL_DEF), input(i) {}
