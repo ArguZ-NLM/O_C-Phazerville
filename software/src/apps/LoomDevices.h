@@ -39,6 +39,7 @@
 #include "../Audio/AudioEffectWarp.h"
 #include "../Audio/RingsVoice.h"
 #include "../Audio/StretchVoice.h"
+#include "LoomThrums.h"
 #include "../Audio/AudioEffectClouds.h"
 #include "../Audio/AudioEffectReel.h"
 #include "../Audio/AudioPlayStream.h"
@@ -2526,6 +2527,26 @@ FLASHMEM static int ListOrder(const char* a, const char* b) {
   return strcasecmp(a, b);
 }
 constexpr int MAX_FILES = 48, NAME_LEN = 80;
+
+// Loom's folders on the card, made when they are missing, and the starter
+// waves for THRUMS (WARP's single-cycle waves, see LoomThrums.h) written
+// there when the card has no THRUMS yet. One file a main loop, so nothing
+// waits; a .FILLING file marks a fill still going (power gone halfway: the
+// next start goes on, skipping the waves already there). A THRUMS folder
+// that is there is the user's: nothing in it is touched.
+struct ThrumFill {
+  int16_t next = -1;        // the wave to write next; -1: nothing to do
+  uint32_t tried_at = 0;    // the last look for a card
+  bool checked = false;     // folders done for this card
+  static constexpr char DIR[] = "/LOOM/THRUMS";
+  static constexpr char MARK[] = "/LOOM/THRUMS/.FILLING";
+  bool Busy() const { return next >= 0; }
+  void Step();
+private:
+  void Folders();
+  void Write(int i);
+};
+inline ThrumFill g_thrums;
 constexpr size_t IO_CHUNK = 2048;  // sample frames per step
 // one sample of any size / float as 16 bit
 FLASHMEM static int16_t WavSample(const uint8_t* p, int bytes, bool is_float) {
@@ -3442,6 +3463,69 @@ PlayerDevice* shuttles[2] = {nullptr, nullptr};
 
 // the WAVs in the current folder, sorted by name; a card put in after
 // power-up is picked up here
+FLASHMEM void ThrumFill::Folders() {
+  for (const char* d : {LOOP_DIR, REC_DIR, TapeRecorder::DIR})
+    if (!SD.exists(d)) SD.mkdir(d);
+  if (!SD.exists(DIR)) {
+    SD.mkdir(DIR);
+    if (File f = SD.open(MARK, FILE_WRITE)) f.close();
+  }
+  if (SD.exists(MARK)) next = 0;
+}
+
+// wave i as <FOLDER>_nn.wav in its folder (skipped when it is there)
+FLASHMEM void ThrumFill::Write(int i) {
+  int fo = 0, k = i;
+  while (fo < THRUM_FOLDERS - 1 && k >= THRUM_COUNT[fo]) k -= THRUM_COUNT[fo++];
+  char path[48];
+  snprintf(path, sizeof(path), "%s/%s", DIR, THRUM_NAME[fo]);
+  if (k == 0 && !SD.exists(path)) SD.mkdir(path);
+  snprintf(path, sizeof(path), "%s/%s/%s_%02d.wav", DIR, THRUM_NAME[fo], THRUM_NAME[fo], k + 1);
+  if (SD.exists(path)) {
+    File f = SD.open(path);
+    const bool whole = f && f.size() == 44 + 2 * THRUM_SAMPLES;
+    if (f) f.close();
+    if (whole) return;
+    SD.remove(path);  // cut off when the power went
+  }
+  File f = SD.open(path, FILE_WRITE);
+  if (!f) return;
+  const uint32_t data = 2 * THRUM_SAMPLES;
+  uint8_t h[44] = {'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'A', 'V', 'E', 'f', 'm', 't', ' ',
+                   16, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 16, 0,
+                   'd', 'a', 't', 'a', 0, 0, 0, 0};
+  auto put32 = [&](int at, uint32_t v) { for (int b = 0; b < 4; b++) h[at + b] = uint8_t(v >> (8 * b)); };
+  put32(4, 36 + data);
+  put32(24, THRUM_RATE);
+  put32(28, THRUM_RATE * 2);
+  put32(40, data);
+  f.write(h, sizeof(h));
+  f.write(reinterpret_cast<const uint8_t*>(THRUM_DATA[i]), data);
+  f.close();
+}
+
+FLASHMEM void ThrumFill::Step() {
+  if (!checked) {
+    if (tried_at && millis() - tried_at < 5000) return;
+    tried_at = millis() | 1;
+    if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
+    if (!SDcard_Ready) return;
+    checked = true;
+    Folders();
+  }
+  if (next < 0) return;
+  if (next < THRUM_WAVES) { Write(next++); return; }
+  SD.remove("/LOOM/THRUMS/README.txt");
+  if (File f = SD.open("/LOOM/THRUMS/README.txt", FILE_WRITE)) {
+    f.print("Single-cycle waveforms from the Adventure Kid Waveforms (AKWF) by Kristoffer Ekstrand,\n"
+            "CC0 1.0 (public domain): https://github.com/KristofferKarlAxelEkstrand/AKWF-FREE\n"
+            "Loom's WARP plays them (THRUM). Add your own in folders of their own.\n");
+    f.close();
+  }
+  SD.remove(MARK);
+  next = -1;
+}
+
 FLASHMEM void PlayerDevice::Scan() {
   nfiles = 0;
   scanned_at = millis() | 1;

@@ -1777,6 +1777,7 @@ FLASHMEM void AppLoom::MainLoop() {
   if (loop_prev && loop_now - loop_prev > loop_gap_max) loop_gap_max = loop_now - loop_prev;
   loop_prev = loop_now;
   if (active) ReadMIDI();
+  loom::g_thrums.Step();  // the card's folders, THRUMS' starter waves
   {
     using namespace loom;
     // SPOOL: A held 2 s starts writing the loop; the files go in steps
