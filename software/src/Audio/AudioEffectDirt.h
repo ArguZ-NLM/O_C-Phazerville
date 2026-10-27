@@ -240,7 +240,6 @@ private:
   float tilt_z[2] = {}, env_in = 0.0f;
   float det = 0.0f;  // the input's level (peaks, ~30 ms fall) for the noise threshold
   float pink[2][3] = {}, svf_lo[2] = {}, svf_bp[2] = {};
-  float fold_env = 0.0f;  // FOLD: the sound's level (both sides)
   // FOLD's 2 x oversampling: a 39-tap half-band low-pass (Kaiser; flat to
   // 18 kHz, -75 dB from 28 kHz, what would mirror back below 16 kHz).
   // Half-band: every other tap is 0 but the middle one (0.5), so only
@@ -262,7 +261,7 @@ private:
   float fold_in[2] = {}, fold_out[2] = {};  // ... loudness in and folded, per side (~15 ms)
   float fold_v[2] = {}, fold_F[2] = {}, fold_x[2] = {}, fold_lp[2] = {};  // FOLD: last sample (volts, integral, dry), low-pass
   float fold_ref = 0.0f;  // FOLD: how loud the note was (~0.6 s down), for the low-pass gate
-  float fold_lpk = 0.348f;  // the low-pass's coefficient now
+  static constexpr float FOLD_LP = 0.348f;  // one pole at 3 kHz: 1 - exp(-2 pi 3000 / 44117)
   float crush_env = 0.0f;  // CRUSH: the sound's level (both sides), ~150 ms fall
   float dust_z[2] = {};  // SPEC: the click ringing down, per side
   static constexpr float NOISE_ATTACK = 0.0104f;  // ~2 ms: the noise comes in softly
@@ -337,7 +336,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
   int Lwi[2] = {os_wi[0], os_wi[1]}, Lxi[2] = {os_xi[0], os_xi[1]}, Ldi = os_di;
   float Lfv[2] = {fold_v[0], fold_v[1]}, LfF[2] = {fold_F[0], fold_F[1]}, Llp[2] = {fold_lp[0], fold_lp[1]};
   float Lfin[2] = {fold_in[0], fold_in[1]}, Lfout[2] = {fold_out[0], fold_out[1]};
-  float Lfenv = fold_env, Lfref = fold_ref;
+  float Lfref = fold_ref;
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   audio_block_t* out[2] = {allocate(), allocate()};
   if (!out[0] || !out[1]) {
@@ -369,17 +368,6 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
   const float fA0 = B259Volts(fld0), fm0 = std::min(1.0f, fld0 * 4.0f);
   const float dfA = (B259Volts(fold_now) - fA0) * (1.0f / AUDIO_BLOCK_SAMPLES);
   const float dfm = (std::min(1.0f, fold_now * 4.0f) - fm0) * (1.0f / AUDIO_BLOCK_SAMPLES);
-  // FOLD's low-pass, as a vactrol low-pass gate after the folder: 3 kHz
-  // while the note sounds (the 259's 1.33 kHz was too dull here), closing
-  // towards 150 Hz as it dies away, so the end goes darker and softer
-  // together (glides from block to block)
-  const float lp0 = fold_lpk;
-  {
-    const float r = Lfref > 1e-4f ? std::min(1.0f, Lfenv / Lfref) : 1.0f;
-    const float hz = 150.0f + 2850.0f * r * sqrtf(r);
-    fold_lpk = 1.0f - expf(-2.0f * float(M_PI) * hz / AUDIO_SAMPLE_RATE_EXACT);
-  }
-  const float dlp = (fold_lpk - lp0) * (1.0f / AUDIO_BLOCK_SAMPLES);
   // the noise threshold: -12 dB at the bottom of NOISE, down to -50 dB at
   // the top (as 1 / threshold)
   const float inv_thr = 1.0f / (0.25f * expf(-38.0f * 0.11512925f * namt));
@@ -490,29 +478,27 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
       const float held = Ldry[c][Ldi];
       Ldry[c][Ldi] = v;
       if (fld > 0.0f) {
-        // run at 2 x the rate (half-band up, the folder, half-band down),
-        // with first-order anti-aliasing on top (the curve's integral across
-        // each step): the folds' harmonics past the top no longer mirror back
-        // as low, unrelated tones. (At 1 x they did; once the low-pass closed
-        // at a note's end they were what was left: a digital garble.) Then
-        // a low-pass that closes as the sound dies (below)
-        // the sound against its own peak (both sides, at once up, ~100 ms
-        // down): the folds stay as they are while a note dies away, as in a
-        // Buchla patch, where the low-pass gate comes after the timbre
-        // circuit. (With a slow follower the folds collapsed one after the
-        // other in the last 150 ms of a note: a fast downward zap that
-        // sounded digital.) Under -54 dB it is driven less, so hiss doesn't
-        // fold (at -30 dB, the folds still collapsed in the last 40 ms, a
-        // garble; by -30 dB the low-pass has closed to ~200 Hz anyway)
+        // As in a Buchla patch: the timbre follows the note, the level
+        // follows the sound.
+        // - The drive is set by how loud the note was (its peak, ~0.6 s
+        //   down): as a note dies away its folds go one by one, as when the
+        //   259's timbre is played by the envelope (the "bong"); FOLD sets
+        //   how many there are at the note's loudest, at any level.
+        // - A folder squashes: what comes out stays loud while the note dies
+        //   (its straight part lifts a quiet tail ~11 x). So, as the low-pass
+        //   gate after the folder does there, the folded sound (after its
+        //   tone filter) is brought to the loudness going in (both averaged
+        //   over ~15 ms): the note's own fade comes back.
+        // (Tried on the way, 2026-10-27/28: the level follower alone - the
+        // tail stepped and then cut off; folds held with a closing low-pass
+        // - matching ahead of the filter, the level jumped as it closed.)
+        // The folder runs at 2 x the rate (half-band up, the curve, half-band
+        // down) with first-order anti-aliasing on top (the curve's integral
+        // across each step), so its harmonics past the top don't mirror back
+        // as low, unrelated tones. Under -54 dB the drive drops (hiss)
         const float fA = fA0 + dfA * n, fm = fm0 + dfm * n;
-        Lfenv = std::max(fabsf(v), Lfenv * 0.999773f);
-        const float lvl = std::max(Lfenv, 0.002f);
         Lfref = std::max(fabsf(v), Lfref * 0.999962f);
-        // the folded sound comes out exactly as loud as what goes in (both
-        // averaged over ~15 ms), so a sound dying away fades smoothly as its
-        // folds go. (The circuit's straight part lifts a quiet tail ~11 x,
-        // and its loudness rises and falls as each cell drops out: the tail
-        // came down in steps, one per cell, then stopped all at once)
+        const float lvl = std::max(Lfref, 0.002f);
         Lfin[c] += 0.00151f * (fabsf(v) - Lfin[c]);
         const float drive = fA / lvl;
         float* X = Lx[c];
@@ -550,10 +536,10 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
             fn = (d0 + d1) + (d2 + d3);
           }
         }
-        Lfout[c] += 0.00151f * (fabsf(fn) - Lfout[c]);
-        const float f = fn * std::min(2.0f, Lfin[c] / std::max(Lfout[c], 1e-5f));
-        Llp[c] += (lp0 + dlp * n) * (f - Llp[c]);
-        v = held + fm * (Llp[c] - held);  // (loudness matched above)
+        Llp[c] += FOLD_LP * (fn - Llp[c]);  // the tone filter (one pole, 3 kHz; the 259's 1.33 kHz was too dull here)
+        Lfout[c] += 0.00151f * (fabsf(Llp[c]) - Lfout[c]);
+        const float f = Llp[c] * std::min(4.0f, Lfin[c] / std::max(Lfout[c], 1e-5f));
+        v = held + fm * (f - held);
       } else {
         Lfv[c] = 0.0f; LfF[c] = 0.0f; Llp[c] = 0.0f;
         for (auto& xx : Lx[c]) xx = 0.0f;
@@ -693,7 +679,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
     os_wi[c] = Lwi[c]; os_xi[c] = Lxi[c]; fold_v[c] = Lfv[c]; fold_F[c] = LfF[c]; fold_lp[c] = Llp[c];
     fold_in[c] = Lfin[c]; fold_out[c] = Lfout[c];
   }
-  os_di = Ldi; fold_env = Lfenv; fold_ref = Lfref;
+  os_di = Ldi; fold_ref = Lfref;
   transmit(out[0], 0);
   transmit(out[1], 1);
   for (auto b : out) release(b);
