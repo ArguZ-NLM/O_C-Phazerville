@@ -16,7 +16,7 @@
 //            little NOISE only answers the loudest hits, more answers
 //            quieter playing as well, and louder (N.DCY = how long it
 //            trails), band-passed (N.TON)
-//   FOLD     sine wavefolder, West-coast style, clean at 0
+//   FOLD     wavefolder after the Buchla 259 (five folding cells), clean at 0
 //   DRIVE    soft saturation, clean at 0; made up so a usual level stays
 //            about as loud
 //   CRUSH    bit depth (10 bits down to 1.5, smoothly), sample-rate
@@ -43,7 +43,7 @@ public:
   void crush(float c, uint8_t mode) { crush_ = constrain(c, 0.0f, 1.0f); crush_mode = mode; }
   void fold(float f) {
     fold_ = constrain(f, 0.0f, 1.0f);
-    // FOLD lifts a quieter signal (up to 7x before it folds back): bring a
+    // FOLD drives the circuit (a full-scale signal up to 6.6 V): bring a
     // sine at the usual level (DRIVE_REF) back to its own loudness (rms)
     float in2 = 0.0f, out2 = 0.0f;
     for (int i = 0; i < 64; i++) {
@@ -118,12 +118,40 @@ public:
   // on the clock: nudged so its octaves turn over on the note values
   void PullPhase(float d) { float p = ph_pos + d; ph_pos = p - floorf(p); }
 
-  // fold curve, shared with the picture: sin() of the boosted signal folds
-  // it back from the edges; crossfaded in so 0 is clean
+  // FOLD after the Buchla 259's timbre circuit (Esqueda, Pontynen,
+  // Valimaki, Parker: "Virtual Analog Buchla 259 Wavefolder", DAFx-17):
+  // five folding cells side by side with the straight path, each one
+  // joining in above its own threshold (in volts), summed with the circuit's
+  // weights, then the circuit's gentle low-pass. FOLD sets how hard the
+  // signal drives it (as the 259's timbre knob: the input level).
+  //   cell k: Gk * sgn(v) * (|v| - Tk) above Tk, else 0
+  //   out    = 5 v + sum Wk * cell k        (here as Ck = Wk * Gk)
+  static constexpr float B259_T[5] = {0.6f, 1.8f, 2.994f, 4.08f, 5.46f};
+  static constexpr float B259_C[5] = {-12.0f * 0.8333f, 17.647f * 0.5743f, -27.777f * 0.3768f,
+                                      36.363f * 0.2673f, -21.428f * 0.2829f};
+  static constexpr float B259_PEAK = 3.0f;  // the folds' tops, in volts: full scale out
+  static inline float B259(float v) {  // the circuit's curve, volts in and out
+    const float a = fabsf(v);
+    float y = 5.0f * a;
+    for (int k = 0; k < 5; k++) if (a > B259_T[k]) y += B259_C[k] * (a - B259_T[k]);
+    return v < 0.0f ? -y : y;
+  }
+  static inline float B259Int(float v) {  // its integral (for the anti-aliasing)
+    const float a = fabsf(v);
+    float y = 2.5f * a * a;
+    for (int k = 0; k < 5; k++) if (a > B259_T[k]) y += 0.5f * B259_C[k] * (a - B259_T[k]) * (a - B259_T[k]);
+    return y;
+  }
+  // FOLD 0..1 -> the volts a full-scale signal reaches: 0.6 (the first
+  // fold just starts, the circuit is still straight) up to 6.6 (past the
+  // last cell the curve runs off instead of folding)
+  static inline float B259Volts(float fold) { return 0.6f * (1.0f + 10.0f * fold); }
+  // fold curve, shared with the picture (without the anti-aliasing and the
+  // low-pass); crossfaded in so 0 is clean
   static inline float Fold(float x, float fold) {
     if (fold <= 0.0f) return x;
-    const float k = 1.0f + 6.0f * fold;
-    const float f = sinf(0.5f * float(M_PI) * constrain(x * k, -8.0f, 8.0f));
+    const float A = B259Volts(fold);
+    const float f = B259(x * A) * (1.0f / B259_PEAK);
     return x + std::min(1.0f, fold * 4.0f) * (f - x);
   }
 
@@ -135,9 +163,13 @@ public:
     const float norm = (1.0f + d) / d;                  // full scale stays full scale
     return x + std::min(1.0f, drive * 4.0f) * (s * norm - x);
   }
-  // bit depth as levels per side of zero: 10 bits at the start (just
-  // audible on quiet sounds) down to 1.5 bits, without steps between
-  static inline float CrushLevels(float c) { return exp2f(9.0f - 8.5f * c); }  // 512 .. 1.4
+  // bit depth as levels per side of zero: 10 bits at the start down to 2,
+  // without steps between. The steps are cut from the sound's own level
+  // (a peak follower), not from full scale: a quiet sound gets as many
+  // bits as a loud one, so it keeps its grit instead of breaking up into
+  // a few clicks and silence (it did: rounded from full scale, a sound at
+  // -10 dB was down to one step or none from about 70 % up)
+  static inline float CrushLevels(float c) { return exp2f(9.0f - 8.0f * c); }  // 512 .. 2
   static constexpr float DRIVE_REF = 0.3f;
   static inline int ReduxHold(float c) { return 1 + int(c * c * 31.0f); }     // 1 .. 32
 
@@ -207,6 +239,9 @@ private:
   float tilt_z[2] = {}, env_in = 0.0f;
   float det = 0.0f;  // the input's level (peaks, ~30 ms fall) for the noise threshold
   float pink[2][3] = {}, svf_lo[2] = {}, svf_bp[2] = {};
+  float fold_v[2] = {}, fold_F[2] = {}, fold_x[2] = {}, fold_lp[2] = {};  // FOLD: last sample (volts, integral, dry), low-pass
+  static constexpr float FOLD_LP = 1.0f - 0.65227f;  // one pole at ~3 kHz (exp(-2 pi 3000 / 44117))
+  float crush_env = 0.0f;  // CRUSH: the sound's level (both sides), ~150 ms fall
   float dust_z[2] = {};  // SPEC: the click ringing down, per side
   static constexpr float NOISE_ATTACK = 0.0104f;  // ~2 ms: the noise comes in softly
   static constexpr float DET_FALL = 0.99931f;     // ~30 ms
@@ -289,6 +324,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
   const float tl = tilt_lo, th = tilt_hi, ta = tilt_a;
   const bool tilt = tilt_on;
   const float nrel = noise_rel, sf = svf_f, fld = fold_, fold_gain_now = fold_gain;
+  const float fA = B259Volts(fld), fm = std::min(1.0f, fld * 4.0f);  // FOLD: drive, share
   // the noise threshold: -12 dB at the bottom of NOISE, down to -50 dB at
   // the top (as 1 / threshold)
   const float inv_thr = 1.0f / (0.25f * expf(-38.0f * 0.11512925f * namt));
@@ -391,9 +427,33 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
         svf_lo[c] += sf * svf_bp[c];
         v += svf_bp[c] * nlev;
       }
-      v = Fold(v, fld) * fold_gain_now;
+      if (fld > 0.0f) {
+        // first-order anti-aliasing (the curve's integral across the step
+        // from the last sample: its corners don't fold back as whistles),
+        // the straight path taken at the same half sample, then the
+        // circuit's low-pass (one pole, 1.33 kHz in the 259, here 3 kHz)
+        const float vv = v * fA, dv = vv - fold_v[c];
+        const float Fi = B259Int(vv);
+        const float f = (fabsf(dv) > 1e-5f ? (Fi - fold_F[c]) / dv : B259(0.5f * (vv + fold_v[c])))
+                        * (1.0f / B259_PEAK);
+        const float xm = 0.5f * (v + fold_x[c]);
+        fold_v[c] = vv; fold_F[c] = Fi; fold_x[c] = v;
+        fold_lp[c] += FOLD_LP * (f - fold_lp[c]);
+        v = (xm + fm * (fold_lp[c] - xm)) * fold_gain_now;
+      } else {
+        fold_v[c] = 0.0f; fold_F[c] = 0.0f; fold_x[c] = v; fold_lp[c] = 0.0f;
+      }
       v = Shape(v, drv) * dg;
-      if (do_bits) v = roundf(constrain(v, -1.0f, 1.0f) * levels) * inv_levels;
+      if (do_bits) {
+        // mid-rise steps (no step at zero): quiet tails buzz on as the
+        // smallest steps instead of being gated to silence; under -48 dB
+        // it is left alone (no buzz out of the noise floor)
+        crush_env = std::max(fabsf(v), crush_env * 0.99985f);
+        if (crush_env > 0.004f) {
+          const float step = crush_env * inv_levels;
+          v = (floorf(constrain(v, -1.0f, 1.0f) / step) + 0.5f) * step;
+        }
+      }
       if (do_redux) {
         if (take) hold_val[c] = v;
         v = hold_val[c];
