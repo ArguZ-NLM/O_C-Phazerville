@@ -2524,6 +2524,15 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
         }
       } else if (view == CHAIN) {
         focus_mod = false;
+        // a slot set to no device: its last one comes back, bypassed (not
+        // heard yet), and opens, to be set up first; DOWN then brings it in
+        if (col > SOURCE && col < MIX_COL && !Focused() && tracks[track].last_choice[col]) {
+          for (int t = 0; t < NUM_TRACKS; t++)
+            if (t == track || linked) tracks[t].bypass |= uint8_t(1 << col);
+          SetChoiceLinked(col, tracks[track].last_choice[col]);
+          for (int t = 0; t < NUM_TRACKS; t++)
+            if (active && (t == track || linked)) ApplyBypass(t);
+        }
         if (Device* o = Focused()) {
           view = DEVICE;
           cursor = constrain(int(o->ui_cursor), 0, o->num_params() - 1);  // where it was left (REPEAT: its reverb page)
