@@ -251,6 +251,7 @@ private:
   float det = 0.0f;  // the input's level (peaks, ~30 ms fall) for the noise threshold
   float pink[2][3] = {}, svf_lo[2] = {}, svf_bp[2] = {};
   float fold_env = 0.0f;  // FOLD: the sound's level (both sides)
+  float fold_fast[2] = {};  // ... and its loudness now, per side
   float fold_v[2] = {}, fold_F[2] = {}, fold_x[2] = {}, fold_lp[2] = {};  // FOLD: last sample (volts, integral, dry), low-pass
   static constexpr float FOLD_LP = 1.0f - 0.65227f;  // one pole at ~3 kHz (exp(-2 pi 3000 / 44117))
   float crush_env = 0.0f;  // CRUSH: the sound's level (both sides), ~150 ms fall
@@ -464,10 +465,17 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
         const float fA = fA0 + dfA * n, fm = fm0 + dfm * n, fold_gain_now = g0 + dg_f * n;
         fold_env = std::max(fabsf(v), fold_env * 0.999962f);
         const float lvl = std::max(fold_env, 0.03f);
+        // ... and its loudness now (an average over ~15 ms, as a sine's peak:
+        // a peak follower rippled on low notes): the folded sound comes
+        // out at the level that goes in, so a sound dying away gets quieter
+        // as its folds go (the circuit's straight part would lift a quiet
+        // tail ~11 x: the folds snapped away one by one at full volume and
+        // then it stopped all at once)
+        fold_fast[c] += 0.00151f * (1.5708f * fabsf(v) - fold_fast[c]);
         const float vv = v * (fA / lvl), dv = vv - fold_v[c];
         const float Fi = B259Int(vv);
         const float f = Diodes((fabsf(dv) > 1e-5f ? (Fi - fold_F[c]) / dv : B259(0.5f * (vv + fold_v[c])))
-                               * (1.0f / B259_PEAK)) * lvl;
+                               * (1.0f / B259_PEAK)) * fold_fast[c];
         const float xm = 0.5f * (v + fold_x[c]);
         fold_v[c] = vv; fold_F[c] = Fi; fold_x[c] = v;
         fold_lp[c] += FOLD_LP * (f - fold_lp[c]);
