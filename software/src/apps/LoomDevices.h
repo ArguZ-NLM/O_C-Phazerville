@@ -355,6 +355,10 @@ public:
   // modulator's step, not its glide
   virtual bool Sampled(int p) const { return false; }
   virtual void Action(int a) {}
+  // an action that plays while held (WARP's PLAY): Action when the button
+  // goes down or its gate rises, Release when let go / the gate falls
+  virtual bool Holds(int a) const { return false; }
+  virtual void Release(int a) {}
   virtual bool ActionLit(int a) const { return false; }
   virtual bool LongA() { return false; }  // A held on the page: true if the device took it
   virtual void DrawViz(int x, int y, int w, int h) {}
@@ -594,6 +598,11 @@ FLASHMEM void Device::Modulate() {
 FLASHMEM void Device::RunTriggers(uint16_t edges) {
   for (int a = 0; a < 2; a++) {
     if (TrigParam(a) >= 0) continue;  // (the modulator watches that source itself)
+    if (act_trig[a] && Holds(a)) {  // as long as the gate is up
+      const bool g = SrcGate(act_trig[a]);
+      if (g != act_prev[a]) { act_prev[a] = g; if (g) Action(a); else Release(a); }
+      continue;
+    }
     if (act_trig[a] && SrcEdge(act_trig[a], edges, act_prev[a])) Action(a);
   }
 }
@@ -7129,7 +7138,7 @@ FLASHMEM void ChimeDevice::DrawMini(int x, int y, int w, int h) {
 // notes' envelope.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef WARP_DEF = {
-  "WARP", "WRP", 8, {"TRIG", "STOP"},  // A: the root note, 60 (LOOP on: let go once in); B: every voice let go
+  "WARP", "WRP", 8, {"TRIG", "PLAY"},  // A: the root note, 60 (LOOP on: let go once in); B: the root while held (a preview without MIDI)
   {
     // mode (L): the other track's SPOOL or SHUTTLE, or a THRUM: a waveform
     // from the card (/LOOM/THRUMS; a fresh WARP a random one). Value (R):
@@ -7200,6 +7209,8 @@ public:
   void Apply(int p) override;
   void Format(int p, char* buf, size_t n) const override;
   void Action(int a) override;
+  bool Holds(int a) const override { return a == 1; }
+  void Release(int a) override;
   bool ActionLit(int a) const override { return a == 0 && fx.Sounding() > 0; }
   void Idle() override;
   bool Busy() const { return loading; }  // reading the card (the output is muted)
@@ -7876,9 +7887,14 @@ FLASHMEM void WarpDevice::Action(int a) {
   if (a == 0) {  // TRIG: the root, as if a key was struck (LOOP on: let go once in)
     fx.NoteOff(ROOT);
     fx.NoteOn(ROOT, VelOut(100), true);
-  } else {
-    fx.AllOff();
+  } else {  // PLAY: down
+    fx.NoteOff(ROOT);
+    fx.NoteOn(ROOT, VelOut(100));
   }
+}
+
+FLASHMEM void WarpDevice::Release(int a) {
+  if (a == 1) fx.NoteOff(ROOT);  // PLAY let go
 }
 
 FLASHMEM bool WarpDevice::HeaderInfo(char* buf, size_t n) const {

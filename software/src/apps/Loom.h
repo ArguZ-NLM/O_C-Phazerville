@@ -447,6 +447,7 @@ private:
   loom::Device* undo_dev[2] = {};
   loom::Device::Saved undo_state[2];
   uint32_t undone_at = 0;  // UNDO shown
+  loom::Device* held_dev = nullptr;  // B held on a device that plays while held (WARP)
   bool stop_held = false, stop_armed = false;  // A held to stop the PLAYER (or a modulator: stop_mod) ...
   loom::Modulator* stop_mod = nullptr;
   uint32_t stop_hold = 0;                      // ... since then
@@ -2408,8 +2409,22 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
     if (event.type == UI::EVENT_BUTTON_DOWN) {
       clear_held = view == DEVICE && !focus_mod && col == SOURCE && tracks[track].choice[SOURCE] == 1;
       clear_hold = millis();
+      // a device whose B plays while held (WARP's PLAY): on at once
+      loom::Device* hd = view == DEVICE && !focus_mod && !mod_mode && !trig_mode && !Listing() ? Focused() : nullptr;
+      if (hd && hd->Holds(1) && !BypassKey()) {
+        hd->Action(1);
+        if (loom::Device* tw = Twin(hd)) tw->Action(1);
+        held_dev = hd;
+      }
     } else if (event.type == UI::EVENT_BUTTON_PRESS || event.type == UI::EVENT_BUTTON_LONG_RELEASE) {
       clear_held = false;
+      if (held_dev) {  // ... and off when let go (no action besides)
+        held_dev->Release(1);
+        if (loom::Device* tw = Twin(held_dev)) tw->Release(1);
+        held_dev = nullptr;
+        if (chord_releases) chord_releases--;
+        return;
+      }
     }
   }
   if (event.control == OC::CONTROL_BUTTON_UP || event.control == OC::CONTROL_BUTTON_DOWN) {
