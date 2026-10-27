@@ -252,7 +252,8 @@ private:
     1.544368055e-02f, -2.786849153e-02f, 4.979280858e-02f, -9.720978481e-02f, 3.152383797e-01f,
     3.152383797e-01f, -9.720978481e-02f, 4.979280858e-02f, -2.786849153e-02f, 1.544368055e-02f,
     -8.060244059e-03f, 3.792791994e-03f, -1.515362554e-03f, 4.541707995e-04f, -6.247278870e-05f};
-  float os_x[2][OS_HALF] = {};    // the input, driven, newest first
+  float os_x[2][2 * OS_HALF] = {};  // the input, driven, written twice (a ring read in one piece)
+  int os_xi[2] = {};
   float os_w[2][2 * OS_N] = {};   // the folded sound at 2 x, written twice (a ring read in one piece)
   int os_wi[2] = {};
   float os_dry[2][OS_DELAY] = {};  // the sound into FOLD, held back as long
@@ -326,6 +327,17 @@ FASTRUN static void RunChain(int n, const float* in, float* acc, float a, float 
 
 // Runs from RAM1 (ITCM) like the other Loom engines.
 FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2: the build is -Os)
+
+  // FOLD's state into fast memory for the block (the object sits in RAM2:
+  // read there sample by sample, the 2 x folder took ~1300 cycles a sample
+  // and side, ten times its sums), back at the end
+  float Lx[2][2 * OS_HALF], Lw[2][2 * OS_N], Ldry[2][OS_DELAY], Lmix[2][OS_DELAY];
+  memcpy(Lx, os_x, sizeof(Lx)); memcpy(Lw, os_w, sizeof(Lw));
+  memcpy(Ldry, os_dry, sizeof(Ldry)); memcpy(Lmix, os_mix, sizeof(Lmix));
+  int Lwi[2] = {os_wi[0], os_wi[1]}, Lxi[2] = {os_xi[0], os_xi[1]}, Ldi = os_di;
+  float Lfv[2] = {fold_v[0], fold_v[1]}, LfF[2] = {fold_F[0], fold_F[1]}, Llp[2] = {fold_lp[0], fold_lp[1]};
+  float Lfin[2] = {fold_in[0], fold_in[1]}, Lfout[2] = {fold_out[0], fold_out[1]};
+  float Lfenv = fold_env, Lfref = fold_ref;
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   audio_block_t* out[2] = {allocate(), allocate()};
   if (!out[0] || !out[1]) {
@@ -363,7 +375,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
   // together (glides from block to block)
   const float lp0 = fold_lpk;
   {
-    const float r = fold_ref > 1e-4f ? std::min(1.0f, fold_env / fold_ref) : 1.0f;
+    const float r = Lfref > 1e-4f ? std::min(1.0f, Lfenv / Lfref) : 1.0f;
     const float hz = 150.0f + 2850.0f * r * sqrtf(r);
     fold_lpk = 1.0f - expf(-2.0f * float(M_PI) * hz / AUDIO_SAMPLE_RATE_EXACT);
   }
@@ -417,9 +429,9 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
     float x[2] = {in[0] ? in[0]->data[n] * q : 0.0f, in[1] ? in[1]->data[n] * q : 0.0f};
     // the dry side of MIX, held back as long as FOLD's oversampling
-    const float dry[2] = {os_mix[0][os_di], os_mix[1][os_di]};
-    os_mix[0][os_di] = x[0];
-    os_mix[1][os_di] = x[1];
+    const float dry[2] = {Lmix[0][Ldi], Lmix[1][Ldi]};
+    Lmix[0][Ldi] = x[0];
+    Lmix[1][Ldi] = x[1];
     const float lvl = std::max(fabsf(x[0]), fabsf(x[1]));
     peak_in = std::max(peak_in, lvl);
 
@@ -475,8 +487,8 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
       }
       // the dry sound held back as long as the 2 x folder takes (19
       // samples, 0.43 ms), always, so FOLD turning on or off doesn't jump
-      const float held = os_dry[c][os_di];
-      os_dry[c][os_di] = v;
+      const float held = Ldry[c][Ldi];
+      Ldry[c][Ldi] = v;
       if (fld > 0.0f) {
         // run at 2 x the rate (half-band up, the folder, half-band down),
         // with first-order anti-aliasing on top (the curve's integral across
@@ -493,49 +505,59 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
         // fold (at -30 dB, the folds still collapsed in the last 40 ms, a
         // garble; by -30 dB the low-pass has closed to ~200 Hz anyway)
         const float fA = fA0 + dfA * n, fm = fm0 + dfm * n;
-        fold_env = std::max(fabsf(v), fold_env * 0.999773f);
-        const float lvl = std::max(fold_env, 0.002f);
-        fold_ref = std::max(fabsf(v), fold_ref * 0.999962f);
+        Lfenv = std::max(fabsf(v), Lfenv * 0.999773f);
+        const float lvl = std::max(Lfenv, 0.002f);
+        Lfref = std::max(fabsf(v), Lfref * 0.999962f);
         // the folded sound comes out exactly as loud as what goes in (both
         // averaged over ~15 ms), so a sound dying away fades smoothly as its
         // folds go. (The circuit's straight part lifts a quiet tail ~11 x,
         // and its loudness rises and falls as each cell drops out: the tail
         // came down in steps, one per cell, then stopped all at once)
-        fold_in[c] += 0.00151f * (fabsf(v) - fold_in[c]);
+        Lfin[c] += 0.00151f * (fabsf(v) - Lfin[c]);
         const float drive = fA / lvl;
-        float* xh = os_x[c];
-        for (int j = OS_HALF - 1; j > 0; j--) xh[j] = xh[j - 1];
-        xh[0] = v * drive;
+        float* X = Lx[c];
+        X[Lxi[c]] = X[Lxi[c] + OS_HALF] = v * drive;
+        if (++Lxi[c] == OS_HALF) Lxi[c] = 0;
+        const float* xr = X + Lxi[c];  // the last 20, oldest first (the taps are symmetric)
         // up: the in-between sample from the even taps, the other one is
         // the input itself, from the middle (each x 2: zeros stuffed in)
-        float up0 = 0.0f;
-        for (int j = 0; j < OS_HALF; j++) up0 += OS_E[j] * xh[j];
-        const float ups[2] = {2.0f * up0, xh[9]};
-        float* w = os_w[c];
+        // (four sums side by side: one chain of 20 waited on itself)
+        float u0 = 0.0f, u1 = 0.0f, u2 = 0.0f, u3 = 0.0f;
+        for (int j = 0; j < OS_HALF; j += 4) {
+          u0 += OS_E[j] * xr[j]; u1 += OS_E[j + 1] * xr[j + 1];
+          u2 += OS_E[j + 2] * xr[j + 2]; u3 += OS_E[j + 3] * xr[j + 3];
+        }
+        const float ups[2] = {2.0f * ((u0 + u1) + (u2 + u3)), xr[10]};
+        float* w = Lw[c];
         float fn = 0.0f;
         for (int k = 0; k < 2; k++) {
-          const float vv = ups[k], dv = vv - fold_v[c];
+          const float vv = ups[k], dv = vv - Lfv[c];
           const float Fi = B259Int(vv);
-          const float y = Diodes((fabsf(dv) > 1e-5f ? (Fi - fold_F[c]) / dv : B259(0.5f * (vv + fold_v[c])))
+          const float y = Diodes((fabsf(dv) > 1e-5f ? (Fi - LfF[c]) / dv : B259(0.5f * (vv + Lfv[c])))
                                  * (1.0f / B259_PEAK));
-          fold_v[c] = vv; fold_F[c] = Fi;
-          w[os_wi[c]] = w[os_wi[c] + OS_N] = y;
-          if (++os_wi[c] == OS_N) os_wi[c] = 0;
+          Lfv[c] = vv; LfF[c] = Fi;
+          w[Lwi[c]] = w[Lwi[c] + OS_N] = y;
+          if (++Lwi[c] == OS_N) Lwi[c] = 0;
           if (k == 0) {
             // down, after the first of the two (so the whole way takes 19
             // samples, as the dry side): the even taps and the middle one
-            const float* r = w + os_wi[c];  // the last 39, oldest first
-            fn = 0.5f * r[19];
-            for (int j = 0; j < OS_HALF; j++) fn += OS_E[j] * r[2 * j];
+            const float* r = w + Lwi[c];  // the last 39, oldest first
+            float d0 = 0.5f * r[19], d1 = 0.0f, d2 = 0.0f, d3 = 0.0f;
+            for (int j = 0; j < OS_HALF; j += 4) {
+              d0 += OS_E[j] * r[2 * j]; d1 += OS_E[j + 1] * r[2 * j + 2];
+              d2 += OS_E[j + 2] * r[2 * j + 4]; d3 += OS_E[j + 3] * r[2 * j + 6];
+            }
+            fn = (d0 + d1) + (d2 + d3);
           }
         }
-        fold_out[c] += 0.00151f * (fabsf(fn) - fold_out[c]);
-        const float f = fn * std::min(2.0f, fold_in[c] / std::max(fold_out[c], 1e-5f));
-        fold_lp[c] += (lp0 + dlp * n) * (f - fold_lp[c]);
-        v = held + fm * (fold_lp[c] - held);  // (loudness matched above)
+        Lfout[c] += 0.00151f * (fabsf(fn) - Lfout[c]);
+        const float f = fn * std::min(2.0f, Lfin[c] / std::max(Lfout[c], 1e-5f));
+        Llp[c] += (lp0 + dlp * n) * (f - Llp[c]);
+        v = held + fm * (Llp[c] - held);  // (loudness matched above)
       } else {
-        fold_v[c] = 0.0f; fold_F[c] = 0.0f; fold_lp[c] = 0.0f;
-        for (auto& xx : os_x[c]) xx = 0.0f;
+        Lfv[c] = 0.0f; LfF[c] = 0.0f; Llp[c] = 0.0f;
+        for (auto& xx : Lx[c]) xx = 0.0f;
+        Lxi[c] = 0;
         v = held;
       }
       v = Shape(v, drv) * dg;
@@ -555,7 +577,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
       }
       x[c] = v;
     }
-    os_di = (os_di + 1) % OS_DELAY;
+    Ldi = (Ldi + 1) % OS_DELAY;
 
     float o2[2];
     for (int c = 0; c < 2; c++) o2[c] = dry[c] + w * (x[c] - dry[c]);
@@ -664,6 +686,14 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
     osc_s *= m;
   }
 
+  // FOLD's state back
+  memcpy(os_x, Lx, sizeof(Lx)); memcpy(os_w, Lw, sizeof(Lw));
+  memcpy(os_dry, Ldry, sizeof(Ldry)); memcpy(os_mix, Lmix, sizeof(Lmix));
+  for (int c = 0; c < 2; c++) {
+    os_wi[c] = Lwi[c]; os_xi[c] = Lxi[c]; fold_v[c] = Lfv[c]; fold_F[c] = LfF[c]; fold_lp[c] = Llp[c];
+    fold_in[c] = Lfin[c]; fold_out[c] = Lfout[c];
+  }
+  os_di = Ldi; fold_env = Lfenv; fold_ref = Lfref;
   transmit(out[0], 0);
   transmit(out[1], 1);
   for (auto b : out) release(b);
