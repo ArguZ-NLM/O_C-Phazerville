@@ -51,6 +51,19 @@ public:
   void set_bypass(bool b) { bypass = b; }  // fades to pass through, settings kept
   DuckEnv duck;  // CLOTH's DUCK (whatever the bands do, bypassed too)
   void split_high(float hz) { f_hi = Coeff(hz); }
+  // PLUSH: the whole track squashed (both sides together) and made up, so
+  // quiet parts come up and it all sits denser and louder; 0 (off) .. 1.
+  // Threshold -4 .. -30 dB, ratio up to 8:1; the make-up gives back most of
+  // what a full-scale sound loses (up to ~18 dB), the limiter after it
+  // keeps the peaks
+  void plush(float p) {
+    p = constrain(p, 0.0f, 1.0f);
+    pl_on = p > 0.0f;
+    pl_th = -4.0f - 26.0f * p;
+    pl_sl = pl_on ? 1.0f - 1.0f / (1.0f + 7.0f * p) : 0.0f;
+    pl_mk = pl_on ? powf(10.0f, -pl_th * pl_sl * 0.7f * 0.05f) : 1.0f;
+    Check();
+  }
   void compress(int b, float c) {
     c = constrain(c, 0.0f, 1.0f);
     thresh_db[b] = -6.0f - 24.0f * c;
@@ -94,6 +107,9 @@ private:
   volatile bool flat = true, bypass = false;
   float mixw = 1.0f;  // processed share, fades with bypass
   float lim_g = 1.0f; // the limiter's gain now
+  volatile bool pl_on = false;
+  volatile float pl_th = -4.0f, pl_sl = 0.0f, pl_mk = 1.0f;
+  float pl_env = 0.0f, pl_cg = 1.0f, pl_target = 1.0f, pl_mk_now = 1.0f;  // PLUSH's state
 
   float lo_l[2] = {}, lo_b[2] = {}, hi_l[2] = {}, hi_b[2] = {};
   float env[BANDS] = {}, cgain[BANDS] = {1.0f, 1.0f, 1.0f}, target[BANDS] = {1.0f, 1.0f, 1.0f};
@@ -120,7 +136,7 @@ private:
   }
   void Check() {
     flat = slope[0] == 0.0f && slope[1] == 0.0f && slope[2] == 0.0f
-        && gain[0] == 1.0f && gain[1] == 1.0f && gain[2] == 1.0f;
+        && gain[0] == 1.0f && gain[1] == 1.0f && gain[2] == 1.0f && !pl_on;
   }
 };
 
@@ -129,6 +145,8 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectBandz::update() {  // (O
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   // bypass fades over ~15 ms; nothing to do once it is all the way out
   const float mix_to = bypass ? 0.0f : 1.0f;
+  // flat: nothing set; PLUSH just turned off still glides its gain home
+  const bool flat = this->flat && fabsf(pl_cg * pl_mk_now - 1.0f) < 1e-4f;
   if ((flat || (mix_to == 0.0f && mixw == 0.0f)) && duck.Active()) {
     // nothing for the bands to do, but ducking: the dip alone
     if (flat) mixw = mix_to;
@@ -266,6 +284,26 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectBandz::update() {  // (O
       }
       const float x = in[c] ? in[c]->data[n] * q : 0.0f;
       yb[c][n] = x + mixw * (y - x);
+    }
+  }
+  // PLUSH, on what the bands made (gliding back to nothing when turned off)
+  if (pl_on || fabsf(pl_cg * pl_mk_now - 1.0f) > 1e-4f) {
+    constexpr float PL_ATT = 0.98877f, PL_REL = 0.99981f;  // ~2 ms / ~120 ms
+    const float th = pl_th, sl = pl_sl, mk = pl_mk;
+    const bool on = pl_on;
+    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+      const float det = std::max(fabsf(yb[0][n]), fabsf(yb[1][n]));
+      pl_env = det > pl_env ? PL_ATT * pl_env + (1.0f - PL_ATT) * det
+                            : PL_REL * pl_env + (1.0f - PL_REL) * det;
+      if ((n & 15) == 0) {
+        const float over = on ? 6.0206f * FastLog2(pl_env + 1e-6f) - th : 0.0f;  // dB
+        pl_target = over > 0.0f ? FastExp2(-over * sl * 0.16610f) : 1.0f;
+      }
+      pl_cg += 0.05f * (pl_target - pl_cg);
+      pl_mk_now += 0.0005f * (mk - pl_mk_now);  // the make-up glides (~50 ms)
+      const float gg = 1.0f + mixw * (pl_cg * pl_mk_now - 1.0f);
+      yb[0][n] *= gg;
+      yb[1][n] *= gg;
     }
   }
   // a limiter (both sides together): band boosts can't push the track

@@ -1350,7 +1350,9 @@ PROGMEM static const DeviceDef MIX_DEF = {
     {"LOW", -12, 12, 0, BI, 0, 21, 0},
     {"MID", -12, 12, 0, BI, 0, 21, 0},
     {"HIGH", -12, 12, 0, BI, 0, 21, 0},
-    {"SPLIT", 0, 4, 2, UNI},  // where the bands divide: 120 / 1.5k .. 500 / 6k
+    // where the bands divide: 120 / 1.5k .. 500 / 6k; mode: PLUSH, the whole
+    // track squashed and made up, denser and louder (off, 5 .. 100 %)
+    {"SPLIT", 0, 4, 2, UNI, 0, 21, 0},
   }
 };
 
@@ -1360,6 +1362,7 @@ class MixDevice : public Device {
 public:
   enum { DRYWET, LEVEL, PAN, MUTE, B_LOW, B_MID, B_HIGH, SPLIT };
   bool Varies(int p) const override { return p == DRYWET || p == LEVEL || p == PAN; }
+  int BarStyle(int p) const override { return p == SPLIT ? BAR_LEFT : Device::BarStyle(p); }  // PLUSH's amount
   static constexpr float LO_HZ[5] = {120.0f, 180.0f, 250.0f, 350.0f, 500.0f};
   static constexpr float HI_HZ[5] = {1500.0f, 2000.0f, 3000.0f, 4000.0f, 6000.0f};
   LoomFade* out_fade = nullptr;  // source (dry) against the chain (wet), before the band stage
@@ -1444,6 +1447,7 @@ FLASHMEM void MixDevice::Apply(int p) {
     case SPLIT:
       bandz.split_low(LO_HZ[constrain(cur[SPLIT], 0, 4)]);
       bandz.split_high(HI_HZ[constrain(cur[SPLIT], 0, 4)]);
+      bandz.plush(mode[SPLIT] * 0.05f);
       return;
     default: break;
   }
@@ -1471,6 +1475,8 @@ FLASHMEM void MixDevice::FormatMode(int p, char* buf, size_t n) const {
   if (p >= B_LOW && p <= B_HIGH) {
     if (mode[p]) snprintf(buf, n, "C%d%%", mode[p] * 5);
     else snprintf(buf, n, "C off");
+  } else if (p == SPLIT) {  // PLUSH (the bar above shows how much)
+    snprintf(buf, n, mode[SPLIT] ? "PLUSH" : "PL off");
   } else {
     Device::FormatMode(p, buf, n);
   }
