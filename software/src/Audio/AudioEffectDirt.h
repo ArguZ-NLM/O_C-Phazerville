@@ -240,6 +240,29 @@ private:
   float det = 0.0f;  // the input's level (peaks, ~30 ms fall) for the noise threshold
   float pink[2][3] = {}, svf_lo[2] = {}, svf_bp[2] = {};
   float fold_env = 0.0f;  // FOLD: the sound's level (both sides)
+  // FOLD's 4 x oversampling: 65-tap low-pass (Kaiser, flat to 16 kHz,
+  // -52 dB at 26 kHz, -90 dB from 30 kHz), polyphase up, plain down
+  static constexpr int OS = 4, OS_N = 65, OS_TAPS = (OS_N + OS - 1) / OS, OS_DELAY = (OS_N - 1) / OS;
+  static constexpr float OS_H[OS_N] = {
+-1.367430106e-05f, 4.248435796e-06f, 7.202080872e-05f, 1.710345044e-04f, 2.179175567e-04f,
+9.390940706e-05f, -2.625603204e-04f, -7.452303971e-04f, -1.043631812e-03f, -7.637963599e-04f,
+2.992064404e-04f, 1.873531608e-03f, 3.130912977e-03f, 2.989265696e-03f, 7.640322151e-04f,
+-3.141168399e-03f, -6.981010370e-03f, -8.222466285e-03f, -4.870390238e-03f, 3.004626566e-03f,
+1.244945949e-02f, 1.830407322e-02f, 1.548434991e-02f, 2.052455554e-03f, -1.844620781e-02f,
+-3.689309325e-02f, -4.139770599e-02f, -2.222364346e-02f, 2.318899243e-02f, 8.753336950e-02f,
+1.549085827e-01f, 2.059658145e-01f, 2.249935510e-01f, 2.059658145e-01f, 1.549085827e-01f,
+8.753336950e-02f, 2.318899243e-02f, -2.222364346e-02f, -4.139770599e-02f, -3.689309325e-02f,
+-1.844620781e-02f, 2.052455554e-03f, 1.548434991e-02f, 1.830407322e-02f, 1.244945949e-02f,
+3.004626566e-03f, -4.870390238e-03f, -8.222466285e-03f, -6.981010370e-03f, -3.141168399e-03f,
+7.640322151e-04f, 2.989265696e-03f, 3.130912977e-03f, 1.873531608e-03f, 2.992064404e-04f,
+-7.637963599e-04f, -1.043631812e-03f, -7.452303971e-04f, -2.625603204e-04f, 9.390940706e-05f,
+2.179175567e-04f, 1.710345044e-04f, 7.202080872e-05f, 4.248435796e-06f, -1.367430106e-05f};
+  float os_x[2][OS_TAPS] = {};  // the input, driven, newest first
+  float os_w[2][OS_N] = {};     // the folded sound at 4 x, a ring
+  int os_wi[2] = {};
+  float os_dry[2][OS_DELAY] = {};  // the sound into FOLD, held back as long
+  float os_mix[2][OS_DELAY] = {};  // ... and MIX's dry side
+  int os_di = 0;
   float fold_in[2] = {}, fold_out[2] = {};  // ... loudness in and folded, per side (~15 ms)
   float fold_v[2] = {}, fold_F[2] = {}, fold_x[2] = {}, fold_lp[2] = {};  // FOLD: last sample (volts, integral, dry), low-pass
   float fold_ref = 0.0f;  // FOLD: how loud the note was (~0.6 s down), for the low-pass gate
@@ -398,7 +421,10 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
   float e_in[2] = {}, e_out[2] = {};   // HEDDLE's energy in / out this block, per side (the level match)
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
     float x[2] = {in[0] ? in[0]->data[n] * q : 0.0f, in[1] ? in[1]->data[n] * q : 0.0f};
-    const float dry[2] = {x[0], x[1]};
+    // the dry side of MIX, held back as long as FOLD's oversampling
+    const float dry[2] = {os_mix[0][os_di], os_mix[1][os_di]};
+    os_mix[0][os_di] = x[0];
+    os_mix[1][os_di] = x[1];
     const float lvl = std::max(fabsf(x[0]), fabsf(x[1]));
     peak_in = std::max(peak_in, lvl);
 
@@ -452,11 +478,17 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
         svf_lo[c] += sf * svf_bp[c];
         v += svf_bp[c] * nlev;
       }
+      // the dry sound held back as long as the 4 x folder takes (16
+      // samples, 0.36 ms), always, so FOLD turning on or off doesn't jump
+      const float held = os_dry[c][os_di];
+      os_dry[c][os_di] = v;
       if (fld > 0.0f) {
-        // first-order anti-aliasing (the curve's integral across the step
-        // from the last sample: its corners don't fold back as whistles),
-        // the straight path taken at the same half sample, then a low-pass
-        // that closes as the sound dies (below)
+        // run at 4 x the rate (OS_H up, the folder, OS_H down), with
+        // first-order anti-aliasing on top (the curve's integral across each
+        // step): the folds' harmonics past the top no longer mirror back as
+        // low, unrelated tones. (At 1 x they did; once the low-pass closed
+        // at a note's end they were what was left: a digital garble.) Then
+        // a low-pass that closes as the sound dies (below)
         // the sound against its own peak (both sides, at once up, ~100 ms
         // down): the folds stay as they are while a note dies away, as in a
         // Buchla patch, where the low-pass gate comes after the timbre
@@ -475,18 +507,35 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
         // and its loudness rises and falls as each cell drops out: the tail
         // came down in steps, one per cell, then stopped all at once)
         fold_in[c] += 0.00151f * (fabsf(v) - fold_in[c]);
-        const float vv = v * (fA / lvl), dv = vv - fold_v[c];
-        const float Fi = B259Int(vv);
-        const float fn = Diodes((fabsf(dv) > 1e-5f ? (Fi - fold_F[c]) / dv : B259(0.5f * (vv + fold_v[c])))
-                                * (1.0f / B259_PEAK));
+        const float drive = fA / lvl;
+        float* xh = os_x[c];
+        for (int j = OS_TAPS - 1; j > 0; j--) xh[j] = xh[j - 1];
+        xh[0] = v * drive;
+        for (int ph = 0; ph < OS; ph++) {
+          float vv = 0.0f;
+          for (int j = 0; j < OS_TAPS && OS * j + ph < OS_N; j++) vv += OS_H[OS * j + ph] * xh[j];
+          vv *= float(OS);
+          const float dv = vv - fold_v[c];
+          const float Fi = B259Int(vv);
+          const float y = Diodes((fabsf(dv) > 1e-5f ? (Fi - fold_F[c]) / dv : B259(0.5f * (vv + fold_v[c])))
+                                 * (1.0f / B259_PEAK));
+          fold_v[c] = vv; fold_F[c] = Fi;
+          os_w[c][os_wi[c]] = y;
+          os_wi[c] = (os_wi[c] + 1) % OS_N;
+        }
+        float fn = 0.0f;
+        for (int k = 0, i = os_wi[c]; k < OS_N; k++) {  // oldest to newest (the filter is symmetric)
+          fn += OS_H[k] * os_w[c][i];
+          if (++i == OS_N) i = 0;
+        }
         fold_out[c] += 0.00151f * (fabsf(fn) - fold_out[c]);
         const float f = fn * std::min(2.0f, fold_in[c] / std::max(fold_out[c], 1e-5f));
-        const float xm = 0.5f * (v + fold_x[c]);
-        fold_v[c] = vv; fold_F[c] = Fi; fold_x[c] = v;
         fold_lp[c] += (lp0 + dlp * n) * (f - fold_lp[c]);
-        v = xm + fm * (fold_lp[c] - xm);  // (loudness matched above)
+        v = held + fm * (fold_lp[c] - held);  // (loudness matched above)
       } else {
-        fold_v[c] = 0.0f; fold_F[c] = 0.0f; fold_x[c] = v; fold_lp[c] = 0.0f;
+        fold_v[c] = 0.0f; fold_F[c] = 0.0f; fold_lp[c] = 0.0f;
+        for (auto& xx : os_x[c]) xx = 0.0f;
+        v = held;
       }
       v = Shape(v, drv) * dg;
       if (do_bits) {
@@ -505,6 +554,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
       }
       x[c] = v;
     }
+    os_di = (os_di + 1) % OS_DELAY;
 
     float o2[2];
     for (int c = 0; c < 2; c++) o2[c] = dry[c] + w * (x[c] - dry[c]);
