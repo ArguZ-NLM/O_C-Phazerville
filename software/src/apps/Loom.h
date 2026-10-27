@@ -601,8 +601,7 @@ FLASHMEM void AppLoom::Start() {
     Track& tr = tracks[t];
     tr.mix->mixer = mixer;
     tr.mix->mod_bus = tr.mod_out;
-    tr.mix->Defaults();
-    tr.mix->val[MixDevice::PAN] = t ? 25 : -25; // pan the tracks apart a little
+    tr.mix->Defaults();  // LEVEL 100, PAN centre (were L25 / R25 until 2026-10-27)
     tr.mix->ApplyAll();
     // start with ECHO on both tracks, a bit different on track 2
     tr.choice[ECHO] = 1;
