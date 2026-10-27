@@ -917,7 +917,7 @@ FLASHMEM static float WorstCost(const Device* d) {
     return 12.0f + (m[EchoDevice::ROOM] ? 4.0f : 0.0f);  // (the costlier two-voice recipes, to be safe)
   }
   if (!strcmp(t, "STR")) return 11.5f;  // DRAFT (with its diffuser)
-  if (!strcmp(t, "TEX")) return 8.0f;  // TEXTURE
+  if (!strcmp(t, "TEX")) return 18.0f;  // TEXTURE (FOLD on: its 2 x folder, measured 17.8 %; 8 before 2026-10-28)
   if (!strcmp(t, "HDL")) {  // HEDDLE: TEXTURE's engine left clean, the shifter ~1 %, PHASE ~0.6 % a stage (measured)
     const HeddleDevice* x = static_cast<const HeddleDevice*>(d);
     return 4.0f + (x->Phasing() ? 1.0f + 0.6f * x->MaxStages() : 1.0f);  // (STAGE's variation up)
