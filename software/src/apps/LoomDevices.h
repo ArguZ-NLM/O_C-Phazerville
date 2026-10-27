@@ -4965,9 +4965,9 @@ PROGMEM static const DeviceDef DIRT_DEF = {
     {"FOLD", 0, 100, 0, UNI, 0, 21, 0},
     {"CRSH", 0, 100, 0, UNI, 0, 3, 0, {}, {"BIT", "REDUX", "BOTH"}},
     {"TILT", -50, 50, 0, BI, 0, 3, 1, {}, {"LOW", "MID", "HIGH"}},
-    {"NOICE", 0, 100, 0, UNI, 0, 3, 1, {}, {"WHITE", "PINK", "DUST"}},
+    {"NOICE", 0, 100, 0, UNI, 0, 3, 1, {}, {"WHITE", "PINK", "SPEC"}},  // a colour picked sets N.TON: 6k6 / 3k3 / 1k0
     {"N.DCY", 0, 100, 40, UNI, 0, 21, 0},
-    {"N.TON", 0, 100, 50, UNI, 0, 21, 0},
+    {"N.TON", 0, 100, 76, UNI, 0, 21, 0},  // 3k3 (PINK)
     {"MIX", 0, 100, 100, UNI, 0, 21, 0},
   },
   {"", ""},
@@ -4999,6 +4999,14 @@ public:
   bool Varies(int p) const override { return p == DRIVE || p == FOLD || p == NDECAY || p == NTONE || p == WET; }
   DirtDevice() : Device(DIRT_DEF) {}
   void Action(int a) override { if (a == 0) VarNew(); else fx.noise_burst(); }
+  void NudgeMode(int p, int dir) override {
+    const int was = mode[NOISE];
+    Device::NudgeMode(p, dir);
+    if (p != NOISE || mode[NOISE] == was) return;
+    static const int16_t tone[3] = {91, 76, 50};  // WHITE 6k6, PINK 3k3, SPEC 1k0
+    val[NTONE] = tone[constrain(int(mode[NOISE]), 0, 2)];
+    Refresh(NTONE);
+  }
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
   void Apply(int p) override;
@@ -5178,7 +5186,7 @@ FLASHMEM void DirtDevice::DrawViz(int x, int y, int w, int h) {
         gfxRect(nx + random(nw - 1), yy, 2, 2);
       }
     } break;
-    default: {                              // dust: few big specks, in bursts
+    default: {                              // spec: few big specks, in bursts
       const int specks = lvl > 0.02f && random(100) < int(lvl * 160.0f) ? 1 + random(3) : 0;
       for (int i = 0; i < specks; i++) {
         const int sx = nx + random(nw - 4), sy = y + 1 + random(nh - 3);
@@ -5218,7 +5226,7 @@ FLASHMEM void DirtDevice::DrawMini(int x, int y, int w, int h) {
   ThinLine(x, ys, nc, keep);
   // NOICE: grains over it as loud as the noise is now, looking like its type
   // (as on the page): WHITE fine and even, PINK bigger and sinking to the
-  // bottom, DUST the odd speck in bursts
+  // bottom, SPEC the odd speck in bursts
   const float lvl = noise_m.v;
   switch (mode[NOISE]) {
     case AudioEffectDirt::NOISE_WHITE:

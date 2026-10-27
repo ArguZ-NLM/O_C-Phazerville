@@ -11,7 +11,7 @@
 //   TILT     two bands split at 80 Hz / 650 Hz / 2.5 kHz; + lifts the highs
 //            and drops the lows, - the other way round; the level is
 //            brought back so it sounds about as loud
-//   NOISE    white, pink or dust (sparse clicks, like a record), its level
+//   NOISE    white, pink or spec (sparse clicks, like a record), its level
 //            follows the input above a threshold that NOISE sets too: a
 //            little NOISE only answers the loudest hits, more answers
 //            quieter playing as well, and louder (N.DCY = how long it
@@ -207,10 +207,12 @@ private:
   float tilt_z[2] = {}, env_in = 0.0f;
   float det = 0.0f;  // the input's level (peaks, ~30 ms fall) for the noise threshold
   float pink[2][3] = {}, svf_lo[2] = {}, svf_bp[2] = {};
-  float dust_z[2] = {};  // DUST: the click ringing down, per side
+  float dust_z[2] = {};  // SPEC: the click ringing down, per side
   static constexpr float NOISE_ATTACK = 0.0104f;  // ~2 ms: the noise comes in softly
   static constexpr float DET_FALL = 0.99931f;     // ~30 ms
-  static constexpr float GATE_KNEE = 1.8f;        // fully open ~9 dB over the threshold
+  // a soft gate: starts opening 6 dB under the threshold, fully open 6 dB
+  // over it, on an S curve (was a straight 5 dB ramp from the threshold up)
+  static constexpr float GATE_LO = 0.5f, GATE_HI = 2.0f;
   static constexpr float DUST_THRESH = 1.0f - 2.0f * 30.0f / 48000.0f;  // Rand() above: ~30 clicks / s
   static constexpr float DUST_GAIN = 6.0f;
   int hold_count = 0;
@@ -342,7 +344,8 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
     // noise level follows the input over the threshold, faded in across
     // the knee (no chatter at the edge): ~2 ms rise, N.DCY fall
     det = lvl > det ? lvl : det * DET_FALL;
-    const float open = std::min(1.0f, std::max(0.0f, (det * inv_thr - 1.0f) * (1.0f / (GATE_KNEE - 1.0f))));
+    const float u = std::min(1.0f, std::max(0.0f, (det * inv_thr - GATE_LO) * (1.0f / (GATE_HI - GATE_LO))));
+    const float open = u * u * (3.0f - 2.0f * u);
     const float want = det * open;
     env_in = want > env_in ? env_in + NOISE_ATTACK * (want - env_in) : env_in * nrel;
     // a burst: in over ~2 ms, out over N.DCY
