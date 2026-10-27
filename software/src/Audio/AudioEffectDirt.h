@@ -462,10 +462,12 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
         // Buchla patch, where the low-pass gate comes after the timbre
         // circuit. (With a slow follower the folds collapsed one after the
         // other in the last 150 ms of a note: a fast downward zap that
-        // sounded digital.) Under -30 dB it is driven less, so hiss doesn't fold
+        // sounded digital.) Under -54 dB it is driven less, so hiss doesn't
+        // fold (at -30 dB, the folds still collapsed in the last 40 ms, a
+        // garble; by -30 dB the low-pass has closed to ~200 Hz anyway)
         const float fA = fA0 + dfA * n, fm = fm0 + dfm * n;
         fold_env = std::max(fabsf(v), fold_env * 0.999773f);
-        const float lvl = std::max(fold_env, 0.03f);
+        const float lvl = std::max(fold_env, 0.002f);
         fold_ref = std::max(fabsf(v), fold_ref * 0.999962f);
         // the folded sound comes out exactly as loud as what goes in (both
         // averaged over ~15 ms), so a sound dying away fades smoothly as its
