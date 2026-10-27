@@ -43,17 +43,6 @@ public:
   void crush(float c, uint8_t mode) { crush_ = constrain(c, 0.0f, 1.0f); crush_mode = mode; }
   // FOLD's target: the engine glides there (~40 ms), no steps as it turns
   void fold(float f) { fold_ = constrain(f, 0.0f, 1.0f); }
-  // the folds take loudness away (or add it): what brings a sine back to its
-  // own loudness (rms); the level follower makes any level look the same
-  static float FoldGain(float fold) {
-    if (fold <= 0.0f) return 1.0f;
-    float out2 = 0.0f;
-    for (int i = 0; i < 16; i++) {  // a quarter of a sine is enough (symmetric)
-      const float y = Fold(sinf(0.5f * float(M_PI) * (i + 0.5f) / 16.0f), fold);
-      out2 += y * y;
-    }
-    return out2 > 0.0f ? sqrtf(0.5f * 16.0f / out2) : 1.0f;
-  }
   void tilt(float t, uint8_t xover) {
     static const float hz[3] = {80.0f, 650.0f, 2500.0f};
     t = constrain(t, -1.0f, 1.0f);
@@ -198,7 +187,7 @@ private:
   volatile float drive_ = 0.0f, crush_ = 0.0f, wet_ = 1.0f;
   volatile uint8_t crush_mode = CRUSH_BIT, noise_mode = NOISE_PINK;
   volatile float fold_ = 0.0f;
-  float fold_now = 0.0f, fold_gain = 1.0f;  // FOLD as it glides, its make-up
+  float fold_now = 0.0f;  // FOLD as it glides
   volatile bool tilt_on = false;
   volatile float tilt_lo = 1.0f, tilt_hi = 1.0f, tilt_a = 0.1f, tilt_gain = 1.0f;
   volatile float drive_gain = 1.0f;
@@ -251,7 +240,7 @@ private:
   float det = 0.0f;  // the input's level (peaks, ~30 ms fall) for the noise threshold
   float pink[2][3] = {}, svf_lo[2] = {}, svf_bp[2] = {};
   float fold_env = 0.0f;  // FOLD: the sound's level (both sides)
-  float fold_fast[2] = {};  // ... and its loudness now, per side
+  float fold_in[2] = {}, fold_out[2] = {};  // ... loudness in and folded, per side (~15 ms)
   float fold_v[2] = {}, fold_F[2] = {}, fold_x[2] = {}, fold_lp[2] = {};  // FOLD: last sample (volts, integral, dry), low-pass
   static constexpr float FOLD_LP = 1.0f - 0.65227f;  // one pole at ~3 kHz (exp(-2 pi 3000 / 44117))
   float crush_env = 0.0f;  // CRUSH: the sound's level (both sides), ~150 ms fall
@@ -339,18 +328,16 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
   const float nrel = noise_rel, sf = svf_f;
   // FOLD glides from where it was to (part way to) its target over the
   // block: drive, share and make-up move with it sample by sample
-  const float fld0 = fold_now, g0 = fold_gain;
+  const float fld0 = fold_now;
   {
     const float to = fold_;
     fold_now += 0.07f * (to - fold_now);
     if (fabsf(to - fold_now) < 1e-4f) fold_now = to;
-    if (fold_now != fld0) fold_gain = FoldGain(fold_now);
   }
   const float fld = std::max(fld0, fold_now);  // (on while either end folds)
   const float fA0 = B259Volts(fld0), fm0 = std::min(1.0f, fld0 * 4.0f);
   const float dfA = (B259Volts(fold_now) - fA0) * (1.0f / AUDIO_BLOCK_SAMPLES);
   const float dfm = (std::min(1.0f, fold_now * 4.0f) - fm0) * (1.0f / AUDIO_BLOCK_SAMPLES);
-  const float dg_f = (fold_gain - g0) * (1.0f / AUDIO_BLOCK_SAMPLES);
   // the noise threshold: -12 dB at the bottom of NOISE, down to -50 dB at
   // the top (as 1 / threshold)
   const float inv_thr = 1.0f / (0.25f * expf(-38.0f * 0.11512925f * namt));
@@ -462,24 +449,25 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
         // down: a sound dying away gets fewer folds as it fades, as a fading
         // sine does in the circuit, instead of its tail pulled back up into
         // the folds; under -30 dB it is driven less, so hiss doesn't fold)
-        const float fA = fA0 + dfA * n, fm = fm0 + dfm * n, fold_gain_now = g0 + dg_f * n;
+        const float fA = fA0 + dfA * n, fm = fm0 + dfm * n;
         fold_env = std::max(fabsf(v), fold_env * 0.999962f);
         const float lvl = std::max(fold_env, 0.03f);
-        // ... and its loudness now (an average over ~15 ms, as a sine's peak:
-        // a peak follower rippled on low notes): the folded sound comes
-        // out at the level that goes in, so a sound dying away gets quieter
-        // as its folds go (the circuit's straight part would lift a quiet
-        // tail ~11 x: the folds snapped away one by one at full volume and
-        // then it stopped all at once)
-        fold_fast[c] += 0.00151f * (1.5708f * fabsf(v) - fold_fast[c]);
+        // the folded sound comes out exactly as loud as what goes in (both
+        // averaged over ~15 ms), so a sound dying away fades smoothly as its
+        // folds go. (The circuit's straight part lifts a quiet tail ~11 x,
+        // and its loudness rises and falls as each cell drops out: the tail
+        // came down in steps, one per cell, then stopped all at once)
+        fold_in[c] += 0.00151f * (fabsf(v) - fold_in[c]);
         const float vv = v * (fA / lvl), dv = vv - fold_v[c];
         const float Fi = B259Int(vv);
-        const float f = Diodes((fabsf(dv) > 1e-5f ? (Fi - fold_F[c]) / dv : B259(0.5f * (vv + fold_v[c])))
-                               * (1.0f / B259_PEAK)) * fold_fast[c];
+        const float fn = Diodes((fabsf(dv) > 1e-5f ? (Fi - fold_F[c]) / dv : B259(0.5f * (vv + fold_v[c])))
+                                * (1.0f / B259_PEAK));
+        fold_out[c] += 0.00151f * (fabsf(fn) - fold_out[c]);
+        const float f = fn * std::min(2.0f, fold_in[c] / std::max(fold_out[c], 1e-5f));
         const float xm = 0.5f * (v + fold_x[c]);
         fold_v[c] = vv; fold_F[c] = Fi; fold_x[c] = v;
         fold_lp[c] += FOLD_LP * (f - fold_lp[c]);
-        v = (xm + fm * (fold_lp[c] - xm)) * fold_gain_now;
+        v = xm + fm * (fold_lp[c] - xm);  // (loudness matched above)
       } else {
         fold_v[c] = 0.0f; fold_F[c] = 0.0f; fold_x[c] = v; fold_lp[c] = 0.0f;
       }
