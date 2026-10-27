@@ -240,25 +240,19 @@ private:
   float det = 0.0f;  // the input's level (peaks, ~30 ms fall) for the noise threshold
   float pink[2][3] = {}, svf_lo[2] = {}, svf_bp[2] = {};
   float fold_env = 0.0f;  // FOLD: the sound's level (both sides)
-  // FOLD's 4 x oversampling: 65-tap low-pass (Kaiser, flat to 16 kHz,
-  // -52 dB at 26 kHz, -90 dB from 30 kHz), polyphase up, plain down
-  static constexpr int OS = 4, OS_N = 65, OS_TAPS = (OS_N + OS - 1) / OS, OS_DELAY = (OS_N - 1) / OS;
-  static constexpr float OS_H[OS_N] = {
--1.367430106e-05f, 4.248435796e-06f, 7.202080872e-05f, 1.710345044e-04f, 2.179175567e-04f,
-9.390940706e-05f, -2.625603204e-04f, -7.452303971e-04f, -1.043631812e-03f, -7.637963599e-04f,
-2.992064404e-04f, 1.873531608e-03f, 3.130912977e-03f, 2.989265696e-03f, 7.640322151e-04f,
--3.141168399e-03f, -6.981010370e-03f, -8.222466285e-03f, -4.870390238e-03f, 3.004626566e-03f,
-1.244945949e-02f, 1.830407322e-02f, 1.548434991e-02f, 2.052455554e-03f, -1.844620781e-02f,
--3.689309325e-02f, -4.139770599e-02f, -2.222364346e-02f, 2.318899243e-02f, 8.753336950e-02f,
-1.549085827e-01f, 2.059658145e-01f, 2.249935510e-01f, 2.059658145e-01f, 1.549085827e-01f,
-8.753336950e-02f, 2.318899243e-02f, -2.222364346e-02f, -4.139770599e-02f, -3.689309325e-02f,
--1.844620781e-02f, 2.052455554e-03f, 1.548434991e-02f, 1.830407322e-02f, 1.244945949e-02f,
-3.004626566e-03f, -4.870390238e-03f, -8.222466285e-03f, -6.981010370e-03f, -3.141168399e-03f,
-7.640322151e-04f, 2.989265696e-03f, 3.130912977e-03f, 1.873531608e-03f, 2.992064404e-04f,
--7.637963599e-04f, -1.043631812e-03f, -7.452303971e-04f, -2.625603204e-04f, 9.390940706e-05f,
-2.179175567e-04f, 1.710345044e-04f, 7.202080872e-05f, 4.248435796e-06f, -1.367430106e-05f};
-  float os_x[2][OS_TAPS] = {};  // the input, driven, newest first
-  float os_w[2][OS_N] = {};     // the folded sound at 4 x, a ring
+  // FOLD's 2 x oversampling: a 39-tap half-band low-pass (Kaiser; flat to
+  // 18 kHz, -75 dB from 28 kHz, what would mirror back below 16 kHz).
+  // Half-band: every other tap is 0 but the middle one (0.5), so only
+  // these 20 (the even ones) are worked out. (4 x with 65 taps took 41 %
+  // of the CPU)
+  static constexpr int OS_N = 39, OS_HALF = 20, OS_DELAY = 19;  // (taps, even taps, delay in samples)
+  static constexpr float OS_E[OS_HALF] = {
+    -6.247278870e-05f, 4.541707995e-04f, -1.515362554e-03f, 3.792791994e-03f, -8.060244059e-03f,
+    1.544368055e-02f, -2.786849153e-02f, 4.979280858e-02f, -9.720978481e-02f, 3.152383797e-01f,
+    3.152383797e-01f, -9.720978481e-02f, 4.979280858e-02f, -2.786849153e-02f, 1.544368055e-02f,
+    -8.060244059e-03f, 3.792791994e-03f, -1.515362554e-03f, 4.541707995e-04f, -6.247278870e-05f};
+  float os_x[2][OS_HALF] = {};    // the input, driven, newest first
+  float os_w[2][2 * OS_N] = {};   // the folded sound at 2 x, written twice (a ring read in one piece)
   int os_wi[2] = {};
   float os_dry[2][OS_DELAY] = {};  // the sound into FOLD, held back as long
   float os_mix[2][OS_DELAY] = {};  // ... and MIX's dry side
@@ -478,15 +472,15 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
         svf_lo[c] += sf * svf_bp[c];
         v += svf_bp[c] * nlev;
       }
-      // the dry sound held back as long as the 4 x folder takes (16
-      // samples, 0.36 ms), always, so FOLD turning on or off doesn't jump
+      // the dry sound held back as long as the 2 x folder takes (19
+      // samples, 0.43 ms), always, so FOLD turning on or off doesn't jump
       const float held = os_dry[c][os_di];
       os_dry[c][os_di] = v;
       if (fld > 0.0f) {
-        // run at 4 x the rate (OS_H up, the folder, OS_H down), with
-        // first-order anti-aliasing on top (the curve's integral across each
-        // step): the folds' harmonics past the top no longer mirror back as
-        // low, unrelated tones. (At 1 x they did; once the low-pass closed
+        // run at 2 x the rate (half-band up, the folder, half-band down),
+        // with first-order anti-aliasing on top (the curve's integral across
+        // each step): the folds' harmonics past the top no longer mirror back
+        // as low, unrelated tones. (At 1 x they did; once the low-pass closed
         // at a note's end they were what was left: a digital garble.) Then
         // a low-pass that closes as the sound dies (below)
         // the sound against its own peak (both sides, at once up, ~100 ms
@@ -509,24 +503,30 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
         fold_in[c] += 0.00151f * (fabsf(v) - fold_in[c]);
         const float drive = fA / lvl;
         float* xh = os_x[c];
-        for (int j = OS_TAPS - 1; j > 0; j--) xh[j] = xh[j - 1];
+        for (int j = OS_HALF - 1; j > 0; j--) xh[j] = xh[j - 1];
         xh[0] = v * drive;
-        for (int ph = 0; ph < OS; ph++) {
-          float vv = 0.0f;
-          for (int j = 0; j < OS_TAPS && OS * j + ph < OS_N; j++) vv += OS_H[OS * j + ph] * xh[j];
-          vv *= float(OS);
-          const float dv = vv - fold_v[c];
+        // up: the in-between sample from the even taps, the other one is
+        // the input itself, from the middle (each x 2: zeros stuffed in)
+        float up0 = 0.0f;
+        for (int j = 0; j < OS_HALF; j++) up0 += OS_E[j] * xh[j];
+        const float ups[2] = {2.0f * up0, xh[9]};
+        float* w = os_w[c];
+        float fn = 0.0f;
+        for (int k = 0; k < 2; k++) {
+          const float vv = ups[k], dv = vv - fold_v[c];
           const float Fi = B259Int(vv);
           const float y = Diodes((fabsf(dv) > 1e-5f ? (Fi - fold_F[c]) / dv : B259(0.5f * (vv + fold_v[c])))
                                  * (1.0f / B259_PEAK));
           fold_v[c] = vv; fold_F[c] = Fi;
-          os_w[c][os_wi[c]] = y;
-          os_wi[c] = (os_wi[c] + 1) % OS_N;
-        }
-        float fn = 0.0f;
-        for (int k = 0, i = os_wi[c]; k < OS_N; k++) {  // oldest to newest (the filter is symmetric)
-          fn += OS_H[k] * os_w[c][i];
-          if (++i == OS_N) i = 0;
+          w[os_wi[c]] = w[os_wi[c] + OS_N] = y;
+          if (++os_wi[c] == OS_N) os_wi[c] = 0;
+          if (k == 0) {
+            // down, after the first of the two (so the whole way takes 19
+            // samples, as the dry side): the even taps and the middle one
+            const float* r = w + os_wi[c];  // the last 39, oldest first
+            fn = 0.5f * r[19];
+            for (int j = 0; j < OS_HALF; j++) fn += OS_E[j] * r[2 * j];
+          }
         }
         fold_out[c] += 0.00151f * (fabsf(fn) - fold_out[c]);
         const float f = fn * std::min(2.0f, fold_in[c] / std::max(fold_out[c], 1e-5f));
