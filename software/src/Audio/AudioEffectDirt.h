@@ -119,16 +119,16 @@ public:
   static constexpr float B259_C[5] = {-12.0f * 0.8333f, 17.647f * 0.5743f, -27.777f * 0.3768f,
                                       36.363f * 0.2673f, -21.428f * 0.2829f};
   static constexpr float B259_PEAK = 3.0f;  // the folds' tops, in volts: full scale out
-  static inline float B259(float v) {  // the circuit's curve, volts in and out
+  static inline float B259(float v) {  // the circuit's curve, volts in and out (no branches: fast)
     const float a = fabsf(v);
     float y = 5.0f * a;
-    for (int k = 0; k < 5; k++) if (a > B259_T[k]) y += B259_C[k] * (a - B259_T[k]);
-    return v < 0.0f ? -y : y;
+    for (int k = 0; k < 5; k++) y += B259_C[k] * std::max(0.0f, a - B259_T[k]);
+    return copysignf(y, v);
   }
   static inline float B259Int(float v) {  // its integral (for the anti-aliasing)
     const float a = fabsf(v);
     float y = 2.5f * a * a;
-    for (int k = 0; k < 5; k++) if (a > B259_T[k]) y += 0.5f * B259_C[k] * (a - B259_T[k]) * (a - B259_T[k]);
+    for (int k = 0; k < 5; k++) { const float d = std::max(0.0f, a - B259_T[k]); y += 0.5f * B259_C[k] * d * d; }
     return y;
   }
   // The volts are the circuit's own, nothing in Loom's audio: they only
@@ -140,10 +140,11 @@ public:
   // 50 = three, 100 = all five (6.5; past the last one the curve runs off)
   static inline float B259Volts(float fold) { return 0.6f + 5.9f * fold; }
   // the Easel's two diodes across the summing amp: the folds' tips round
-  // off (a soft clip, tanh-like, full scale kept)
+  // off (a soft clip, full scale kept: 1.5 u - 0.5 u^3, flat at the top;
+  // no division, it runs twice a sample on both sides)
   static inline float Diodes(float u) {
-    const float a = 1.3f * u;
-    return a * (27.0f + a * a) / (27.0f + 9.0f * a * a) * 1.1317f;  // (1 stays 1)
+    u = constrain(u, -1.0f, 1.0f);
+    return u * (1.5f - 0.5f * u * u);
   }
   // fold curve on a sound whose peak is 1 (the picture's sine; the engine
   // divides by the level first), without the anti-aliasing and the
