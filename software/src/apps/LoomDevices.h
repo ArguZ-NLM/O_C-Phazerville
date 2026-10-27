@@ -5205,7 +5205,7 @@ FLASHMEM void DirtDevice::DrawViz(int x, int y, int w, int h) {
   // BIT: the steps; REDUX: the whole line losing pixels as CRUSH goes up;
   // BOTH: the steps losing pixels
   const float keep = RedPixels();
-  const float boost = 1.0f + 6.0f * fld * std::min(1.0f, fld * 4.0f);
+  const float boost = 1.0f + (AudioEffectDirt::B259Volts(fld) / 0.6f - 1.0f) * std::min(1.0f, fld * 4.0f);  // how hard the folder is driven
   int ys[128];
   const int nc = std::min(128, bs - 2);
   for (int i = 1; i <= nc; i++) {

@@ -43,11 +43,11 @@ public:
   void crush(float c, uint8_t mode) { crush_ = constrain(c, 0.0f, 1.0f); crush_mode = mode; }
   void fold(float f) {
     fold_ = constrain(f, 0.0f, 1.0f);
-    // FOLD drives the circuit (a full-scale signal up to 6.6 V): bring a
-    // sine at the usual level (DRIVE_REF) back to its own loudness (rms)
+    // the folds take loudness away (or add it): bring a sine back to its
+    // own loudness (rms); the level follower makes any level look the same
     float in2 = 0.0f, out2 = 0.0f;
     for (int i = 0; i < 64; i++) {
-      const float x = DRIVE_REF * sinf(2.0f * float(M_PI) * (i + 0.5f) / 64.0f);
+      const float x = sinf(2.0f * float(M_PI) * (i + 0.5f) / 64.0f);
       const float y = Fold(x, fold_);
       in2 += x * x;
       out2 += y * y;
@@ -142,16 +142,26 @@ public:
     for (int k = 0; k < 5; k++) if (a > B259_T[k]) y += 0.5f * B259_C[k] * (a - B259_T[k]) * (a - B259_T[k]);
     return y;
   }
-  // FOLD 0..1 -> the volts a full-scale signal reaches: 0.6 (the first
-  // fold just starts, the circuit is still straight) up to 6.6 (past the
-  // last cell the curve runs off instead of folding)
-  static inline float B259Volts(float fold) { return 0.6f * (1.0f + 10.0f * fold); }
-  // fold curve, shared with the picture (without the anti-aliasing and the
-  // low-pass); crossfaded in so 0 is clean
+  // The volts are the circuit's own, nothing in Loom's audio: they only
+  // set where the cells start. As in the Music Easel (the same five cells),
+  // the folder always sees its sine at the same strength and the timbre
+  // knob is a level in front of it (a JFET): here the sound is taken
+  // relative to its own peak (a level follower), so FOLD alone says how
+  // many cells work, loud or quiet: 0 = none (0.6, the first just starts),
+  // 50 = three, 100 = all five (6.5; past the last one the curve runs off)
+  static inline float B259Volts(float fold) { return 0.6f + 5.9f * fold; }
+  // the Easel's two diodes across the summing amp: the folds' tips round
+  // off (a soft clip, tanh-like, full scale kept)
+  static inline float Diodes(float u) {
+    const float a = 1.3f * u;
+    return a * (27.0f + a * a) / (27.0f + 9.0f * a * a) * 1.1317f;  // (1 stays 1)
+  }
+  // fold curve on a sound whose peak is 1 (the picture's sine; the engine
+  // divides by the level first), without the anti-aliasing and the
+  // low-pass; crossfaded in so 0 is clean
   static inline float Fold(float x, float fold) {
     if (fold <= 0.0f) return x;
-    const float A = B259Volts(fold);
-    const float f = B259(x * A) * (1.0f / B259_PEAK);
+    const float f = Diodes(B259(x * B259Volts(fold)) * (1.0f / B259_PEAK));
     return x + std::min(1.0f, fold * 4.0f) * (f - x);
   }
 
@@ -239,6 +249,7 @@ private:
   float tilt_z[2] = {}, env_in = 0.0f;
   float det = 0.0f;  // the input's level (peaks, ~30 ms fall) for the noise threshold
   float pink[2][3] = {}, svf_lo[2] = {}, svf_bp[2] = {};
+  float fold_env = 0.0f;  // FOLD: the sound's level (both sides)
   float fold_v[2] = {}, fold_F[2] = {}, fold_x[2] = {}, fold_lp[2] = {};  // FOLD: last sample (volts, integral, dry), low-pass
   static constexpr float FOLD_LP = 1.0f - 0.65227f;  // one pole at ~3 kHz (exp(-2 pi 3000 / 44117))
   float crush_env = 0.0f;  // CRUSH: the sound's level (both sides), ~150 ms fall
@@ -432,10 +443,14 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
         // from the last sample: its corners don't fold back as whistles),
         // the straight path taken at the same half sample, then the
         // circuit's low-pass (one pole, 1.33 kHz in the 259, here 3 kHz)
-        const float vv = v * fA, dv = vv - fold_v[c];
+        // the sound against its own peak (both sides, at once up, ~150 ms
+        // down; under -40 dB it is driven less, so hiss doesn't fold)
+        fold_env = std::max(fabsf(v), fold_env * 0.99985f);
+        const float lvl = std::max(fold_env, 0.01f);
+        const float vv = v * (fA / lvl), dv = vv - fold_v[c];
         const float Fi = B259Int(vv);
-        const float f = (fabsf(dv) > 1e-5f ? (Fi - fold_F[c]) / dv : B259(0.5f * (vv + fold_v[c])))
-                        * (1.0f / B259_PEAK);
+        const float f = Diodes((fabsf(dv) > 1e-5f ? (Fi - fold_F[c]) / dv : B259(0.5f * (vv + fold_v[c])))
+                               * (1.0f / B259_PEAK)) * lvl;
         const float xm = 0.5f * (v + fold_x[c]);
         fold_v[c] = vv; fold_F[c] = Fi; fold_x[c] = v;
         fold_lp[c] += FOLD_LP * (f - fold_lp[c]);
