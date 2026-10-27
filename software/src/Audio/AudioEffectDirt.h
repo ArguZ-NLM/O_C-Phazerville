@@ -118,18 +118,12 @@ public:
   static constexpr float B259_T[5] = {0.6f, 1.8f, 2.994f, 4.08f, 5.46f};
   static constexpr float B259_C[5] = {-12.0f * 0.8333f, 17.647f * 0.5743f, -27.777f * 0.3768f,
                                       36.363f * 0.2673f, -21.428f * 0.2829f};
-  static constexpr float B259_PEAK = 3.0f;  // the folds' tops, in volts: full scale out
+  static constexpr float B259_PEAK = 3.4f;  // the folds' tops, in volts (3.33 the highest): full scale out, inside the diodes
   static inline float B259(float v) {  // the circuit's curve, volts in and out (no branches: fast)
     const float a = fabsf(v);
     float y = 5.0f * a;
     for (int k = 0; k < 5; k++) y += B259_C[k] * std::max(0.0f, a - B259_T[k]);
     return copysignf(y, v);
-  }
-  static inline float B259Int(float v) {  // its integral (for the anti-aliasing)
-    const float a = fabsf(v);
-    float y = 2.5f * a * a;
-    for (int k = 0; k < 5; k++) { const float d = std::max(0.0f, a - B259_T[k]); y += 0.5f * B259_C[k] * d * d; }
-    return y;
   }
   // The volts are the circuit's own, nothing in Loom's audio: they only
   // set where the cells start. As in the Music Easel (the same five cells),
@@ -259,7 +253,7 @@ private:
   float os_mix[2][OS_DELAY] = {};  // ... and MIX's dry side
   int os_di = 0;
   float fold_in[2] = {}, fold_out[2] = {};  // ... loudness in and folded, per side (~15 ms)
-  float fold_v[2] = {}, fold_F[2] = {}, fold_x[2] = {}, fold_lp[2] = {};  // FOLD: last sample (volts, integral, dry), low-pass
+  float fold_lp[2] = {};  // FOLD: its tone filter
   float fold_ref = 0.0f;  // FOLD: how loud the note was (~0.6 s down), for the low-pass gate
   static constexpr float FOLD_LP = 0.348f;  // one pole at 3 kHz: 1 - exp(-2 pi 3000 / 44117)
   float crush_env = 0.0f;  // CRUSH: the sound's level (both sides), ~150 ms fall
@@ -334,7 +328,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
   memcpy(Lx, os_x, sizeof(Lx)); memcpy(Lw, os_w, sizeof(Lw));
   memcpy(Ldry, os_dry, sizeof(Ldry)); memcpy(Lmix, os_mix, sizeof(Lmix));
   int Lwi[2] = {os_wi[0], os_wi[1]}, Lxi[2] = {os_xi[0], os_xi[1]}, Ldi = os_di;
-  float Lfv[2] = {fold_v[0], fold_v[1]}, LfF[2] = {fold_F[0], fold_F[1]}, Llp[2] = {fold_lp[0], fold_lp[1]};
+  float Llp[2] = {fold_lp[0], fold_lp[1]};
   float Lfin[2] = {fold_in[0], fold_in[1]}, Lfout[2] = {fold_out[0], fold_out[1]};
   float Lfref = fold_ref;
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
@@ -493,9 +487,8 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
         // tail stepped and then cut off; folds held with a closing low-pass
         // - matching ahead of the filter, the level jumped as it closed.)
         // The folder runs at 2 x the rate (half-band up, the curve, half-band
-        // down) with first-order anti-aliasing on top (the curve's integral
-        // across each step), so its harmonics past the top don't mirror back
-        // as low, unrelated tones. Under -54 dB the drive drops (hiss)
+        // down), so its harmonics past the top don't mirror back as low,
+        // unrelated tones. Under -54 dB the drive drops (hiss)
         const float fA = fA0 + dfA * n, fm = fm0 + dfm * n;
         Lfref = std::max(fabsf(v), Lfref * 0.999962f);
         const float lvl = std::max(Lfref, 0.002f);
@@ -517,11 +510,10 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
         float* w = Lw[c];
         float fn = 0.0f;
         for (int k = 0; k < 2; k++) {
-          const float vv = ups[k], dv = vv - Lfv[c];
-          const float Fi = B259Int(vv);
-          const float y = Diodes((fabsf(dv) > 1e-5f ? (Fi - LfF[c]) / dv : B259(0.5f * (vv + Lfv[c])))
-                                 * (1.0f / B259_PEAK));
-          Lfv[c] = vv; LfF[c] = Fi;
+          // (no first-order anti-aliasing on top any more: at 2 x its steps
+          // got so small near the wave's tops that its division turned
+          // rounding into single-sample spikes, a crackle)
+          const float y = Diodes(B259(ups[k]) * (1.0f / B259_PEAK));
           w[Lwi[c]] = w[Lwi[c] + OS_N] = y;
           if (++Lwi[c] == OS_N) Lwi[c] = 0;
           if (k == 0) {
@@ -538,10 +530,13 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
         }
         Llp[c] += FOLD_LP * (fn - Llp[c]);  // the tone filter (one pole, 3 kHz; the 259's 1.33 kHz was too dull here)
         Lfout[c] += 0.00151f * (fabsf(Llp[c]) - Lfout[c]);
-        const float f = Llp[c] * std::min(4.0f, Lfin[c] / std::max(Lfout[c], 1e-5f));
+        // (the folded sound's level counted from 0.3 at least: at a note's
+        // start it is full at once while its average still sits at 0, and
+        // the match jumped up to 4 x: a click)
+        const float f = Llp[c] * std::min(4.0f, Lfin[c] / std::max(Lfout[c], 0.3f));
         v = held + fm * (f - held);
       } else {
-        Lfv[c] = 0.0f; LfF[c] = 0.0f; Llp[c] = 0.0f;
+        Llp[c] = 0.0f;
         for (auto& xx : Lx[c]) xx = 0.0f;
         Lxi[c] = 0;
         v = held;
@@ -676,7 +671,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
   memcpy(os_x, Lx, sizeof(Lx)); memcpy(os_w, Lw, sizeof(Lw));
   memcpy(os_dry, Ldry, sizeof(Ldry)); memcpy(os_mix, Lmix, sizeof(Lmix));
   for (int c = 0; c < 2; c++) {
-    os_wi[c] = Lwi[c]; os_xi[c] = Lxi[c]; fold_v[c] = Lfv[c]; fold_F[c] = LfF[c]; fold_lp[c] = Llp[c];
+    os_wi[c] = Lwi[c]; os_xi[c] = Lxi[c]; fold_lp[c] = Llp[c];
     fold_in[c] = Lfin[c]; fold_out[c] = Lfout[c];
   }
   os_di = Ldi; fold_ref = Lfref;
