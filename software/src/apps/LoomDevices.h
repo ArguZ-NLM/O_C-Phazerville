@@ -1410,7 +1410,7 @@ public:
 private:
   AudioEffectBandz bandz;
   int track;
-  Meter meters[2], band_m[3], gr_m[3];
+  Meter meters[2], band_m[3], gr_m[3], plush_m;
   static constexpr int SPEC_BARS = 31; // 3 px each across the 3 left columns
   float spec[SPEC_BARS] = {};
   float* fft = nullptr; // 4 x 512 floats for the two FFTs, made when first drawn
@@ -1528,6 +1528,32 @@ FLASHMEM void MixDevice::DrawViz(int x, int y, int w, int h) {
     if (gr > 0) gfxRect(bx + 22, y + 1, 4, gr);
   }
 
+  // page 2, above PLUSH: its curve. Across: how loud it goes in, up: how
+  // loud it comes out, both -36..0 dB. Straight (dotted) is nothing done;
+  // PLUSH bends the top flat (squashed) and lifts the whole line (made
+  // up), so quiet parts come up and loud ones stay put. The dot rides the
+  // curve at what is coming in now.
+  if (view_page == 1 && !AltShown(PLUSH)) {
+    const int gx = x + 96 + 2, gy = y, gw = 28, gh = h;
+    constexpr float LO_DB = -36.0f;
+    auto px = [&](float db) { return gx + 1 + int((db - LO_DB) * (gw - 3) / -LO_DB + 0.5f); };
+    auto py = [&](float db) { return gy + gh - 2 - int((constrain(db, LO_DB, 0.0f) - LO_DB) * (gh - 3) / -LO_DB + 0.5f); };
+    gfxFrame(gx, gy, gw, gh);
+    gfxDottedLine(gx + 1, gy + gh - 2, gx + gw - 2, gy + 1, 3);
+    int lx = px(LO_DB), ly = py(bandz.PlushOut(LO_DB));
+    for (int i = 1; i <= gw - 3; i++) {
+      const float db = LO_DB - LO_DB * i / (gw - 3);
+      const int nx = px(db), ny = py(bandz.PlushOut(db));
+      gfxLine(lx, ly, nx, ny);
+      lx = nx; ly = ny;
+    }
+    const float in = plush_m.Hit(v.pl_in * v.pl_in, 0.93f);  // (Hit takes a power)
+    if (cur[PLUSH] && in > 0.016f) {
+      const float db = std::max(LO_DB, 20.0f * log10f(in));
+      gfxRect(px(db) - 1, py(bandz.PlushOut(db)) - 1, 3, 3);
+    }
+    return;
+  }
   // page 2, above SPLIT: where the bands divide, the high split on top
   if (view_page == 1) {
     const int sx = x + 96 + 4;

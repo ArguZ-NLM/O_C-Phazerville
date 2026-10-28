@@ -40,7 +40,16 @@ public:
   struct Viz {
     float level[BANDS];  // band peaks after gain, 0..1
     float gr_db[BANDS];  // gain reduction per band
+    float pl_in;         // PLUSH: the loudest it was fed (0..1, its follower)
   };
+  // PLUSH's curve, for the picture: what comes out (dB, made up, the limiter
+  // at the top) for what goes in (dB)
+  float PlushOut(float in_db) const {
+    const float th = pl_th, sl = pl_sl;
+    float o = in_db > th ? in_db - (in_db - th) * sl : in_db;
+    if (pl_on) o += -th * sl * 0.7f;
+    return std::min(o, -0.9f);
+  }
 
   AudioEffectBandz() : AudioStream(2, input_queue_array) {}
 
@@ -299,6 +308,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectBandz::update() {  // (O
         const float over = on ? 6.0206f * FastLog2(pl_env + 1e-6f) - th : 0.0f;  // dB
         pl_target = over > 0.0f ? FastExp2(-over * sl * 0.16610f) : 1.0f;
       }
+      if (pl_env > viz.pl_in) viz.pl_in = pl_env;
       pl_cg += 0.05f * (pl_target - pl_cg);
       pl_mk_now += 0.0005f * (mk - pl_mk_now);  // the make-up glides (~50 ms)
       const float gg = 1.0f + mixw * (pl_cg * pl_mk_now - 1.0f);
