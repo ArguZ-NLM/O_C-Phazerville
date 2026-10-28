@@ -801,6 +801,9 @@ public:
   void DrawMini(int x, int y, int w, int h) override;
   bool external() const { return cur[P_SOURCE] != 0; }
   bool midi() const { return cur[P_SOURCE] == 1; }
+  // SOURCE on a CV input (CV1-8): no pulses counted there, the voltage moves
+  // the tempo from BPM (0 V: BPM, +5 V double, -5 V half): -1 none
+  int CvTempo() const { const int s = cur[P_SOURCE]; return s >= 6 && s <= 13 ? s - 6 : -1; }
   int Shuttle() const { return cur[P_SOURCE] >= CLK_SHU ? cur[P_SOURCE] - CLK_SHU : -1; }  // its track, -1 none
   bool Waiting() const { return external() && !have_measure; }
   int Beat() const { return beat; }
@@ -848,6 +851,12 @@ FLASHMEM void ClockDevice::Tick(const ModCtx& ctx) {
     const PlayerDevice* p = shuttles[src - CLK_SHU];
     const float b = p ? p->HeardBpm() : 0.0f;
     if (b >= 10.0f && b <= 400.0f) { measured = b; have_measure = true; }
+  } else if (CvTempo() >= 0) {
+    // a CV input: the tempo from BPM, an octave of tempo for every 5 V, smoothed
+    const float volts = HS::frame.In(CvTempo()) / 1536.0f;
+    const float target = constrain(cur[P_BPM] * exp2f(volts / 5.0f), 30.0f, 300.0f);
+    measured = have_measure ? measured + 0.02f * (target - measured) : target;
+    have_measure = true;
   } else if (src >= 2) {
     if (SrcEdge(src - 1, ctx.edges, prev_gate[0])) {
       const uint32_t dt = now - last_edge_us;
@@ -897,6 +906,8 @@ FLASHMEM void ClockDevice::Format(int p, char* buf, size_t n) const {
     else if (val[p] == 1) snprintf(buf, n, "MIDI");
     else if (val[p] >= CLK_SHU) snprintf(buf, n, "SHU %c", 'A' + (val[p] - CLK_SHU));
     else FormatTrig(val[p] - 1, buf, n);
+  } else if (p == P_BPM && CvTempo() >= 0) {  // what you set, and where the CV has it now
+    snprintf(buf, n, "%d (%d)", val[P_BPM], int(tempo_bpm + 0.5f));
   } else if (p == P_BPM && external()) {
     snprintf(buf, n, "%d", int(tempo_bpm + 0.5f));
   } else if (p == P_BOOT) {
