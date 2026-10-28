@@ -3715,7 +3715,7 @@ FLASHMEM void AppLoom::DrawClockPage() const {
       if (editing) gfxInvert(47, y - 1, 6 * int(strlen(buf)) + 1, 9);
     }
   }
-  // "Loom Beta 3 40720f32": 20 characters, the screen's width
+  // "Loom Beta 2 40720f32": 20 characters, the screen's width
   gfxPrint(2, 47, OC::Strings::VERSION);
   gfxPrint(2 + 6 * int(strlen(OC::Strings::VERSION)), 47, OC::Strings::BUILD_TAG);
   // four beats, the current one filled while running
