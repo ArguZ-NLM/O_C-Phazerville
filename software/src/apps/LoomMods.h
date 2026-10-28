@@ -801,8 +801,8 @@ public:
   void DrawMini(int x, int y, int w, int h) override;
   bool external() const { return cur[P_SOURCE] != 0; }
   bool midi() const { return cur[P_SOURCE] == 1; }
-  // BPM's L knob: a CV input (CV1-8) that moves the tempo from BPM (0 V:
-  // BPM, +5 V double, -5 V half), for the internal clock: -1 none
+  // BPM's L knob: a CV input (CV1-8) that moves the tempo from BPM (27 BPM
+  // a volt, 30-300), for the internal clock: -1 none
   int CvTempo() const { return !external() && mode[P_BPM] >= 1 && mode[P_BPM] <= 8 ? mode[P_BPM] - 1 : -1; }
   bool NameStop(int p) const override { return p != P_BPM && Modulator::NameStop(p); }  // (the clock page shows no name stop)
   void FormatMode(int p, char* buf, size_t n) const override {
@@ -825,9 +825,9 @@ public:
 private:
   uint8_t beat = 0;
   uint32_t last_edge_us = 0;
-  static constexpr int TAPS = 8;     // TAP: the last presses (times), how many in a row
-  uint32_t taps[TAPS] = {};
-  uint16_t taps_n = 0;
+  uint32_t tap_first = 0, tap_last = 0, tap_set_us = 0;  // TAP: the sequence under way (first, last press), when a tempo was last tapped
+  uint16_t tap_n = 0;                // presses in the sequence
+  bool tap_set = false;
   uint32_t midi_mark = 0, midi_mark_us = 0;
   float beat_ph = 0.0f;
   float measured = 120.0f;
@@ -860,9 +860,10 @@ FLASHMEM void ClockDevice::Tick(const ModCtx& ctx) {
     const float b = p ? p->HeardBpm() : 0.0f;
     if (b >= 10.0f && b <= 400.0f) { measured = b; have_measure = true; }
   } else if (CvTempo() >= 0) {
-    // a CV input: the tempo from BPM, an octave of tempo for every 5 V, smoothed
+    // a CV input: added to BPM in a straight line, 27 BPM a volt (0-10 V
+    // spans 30-300 from BPM 30), held to 30-300, smoothed
     const float volts = HS::frame.In(CvTempo()) / 1536.0f;
-    const float target = constrain(cur[P_BPM] * exp2f(volts / 5.0f), 30.0f, 300.0f);
+    const float target = constrain(cur[P_BPM] + volts * 27.0f, 30.0f, 300.0f);
     measured = have_measure ? measured + 0.02f * (target - measured) : target;
     have_measure = true;
   } else if (src >= 2) {
@@ -896,23 +897,28 @@ FLASHMEM void ClockDevice::Tick(const ModCtx& ctx) {
   clock_beat_us = micros();
 }
 
-// TAP: tap the tempo on A (internal clock). From the third press on, the
-// tempo is the average of the gaps, over up to the last eight presses; a
-// pause of more than 2 s starts counting again
+// TAP: tap the tempo on A (internal clock), in sequences: a press whose
+// gap breaks the run (more than a third off its steady gap, or a pause over
+// 2 s) starts a new sequence, and only the sequence under way counts. The
+// first sequence sets the tempo from its third press on; one that follows
+// within 5 s of a tapped tempo already from its second
 FLASHMEM void ClockDevice::Action(int a) {
   if (a == 1) { ClockStart(); return; }
   const uint32_t now = micros();
-  if (taps_n && now - taps[(taps_n - 1) % TAPS] > 2000000) taps_n = 0;
-  taps[taps_n % TAPS] = now;
-  taps_n++;
-  const int n = std::min<int>(taps_n, TAPS);
-  if (n < 3) return;
-  const uint32_t first = taps[(taps_n - n) % TAPS];
-  const float gap = float(now - first) / (n - 1);
-  if (gap > 200000.0f) {
-    val[P_BPM] = constrain(int(60e6f / gap + 0.5f), 30, 300);
-    Refresh(P_BPM);
-  }
+  const uint32_t gap = now - tap_last;
+  const float steady = tap_n >= 2 ? float(tap_last - tap_first) / (tap_n - 1) : 0.0f;
+  const bool broken = !tap_n || gap > 2000000 || gap < 150000
+                   || (steady > 0.0f && fabsf(gap - steady) > steady * 0.35f);
+  if (broken) { tap_first = now; tap_n = 1; }
+  else tap_n++;
+  tap_last = now;
+  const int need = tap_set && now - tap_set_us < 5000000 ? 2 : 3;
+  if (tap_n < need) return;
+  const float mean = float(tap_last - tap_first) / (tap_n - 1);
+  val[P_BPM] = constrain(int(60e6f / mean + 0.5f), 30, 300);
+  Refresh(P_BPM);
+  tap_set = true;
+  tap_set_us = now;
 }
 
 FLASHMEM void ClockDevice::Format(int p, char* buf, size_t n) const {
