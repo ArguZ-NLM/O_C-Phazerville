@@ -2863,10 +2863,10 @@ FLASHMEM void AppLoom::GoTo(const char* text) {
   if (!strcmp(part[1], "MOD") && part[2][0] >= 'A' && part[2][0] <= 'H') {
     const int i = part[2][0] - 'A';
     if (part[3][0]) {
-      static const char* const names[MOD_TYPES] = {"OFF", "ADSR", "FOLLOW", "RANDOM", "WAVE", "TREADLE", "PICK"};
+      static const char* const names[MOD_TYPES] = {"OFF", "ADSR", "FOLLOW", "RANDOM", "WAVE", "TREADLE", "TABBY"};
       int ty = -1;
       for (int m = 0; m < MOD_TYPES; m++)
-        if (!strcmp(part[3], names[m]) || !strcmp(part[3], MOD_TYPE_TAGS[m])) ty = m;
+        if (!strcmp(part[3], names[m]) || !strcmp(part[3], MOD_TYPE_TAGS[m]) || (m == 6 && !strcmp(part[3], "PICK"))) ty = m;  // (TABBY was PICK)
       if (ty < 0) { Serial.printf("GOTO: no modulator %s\n", part[3]); return; }
       SetModType(t, i, ty);
     }

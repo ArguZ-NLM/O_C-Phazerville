@@ -8047,7 +8047,7 @@ PROGMEM static const SlotDef SLOT_DEFS[SLOT_COUNT] = {
 static const char* ShownTag(const char* tag) {
   static const char map[][2][5] = {
     {"SPR", "FIB"}, {"STR", "DFT"}, {"RES", "REED"}, {"MDL", "BTR"},
-    {"CHM", "TWL"}, {"ECO", "RPT"}, {"MIX", "CLTH"}, {"REL", "SPL"}};
+    {"CHM", "TWL"}, {"ECO", "RPT"}, {"MIX", "CLTH"}, {"REL", "SPL"}, {"PCK", "TAB"}};
   for (auto& m : map) if (!strcmp(tag, m[0])) return m[1];
   return tag;
 }

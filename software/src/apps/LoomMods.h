@@ -1355,8 +1355,9 @@ FLASHMEM void TreadleMod::DrawViz(int x, int y, int w, int h) {
 }
 
 /////////////////////////////////////////////////////////////////
-// PICK: a clock and its dividers. On a loom a pick is one pass of the
-// weft; picks per inch is how dense the cloth is. RATE ticks (TICK). DIV A
+// TABBY (was PICK until 2026-10-28; the class and the saved tag keep that
+// name): a clock and its dividers. Tabby is the plainest weave, over and
+// under, one thread against the other, as A against B. RATE ticks (TICK). DIV A
 // and DIV B strike every n-th tick, their L knob keeping the count to a set
 // of numbers (all, odd, even, primes, triplets, Fibonacci, powers of two),
 // and eight fixed ones /2 /3 /4 /6 /8 /12 /16 /24 count along. A divider
@@ -1379,7 +1380,7 @@ FLASHMEM void TreadleMod::DrawViz(int x, int y, int w, int h) {
 // fixed ones. Its own box sends one; the other boxes can take the rest.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef PICK_DEF = {
-  "PICK", "PCK", 8, {"RUN", "RST"},  // (A held: stop; B: RST, or FILL with the cursor on BURST)
+  "TABBY", "PCK", 8, {"RUN", "RST"},  // (tag PCK kept for saved files; A held: stop; B: RST, or FILL with the cursor on BURST)
   {
     {"RATE", 0, 100, 74, UNI, 0, 2, 1, {}, {"FREE", "CLOCK"}},  // a tick; on the clock (74: 1/16)
     {"DIVA", 1, 144, 3, UNI, 0, 7, 0, {}, {}},  // mode: the set of numbers
