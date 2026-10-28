@@ -3315,6 +3315,12 @@ FLASHMEM void AppLoom::DrawChain() const {
 
 // text centred in a 32 px parameter column
 FLASHMEM static void PrintCentred(int x, int y, const char* str) {
+  if (!strncmp(str, "ROL ", 4) && str[4] && !str[5]) {  // ROL A / ROL B: half a space between
+    gfxPrint(x + (32 - 27) / 2, y, "ROL");
+    const char c[2] = {str[4], 0};
+    gfxPrint(x + (32 - 27) / 2 + 21, y, c);
+    return;
+  }
   const int w = 6 * int(strlen(str));
   gfxPrint(x + std::max(0, (32 - w) / 2), y, str);
 }
@@ -3864,7 +3870,7 @@ namespace loom {
   // 14: DRAFT in FIBRE's order SPEED SIZE PITCH POS (was PITCH POS SIZE SPEED)
   // 15: DRAFT page 2 DIFF TONE SPRD MIX (was TONE FDBK SPRD MIX, TONE's mode
   //     the diffusion)
-  constexpr uint8_t SAVE_VERSION = 31;  // 31: SPOOL IN MON LEVEL first, CLOTH PLUSH / SPLIT; 21: TREADLE, a 6th modulator type; 22: PICK, a 7th; 23: TREADLE's LEN per part; 24: TREADLE's CHAOS -32..32; 25: TREADLE's pages; 26: STYLE / BEAT for X / Y; 27: TWILL's HITS; 28: TWILL's TONE gone, HITS in its place; 29: TWILL's VARI; 30: TWILL sound / strike pages
+  constexpr uint8_t SAVE_VERSION = 32;  // 32: TABBY's DENS (4th setting) became CHANC; 31: SPOOL IN MON LEVEL first, CLOTH PLUSH / SPLIT; 21: TREADLE, a 6th modulator type; 22: PICK, a 7th; 23: TREADLE's LEN per part; 24: TREADLE's CHAOS -32..32; 25: TREADLE's pages; 26: STYLE / BEAT for X / Y; 27: TWILL's HITS; 28: TWILL's TONE gone, HITS in its place; 29: TWILL's VARI; 30: TWILL sound / strike pages
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -3995,6 +4001,7 @@ namespace loom {
     // before v31 CLOTH's last was SPLIT (value) with PLUSH as its mode (in
     // 5 % steps): now PLUSH (value, 0..100) with SPLIT as its second value
     const bool plush_swap = use && !memcmp(tag, "MIX", 4) && load_version < 31;
+    const bool dens_gone = use && !memcmp(tag, "PCK", 4) && load_version < 32;  // TABBY: DENS -> CHANC
     int old_dub = -1;
     // before v13 CLOTH's page 2 was band gains (0.5 dB steps; LOW's mode the
     // low split) and one COMP: COMP becomes each band's squash, the gains
@@ -4049,6 +4056,11 @@ namespace loom {
         p = SPOOL_MAP[q];
       }
       if (spool_v31) p = SPOOL_V31[constrain(p, 0, 7)];
+      if (dens_gone && p == 3) {  // what was DENS starts as CHANC 0 (GAPS), nothing moving it
+        v = 0; md = 0;
+        amt = amt2 = 0;
+        src = 0; bus = bus2 = 0;
+      }
       if (plush_swap && p == MixDevice::PLUSH) {
         const int16_t split = v;
         v = int16_t(constrain(int(md), 0, 20) * 5);

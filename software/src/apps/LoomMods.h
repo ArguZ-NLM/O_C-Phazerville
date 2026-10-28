@@ -1360,24 +1360,27 @@ FLASHMEM void TreadleMod::DrawViz(int x, int y, int w, int h) {
 // under, one thread against the other, as A against B. RATE ticks (TICK). DIV A
 // and DIV B strike every n-th tick, their L knob keeping the count to a set
 // of numbers (all, odd, even, primes, triplets, Fibonacci, powers of two),
-// and eight fixed ones /2 /3 /4 /6 /8 /12 /16 /24 count along. A divider
+// and five fixed ones /2 /3 /4 /6 /8 count along. A divider
 // changed while running takes over at its next hit (the count under way
 // finishes as it began); RESET, B, or the clock starting line them all up.
-// DENS works on the hits, after the dividers: at each landing it lets the
-// hit out or drops it, at random (RAND) or spread evenly (EVEN), counted
-// for A and B apart; a dropped hit goes to TOCK instead. A new DENS waits
-// for the next landing. START's input (L: START) starts and stops PICK, a
-// pulse each, or (L: RUN) runs it while the input is high. B with the
-// cursor on BURST plays a fill, BURST hits of A and B as a roll that slows
-// down (BURST 7: OOOO.O.O..O in half ticks: the first half every half tick,
-// then every tick, the last a tick and a half after); the pattern's hits
-// rest meanwhile, its count goes on, and it carries on where it would have
-// been.
+// Every landing is a hit. CHANC is a third voice from the clock and the
+// balls, its L knob picking how: GAPS (ticks where no ball lands), APEX (a
+// ball at the top of its hop), LEAD (likelier the closer a ball is to
+// landing) or RICO (between landings that come close together); its value
+// is the chance a tick it would play really plays. START's input (L: START)
+// starts and stops it, a pulse each, or (L: RUN) runs it while the input
+// is high. B with the cursor on ROLL plays a roll that slows down (a third
+// of ROLL every half tick, then every 3/4 tick, the last a tick after),
+// timed so its last hit lands on the ball's next landing; its L knob: both
+// balls (ROLL), ROL A or ROL B. A rolling ball's own hits rest meanwhile,
+// its count goes on.
 // The picture: a ball for each divider hopping from hit to hit over the
-// ticks going by; on the right DENS (each ball's last five landings) over
-// GATE (one tick, the pulse as long as the gate), and A's / B's hits.
-// Thirteen outputs: A+B (A full height, B lower), A, B, TICK, TOCK and the
-// fixed ones. Its own box sends one; the other boxes can take the rest.
+// ticks going by; on the right the four CHANC ways (the last eight ticks,
+// the one picked bold) over GATE (one tick, the pulse as long as the gate),
+// and A's / B's hits. Outputs: A+B (A full height, B lower), A, B,
+// CLOCK (every tick), CHANC, the fixed ones and GAPS, APEX, LEAD, RICO each on
+// their own (fourteen). Its own box sends one; the
+// other boxes can take the rest.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef PICK_DEF = {
   "TABBY", "PCK", 8, {"RUN", "RST"},  // (tag PCK kept for saved files; A held: stop; B: RST, or FILL with the cursor on BURST)
@@ -1385,9 +1388,9 @@ PROGMEM static const DeviceDef PICK_DEF = {
     {"RATE", 0, 100, 74, UNI, 0, 2, 1, {}, {"FREE", "CLOCK"}},  // a tick; on the clock (74: 1/16)
     {"DIVA", 1, 144, 3, UNI, 0, 7, 0, {}, {}},  // mode: the set of numbers
     {"DIVB", 0, 144, 4, UNI, 0, 7, 0, {}, {}},  // (0: off)
-    {"DENS", 0, 100, 100, UNI, 0, 2, 0, {}, {"RAND", "EVEN"}},  // per landing; mode: how the drops fall
+    {"CHANC", 0, 100, 0, UNI, 0, 4, 0, {}, {"GAPS", "APEX", "LEAD", "RICO"}},  // the chance; mode: which ticks may play
     {"START", 0, TRIG_SOURCES - 1, 0, UNI, 0, 2, 0, {}, {"START", "RUN"}},  // the input; mode: a pulse starts / stops, or runs while high
-    {"BURST", 1, 64, 8, UNI},  // hits in a fill
+    {"ROLL", 1, 64, 8, UNI, 0, 3, 0, {}, {"ROLL", "ROL A", "ROL B"}},  // its size; mode: who rolls
     {"RESET", 0, TRIG_SOURCES - 1, 0, UNI},
     {"GATE", 0, 100, 0, UNI},  // 5 ms .. 1 s (no longer than most of a tick)
   }
@@ -1395,33 +1398,36 @@ PROGMEM static const DeviceDef PICK_DEF = {
 
 class PickMod : public Modulator {
 public:
-  enum { P_RATE, P_DIVA, P_DIVB, P_DENS, P_START, P_BURST, P_RESET, P_GATE };
+  enum { P_RATE, P_DIVA, P_DIVB, P_CHANC, P_START, P_ROLL, P_RESET, P_GATE };
   enum { SET_ALL, SET_ODD, SET_EVEN, SET_PRIME, SET_TRIP, SET_FIB, SET_POW2, SETS };
-  enum { O_AB, O_A, O_B, O_TICK, O_TOCK, O_FIXED, OUTS = O_FIXED + 8 };
+  // (CLOCK, CHANC: once TICK, TOCK; /12 /16 /24 made way for the four CHANC ways)
+  enum { O_AB, O_A, O_B, O_CLOCK, O_CHANC, O_FIXED, O_GAPS = O_FIXED + 5, O_APEX, O_LEAD, O_RICO, OUTS };
   PickMod() : Modulator(PICK_DEF) {}
   int TrigParam(int a) const override { return a == 1 ? P_RESET : -1; }  // RST is RESET
   void Tick(const ModCtx& ctx) override;
   int Step(int p, int v, int dir) const override;
   void Format(int p, char* buf, size_t n) const override;
   void FormatMode(int p, char* buf, size_t n) const override;
-  // a divider's name is its set once one is chosen (PRIME, FIB ..); DENS
-  // reads RAND / EVEN; START reads what the next pulse does (START while
-  // stopped, STOP while running), or RUN
+  // a divider's name is its set once one is chosen (PRIME, FIB ..); CHANC
+  // reads its way (GAPS ..), ROLL who rolls; START reads what the next
+  // pulse does (START while stopped, STOP while running), or RUN
   const char* Name(int p) const override {
     if ((p == P_DIVA || p == P_DIVB) && ModeNamed(p) && mode[p] < SETS) return SET_NAMES[mode[p]];
-    if (p == P_DENS) return mode[P_DENS] ? "EVEN" : "RAND";
+    if (p == P_CHANC || p == P_ROLL) return param(p).modes[constrain(int(mode[p]), 0, int(param(p).nmodes) - 1)];
     if (p == P_START) return mode[P_START] ? "RUN" : stopped ? "START" : "STOP";
     return Modulator::Name(p);
   }
-  bool NameIsMode(int p) const override { return p == P_DIVA || p == P_DIVB || p == P_DENS || p == P_START; }
-  // A: runs it (from the top when it was stopped); B: a fill with the
-  // cursor on BURST, else lines the dividers up
+  bool NameIsMode(int p) const override { return p == P_DIVA || p == P_DIVB || p == P_CHANC || p == P_START || p == P_ROLL; }
+  // CHANC, START, ROLL: the name is the mode, so the L knob has no separate name stop
+  bool NameStop(int p) const override { return p != P_CHANC && p != P_START && p != P_ROLL && Modulator::NameStop(p); }
+  // A: runs it (from the top when it was stopped); B: a roll with the
+  // cursor on ROLL, else lines the dividers up
   void Action(int a) override {
     if (a == 0 && stopped) { stopped = false; Sync(); start_now = true; }
-    else if (a == 1 && view_cursor == P_BURST && !stopped) { fill_n = uint8_t(cur[P_BURST]); fill_idx = 0; fill_start = ticks + ph; }
+    else if (a == 1 && view_cursor == P_ROLL && !stopped) StartRoll();
     else if (a == 1) Sync();
   }
-  const char* ActionLabel(int a) const override { return a == 1 && view_cursor == P_BURST ? "FILL" : def.actions[a]; }
+  const char* ActionLabel(int a) const override { return a == 1 && view_cursor == P_ROLL ? "ROLL" : def.actions[a]; }
   bool Stops() const override { return true; }
   void DrawViz(int x, int y, int w, int h) override;
   int Outs() const override { return OUTS; }
@@ -1429,7 +1435,7 @@ public:
   float OutVal(int k) const override { return k >= 0 && k < OUTS && og[k] > 0.0f ? olv[k] : 0.0f; }
 private:
   static constexpr char SET_NAMES[SETS][6] = {"ALL", "ODD", "EVEN", "PRIME", "TRIP", "FIB", "2^N"};
-  static constexpr uint8_t FIXED[8] = {2, 3, 4, 6, 8, 12, 16, 24};
+  static constexpr uint8_t FIXED[5] = {2, 3, 4, 6, 8};
   static constexpr int HITS = 64;   // ticks remembered for the picture's sparks
   static constexpr int TRAIL = 64;  // screen columns of each ball's flight remembered
   uint8_t count[2] = {255, 255};    // ticks since each divider's last hit (255: hit on the next)
@@ -1439,13 +1445,11 @@ private:
   float ph = 0.0f;                  // how far into the tick it is, 0..1 (the picture)
   float lit[2] = {};                // A's / B's box on the right: lit a moment after each hit that went out
   uint32_t counted = 0;             // ticks the fixed dividers counted since the last sync
-  uint8_t hits[HITS] = {};          // the last ticks: bit 0 A landed, bit 1 B landed
+  uint8_t hits[HITS] = {};          // the last ticks: bit 0 A landed, bit 1 B landed, bits 2-5 the CHANC ways that played
   uint8_t hits_pos = 0;
-  uint8_t dens_res[2] = {}, dens_n[2] = {};  // each ball's last five landings (bit 0 newest: went out), how many yet
-  uint16_t even_n[2] = {};          // EVEN's count of landings, per ball
-  uint8_t dens_now = 100, dens_mode = 0;     // DENS as set at the last landing
-  uint8_t fill_n = 0, fill_idx = 0; // a fill: its hits, the next one (fill_idx < fill_n: playing)
-  float fill_start = 0.0f;          // when it began, in ticks
+  uint8_t fill_n = 0, fill_idx = 0; // a roll: its hits, the next one (fill_idx < fill_n: on its way)
+  uint8_t roll_size = 8, roll_who = 3;  // ROLL as pressed; bit 0 A rolls, bit 1 B
+  float fill_start = 0.0f;          // when its first hit plays, in ticks (it may lie ahead)
   bool run_prev = false, start_now = false;
   int8_t trail_y[2][TRAIL] = {};    // each ball's height, per screen column it flew over
   uint16_t trail_at[2][TRAIL] = {}; // which column that was (the picture's own pixel count)
@@ -1454,7 +1458,7 @@ private:
   float t = 0.0f, tick_s = 0.125f;
   float og[OUTS] = {}, olv[OUTS] = {};  // each output: its pulse's time left, its height
   void Sync() {
-    count[0] = count[1] = 255; counted = 0; even_n[0] = even_n[1] = 0; fill_n = fill_idx = 0;
+    count[0] = count[1] = 255; counted = 0; fill_n = fill_idx = 0;
     last_at[0] = last_at[1] = -1.0f;  // a ball in the air drops (the trail shows it)
   }
   void Fire(int k, float lv = 1.0f);
@@ -1462,14 +1466,17 @@ private:
   void Pulse();
   void Land(int landed, float at);
   bool Filling() const { return fill_idx < fill_n; }
-  float FillAt(int i) const;  // the fill's i-th hit, in ticks from its start
+  bool Rolling(int k) const { return Filling() && (roll_who >> k & 1); }
+  float FillAt(int i) const;  // the roll's i-th hit, in ticks from its start
+  void StartRoll();
+  int Chance(int landed);     // the CHANC ways that play this tick (bits 0-3)
   int BallY(int k, int floor_y, int h, float f) const;
   static bool InSet(int set, int v);
   int Div(int p, int v) const;  // v snapped into p's set (0: off)
 };
 
 constexpr char PickMod::SET_NAMES[PickMod::SETS][6];
-constexpr uint8_t PickMod::FIXED[8];
+constexpr uint8_t PickMod::FIXED[5];
 
 FLASHMEM bool PickMod::InSet(int set, int v) {
   if (v < 1) return false;
@@ -1524,54 +1531,93 @@ FLASHMEM void PickMod::Fire(int k, float lv) {
 
 FLASHMEM void PickMod::Pulse() {
   ticks++;
-  Fire(O_TICK);
+  Fire(O_CLOCK);
   int landed = 0;
   for (int k = 0; k < 2; k++) {
     const int p = k ? P_DIVB : P_DIVA, div = Div(p, cur[p]);
     if (!div) { hop[k] = 0; last_at[k] = -1.0f; continue; }  // off: at once
     if (!hop[k]) hop[k] = uint8_t(div);
     if (count[k] < 255) count[k]++;
-    if (count[k] >= hop[k]) { count[k] = 0; hop[k] = uint8_t(div); if (!Filling()) landed |= 1 << k; }  // (a fill: the pattern rests)
+    if (count[k] >= hop[k]) {
+      count[k] = 0; hop[k] = uint8_t(div);
+      if (!(Rolling(k) && ticks + 1e-4f >= fill_start)) landed |= 1 << k;  // (a rolling ball: its own hits rest)
+    }
   }
-  for (int j = 0; j < 8; j++) if (counted % FIXED[j] == 0) Fire(O_FIXED + j);
+  for (int j = 0; j < 5; j++) if (counted % FIXED[j] == 0) Fire(O_FIXED + j);
   counted++;
   Land(landed, float(ticks));
-  hits[hits_pos] = uint8_t(landed);
+  const int ch = Chance(landed);
+  if (ch >> mode[P_CHANC] & 1) Fire(O_CHANC);
+  for (int r = 0; r < 4; r++) if (ch >> r & 1) Fire(O_GAPS + r);  // each way on its own output too
+  hits[hits_pos] = uint8_t(landed | ch << 2);
   hits_pos = (hits_pos + 1) % HITS;
 }
 
-// the fill's i-th hit, in ticks from its start: the first half every half
-// tick, then every tick, the last a tick and a half after the one before
-FLASHMEM float PickMod::FillAt(int i) const {
-  const int a = (fill_n + 1) / 2;
-  int half = 0;
-  for (int j = 1; j <= i; j++) half += j < a ? 1 : j < fill_n - 1 ? 2 : 3;
-  return half * 0.5f;
+// CHANC: which of its four ways may play this tick, each rolling its own
+// dice at the one chance (they all run; the L knob picks the one sent)
+//   GAPS  no ball lands here
+//   APEX  a ball is at the top of its hop (half way between its landings)
+//   LEAD  likelier the closer a ball is to its landing (squared)
+//   RICO  between landings that come close together (a rattle)
+FLASHMEM int PickMod::Chance(int landed) {
+  const int c = cur[P_CHANC];
+  if (c <= 0) return 0;
+  const bool any = landed || (Filling() && ticks + 1e-4f >= fill_start);
+  int since_min = 1000, next_min = 1000, apex = 0;
+  float lead = 0.0f;
+  for (int k = 0; k < 2; k++) {
+    if (!hop[k] || last_at[k] < 0.0f) continue;
+    const int since = int(float(ticks) - last_at[k] + 0.5f);
+    const int next = std::max(1, int(hop[k]) - (count[k] == 255 ? 0 : int(count[k])));
+    const int len = since + next;
+    if (len >= 2 && since == len / 2) apex = 1;
+    const float f = float(since) / len;
+    lead = std::max(lead, f * f);
+    since_min = std::min(since_min, since);
+    next_min = std::min(next_min, next);
+  }
+  int ways = 0;
+  if (!any && int(random(100)) < c) ways |= 1;                                    // GAPS
+  if (apex && int(random(100)) < c) ways |= 2;                                    // APEX
+  if (!any && random(10000) < int(c * 100 * lead)) ways |= 4;                     // LEAD
+  if (!any && since_min <= 2 && next_min <= 2 && int(random(100)) < c) ways |= 8; // RICO
+  return ways;
 }
 
-// balls landing (pattern or fill): DENS decides once per ball whether the
-// hit goes out (A, B, A+B) or is dropped (TOCK); the DENS set now takes over
+// the roll's i-th hit, in ticks from its start, counted in quarter ticks:
+// a third of ROLL every half tick, then every 3/4 tick, the last a tick on
+FLASHMEM float PickMod::FillAt(int i) const {
+  const int fast = std::max(1, (roll_size + 1) / 3);
+  int q = 0;
+  for (int j = 1; j <= i; j++) q += j < fast ? 2 : j < fill_n - 1 ? 3 : 4;
+  return q * 0.25f;
+}
+
+// a roll, timed so its last hit lands on the rolling ball's next landing
+// (A's for both), like a fill into the one; too close: the landing after
+FLASHMEM void PickMod::StartRoll() {
+  roll_size = uint8_t(constrain(int(cur[P_ROLL]), 1, 64));
+  const int m = constrain(int(mode[P_ROLL]), 0, 2);
+  roll_who = m == 1 ? 1 : m == 2 ? 2 : 3;
+  const int fast = std::max(1, (roll_size + 1) / 3), slow = roll_size - (roll_size + 1) / 2;
+  fill_n = uint8_t(std::max(1, fast + slow));
+  fill_idx = 0;
+  const float dur = FillAt(fill_n - 1), now = ticks + ph;
+  const int k = m == 2 ? 1 : 0;
+  float land = hop[k] ? float(ticks) + std::max(1, int(hop[k]) - (count[k] == 255 ? 0 : int(count[k])))
+                      : ceilf(now) + ceilf(dur);
+  while (land - now < dur) land += hop[k] ? hop[k] : 1;
+  fill_start = land - dur;
+}
+
+// balls landing (pattern or roll): the outputs, the boxes on the right
 FLASHMEM void PickMod::Land(int landed, float at) {
   if (!landed) return;
-  dens_now = uint8_t(cur[P_DENS]); dens_mode = mode[P_DENS];
-  int out = 0;
-  for (int k = 0; k < 2; k++) {
-    if (!(landed >> k & 1)) continue;
-    last_at[k] = at;
-    bool pass;
-    if (dens_mode) {  // EVEN: as many out of every hundred, spread
-      const uint32_t n = even_n[k]++;
-      pass = (n + 1) * dens_now / 100 > n * dens_now / 100;
-    } else {
-      pass = int(random(100)) < dens_now;
-    }
-    dens_res[k] = uint8_t(((dens_res[k] << 1) | (pass ? 1 : 0)) & 31);
-    if (dens_n[k] < 5) dens_n[k]++;
-    if (pass) out |= 1 << k; else Fire(O_TOCK);  // TOCK: the hits DENS dropped
-  }
-  if (out & 1) { Fire(O_A); lit[0] = 0.1f; }
-  if (out & 2) { Fire(O_B); lit[1] = 0.1f; }
-  if (out & 3) { Fire(O_AB, (out & 1) ? 1.0f : 0.6f); flash = 0.06f; }
+  for (int k = 0; k < 2; k++) if (landed >> k & 1) last_at[k] = at;
+  if (landed & 1) { Fire(O_A); lit[0] = 0.1f; }
+  if (landed & 2) { Fire(O_B); lit[1] = 0.1f; }
+  Fire(O_AB, (landed & 1) ? 1.0f : 0.6f);
+  flash = 0.06f;
 }
 
 FLASHMEM void PickMod::Tick(const ModCtx& ctx) {
@@ -1613,18 +1659,20 @@ FLASHMEM void PickMod::Tick(const ModCtx& ctx) {
     ph = t;
   }
   if (now) Pulse();
-  // the fill's hits, between the ticks
+  // the roll's hits, between the ticks
   while (Filling() && ticks + ph >= fill_start + FillAt(fill_idx)) {
     const float at = fill_start + FillAt(fill_idx++);
-    int both = 0;
-    for (int k = 0; k < 2; k++) if (Div(k ? P_DIVB : P_DIVA, cur[k ? P_DIVB : P_DIVA])) both |= 1 << k;
-    Land(both, at);
+    int who = 0;
+    for (int k = 0; k < 2; k++) if ((roll_who >> k & 1) && Div(k ? P_DIVB : P_DIVA, cur[k ? P_DIVB : P_DIVA])) who |= 1 << k;
+    Land(who, at);
   }
 }
 
 FLASHMEM void PickMod::OutName(int k, char* buf, size_t n) const {
-  static const char names[O_FIXED][6] = {"A+B", "A", "B", "TICK", "TOCK"};
-  if (k >= O_FIXED && k < OUTS) snprintf(buf, n, "/%d", FIXED[k - O_FIXED]);
+  static const char names[O_FIXED][6] = {"A+B", "A", "B", "CLOCK", "CHANC"};
+  static const char ways[4][5] = {"GAPS", "APEX", "LEAD", "RICO"};
+  if (k >= O_GAPS && k < OUTS) snprintf(buf, n, "%s", ways[k - O_GAPS]);
+  else if (k >= O_FIXED && k < O_GAPS) snprintf(buf, n, "/%d", FIXED[k - O_FIXED]);
   else snprintf(buf, n, "%s", names[constrain(k, 0, O_FIXED - 1)]);
 }
 
@@ -1655,8 +1703,8 @@ FLASHMEM int PickMod::BallY(int k, int floor_y, int h, float f) const {
   if (stopped || !hop[k] || last_at[k] < 0.0f) return floor_y - 1;
   const float now = ticks + f;
   // the next landing: the fill's next hit, else the pattern's next hit
-  const float next = Filling() ? fill_start + FillAt(fill_idx)
-                               : float(ticks) + std::max(1, int(hop[k]) - (count[k] == 255 ? 0 : int(count[k])));
+  const float next = Rolling(k) ? fill_start + FillAt(fill_idx)
+                                : float(ticks) + std::max(1, int(hop[k]) - (count[k] == 255 ? 0 : int(count[k])));
   const float len = std::max(0.25f, next - last_at[k]);
   const float g = constrain((now - last_at[k]) / len, 0.0f, 1.0f);
   const int hh = k ? std::min((h - 6) / 2, 2 + int(len + 0.5f)) : std::min(h - 6, 4 + int(2 * len + 0.5f));
@@ -1667,7 +1715,7 @@ FLASHMEM int PickMod::BallY(int k, int floor_y, int h, float f) const {
 // the ones to come dotted; a ball for each divider (A big, B small) stays
 // in its place while the stones move under it, and its trail is the way it
 // really flew (a dotted drop where RESET pulled it down); a spark where A
-// and B landed together. Right of them DENS over GATE, then A's and B's
+// and B landed together. Right of them the CHANC ways over GATE, then A's and B's
 // hits, each in its own box
 FLASHMEM void PickMod::DrawViz(int x, int y, int w, int h) {
   // pixels a tick: 5, up to 10 at slow tempos, so it still moves smoothly
@@ -1678,6 +1726,7 @@ FLASHMEM void PickMod::DrawViz(int x, int y, int w, int h) {
     const int sx = nowx - int((i + f) * step + 0.5f);
     if (sx < x) break;
     gfxPixel(sx, floor_y); gfxPixel(sx, floor_y + 1);
+    if (hits[(hits_pos + HITS - 1 - i) % HITS] >> (2 + mode[P_CHANC]) & 1) { gfxPixel(sx, floor_y - 1); gfxPixel(sx, floor_y - 2); }  // CHANC: taller
   }
   if (!stopped)
     for (int i = 1; ; i++) {  // still to come
@@ -1718,15 +1767,14 @@ FLASHMEM void PickMod::DrawViz(int x, int y, int w, int h) {
     if (sx < x + 3) break;
     gfxPixel(sx - 3, floor_y - 4); gfxPixel(sx + 3, floor_y - 4); gfxPixel(sx, floor_y - 6);
   }
-  // DENS: A's last five landings on top, B's under them, oldest left;
-  // filled went out, hollow was dropped
-  for (int k = 0; k < 2; k++)
-    for (int c = 0; c < 5; c++) {
-      const int age = 4 - c;
-      if (age >= dens_n[k]) continue;
-      const int sx = x + 78 + c * 6, sy = y + 1 + k * 6;
-      if (dens_res[k] >> age & 1) gfxRect(sx, sy, 5, 5);
-      else gfxFrame(sx, sy, 5, 5);
+  // CHANC: the last eight ticks of its four ways, one row each (GAPS,
+  // APEX, LEAD, RICO from the top), the one its L knob picks bold
+  for (int r = 0; r < 4; r++)
+    for (int i = 0; i < 9; i++) {
+      if (!(hits[(hits_pos + HITS - 1 - i) % HITS] >> (2 + r) & 1)) continue;
+      const int sx = x + 106 - int((i + f) * 4 + 0.5f), sy = y + 1 + r * 3;
+      if (sx < x + 77) continue;
+      if (r == mode[P_CHANC]) gfxRect(sx, sy, 3, 2); else gfxPixel(sx + 1, sy);
     }
   // GATE: one tick wide, the pulse as long as the gate
   {
@@ -1738,7 +1786,7 @@ FLASHMEM void PickMod::DrawViz(int x, int y, int w, int h) {
     gfxLine(gx, top, gx + gwid, top);
     gfxLine(gx + gwid, base, gx + gw, base);
   }
-  // A's and B's hits that went out, each lit a moment
+  // A's and B's hits, each lit a moment
   for (int k = 0; k < 2; k++) {
     const int by0 = y + k * 14;
     gfxPrint(x + 113, by0 + 3, k ? "B" : "A");
