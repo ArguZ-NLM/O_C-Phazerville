@@ -824,7 +824,10 @@ public:
   }
 private:
   uint8_t beat = 0;
-  uint32_t last_edge_us = 0, tap_us = 0;
+  uint32_t last_edge_us = 0;
+  static constexpr int TAPS = 8;     // TAP: the last presses (times), how many in a row
+  uint32_t taps[TAPS] = {};
+  uint16_t taps_n = 0;
   uint32_t midi_mark = 0, midi_mark_us = 0;
   float beat_ph = 0.0f;
   float measured = 120.0f;
@@ -893,14 +896,21 @@ FLASHMEM void ClockDevice::Tick(const ModCtx& ctx) {
   clock_beat_us = micros();
 }
 
-// TAP: tap the tempo on the UP button (internal clock)
+// TAP: tap the tempo on A (internal clock). From the third press on, the
+// tempo is the average of the gaps, over up to the last eight presses; a
+// pause of more than 2 s starts counting again
 FLASHMEM void ClockDevice::Action(int a) {
   if (a == 1) { ClockStart(); return; }
   const uint32_t now = micros();
-  const uint32_t dt = now - tap_us;
-  tap_us = now;
-  if (dt > 200000 && dt < 2000000) {
-    val[P_BPM] = constrain(int(60e6f / dt + 0.5f), 30, 300);
+  if (taps_n && now - taps[(taps_n - 1) % TAPS] > 2000000) taps_n = 0;
+  taps[taps_n % TAPS] = now;
+  taps_n++;
+  const int n = std::min<int>(taps_n, TAPS);
+  if (n < 3) return;
+  const uint32_t first = taps[(taps_n - n) % TAPS];
+  const float gap = float(now - first) / (n - 1);
+  if (gap > 200000.0f) {
+    val[P_BPM] = constrain(int(60e6f / gap + 0.5f), 30, 300);
     Refresh(P_BPM);
   }
 }
