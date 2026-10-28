@@ -1362,8 +1362,10 @@ FLASHMEM void TreadleMod::DrawViz(int x, int y, int w, int h) {
 // strike every n-th, their L knob keeping the count to a set of numbers
 // (all, odd, even, primes, triplets, Fibonacci, powers of two), and eight
 // fixed ones /2 /3 /4 /6 /8 /12 /16 /24. A divider changed while running
-// counts on from its last hit, so A and B on the same count can sit on
-// different ticks; RESET (or the clock starting) lines them all up. START
+// takes over at its next hit (the count under way finishes as it began),
+// so A and B on the same count can sit on different ticks; RESET (or the
+// clock starting) lines them all up. The picture: a ball for each divider
+// hopping from hit to hit over the ticks going by. START
 // plays a burst of BURST ticks on each trigger and then rests.
 // Thirteen outputs: A+B (A full height, B lower), A, B, TICK, TOCK and the
 // fixed ones. Its own box sends one; the other boxes can take the rest.
@@ -1410,8 +1412,11 @@ public:
 private:
   static constexpr char SET_NAMES[SETS][6] = {"ALL", "ODD", "EVEN", "PRIME", "TRIP", "FIB", "2^N"};
   static constexpr uint8_t FIXED[8] = {2, 3, 4, 6, 8, 12, 16, 24};
-  static constexpr int HITS = 30;  // (4 pixels each: B's bars hollow)
+  static constexpr int HITS = 64;  // ticks remembered for the picture (the screen shows ~30)
   uint8_t count[2] = {255, 255};  // ticks since each divider's last hit
+  uint8_t hop[2] = {};            // the count each divider is on now: a new setting waits for its next hit
+  float ph = 0.0f;                // how far into the tick it is, 0..1 (the picture)
+  float lit[2] = {};              // A's / B's half of the bar: lit a moment after each hit
   uint32_t counted = 0;           // ticks the dividers counted since the last sync
   uint8_t hits[HITS] = {};        // the last ticks: bit 0 A, bit 1 B, bit 2 TOCK, bit 3 resting
   uint8_t hits_pos = 0;
@@ -1489,15 +1494,16 @@ FLASHMEM void PickMod::Pulse() {
   if (tock || !mode[P_DENS]) {  // the dividers count this one
     for (int k = 0; k < 2; k++) {
       const int p = k ? P_DIVB : P_DIVA, div = Div(p, cur[p]);
-      if (!div) continue;
+      if (!div) { hop[k] = 0; continue; }  // off: at once
+      if (!hop[k]) hop[k] = uint8_t(div);
       if (count[k] < 255) count[k]++;
-      if (count[k] >= div) { count[k] = 0; fired |= 1 << k; }
+      if (count[k] >= hop[k]) { count[k] = 0; fired |= 1 << k; hop[k] = uint8_t(div); }
     }
     for (int j = 0; j < 8; j++) if (counted % FIXED[j] == 0) Fire(O_FIXED + j);
     counted++;
   }
-  if (fired & 1) Fire(O_A);
-  if (fired & 2) Fire(O_B);
+  if (fired & 1) { Fire(O_A); lit[0] = 0.1f; }
+  if (fired & 2) { Fire(O_B); lit[1] = 0.1f; }
   if (fired & 3) { Fire(O_AB, (fired & 1) ? 1.0f : 0.6f); flash = 0.06f; }
   hits[hits_pos] = uint8_t(fired);
   hits_pos = (hits_pos + 1) % HITS;
@@ -1508,6 +1514,7 @@ FLASHMEM void PickMod::Tick(const ModCtx& ctx) {
   if (Restarted() && synced) { grid_at = -1; Sync(); }
   if (cur[P_RESET] && Edge(cur[P_RESET], ctx, 0)) Sync();
   for (float& g : og) if (g > 0.0f) g -= ctx.dt;
+  for (float& g : lit) if (g > 0.0f) g -= ctx.dt;
   if (stopped) { for (float& g : og) g = 0.0f; grid_at = -1; return; }
   const bool bursts = cur[P_START] != 0;
   bool now = false;
@@ -1524,12 +1531,15 @@ FLASHMEM void PickMod::Tick(const ModCtx& ctx) {
     if (clock_running) {
       const int64_t g = ClockGrid(db);
       if (g != grid_at) { if (grid_at >= 0 && !now) now = true; grid_at = g; }
+      const float pos = (clock_beat_n + clock_beat_ph) / db;
+      ph = constrain(pos - floorf(pos + 1e-4f), 0.0f, 1.0f);
     }
   } else {
     const float hz = RateHz(P_RATE, 0.1f, 50.0f);
     tick_s = 1.0f / hz;
     t += hz * ctx.dt;
     if (t >= 1.0f) { t -= floorf(t); now = true; }
+    ph = t;
   }
   if (now && (!bursts || burst_left > 0)) {
     Pulse();
@@ -1567,30 +1577,72 @@ FLASHMEM void PickMod::Format(int p, char* buf, size_t n) const {
   else Device::Format(p, buf, n);
 }
 
-// the last ticks going by, newest on the right: A hits full height and
-// solid, B hits half and hollow, both: A; under each tick a dot, two for the ones let
-// through to TOCK (none between bursts); while a burst runs, what is left
+// the ticks going by as stones, scrolling left (two pixels tall: let
+// through to TOCK; none between bursts). A ball for each divider hops from
+// hit to hit and sits at the same place on screen, the stones moving under
+// it: A big, B small, each hop as high as it is long. Dotted arcs trail
+// the hops before; a spark where A and B landed together. On the right,
+// A's and B's hits, each in its own half. While a burst runs, what is
+// left of it top left
 FLASHMEM void PickMod::DrawViz(int x, int y, int w, int h) {
-  const int ww = w - 8, base = y + h - 4, top = y + 1;
-  const int cw = std::max(2, ww / HITS);
-  for (int i = 0; i < HITS; i++) {
-    const uint8_t f = hits[(hits_pos + i) % HITS];
-    const int cx = x + i * cw;
-    if (f & 8) continue;  // a rest between bursts
-    gfxPixel(cx, base + 3);
-    if (f & 4) gfxPixel(cx, base + 2);
-    if (!(f & 3)) continue;
-    if (f & 1) gfxRect(cx, top, std::max(1, cw - 1), base - top + 1);
-    else gfxFrame(cx, base - (base - top) / 2, std::max(1, cw - 1), (base - top) / 2 + 1);
+  constexpr int STEP = 4;                       // pixels a tick
+  const int ww = w - 9, floor_y = y + h - 3, nowx = x + ww * 2 / 3;
+  const float f = constrain(ph, 0.0f, 1.0f);
+  auto tx = [&](float ago) { return nowx - int((ago + f) * STEP + 0.5f); };  // where a tick that long ago sits
+  for (int i = 0; i < HITS; i++) {             // the stones, i ticks ago
+    const int sx = tx(float(i));
+    if (sx < x) break;
+    const uint8_t s = hits[(hits_pos + HITS - 1 - i) % HITS];
+    if (s & 8) continue;
+    gfxPixel(sx, floor_y + 2);
+    if (s & 4) gfxPixel(sx, floor_y + 1);
+  }
+  for (int sx = nowx + STEP - int(f * STEP + 0.5f); sx < x + ww; sx += STEP) gfxPixel(sx, floor_y + 2);  // still to come
+  for (int k = 0; k < 2; k++) {
+    // A high, B low: each hop as high as it is long, up to its ceiling
+    auto height = [&](int len) { return k ? std::min((h - 6) / 2, 2 + len) : std::min(h - 6, 6 + len * 2); };
+    auto arc = [&](float a0, int len, bool whole, float a1) {  // a hop from a0 ticks ago
+      const int x0 = tx(a0), x1 = whole ? tx(a1) : nowx, span = std::max(1, len * STEP), hh = height(len);
+      for (int q = 0; x0 + q <= x1; q += 2) {
+        if (x0 + q < x) continue;
+        const float g = float(q) / span;
+        gfxPixel(x0 + q, floor_y - int(hh * 4.0f * g * (1.0f - g) + 0.5f));
+      }
+    };
+    int newer = -1, last = -1;                 // ticks ago of the hits, newest first
+    for (int i = 0; i < HITS; i++) {
+      const uint8_t s = hits[(hits_pos + HITS - 1 - i) % HITS];
+      if (s & 8 || !(s & (1 << k))) continue;
+      if (last < 0) last = i;
+      if (newer >= 0) arc(float(i), i - newer, true, float(newer));
+      const int sx = tx(float(i));
+      if ((s & 3) == 3 && k == 0 && sx >= x + 3) {  // landed together: a spark
+        gfxPixel(sx - 3, floor_y - 3); gfxPixel(sx + 3, floor_y - 3); gfxPixel(sx, floor_y - 5);
+      }
+      newer = i;
+      if (sx < x) break;
+    }
+    if (!hop[k] || last < 0) continue;
+    // the hop under way: its length is fixed, uncounted ticks (TOCK) stretch it
+    const int left = count[k] == 255 ? 1 : std::max(1, int(hop[k]) - int(count[k]));
+    const int len = last + left;
+    arc(float(last), len, false, 0.0f);
+    const float g = std::min(1.0f, (last + f) / len);
+    const int by = floor_y - int(height(len) * 4.0f * g * (1.0f - g) + 0.5f);
+    if (k == 0) { gfxRect(nowx - 1, by - 4, 3, 5); gfxRect(nowx - 2, by - 3, 5, 3); }
+    else gfxRect(nowx - 1, by - 3, 3, 3);
   }
   if (cur[P_START] && burst_left > 0) {
     char b[6];
     snprintf(b, sizeof(b), "%d", burst_left);
     gfxPrint(x + 1, y + 1, b);
   }
-  const int bh = int(out * h);
-  gfxFrame(x + w - 4, y, 4, h);
-  if (bh > 0) gfxRect(x + w - 4, y + h - bh, 4, bh);
+  // A's and B's hits, side by side
+  for (int k = 0; k < 2; k++) {
+    const int bx = x + w - 7 + k * 4;
+    gfxFrame(bx, y, 3, h);
+    if (lit[k] > 0.0f) gfxRect(bx, y, 3, h);
+  }
 }
 
 /////////////////////////////////////////////////////////////////
