@@ -360,6 +360,8 @@ public:
   virtual bool Holds(int a) const { return false; }
   virtual void Release(int a) {}
   virtual bool ActionLit(int a) const { return false; }
+  // the word over A / B on a modulator's page (PICK's B reads FILL with the cursor on BURST)
+  virtual const char* ActionLabel(int a) const { return def.actions[a]; }
   virtual bool LongA() { return false; }  // A held on the page: true if the device took it
   virtual void DrawViz(int x, int y, int w, int h) {}
   virtual void DrawMini(int x, int y, int w, int h) {}

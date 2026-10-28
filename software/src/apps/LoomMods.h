@@ -1356,31 +1356,39 @@ FLASHMEM void TreadleMod::DrawViz(int x, int y, int w, int h) {
 
 /////////////////////////////////////////////////////////////////
 // PICK: a clock and its dividers. On a loom a pick is one pass of the
-// weft; picks per inch is how dense the cloth is. RATE ticks (TICK); DENS
-// lets each tick through at random (TOCK). The dividers count the ticks,
-// or with DENS's mode on TOCK only the ones let through: DIV A and DIV B
-// strike every n-th, their L knob keeping the count to a set of numbers
-// (all, odd, even, primes, triplets, Fibonacci, powers of two), and eight
-// fixed ones /2 /3 /4 /6 /8 /12 /16 /24. A divider changed while running
-// takes over at its next hit (the count under way finishes as it began),
-// so A and B on the same count can sit on different ticks; RESET (or the
-// clock starting) lines them all up. The picture: a ball for each divider
-// hopping from hit to hit over the ticks going by. START
-// plays a burst of BURST ticks on each trigger and then rests.
+// weft; picks per inch is how dense the cloth is. RATE ticks (TICK). DIV A
+// and DIV B strike every n-th tick, their L knob keeping the count to a set
+// of numbers (all, odd, even, primes, triplets, Fibonacci, powers of two),
+// and eight fixed ones /2 /3 /4 /6 /8 /12 /16 /24 count along. A divider
+// changed while running takes over at its next hit (the count under way
+// finishes as it began); RESET, B, or the clock starting line them all up.
+// DENS works on the hits, after the dividers: at each landing it lets the
+// hit out or drops it, at random (RAND) or spread evenly (EVEN), counted
+// for A and B apart; a dropped hit goes to TOCK instead. A new DENS waits
+// for the next landing. START's input (L: START) starts and stops PICK, a
+// pulse each, or (L: RUN) runs it while the input is high. B with the
+// cursor on BURST plays a fill, BURST hits of A and B as a roll that slows
+// down (BURST 7: OOOO.O.O..O in half ticks: the first half every half tick,
+// then every tick, the last a tick and a half after); the pattern's hits
+// rest meanwhile, its count goes on, and it carries on where it would have
+// been.
+// The picture: a ball for each divider hopping from hit to hit over the
+// ticks going by; on the right DENS (each ball's last five landings) over
+// GATE (one tick, the pulse as long as the gate), and A's / B's hits.
 // Thirteen outputs: A+B (A full height, B lower), A, B, TICK, TOCK and the
 // fixed ones. Its own box sends one; the other boxes can take the rest.
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef PICK_DEF = {
-  "PICK", "PCK", 8, {"RUN", "RST"},  // (A held: stop; B resets)
+  "PICK", "PCK", 8, {"RUN", "RST"},  // (A held: stop; B: RST, or FILL with the cursor on BURST)
   {
     {"RATE", 0, 100, 74, UNI, 0, 2, 1, {}, {"FREE", "CLOCK"}},  // a tick; on the clock (74: 1/16)
     {"DIVA", 1, 144, 3, UNI, 0, 7, 0, {}, {}},  // mode: the set of numbers
     {"DIVB", 0, 144, 4, UNI, 0, 7, 0, {}, {}},  // (0: off)
-    {"DENS", 0, 100, 100, UNI, 0, 2, 0, {}, {"TICK", "TOCK"}},  // mode: what the dividers count
-    {"START", 0, TRIG_SOURCES - 1, 0, UNI},  // none: runs all the time
-    {"BURST", 1, 64, 8, UNI},  // ticks per START
+    {"DENS", 0, 100, 100, UNI, 0, 2, 0, {}, {"RAND", "EVEN"}},  // per landing; mode: how the drops fall
+    {"START", 0, TRIG_SOURCES - 1, 0, UNI, 0, 2, 0, {}, {"START", "RUN"}},  // the input; mode: a pulse starts / stops, or runs while high
+    {"BURST", 1, 64, 8, UNI},  // hits in a fill
     {"RESET", 0, TRIG_SOURCES - 1, 0, UNI},
-    {"GATE", 0, 100, 0, UNI},  // 0: a short pulse; then 1 ms .. 1 s (no longer than most of a tick)
+    {"GATE", 0, 100, 0, UNI},  // 5 ms .. 1 s (no longer than most of a tick)
   }
 };
 
@@ -1396,14 +1404,23 @@ public:
   void Format(int p, char* buf, size_t n) const override;
   void FormatMode(int p, char* buf, size_t n) const override;
   // a divider's name is its set once one is chosen (PRIME, FIB ..); DENS
-  // keeps its name (its mode is what the dividers count)
+  // reads RAND / EVEN; START reads what the next pulse does (START while
+  // stopped, STOP while running), or RUN
   const char* Name(int p) const override {
     if ((p == P_DIVA || p == P_DIVB) && ModeNamed(p) && mode[p] < SETS) return SET_NAMES[mode[p]];
-    if (p == P_DENS) return param(p).name;
+    if (p == P_DENS) return mode[P_DENS] ? "EVEN" : "RAND";
+    if (p == P_START) return mode[P_START] ? "RUN" : stopped ? "START" : "STOP";
     return Modulator::Name(p);
   }
-  bool NameIsMode(int p) const override { return p == P_DIVA || p == P_DIVB; }
-  void Action(int a) override { if (a == 0) stopped = false; else if (a == 1) Sync(); }
+  bool NameIsMode(int p) const override { return p == P_DIVA || p == P_DIVB || p == P_DENS || p == P_START; }
+  // A: runs it (from the top when it was stopped); B: a fill with the
+  // cursor on BURST, else lines the dividers up
+  void Action(int a) override {
+    if (a == 0 && stopped) { stopped = false; Sync(); start_now = true; }
+    else if (a == 1 && view_cursor == P_BURST && !stopped) { fill_n = uint8_t(cur[P_BURST]); fill_idx = 0; fill_start = ticks + ph; }
+    else if (a == 1) Sync();
+  }
+  const char* ActionLabel(int a) const override { return a == 1 && view_cursor == P_BURST ? "FILL" : def.actions[a]; }
   bool Stops() const override { return true; }
   void DrawViz(int x, int y, int w, int h) override;
   int Outs() const override { return OUTS; }
@@ -1412,22 +1429,40 @@ public:
 private:
   static constexpr char SET_NAMES[SETS][6] = {"ALL", "ODD", "EVEN", "PRIME", "TRIP", "FIB", "2^N"};
   static constexpr uint8_t FIXED[8] = {2, 3, 4, 6, 8, 12, 16, 24};
-  static constexpr int HITS = 64;  // ticks remembered for the picture (the screen shows ~30)
-  uint8_t count[2] = {255, 255};  // ticks since each divider's last hit
-  uint8_t hop[2] = {};            // the count each divider is on now: a new setting waits for its next hit
-  float ph = 0.0f;                // how far into the tick it is, 0..1 (the picture)
-  float lit[2] = {};              // A's / B's half of the bar: lit a moment after each hit
-  uint32_t counted = 0;           // ticks the dividers counted since the last sync
-  uint8_t hits[HITS] = {};        // the last ticks: bit 0 A, bit 1 B, bit 2 TOCK, bit 3 resting
+  static constexpr int HITS = 64;   // ticks remembered for the picture's sparks
+  static constexpr int TRAIL = 64;  // screen columns of each ball's flight remembered
+  uint8_t count[2] = {255, 255};    // ticks since each divider's last hit (255: hit on the next)
+  uint8_t hop[2] = {};              // the count each divider is on now: a new setting waits for its next hit
+  float last_at[2] = {-1.0f, -1.0f}; // when each ball last landed, in ticks (-1: on the ground)
+  uint32_t ticks = 0;               // ticks so far (the picture's clock)
+  float ph = 0.0f;                  // how far into the tick it is, 0..1 (the picture)
+  float lit[2] = {};                // A's / B's box on the right: lit a moment after each hit that went out
+  uint32_t counted = 0;             // ticks the fixed dividers counted since the last sync
+  uint8_t hits[HITS] = {};          // the last ticks: bit 0 A landed, bit 1 B landed
   uint8_t hits_pos = 0;
+  uint8_t dens_res[2] = {}, dens_n[2] = {};  // each ball's last five landings (bit 0 newest: went out), how many yet
+  uint16_t even_n[2] = {};          // EVEN's count of landings, per ball
+  uint8_t dens_now = 100, dens_mode = 0;     // DENS as set at the last landing
+  uint8_t fill_n = 0, fill_idx = 0; // a fill: its hits, the next one (fill_idx < fill_n: playing)
+  float fill_start = 0.0f;          // when it began, in ticks
+  bool run_prev = false, start_now = false;
+  int8_t trail_y[2][TRAIL] = {};    // each ball's height, per screen column it flew over
+  uint16_t trail_at[2][TRAIL] = {}; // which column that was (the picture's own pixel count)
+  uint32_t trail_px[2] = {};
   int64_t grid_at = -1;
   float t = 0.0f, tick_s = 0.125f;
   float og[OUTS] = {}, olv[OUTS] = {};  // each output: its pulse's time left, its height
-  int burst_left = 0;
-  void Sync() { count[0] = count[1] = 255; counted = 0; }
+  void Sync() {
+    count[0] = count[1] = 255; counted = 0; even_n[0] = even_n[1] = 0; fill_n = fill_idx = 0;
+    last_at[0] = last_at[1] = -1.0f;  // a ball in the air drops (the trail shows it)
+  }
   void Fire(int k, float lv = 1.0f);
   float GateSeconds(int v) const;
   void Pulse();
+  void Land(int landed, float at);
+  bool Filling() const { return fill_idx < fill_n; }
+  float FillAt(int i) const;  // the fill's i-th hit, in ticks from its start
+  int BallY(int k, int floor_y, int h, float f) const;
   static bool InSet(int set, int v);
   int Div(int p, int v) const;  // v snapped into p's set (0: off)
 };
@@ -1474,11 +1509,11 @@ FLASHMEM int PickMod::Step(int p, int v, int dir) const {
   return v;
 }
 
-// how long a hit lasts: SHORT, a quarter of a tick (5 .. 30 ms); else
-// 1 ms .. 1 s, but at most 95 % of a tick, so hits stay apart
+
+// how long a hit lasts: 5 ms .. 1 s, but at most 95 % of a tick, so hits
+// stay apart
 FLASHMEM float PickMod::GateSeconds(int v) const {
-  if (v <= 0) return constrain(tick_s * 0.25f, 0.005f, 0.03f);
-  return std::min(Seconds(v, 0.001f, 1.0f), tick_s * 0.95f);
+  return std::min(Seconds(v, 0.005f, 1.0f), tick_s * 0.95f);
 }
 
 FLASHMEM void PickMod::Fire(int k, float lv) {
@@ -1487,26 +1522,55 @@ FLASHMEM void PickMod::Fire(int k, float lv) {
 }
 
 FLASHMEM void PickMod::Pulse() {
+  ticks++;
   Fire(O_TICK);
-  const bool tock = int(random(100)) < cur[P_DENS];
-  if (tock) Fire(O_TOCK);
-  int fired = tock ? 4 : 0;
-  if (tock || !mode[P_DENS]) {  // the dividers count this one
-    for (int k = 0; k < 2; k++) {
-      const int p = k ? P_DIVB : P_DIVA, div = Div(p, cur[p]);
-      if (!div) { hop[k] = 0; continue; }  // off: at once
-      if (!hop[k]) hop[k] = uint8_t(div);
-      if (count[k] < 255) count[k]++;
-      if (count[k] >= hop[k]) { count[k] = 0; fired |= 1 << k; hop[k] = uint8_t(div); }
-    }
-    for (int j = 0; j < 8; j++) if (counted % FIXED[j] == 0) Fire(O_FIXED + j);
-    counted++;
+  int landed = 0;
+  for (int k = 0; k < 2; k++) {
+    const int p = k ? P_DIVB : P_DIVA, div = Div(p, cur[p]);
+    if (!div) { hop[k] = 0; last_at[k] = -1.0f; continue; }  // off: at once
+    if (!hop[k]) hop[k] = uint8_t(div);
+    if (count[k] < 255) count[k]++;
+    if (count[k] >= hop[k]) { count[k] = 0; hop[k] = uint8_t(div); if (!Filling()) landed |= 1 << k; }  // (a fill: the pattern rests)
   }
-  if (fired & 1) { Fire(O_A); lit[0] = 0.1f; }
-  if (fired & 2) { Fire(O_B); lit[1] = 0.1f; }
-  if (fired & 3) { Fire(O_AB, (fired & 1) ? 1.0f : 0.6f); flash = 0.06f; }
-  hits[hits_pos] = uint8_t(fired);
+  for (int j = 0; j < 8; j++) if (counted % FIXED[j] == 0) Fire(O_FIXED + j);
+  counted++;
+  Land(landed, float(ticks));
+  hits[hits_pos] = uint8_t(landed);
   hits_pos = (hits_pos + 1) % HITS;
+}
+
+// the fill's i-th hit, in ticks from its start: the first half every half
+// tick, then every tick, the last a tick and a half after the one before
+FLASHMEM float PickMod::FillAt(int i) const {
+  const int a = (fill_n + 1) / 2;
+  int half = 0;
+  for (int j = 1; j <= i; j++) half += j < a ? 1 : j < fill_n - 1 ? 2 : 3;
+  return half * 0.5f;
+}
+
+// balls landing (pattern or fill): DENS decides once per ball whether the
+// hit goes out (A, B, A+B) or is dropped (TOCK); the DENS set now takes over
+FLASHMEM void PickMod::Land(int landed, float at) {
+  if (!landed) return;
+  dens_now = uint8_t(cur[P_DENS]); dens_mode = mode[P_DENS];
+  int out = 0;
+  for (int k = 0; k < 2; k++) {
+    if (!(landed >> k & 1)) continue;
+    last_at[k] = at;
+    bool pass;
+    if (dens_mode) {  // EVEN: as many out of every hundred, spread
+      const uint32_t n = even_n[k]++;
+      pass = (n + 1) * dens_now / 100 > n * dens_now / 100;
+    } else {
+      pass = int(random(100)) < dens_now;
+    }
+    dens_res[k] = uint8_t(((dens_res[k] << 1) | (pass ? 1 : 0)) & 31);
+    if (dens_n[k] < 5) dens_n[k]++;
+    if (pass) out |= 1 << k; else Fire(O_TOCK);  // TOCK: the hits DENS dropped
+  }
+  if (out & 1) { Fire(O_A); lit[0] = 0.1f; }
+  if (out & 2) { Fire(O_B); lit[1] = 0.1f; }
+  if (out & 3) { Fire(O_AB, (out & 1) ? 1.0f : 0.6f); flash = 0.06f; }
 }
 
 FLASHMEM void PickMod::Tick(const ModCtx& ctx) {
@@ -1515,16 +1579,22 @@ FLASHMEM void PickMod::Tick(const ModCtx& ctx) {
   if (cur[P_RESET] && Edge(cur[P_RESET], ctx, 0)) Sync();
   for (float& g : og) if (g > 0.0f) g -= ctx.dt;
   for (float& g : lit) if (g > 0.0f) g -= ctx.dt;
-  if (stopped) { for (float& g : og) g = 0.0f; grid_at = -1; return; }
-  const bool bursts = cur[P_START] != 0;
-  bool now = false;
-  if (bursts && Edge(cur[P_START], ctx, 1)) {
-    // a burst: from the top, its first tick right away
-    Sync();
-    burst_left = cur[P_BURST];
-    t = 0.0f;
-    now = true;
+  // START's input: a pulse starts (from the top) or stops it; RUN: it runs
+  // while the input is high
+  if (cur[P_START]) {
+    if (mode[P_START]) {
+      const bool g = Gate(cur[P_START]);
+      if (g && !run_prev) { stopped = false; Sync(); start_now = true; }
+      else if (!g && run_prev) stopped = true;
+      run_prev = g;
+    } else if (Edge(cur[P_START], ctx, 1)) {
+      if (stopped) { stopped = false; Sync(); start_now = true; }
+      else stopped = true;
+    }
   }
+  if (stopped) { for (float& g : og) g = 0.0f; grid_at = -1; fill_n = fill_idx = 0; return; }
+  bool now = start_now;
+  if (start_now) { start_now = false; t = 0.0f; }
   if (synced) {
     const float db = DivBeats(DivIndex(cur[P_RATE], 0, 100));
     tick_s = db * 60.0f / tempo_bpm;
@@ -1541,12 +1611,13 @@ FLASHMEM void PickMod::Tick(const ModCtx& ctx) {
     if (t >= 1.0f) { t -= floorf(t); now = true; }
     ph = t;
   }
-  if (now && (!bursts || burst_left > 0)) {
-    Pulse();
-    if (bursts) burst_left--;
-  } else if (now) {  // resting between bursts: an empty tick goes by
-    hits[hits_pos] = 8;
-    hits_pos = (hits_pos + 1) % HITS;
+  if (now) Pulse();
+  // the fill's hits, between the ticks
+  while (Filling() && ticks + ph >= fill_start + FillAt(fill_idx)) {
+    const float at = fill_start + FillAt(fill_idx++);
+    int both = 0;
+    for (int k = 0; k < 2; k++) if (Div(k ? P_DIVB : P_DIVA, cur[k ? P_DIVB : P_DIVA])) both |= 1 << k;
+    Land(both, at);
   }
 }
 
@@ -1570,78 +1641,108 @@ FLASHMEM void PickMod::Format(int p, char* buf, size_t n) const {
   } else if (p == P_GATE) {
     // in ms as it plays now (held to most of a tick at fast rates)
     const float g = GateSeconds(val[P_GATE]);
-    if (!val[P_GATE]) snprintf(buf, n, "SHORT");
-    else if (g < 0.9995f) snprintf(buf, n, "%dms", std::max(1, int(g * 1000.0f + 0.5f)));
+    if (g < 0.9995f) snprintf(buf, n, "%dms", std::max(1, int(g * 1000.0f + 0.5f)));
     else snprintf(buf, n, "1.0s");
   }
   else Device::Format(p, buf, n);
 }
 
-// the ticks going by as stones, scrolling left (two pixels tall: let
-// through to TOCK; none between bursts). A ball for each divider hops from
-// hit to hit and sits at the same place on screen, the stones moving under
-// it: A big, B small, each hop as high as it is long. Dotted arcs trail
-// the hops before; a spark where A and B landed together. On the right,
-// A's and B's hits, each in its own half. While a burst runs, what is
-// left of it top left
+// a ball's height now: on the ground when stopped or before its first
+// landing; else a throw from its last landing to its next hit (the next
+// tick in a fill), as high as the hop is long
+FLASHMEM int PickMod::BallY(int k, int floor_y, int h, float f) const {
+  if (stopped || !hop[k] || last_at[k] < 0.0f) return floor_y - 1;
+  const float now = ticks + f;
+  // the next landing: the fill's next hit, else the pattern's next hit
+  const float next = Filling() ? fill_start + FillAt(fill_idx)
+                               : float(ticks) + std::max(1, int(hop[k]) - (count[k] == 255 ? 0 : int(count[k])));
+  const float len = std::max(0.25f, next - last_at[k]);
+  const float g = constrain((now - last_at[k]) / len, 0.0f, 1.0f);
+  const int hh = k ? std::min((h - 6) / 2, 2 + int(len + 0.5f)) : std::min(h - 6, 4 + int(2 * len + 0.5f));
+  return floor_y - 1 - int(hh * 4.0f * g * (1.0f - g) + 0.5f);
+}
+
+// the ticks going by as stones, scrolling left, the newest at the balls,
+// the ones to come dotted; a ball for each divider (A big, B small) stays
+// in its place while the stones move under it, and its trail is the way it
+// really flew (a dotted drop where RESET pulled it down); a spark where A
+// and B landed together. Right of them DENS over GATE, then A's and B's
+// hits, each in its own box
 FLASHMEM void PickMod::DrawViz(int x, int y, int w, int h) {
-  constexpr int STEP = 4;                       // pixels a tick
-  const int ww = w - 9, floor_y = y + h - 3, nowx = x + ww * 2 / 3;
+  // pixels a tick: 5, up to 10 at slow tempos, so it still moves smoothly
+  const int step = constrain(int(5.0f * tick_s / 0.125f + 0.5f), 5, 10);
+  const int floor_y = y + h - 3, nowx = x + 50, lane_end = x + 70;
   const float f = constrain(ph, 0.0f, 1.0f);
-  auto tx = [&](float ago) { return nowx - int((ago + f) * STEP + 0.5f); };  // where a tick that long ago sits
-  for (int i = 0; i < HITS; i++) {             // the stones, i ticks ago
-    const int sx = tx(float(i));
+  for (int i = 0; uint32_t(i) <= ticks; i++) {  // the stones, i ticks ago
+    const int sx = nowx - int((i + f) * step + 0.5f);
     if (sx < x) break;
-    const uint8_t s = hits[(hits_pos + HITS - 1 - i) % HITS];
-    if (s & 8) continue;
-    gfxPixel(sx, floor_y + 2);
-    if (s & 4) gfxPixel(sx, floor_y + 1);
+    gfxPixel(sx, floor_y); gfxPixel(sx, floor_y + 1);
   }
-  for (int sx = nowx + STEP - int(f * STEP + 0.5f); sx < x + ww; sx += STEP) gfxPixel(sx, floor_y + 2);  // still to come
-  for (int k = 0; k < 2; k++) {
-    // A high, B low: each hop as high as it is long, up to its ceiling
-    auto height = [&](int len) { return k ? std::min((h - 6) / 2, 2 + len) : std::min(h - 6, 6 + len * 2); };
-    auto arc = [&](float a0, int len, bool whole, float a1) {  // a hop from a0 ticks ago
-      const int x0 = tx(a0), x1 = whole ? tx(a1) : nowx, span = std::max(1, len * STEP), hh = height(len);
-      for (int q = 0; x0 + q <= x1; q += 2) {
-        if (x0 + q < x) continue;
-        const float g = float(q) / span;
-        gfxPixel(x0 + q, floor_y - int(hh * 4.0f * g * (1.0f - g) + 0.5f));
-      }
-    };
-    int newer = -1, last = -1;                 // ticks ago of the hits, newest first
-    for (int i = 0; i < HITS; i++) {
-      const uint8_t s = hits[(hits_pos + HITS - 1 - i) % HITS];
-      if (s & 8 || !(s & (1 << k))) continue;
-      if (last < 0) last = i;
-      if (newer >= 0) arc(float(i), i - newer, true, float(newer));
-      const int sx = tx(float(i));
-      if ((s & 3) == 3 && k == 0 && sx >= x + 3) {  // landed together: a spark
-        gfxPixel(sx - 3, floor_y - 3); gfxPixel(sx + 3, floor_y - 3); gfxPixel(sx, floor_y - 5);
-      }
-      newer = i;
-      if (sx < x) break;
+  if (!stopped)
+    for (int i = 1; ; i++) {  // still to come
+      const int sx = nowx + int((i - f) * step + 0.5f);
+      if (sx > lane_end) break;
+      gfxPixel(sx, floor_y + 1);
     }
-    if (!hop[k] || last < 0) continue;
-    // the hop under way: its length is fixed, uncounted ticks (TOCK) stretch it
-    const int left = count[k] == 255 ? 1 : std::max(1, int(hop[k]) - int(count[k]));
-    const int len = last + left;
-    arc(float(last), len, false, 0.0f);
-    const float g = std::min(1.0f, (last + f) / len);
-    const int by = floor_y - int(height(len) * 4.0f * g * (1.0f - g) + 0.5f);
-    if (k == 0) { gfxRect(nowx - 1, by - 4, 3, 5); gfxRect(nowx - 2, by - 3, 5, 3); }
-    else gfxRect(nowx - 1, by - 3, 3, 3);
-  }
-  if (cur[P_START] && burst_left > 0) {
-    char b[6];
-    snprintf(b, sizeof(b), "%d", burst_left);
-    gfxPrint(x + 1, y + 1, b);
-  }
-  // A's and B's hits, side by side
+  const uint32_t apx = ticks * uint32_t(step) + uint32_t(f * step);  // where the picture is, in pixels
   for (int k = 0; k < 2; k++) {
-    const int bx = x + w - 7 + k * 4;
-    gfxFrame(bx, y, 3, h);
-    if (lit[k] > 0.0f) gfxRect(bx, y, 3, h);
+    if (!hop[k] && last_at[k] < 0.0f && !Div(k ? P_DIVB : P_DIVA, cur[k ? P_DIVB : P_DIVA])) continue;  // off
+    const int by = BallY(k, floor_y, h, f);
+    if (!stopped) {  // remember its height for the columns it passed
+      if (trail_px[k] >= apx || apx - trail_px[k] > TRAIL) trail_px[k] = apx - 1;
+      for (uint32_t a = trail_px[k] + 1; a <= apx; a++) {
+        trail_y[k][a % TRAIL] = int8_t(by - y);
+        trail_at[k][a % TRAIL] = uint16_t(a);
+      }
+      trail_px[k] = apx;
+    }
+    int prev = -1;
+    for (int sx = x; sx < nowx - 1; sx++) {  // the trail: a dot every other column
+      if (uint32_t(nowx - sx) > apx) { prev = -1; continue; }
+      const uint32_t a = apx - uint32_t(nowx - sx);
+      if (trail_at[k][a % TRAIL] != uint16_t(a)) { prev = -1; continue; }
+      const int ty = y + trail_y[k][a % TRAIL];
+      if (prev >= 0 && abs(ty - prev) > 3)  // pulled down: straight to the ground
+        for (int yy = std::min(ty, prev); yy < std::max(ty, prev); yy += 2) gfxPixel(sx, yy);
+      if (!(sx & 1)) gfxPixel(sx, ty);
+      prev = ty;
+    }
+    const int bx = nowx + (k && last_at[k] < 0.0f ? 5 : 0);  // on the ground: B beside A
+    if (k == 0) { gfxRect(bx - 1, by - 4, 3, 5); gfxRect(bx - 2, by - 3, 5, 3); }
+    else gfxRect(bx - 1, by - 2, 3, 3);
+  }
+  for (int i = 0; i < HITS; i++) {  // sparks where both landed together
+    if ((hits[(hits_pos + HITS - 1 - i) % HITS] & 3) != 3) continue;
+    const int sx = nowx - int((i + f) * step + 0.5f);
+    if (sx < x + 3) break;
+    gfxPixel(sx - 3, floor_y - 4); gfxPixel(sx + 3, floor_y - 4); gfxPixel(sx, floor_y - 6);
+  }
+  // DENS: A's last five landings on top, B's under them, oldest left;
+  // filled went out, hollow was dropped
+  for (int k = 0; k < 2; k++)
+    for (int c = 0; c < 5; c++) {
+      const int age = 4 - c;
+      if (age >= dens_n[k]) continue;
+      const int sx = x + 78 + c * 6, sy = y + 1 + k * 6;
+      if (dens_res[k] >> age & 1) gfxRect(sx, sy, 5, 5);
+      else gfxFrame(sx, sy, 5, 5);
+    }
+  // GATE: one tick wide, the pulse as long as the gate
+  {
+    const int gx = x + 77, gw = 30, base = y + 24, top = y + 14;
+    const int gwid = std::max(1, int(gw * GateSeconds(cur[P_GATE]) / std::max(tick_s, 0.001f) + 0.5f));
+    for (int sx = gx; sx <= gx + gw; sx += 2) gfxPixel(sx, base + 1);
+    gfxLine(gx, base, gx, base + 2); gfxLine(gx + gw, base, gx + gw, base + 2);
+    gfxLine(gx, top, gx, base); gfxLine(gx + gwid, top, gx + gwid, base);
+    gfxLine(gx, top, gx + gwid, top);
+    gfxLine(gx + gwid, base, gx + gw, base);
+  }
+  // A's and B's hits that went out, each lit a moment
+  for (int k = 0; k < 2; k++) {
+    const int by0 = y + k * 14;
+    gfxPrint(x + 113, by0 + 3, k ? "B" : "A");
+    if (lit[k] > 0.0f) gfxRect(x + 120, by0, 8, 14);
+    else gfxFrame(x + 120, by0, 8, 14);
   }
 }
 

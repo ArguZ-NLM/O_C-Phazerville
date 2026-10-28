@@ -3361,7 +3361,7 @@ FLASHMEM void AppLoom::DrawDevice() const {
     // (A's RUN is an icon, 6 pixels; the clock mark at 103)
     int room = end;
     for (int a = 0; a < 2; a++)
-      if (d->def.actions[a][0]) room += 6 + (strcmp(d->def.actions[a], "RUN") ? 6 * int(strlen(d->def.actions[a])) : 5);
+      if (d->ActionLabel(a)[0]) room += 6 + (strcmp(d->ActionLabel(a), "RUN") ? 6 * int(strlen(d->ActionLabel(a))) : 5);
     if (mod_mode ? end > 62 : room > 101) {
       snprintf(buf, sizeof(buf), "%c %s", 'A' + mod_cursor, ShownTag(d->def.tag));
       // Still too long (a shared modulator's "A+B" in front and two
@@ -3409,7 +3409,7 @@ FLASHMEM void AppLoom::DrawDevice() const {
   int mx = act_x;  // a modulator's actions one after the other
   for (int a = 0; a < 2 && !mod_mode; a++) {
     if (mod_page) {
-      const char* label = d->def.actions[a];
+      const char* label = d->ActionLabel(a);
       if (!label[0]) continue;
       if (!strcmp(label, "RUN")) {
         // running: a play triangle; stopped (A held): a square
