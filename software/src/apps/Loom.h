@@ -3713,8 +3713,7 @@ FLASHMEM void AppLoom::DrawClockPage() const {
     if (p == ClockDevice::P_SOURCE && c->val[p] == 0) snprintf(buf, sizeof(buf), "internal");
     else if (p == ClockDevice::P_SOURCE && c->val[p] == 1) snprintf(buf, sizeof(buf), "MIDI clock");
     else if (p == ClockDevice::P_SOURCE && c->val[p] >= CLK_SHU) snprintf(buf, sizeof(buf), "SHUTTLE %c", 'A' + (c->val[p] - CLK_SHU));
-    else if (p == ClockDevice::P_SOURCE && c->CvTempo() >= 0) snprintf(buf, sizeof(buf), "CV%d -> BPM", c->CvTempo() + 1);
-    else if (p == ClockDevice::P_PPQN && (!c->external() || c->Shuttle() >= 0 || c->CvTempo() >= 0)) snprintf(buf, sizeof(buf), "-");
+    else if (p == ClockDevice::P_PPQN && (!c->external() || c->Shuttle() >= 0)) snprintf(buf, sizeof(buf), "-");
     else c->Format(p, buf, sizeof(buf));
     gfxPrint(48, y, buf);
     if (p == cursor) {

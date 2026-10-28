@@ -784,7 +784,7 @@ PROGMEM static const DeviceDef CLOCK_DEF = {
   "CLOCK", "CLK", 4, {"TAP", "RST"},  // B: the beat from one again (all on the clock with it)
   {
     {"SOURC", 0, CLK_SHU + 1, 0, UNI},
-    {"BPM", 30, 300, 120, UNI},
+    {"BPM", 30, 300, 120, UNI, 0, 9, 0, {}, {}},  // mode (L knob): a CV input that moves it, off / CV1-8
     {"PPQN", 0, 3, 0, LIST, 4, 0, 0, {"1", "2", "4", "24"}},
     {"BOOT", 0, BOOT_UNTIL_MOVE, 2, UNI},  // the boot picture: off, 1-9 s, until move
   }
@@ -801,9 +801,14 @@ public:
   void DrawMini(int x, int y, int w, int h) override;
   bool external() const { return cur[P_SOURCE] != 0; }
   bool midi() const { return cur[P_SOURCE] == 1; }
-  // SOURCE on a CV input (CV1-8): no pulses counted there, the voltage moves
-  // the tempo from BPM (0 V: BPM, +5 V double, -5 V half): -1 none
-  int CvTempo() const { const int s = cur[P_SOURCE]; return s >= 6 && s <= 13 ? s - 6 : -1; }
+  // BPM's L knob: a CV input (CV1-8) that moves the tempo from BPM (0 V:
+  // BPM, +5 V double, -5 V half), for the internal clock: -1 none
+  int CvTempo() const { return !external() && mode[P_BPM] >= 1 && mode[P_BPM] <= 8 ? mode[P_BPM] - 1 : -1; }
+  bool NameStop(int p) const override { return p != P_BPM && Modulator::NameStop(p); }  // (the clock page shows no name stop)
+  void FormatMode(int p, char* buf, size_t n) const override {
+    if (p == P_BPM) { if (mode[P_BPM] >= 1) snprintf(buf, n, "CV%d", mode[P_BPM]); else snprintf(buf, n, "CV off"); }
+    else Modulator::FormatMode(p, buf, n);
+  }
   int Shuttle() const { return cur[P_SOURCE] >= CLK_SHU ? cur[P_SOURCE] - CLK_SHU : -1; }  // its track, -1 none
   bool Waiting() const { return external() && !have_measure; }
   int Beat() const { return beat; }
@@ -866,7 +871,7 @@ FLASHMEM void ClockDevice::Tick(const ModCtx& ctx) {
       last_edge_us = now;
     }
   }
-  tempo_bpm = (src && have_measure) ? measured : float(cur[P_BPM]);
+  tempo_bpm = ((src || CvTempo() >= 0) && have_measure) ? measured : float(cur[P_BPM]);  // (internal + CV: BPM moved by it)
 
   // beat blink for the picture, and a 0..1 ramp per beat as output
   if (Restarted()) { beat_ph = 0.0f; beat = 0; flash = 0.08f; clock_beat_n = 0; }
@@ -906,8 +911,8 @@ FLASHMEM void ClockDevice::Format(int p, char* buf, size_t n) const {
     else if (val[p] == 1) snprintf(buf, n, "MIDI");
     else if (val[p] >= CLK_SHU) snprintf(buf, n, "SHU %c", 'A' + (val[p] - CLK_SHU));
     else FormatTrig(val[p] - 1, buf, n);
-  } else if (p == P_BPM && CvTempo() >= 0) {  // what you set, and where the CV has it now
-    snprintf(buf, n, "%d (%d)", val[P_BPM], int(tempo_bpm + 0.5f));
+  } else if (p == P_BPM && CvTempo() >= 0) {  // what you set, where the CV has it now, which CV
+    snprintf(buf, n, "%d (%d) CV%d", val[P_BPM], int(tempo_bpm + 0.5f), CvTempo() + 1);
   } else if (p == P_BPM && external()) {
     snprintf(buf, n, "%d", int(tempo_bpm + 0.5f));
   } else if (p == P_BOOT) {
