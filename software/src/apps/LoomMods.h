@@ -1469,7 +1469,8 @@ private:
   static constexpr char SET_NAMES[SETS][6] = {"ALL", "ODD", "EVEN", "PRIME", "TRIP", "FIB", "2^N"};
   static constexpr uint8_t FIXED[5] = {2, 3, 4, 6, 8};
   static constexpr int HITS = 64;   // ticks remembered for the picture's sparks
-  static constexpr int TRAIL = 64;  // screen columns of each ball's flight remembered
+  static constexpr int TRAIL = 64;  // samples of each ball's flight remembered,
+  static constexpr int TRAIL_RES = 6;  // six a tick (by time, not by pixel, so a changing tempo keeps it whole)
   uint8_t count[2] = {255, 255};    // ticks since each divider's last hit (255: hit on the next)
   uint8_t hop[2] = {};              // the count each divider is on now: a new setting waits for its next hit
   float last_at[2] = {-1.0f, -1.0f}; // when each ball last landed, in ticks (-1: on the ground)
@@ -1483,9 +1484,10 @@ private:
   uint8_t roll_size = 8, roll_who = 3;  // ROLL as pressed; bit 0 A rolls, bit 1 B
   float fill_start = 0.0f;          // when its first hit plays, in ticks (it may lie ahead)
   bool run_prev = false, start_now = false;
-  int8_t trail_y[2][TRAIL] = {};    // each ball's height, per screen column it flew over
-  uint16_t trail_at[2][TRAIL] = {}; // which column that was (the picture's own pixel count)
-  uint32_t trail_px[2] = {};
+  int8_t trail_y[2][TRAIL] = {};    // each ball's height, per sample
+  uint16_t trail_at[2][TRAIL] = {}; // which sample that was (sixths of a tick since the start)
+  uint32_t trail_n[2] = {};
+  float step_px = 0.0f;             // pixels a tick, gliding as the tempo moves
   int64_t grid_at = -1;
   float t = 0.0f, tick_s = 0.125f;
   float og[OUTS] = {}, olv[OUTS] = {};  // each output: its pulse's time left, its height
@@ -1750,8 +1752,11 @@ FLASHMEM int PickMod::BallY(int k, int floor_y, int h, float f) const {
 // and B landed together. Right of them the CHANC ways over GATE, then A's and B's
 // hits, each in its own box
 FLASHMEM void PickMod::DrawViz(int x, int y, int w, int h) {
-  // pixels a tick: 5, up to 10 at slow tempos, so it still moves smoothly
-  const int step = constrain(int(5.0f * tick_s / 0.125f + 0.5f), 5, 10);
+  // pixels a tick: 5, up to 10 at slow tempos, so it still moves smoothly;
+  // it glides there, so a tempo moved by CV doesn't make the ticks jump
+  const float want = constrain(5.0f * tick_s / 0.125f, 5.0f, 10.0f);
+  step_px = step_px < 1.0f ? want : step_px + 0.03f * (want - step_px);
+  const float step = step_px;
   const int floor_y = y + h - 3, nowx = x + 50, lane_end = x + 70;
   const float f = constrain(ph, 0.0f, 1.0f);
   for (int i = 0; uint32_t(i) <= ticks; i++) {  // the stones, i ticks ago
@@ -1766,22 +1771,23 @@ FLASHMEM void PickMod::DrawViz(int x, int y, int w, int h) {
       if (sx > lane_end) break;
       gfxPixel(sx, floor_y + 1);
     }
-  const uint32_t apx = ticks * uint32_t(step) + uint32_t(f * step);  // where the picture is, in pixels
+  const uint32_t at = uint32_t((ticks + f) * TRAIL_RES);  // where the picture is, in samples
   for (int k = 0; k < 2; k++) {
     if (!hop[k] && last_at[k] < 0.0f && !Div(k ? P_DIVB : P_DIVA, cur[k ? P_DIVB : P_DIVA])) continue;  // off
     const int by = BallY(k, floor_y, h, f);
-    if (!stopped) {  // remember its height for the columns it passed
-      if (trail_px[k] >= apx || apx - trail_px[k] > TRAIL) trail_px[k] = apx - 1;
-      for (uint32_t a = trail_px[k] + 1; a <= apx; a++) {
+    if (!stopped) {  // remember its height for the time it passed
+      if (trail_n[k] >= at || at - trail_n[k] > TRAIL) trail_n[k] = at - 1;
+      for (uint32_t a = trail_n[k] + 1; a <= at; a++) {
         trail_y[k][a % TRAIL] = int8_t(by - y);
         trail_at[k][a % TRAIL] = uint16_t(a);
       }
-      trail_px[k] = apx;
+      trail_n[k] = at;
     }
     int prev = -1;
     for (int sx = x; sx < nowx - 1; sx++) {  // the trail: a dot every other column
-      if (uint32_t(nowx - sx) > apx) { prev = -1; continue; }
-      const uint32_t a = apx - uint32_t(nowx - sx);
+      const uint32_t back = uint32_t((nowx - sx) * TRAIL_RES / step + 0.5f);
+      if (back > at || back >= TRAIL) { prev = -1; continue; }
+      const uint32_t a = at - back;
       if (trail_at[k][a % TRAIL] != uint16_t(a)) { prev = -1; continue; }
       const int ty = y + trail_y[k][a % TRAIL];
       if (prev >= 0 && abs(ty - prev) > 3)  // pulled down: straight to the ground
