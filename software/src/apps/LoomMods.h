@@ -1421,16 +1421,16 @@ PROGMEM static const DeviceDef PICK_DEF = {
     {"DIVA", 1, 144, 3, UNI, 0, 7, 0, {}, {}},  // mode: the set of numbers
     {"DIVB", 0, 144, 4, UNI, 0, 7, 0, {}, {}},  // (0: off)
     {"CHANC", 0, 100, 0, UNI, 0, 4, 0, {}, {"GAPS", "APEX", "LEAD", "RICO"}},  // the chance; mode: which ticks may play
-    {"START", 0, TRIG_SOURCES - 1, 0, UNI, 0, 2, 0, {}, {"START", "RUN"}},  // the input; mode: a pulse starts / stops, or runs while high
     {"ROLL", 1, 64, 8, UNI, 0, 3, 0, {}, {"ROLL", "ROL A", "ROL B"}},  // its size; mode: who rolls
-    {"RESET", 0, TRIG_SOURCES - 1, 0, UNI},
     {"GATE", 0, 100, 0, UNI},  // 5 ms .. 1 s (no longer than most of a tick)
+    {"RESET", 0, TRIG_SOURCES - 1, 0, UNI},
+    {"START", 0, TRIG_SOURCES - 1, 0, UNI, 0, 2, 0, {}, {"START", "RUN"}},  // the input; mode: a pulse starts / stops, or runs while high
   }
 };
 
 class PickMod : public Modulator {
 public:
-  enum { P_RATE, P_DIVA, P_DIVB, P_CHANC, P_START, P_ROLL, P_RESET, P_GATE };
+  enum { P_RATE, P_DIVA, P_DIVB, P_CHANC, P_ROLL, P_GATE, P_RESET, P_START };  // (page 2 was START ROLL RESET GATE before save v33)
   enum { SET_ALL, SET_ODD, SET_EVEN, SET_PRIME, SET_TRIP, SET_FIB, SET_POW2, SETS };
   // (CLOCK, CHANC: once TICK, TOCK; /12 /16 /24 made way for the four CHANC ways)
   enum { O_AB, O_A, O_B, O_CLOCK, O_CHANC, O_FIXED, O_GAPS = O_FIXED + 5, O_APEX, O_LEAD, O_RICO, OUTS };
@@ -1814,10 +1814,11 @@ FLASHMEM void PickMod::DrawViz(int x, int y, int w, int h) {
       if (sx < x + 77) continue;
       if (r == mode[P_CHANC]) gfxRect(sx, sy, 3, 2); else gfxPixel(sx + 1, sy);
     }
-  // GATE: one tick wide, the pulse as long as the gate
+  // GATE: the pulse as long as the gate on a steady scale, 5 ms at the left
+  // to 1 s at the right (as the knob turns), so the tempo doesn't move it
   {
     const int gx = x + 77, gw = 30, base = y + 24, top = y + 14;
-    const int gwid = std::max(1, int(gw * GateSeconds(cur[P_GATE]) / std::max(tick_s, 0.001f) + 0.5f));
+    const int gwid = std::max(1, int(gw * constrain(int(cur[P_GATE]), 0, 100) / 100.0f + 0.5f));
     for (int sx = gx; sx <= gx + gw; sx += 2) gfxPixel(sx, base + 1);
     gfxLine(gx, base, gx, base + 2); gfxLine(gx + gw, base, gx + gw, base + 2);
     gfxLine(gx, top, gx, base); gfxLine(gx + gwid, top, gx + gwid, base);
