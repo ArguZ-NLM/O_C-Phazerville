@@ -44,6 +44,7 @@
 #include "../Audio/AudioEffectReel.h"
 #include "../Audio/AudioPlayStream.h"
 #include <SD.h>
+#include "../src/extern/gfx_font_6x8.h"  // (Crawl draws its glyphs itself)
 
 extern "C" uint8_t external_psram_size;  // MB of PSRAM found at start (Teensy core)
 
@@ -406,6 +407,8 @@ public:
   virtual void KeepMore(Saved&) const {}
   // a short note for the page's header bar (false: none)
   virtual bool HeaderInfo(char*, size_t) const { return false; }
+  // the name over its page (SID: 2SID / 3SID for a tune for more chips)
+  virtual const char* Title() const { return def.name; }
   // the file list (LoomBrowser): R push on FileParam() opens it; a WAV
   // picked in it comes to Picked
   virtual int FileParam() const { return -1; }
@@ -2573,6 +2576,8 @@ FLASHMEM static int ListOrder(const char* a, const char* b) {
   return strcasecmp(a, b);
 }
 constexpr int MAX_FILES = 48, NAME_LEN = 80;
+// the file list's rows (a folder of tunes for SID is long; the list is in PSRAM)
+constexpr int BROWSE_MAX = 256;
 
 // Loom's folders on the card, made when they are missing, and the starter
 // waves for THRUMS (WARP's single-cycle waves, see LoomThrums.h) written
@@ -2898,10 +2903,45 @@ private:
   void LoopSection(const char* wav_path, size_t& a, size_t& b) const;  // from its .loom
 };
 
+// Text longer than its room crawls (SID's names, its file list): right to
+// left a pixel at a time, round and round (its start comes in again from
+// the right, after a gap), resting 2 s each time its start is back at the
+// left; `since` is when the text came (it starts with the rest). Drawn a
+// font column at a time, only the columns inside the room (the graphics'
+// own text can't be clipped on the left)
+FLASHMEM static void GlyphsAt(int x0, int y, int w, const char* s, int off) {
+  for (int i = 0; s[i]; i++) {
+    const int cx = x0 - off + 6 * i;
+    if (cx >= x0 + w) break;
+    if (cx + 6 <= x0) continue;
+    const uint8_t c = uint8_t(s[i]);
+    if (c <= 32 || c > 127) continue;
+    const int a = std::max(0, x0 - cx), b = std::min(6, x0 + w - cx);
+    graphics.drawBitmap8(cx + a, y, b - a, ssd1306xled_font6x8 + 6 * (c - 32) + a);
+  }
+}
+
+FLASHMEM static void Crawl(int x, int y, int chars, const char* s, uint32_t since) {
+  const int len = int(strlen(s)), room = 6 * chars;
+  if (len <= chars) { gfxPrint(x, y, s); return; }
+  constexpr float PX_S = 20.0f, REST = 2.0f;  // speed; the rest with the start at the left
+  constexpr int GAP = 24;                     // between the end and the start coming again
+  const int lap = 6 * len + GAP;              // pixels from one start to the next
+  const float cycle = REST + lap / PX_S;
+  const float t = fmodf((millis() - since) * 0.001f, cycle);
+  const int off = t < REST ? 0 : int((t - REST) * PX_S);
+  GlyphsAt(x, y, room, s, off);
+  if (off > lap - room) GlyphsAt(x, y, room, s, off - lap);  // the start, coming in at the right
+}
+
 // The file list (R push on FILE: PLAYER, WARP): sub-folders first (with a
 // /), then WAVs; ".." goes up. One for the app, open for one device at a
 // time. B listens to the file under the cursor (the quick listen), B held
 // turns AUTO on: every file the cursor rests on plays.
+// SID's list (no quick listen) has views instead, B steps through them:
+// FILES the folder as it is, A-Z its tunes in a group per first letter,
+// COMP in a group per composer (from the tunes' headers). The groups are
+// of the folder's own tunes; its sub-folders stay on top.
 class LoomBrowser {
 public:
   const void* owner = nullptr;  // the device whose list is open
@@ -2909,7 +2949,8 @@ public:
   bool IsOpen(const void* who) const { return owner && owner == who; }
   // extra: a first row in every folder that picks no file (WARP: the
   // other track's SPOOL loop); select nullptr / "": on it
-  void Open(const void* who, const char* dir, const char* select, const char* extra = nullptr);
+  // ext: the files listed (SID: ".SID"); only WAVs have the quick listen
+  void Open(const void* who, const char* dir, const char* select, const char* extra = nullptr, const char* ext = ".WAV");
   void Close() { owner = nullptr; autoplay = false; if (preview) preview->Stop(); }
   void Move(int d) {
     const int was = bsel;
@@ -2926,18 +2967,35 @@ public:
   const char* Dir() const { return OnExtra() ? "" : bdir; }
   const char* Name() const { return bsel < bcount && !OnExtra() ? bn[bsel] : ""; }
   bool OnWav() const { return bsel < bcount && !OnExtra() && !bfolder[bsel]; }  // the cursor on a WAV
+  enum { V_FILES, V_LETTER, V_COMPOSER, VIEWS };
   void Draw(int x, int y, int w, int h) const;
 
 private:
   char bdir[96] = "/";
-  char bn[MAX_FILES][NAME_LEN] = {};
-  bool bfolder[MAX_FILES] = {};
+  char bn[BROWSE_MAX][NAME_LEN] = {};
+  bool bfolder[BROWSE_MAX] = {};
   int bcount = 0, bsel = 0;
   char extra_[16] = "";
+  char ext_[5] = ".WAV";
+  bool Listens() const { return !strcasecmp(ext_, ".WAV"); }  // the quick listen: WAVs only
   int extra_at = -1;  // its row
   bool OnExtra() const { return bsel == extra_at; }
   bool autoplay = false, auto_due = false;
   uint32_t auto_at = 0;
+  mutable int crawl_sel = -1;    // SID's list: the selected row crawls, from when it was selected
+  mutable uint32_t crawl_at = 0;
+  // SID's views: which one (kept between openings), the group open in it
+  // ("": its groups), and the folder's tunes with their composers
+  uint8_t view = V_FILES;
+  char group[33] = "";
+  bool bgroup[BROWSE_MAX] = {};    // a row that is a group (a folder of the view's)
+  uint16_t bnum[BROWSE_MAX] = {};  // ... its tunes
+  char fn[BROWSE_MAX][NAME_LEN] = {};
+  char fa[BROWSE_MAX][33] = {};
+  int nf = 0;
+  bool Grouped() const { return !Listens() && view != V_FILES; }
+  void GroupKey(int i, char* out, size_t n) const;
+  void ListGroups();
   void List();
 };
 inline LoomBrowser* g_browser = nullptr;  // made with Loom (on the heap: RAM2)
@@ -2948,6 +3006,8 @@ inline LoomPreview* g_preview = nullptr;
 
 // --- the browser: sub-folders first (with a /), then WAVs; ".." goes up
 FLASHMEM void LoomBrowser::List() {
+  for (auto& g : bgroup) g = false;
+  if (Grouped()) { ListGroups(); return; }
   bcount = 0;
   bsel = 0;
   extra_at = -1;
@@ -2959,14 +3019,14 @@ FLASHMEM void LoomBrowser::List() {
   for (int pass = 0; pass < 2; pass++) {  // folders, then files
     d.rewindDirectory();
     const int first = bcount;
-    while (bcount < MAX_FILES) {
+    while (bcount < BROWSE_MAX) {
       File e = d.openNextFile();
       if (!e) break;
       const char* nm = e.name();
       const size_t l = strlen(nm);
       const bool isdir = e.isDirectory();
       const bool want = nm[0] != '.' && l < NAME_LEN - 1 &&
-                        (pass == 0 ? isdir : (!isdir && l > 4 && !strcasecmp(nm + l - 4, ".WAV")));
+                        (pass == 0 ? isdir : (!isdir && l > 4 && !strcasecmp(nm + l - 4, ext_)));
       if (want) { bfolder[bcount] = isdir; snprintf(bn[bcount++], NAME_LEN, "%s", nm); }
       if (pass == 1) Serial.printf("  %s%s %lu%s\n", nm, isdir ? "/" : "", (unsigned long)e.size(), want ? "" : "  (not listed)");
       e.close();
@@ -2981,11 +3041,98 @@ FLASHMEM void LoomBrowser::List() {
   d.close();
 }
 
-FLASHMEM void LoomBrowser::Open(const void* who, const char* dir, const char* select, const char* extra) {
+// a tune's group in the view: its first letter (# for anything else), or
+// its composer (? when the header has none)
+FLASHMEM void LoomBrowser::GroupKey(int i, char* out, size_t n) const {
+  if (view == V_LETTER) {
+    const char c = char(toupper(uint8_t(fn[i][0])));
+    snprintf(out, n, "%c", c >= 'A' && c <= 'Z' ? c : '#');
+  } else {
+    const char* a = fa[i];
+    snprintf(out, n, "%s", a[0] && strcmp(a, "<?>") ? a : "?");
+  }
+}
+
+// A-Z / COMP: the folder's sub-folders and its groups, or a group's tunes
+FLASHMEM void LoomBrowser::ListGroups() {
+  bcount = 0;
+  bsel = 0;
+  extra_at = -1;
+  nf = 0;
+  File d = SD.open(bdir);
+  if (!d) return;
+  if (!group[0] && strcmp(bdir, "/")) { snprintf(bn[bcount], NAME_LEN, ".."); bfolder[bcount++] = true; }
+  if (group[0]) { snprintf(bn[bcount], NAME_LEN, ".."); bfolder[bcount++] = true; }  // back to the groups
+  const int first = bcount;
+  while (true) {
+    File e = d.openNextFile();
+    if (!e) break;
+    const char* nm = e.name();
+    const size_t l = strlen(nm);
+    if (nm[0] != '.' && l < NAME_LEN - 1) {
+      if (e.isDirectory()) {
+        if (!group[0] && bcount < BROWSE_MAX) { bfolder[bcount] = true; snprintf(bn[bcount++], NAME_LEN, "%s", nm); }
+      } else if (l > 4 && !strcasecmp(nm + l - 4, ext_) && nf < BROWSE_MAX) {
+        // the composer: the header's second string (PSID / RSID, at $36)
+        char h[0x56] = {};
+        snprintf(fn[nf], NAME_LEN, "%s", nm);
+        fa[nf][0] = 0;
+        if (e.read(h, sizeof(h)) == int(sizeof(h)) && (!memcmp(h, "PSID", 4) || !memcmp(h, "RSID", 4)))
+          snprintf(fa[nf], sizeof(fa[nf]), "%.32s", h + 0x36);
+        nf++;
+      }
+    }
+    e.close();
+  }
+  d.close();
+  auto sort_rows = [&](int from) {
+    for (int i = from + 1; i < bcount; i++)
+      for (int j = i; j > from && ListOrder(bn[j - 1], bn[j]) > 0; j--) {
+        char t[NAME_LEN];
+        memcpy(t, bn[j], NAME_LEN); memcpy(bn[j], bn[j - 1], NAME_LEN); memcpy(bn[j - 1], t, NAME_LEN);
+        std::swap(bfolder[j], bfolder[j - 1]);
+        std::swap(bgroup[j], bgroup[j - 1]);
+        std::swap(bnum[j], bnum[j - 1]);
+      }
+  };
+  char k[33];
+  if (!group[0]) {
+    sort_rows(first);  // the sub-folders
+    const int groups = bcount;
+    for (int i = 0; i < nf; i++) {
+      GroupKey(i, k, sizeof(k));
+      int r = groups;
+      while (r < bcount && strcmp(bn[r], k)) r++;
+      if (r == bcount) {
+        if (bcount >= BROWSE_MAX) continue;
+        snprintf(bn[bcount], NAME_LEN, "%s", k);
+        bfolder[bcount] = bgroup[bcount] = true;
+        bnum[bcount++] = 0;
+      }
+      bnum[r]++;
+    }
+    sort_rows(groups);
+  } else {
+    for (int i = 0; i < nf && bcount < BROWSE_MAX; i++) {
+      GroupKey(i, k, sizeof(k));
+      if (strcmp(k, group)) continue;
+      bfolder[bcount] = false;
+      snprintf(bn[bcount++], NAME_LEN, "%s", fn[i]);
+    }
+    sort_rows(first);
+  }
+}
+
+FLASHMEM void LoomBrowser::Open(const void* who, const char* dir, const char* select, const char* extra, const char* ext) {
   if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
   snprintf(bdir, sizeof(bdir), "%s", dir && dir[0] ? dir : "/");
   snprintf(extra_, sizeof(extra_), "%s", extra ? extra : "");
+  snprintf(ext_, sizeof(ext_), "%s", ext ? ext : ".WAV");
+  group[0] = 0;
   List();
+  if (Grouped() && select && select[0])  // inside the group of the tune playing
+    for (int i = 0; i < nf; i++)
+      if (!strcmp(fn[i], select)) { GroupKey(i, group, sizeof(group)); List(); break; }
   if (!select || !select[0]) { if (extra_at >= 0) bsel = extra_at; }
   else
     for (int i = 0; i < bcount; i++)
@@ -3002,6 +3149,19 @@ FLASHMEM void LoomBrowser::Back() {
 
 FLASHMEM bool LoomBrowser::Enter() {
   if (bsel >= bcount) return false;
+  if (bgroup[bsel]) {  // a group of the view: its tunes
+    snprintf(group, sizeof(group), "%s", bn[bsel]);
+    List();
+    return false;
+  }
+  if (bfolder[bsel] && group[0] && !strcmp(bn[bsel], "..")) {  // back to the groups, on this one
+    char was[33];
+    snprintf(was, sizeof(was), "%s", group);
+    group[0] = 0;
+    List();
+    for (int i = 0; i < bcount; i++) if (bgroup[i] && !strcmp(bn[i], was)) { bsel = i; break; }
+    return false;
+  }
   if (bfolder[bsel]) {
     if (!strcmp(bn[bsel], "..")) { Back(); return false; }
     const size_t l = strlen(bdir);
@@ -3020,12 +3180,26 @@ FLASHMEM bool LoomBrowser::Enter() {
 // from the card and past the effects, once through (the device's file
 // stays); B again stops it
 FLASHMEM void LoomBrowser::Play() {
-  if (bsel >= bcount || bfolder[bsel] || OnExtra() || !preview) return;
+  if (!Listens()) {  // SID: B steps through the views, on the same tune if it was on one
+    char on[NAME_LEN] = "";
+    if (bsel < bcount && !bfolder[bsel]) snprintf(on, sizeof(on), "%s", bn[bsel]);
+    view = uint8_t((view + 1) % VIEWS);
+    group[0] = 0;
+    List();
+    if (on[0] && Grouped())
+      for (int i = 0; i < nf; i++)
+        if (!strcmp(fn[i], on)) { GroupKey(i, group, sizeof(group)); List(); break; }
+    if (on[0]) for (int i = 0; i < bcount; i++) if (!bfolder[i] && !strcmp(bn[i], on)) { bsel = i; break; }
+    crawl_sel = -1;
+    return;
+  }
+  if (bsel >= bcount || bfolder[bsel] || OnExtra() || !preview || !Listens()) return;
   if (preview->Is(bdir, bn[bsel])) preview->Stop();
   else preview->Start(bdir, bn[bsel]);
 }
 
 FLASHMEM void LoomBrowser::ToggleAutoplay() {
+  if (!Listens()) return;
   autoplay = !autoplay;
   auto_due = false;
   if (!preview) return;
@@ -3046,13 +3220,21 @@ FLASHMEM void LoomBrowser::AutoplayIdle() {
 FLASHMEM void LoomBrowser::Draw(int x, int y, int w, int h) const {
   // the folder on top, then 5 entries around the selection
   char t[24];
-  const size_t l = strlen(bdir);
-  const size_t room = autoplay ? 16 : 21;  // AUTO takes the right end
-  snprintf(t, sizeof(t), "%s", l > room ? bdir + l - room : bdir);
+  // SID's lists: the view at the right end (B steps through them); inside
+  // a group its name in place of the folder
+  const char* vname = Listens() ? nullptr : view == V_LETTER ? "A-Z" : view == V_COMPOSER ? "COMP" : "FILES";
+  const char* top = group[0] ? group : bdir;
+  const size_t l = strlen(top);
+  const size_t room = autoplay ? 16 : vname ? 20 - strlen(vname) : 21;  // AUTO takes the right end
+  snprintf(t, sizeof(t), "%s", l > room ? top + l - room : top);
   gfxPrint(x, y + 1, t);
   if (autoplay) {
     gfxPrint(x + w - 25, y + 1, "AUTO");
     gfxInvert(x + w - 26, y, 26, 9);
+  } else if (vname) {
+    const int vw = 6 * int(strlen(vname)) + 2;
+    gfxPrint(x + w - vw + 1, y + 1, vname);
+    gfxInvert(x + w - vw, y, vw, 9);
   }
   gfxLine(x, y + 10, x + w - 1, y + 10);
   if (!bcount) { gfxPrint(x + 4, y + 16, PSTR("(empty)")); return; }
@@ -3060,16 +3242,43 @@ FLASHMEM void LoomBrowser::Draw(int x, int y, int w, int h) const {
   const int first = constrain(bsel - rows / 2, 0, std::max(0, bcount - rows));
   for (int r = 0; r < rows && first + r < bcount; r++) {
     const int i = first + r;
-    if (bfolder[i]) {
+    char full[NAME_LEN + 12];  // (SID's selected row: the whole of it, crawling)
+    if (bgroup[i]) {
+      snprintf(full, sizeof(full), "%s (%u)", bn[i], unsigned(bnum[i]));
+      char f[20];
+      ShortName(bn[i], 13, f, sizeof(f));
+      snprintf(t, sizeof(t), "%s (%u)", f, unsigned(bnum[i]));
+    } else if (bfolder[i]) {
       const bool up = !strcmp(bn[i], "..");
+      snprintf(full, sizeof(full), "%s%s", bn[i], up ? "" : "/");
       char f[20];
       ShortName(bn[i], 19 - !up, f, sizeof(f));
       snprintf(t, sizeof(t), "%s%s", f, up ? "" : "/");
     } else {
+      snprintf(full, sizeof(full), "%s", bn[i]);
       ShortName(bn[i], 20, t, sizeof(t));
     }
     const int ry = y + 13 + r * 8;
-    gfxPrint(x + 2, ry, t);
+    if (bgroup[i]) {
+      // a group: its name from the start (cut at the edge, crawling when
+      // selected), its count in a column of its own at the right
+      char c[8];
+      snprintf(c, sizeof(c), "%u", unsigned(bnum[i]));
+      const int cw = 6 * int(strlen(c));
+      gfxPrint(x + w - 2 - cw, ry, c);
+      const int chars = (w - 2 - cw - 6 - 2) / 6;
+      if (i == bsel) {
+        if (crawl_sel != bsel) { crawl_sel = bsel; crawl_at = millis(); }
+        Crawl(x + 2, ry, chars, bn[i], crawl_at);
+      } else {
+        GlyphsAt(x + 2, ry, 6 * chars, bn[i], 0);
+      }
+    } else if (i == bsel && !Listens()) {  // SID's list: the whole row, crawling
+      if (crawl_sel != bsel) { crawl_sel = bsel; crawl_at = millis(); }
+      Crawl(x + 2, ry, 20, full, crawl_at);
+    } else {
+      gfxPrint(x + 2, ry, t);
+    }
     // the quick listen playing: a small arrow at the right
     if (!bfolder[i] && preview && preview->Is(bdir, bn[i])) {
       graphics.clearRect(x + w - 6, ry - 1, 6, 9);  // over a long name
@@ -8035,7 +8244,7 @@ struct SlotDef {
 };
 
 PROGMEM static const SlotDef SLOT_DEFS[SLOT_COUNT] = {
-  {"SOURCE",   "SRC", 4, 4},  // INPUT, SPOOL, PLAYER, WARP (owned by the track, not made here)
+  {"SOURCE",   "SRC", 5, 5},  // INPUT, SPOOL, PLAYER, WARP, SID (owned by the track, not made here)
   {"FIBRE",    "FIB", 3, 1},  // BYPASS, FIBRE (grains), DRAFT (pitch / time)
   {"REED",     "RD",  4, 1},  // BYPASS, REED (filter bank), BEATER (struck object), TWILL (tuned resonators)
   {"TEXTURE",  "TEX", 3, 1},  // BYPASS, TEXTURE, HEDDLE (shifter / phaser)
