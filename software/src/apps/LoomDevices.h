@@ -90,11 +90,11 @@ struct DeviceDef {
   char tag[4];       // 3 letters for the chain view
   uint8_t nparams;
   char actions[2][5];
-  ParamDef params[12];   // up to three pages of four
-  char page_title[3][8]; // shown after the name in the header, per page
+  ParamDef params[16];   // up to four pages of four
+  char page_title[4][8]; // shown after the name in the header, per page
 };
 
-constexpr int MAX_PARAMS = 12;
+constexpr int MAX_PARAMS = 16;
 // modulator outputs a setting can pick: the track's MOD A-D, then the
 // shared MOD E-H (the same for both tracks)
 constexpr int MOD_BUSES = 8;
@@ -454,6 +454,9 @@ public:
   // GLINT, WALL / PRSET): the L knob switches between the two (the bar's
   // left / right half), the R knob changes the one showing; its name here
   virtual const char* AltName(int p) const { return nullptr; }
+  // the second value grabbed (R turns it): the L knob's own turn on it, if
+  // it has one (DREAM's VOICE: L the octave, R the instrument)
+  virtual bool TurnAltLeft(int p, int dir) { return false; }
   // the bar over the name: the mode's part (BAR_PARTS), which of the two
   // shows (BAR_HALVES), or a variation's amount growing from the left /
   // the middle (HEDDLE's FDBK / its ± STAGE)
@@ -517,9 +520,23 @@ public:
   void VarTick();
   void VarNew() { var_beat = loom::clock_beat_n + 1; }  // new variations at the next tick, as on a beat
   int VarAdd(int p, int v) const {
-    if (!Varies(p) || var_now[p] == 0.0f) return v;
+    const bool var = Varies(p) && var_now[p] != 0.0f;
+    if (!var && link_p[0] != p && link_p[1] != p) return v;
     const ParamDef& d = param(p);
-    return constrain(v + int(lrintf(var_now[p] * 0.01f * (d.max - d.min))), int(d.min), int(d.max));
+    float add = var ? var_now[p] : 0.0f;
+    for (int i = 0; i < 2; i++) if (link_p[i] == p) add += link_v[i];
+    return constrain(v + int(lrintf(add * 0.01f * (d.max - d.min))), int(d.min), int(d.max));
+  }
+  // another device moving two of this one's settings (DREAM's SPACE:
+  // REPEAT's levels), in % of their range, added like modulation; p -1: none
+  int8_t link_p[2] = {-1, -1}, link_v[2] = {};
+  void Link(int i, int p, int v) {
+    if (link_p[i] == p && link_v[i] == v) return;
+    const int was = link_p[i];
+    link_p[i] = int8_t(p);
+    link_v[i] = int8_t(v);
+    if (was >= 0 && was != p) Refresh(was);
+    if (p >= 0) Refresh(p);
   }
   void Refresh(int p);   // recompute cur[p] and apply it
   void Modulate();       // follow the CV inputs
@@ -6324,6 +6341,24 @@ FLASHMEM void SprayDevice::DrawMini(int x, int y, int w, int h) {
 }
 
 /////////////////////////////////////////////////////////////////
+// A SOURCE that also plays the CV outputs (SID, DREAM): while it is a
+// track's source with its CV on, the outputs it claims carry its pitches
+// or levels, over what they were set to (Loom.h, WriteOutputs)
+/////////////////////////////////////////////////////////////////
+class CvSource {
+public:
+  enum { CV_NONE, CV_PITCH, CV_LEVEL };
+  virtual bool CvOn() const = 0;
+  virtual bool CvOnly() const { return false; }  // the CV and no sound: it wins the outputs (DREAM's CV ONLY)
+  virtual void CvTick() = 0;  // once a modulation tick (main loop), before the outputs are read
+  // output o (0-7): CV_PITCH with v in semitones above C0, CV_LEVEL with v
+  // 0..1, or CV_NONE (the output's own source)
+  virtual int CvOut(int o, float& v) const = 0;
+  // its name on the OUT page: short (3 letters) or long
+  virtual void CvName(int o, char* buf, size_t n, bool long_name) const = 0;
+};
+
+/////////////////////////////////////////////////////////////////
 // Slot catalogue, in chain order. Option 0 of the effect slots is BYPASS.
 /////////////////////////////////////////////////////////////////
 enum Slot : uint8_t { SOURCE, SPRAY, RESONATOR, TEXTURE, ECHO, SLOT_COUNT };
@@ -8244,7 +8279,7 @@ struct SlotDef {
 };
 
 PROGMEM static const SlotDef SLOT_DEFS[SLOT_COUNT] = {
-  {"SOURCE",   "SRC", 5, 5},  // INPUT, SPOOL, PLAYER, WARP, SID (owned by the track, not made here)
+  {"SOURCE",   "SRC", 6, 6},  // INPUT, SPOOL, PLAYER, WARP, SID, DREAM (owned by the track, not made here)
   {"FIBRE",    "FIB", 3, 1},  // BYPASS, FIBRE (grains), DRAFT (pitch / time)
   {"REED",     "RD",  4, 1},  // BYPASS, REED (filter bank), BEATER (struck object), TWILL (tuned resonators)
   {"TEXTURE",  "TEX", 3, 1},  // BYPASS, TEXTURE, HEDDLE (shifter / phaser)

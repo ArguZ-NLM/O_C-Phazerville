@@ -72,6 +72,7 @@
 #include "LoomDevices.h"
 #include "LoomMods.h"
 #include "LoomSid.h"
+#include "LoomDream.h"
 
 namespace loom {
   constexpr int NUM_TRACKS = 2;
@@ -84,6 +85,7 @@ namespace loom {
     PlayerDevice* player = nullptr;  // SOURCE option 2: a WAV from the SD card
     WarpDevice* warp = nullptr;      // SOURCE option 3: a WAV played by MIDI notes
     SidDevice* sid = nullptr;        // SOURCE option 4: a C64 tune (.sid) from the SD card
+    DreamBase* dream = nullptr;      // SOURCE option 5: a generative piece (each track its own engine)
     WavWriter writer;              // saving SPOOL's loop to the SD card
     MixDevice* mix = nullptr;
     uint8_t choice[SLOT_COUNT] = {};
@@ -122,6 +124,7 @@ namespace loom {
         if (choice[SOURCE] == 2 && player) return player;
         if (choice[SOURCE] == 3 && warp) return warp;
         if (choice[SOURCE] == 4 && sid) return sid;
+        if (choice[SOURCE] == 5 && dream) return dream;
         return input;
       }
       return inst[s][choice[s]];
@@ -269,6 +272,8 @@ private:
   uint32_t save_hold = 0, saved_at = 0;  // ... since then; when the save happened
   bool clear_held = false;  // SPOOL: B is down on the SPOOL page ...
   uint32_t clear_hold = 0;  // ... since then
+  bool regrow_held = false;  // DREAM: B is down (on its page or its box): held 2 s, a fresh piece
+  uint32_t regrow_hold = 0;
   bool editing = false;   // device view: setting grabbed, R enc changes it
   bool out_editing = false;  // CV outputs page: output grabbed, R enc picks its modulator
   bool tap_editing = false;  // MOD view: L pushed on a box, L turns through its outputs
@@ -428,7 +433,7 @@ private:
   static void DrawClockMark(int x, int y);
   void DrawLinkLabel(int x, int y) const;  // L, two squares (filled: SPLIT), R
   float OutLevel(int o) const;
-  loom::SidDevice* CvSid() const;  // SID playing the CV outputs (else nullptr)
+  loom::CvSource* CvSrc() const;  // the source playing the CV outputs (SID, DREAM; else nullptr)
   const loom::Modulator* OutMod(int o) const;
   void WriteOutputs();
   void SetChoice(int t, int s, int option);
@@ -514,7 +519,7 @@ private:
   struct TrackSnap {
     uint8_t choice[loom::SLOT_COUNT], last_choice[loom::SLOT_COUNT], order[loom::SLOT_COUNT - 1];
     uint8_t bypass, mod_type[loom::NUM_MODS], mod_tap[loom::NUM_MODS];
-    DevState input, reel, player, warp, sid, mix;
+    DevState input, reel, player, warp, sid, dream, mix;
     DevState inst[loom::SLOT_COUNT][loom::MAX_OPTIONS];
     DevState mods[loom::NUM_MODS][loom::MOD_TYPES];
   };
@@ -578,6 +583,10 @@ FLASHMEM void AppLoom::Start() {
     tr.sid = new SidDevice;
     tr.sid->mod_bus = tr.mod_out;
     tr.sid->Defaults();
+    tr.dream = t ? static_cast<DreamBase*>(new dream_b::DreamDevice) : new dream_a::DreamDevice;
+    tr.dream->track = int8_t(t);
+    tr.dream->mod_bus = tr.mod_out;
+    tr.dream->Defaults();
     for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
       if (s == ECHO) tr.gate = new LoomGate;
       for (int o = 0; o < SLOT_DEFS[s].noptions; o++) {
@@ -648,6 +657,8 @@ FLASHMEM void AppLoom::Repatch(int t) {
     prev = tr.warp->out();
   } else if (tr.choice[SOURCE] == 4 && tr.sid) {  // SID instead of the input
     prev = tr.sid->out();
+  } else if (tr.choice[SOURCE] == 5 && tr.dream) {  // DREAM instead of the input
+    prev = tr.dream->out();
   }
   AudioStream* const source = prev;  // what came in, for OUTPUT's MIX
   for (int k = 0; k < SLOT_COUNT - 1; k++) {  // the effects in their order
@@ -932,15 +943,31 @@ FLASHMEM static float WorstCost(const Device* d) {
     return 4.0f + (x->Phasing() ? 1.0f + 0.6f * x->MaxStages() : 1.0f);  // (STAGE's variation up)
   }
   if (!strcmp(t, "CHM")) return 7.0f;   // TWILL
+  // the sources that are heavy (measured on the module: SID 33 % for one
+  // chip, about 2.4 x for three; DREAM 37 %, whatever the piece); only the
+  // track whose DREAM plays the engine pays for it
+  if (!strcmp(t, "SID")) return 34.0f + 23.0f * float(static_cast<const SidDevice*>(d)->Chips() - 1);
+  if (!strcmp(t, "DRM")) return static_cast<const DreamBase*>(d)->Cost();
   if (!strcmp(t, "SPR")) return 6.0f;   // FIBRE
   if (!strcmp(t, "RES")) return 3.0f;   // REED
   return 3.0f;
+}
+// a track's SOURCE option, as the CPU guard counts it: SID and DREAM (the
+// others are in CPU_BASE)
+FLASHMEM static float SourceCost(const Track& tr, int option) {
+  return option == 4 ? WorstCost(tr.sid) : option == 5 ? WorstCost(tr.dream) : 0.0f;
 }
 }  // namespace loom
 
 FLASHMEM void AppLoom::SetChoiceLinked(int s, int option) {
   using namespace loom;
   if (s == SOURCE) {
+    // room for SID / DREAM (instead of what the track had)?
+    option = constrain(option, 0, SLOT_DEFS[s].noptions - 1);
+    float extra = 0.0f;
+    for (int t = 0; t < NUM_TRACKS; t++)
+      if (t == track || linked) extra += SourceCost(tracks[t], option) - SourceCost(tracks[t], tracks[t].choice[s]);
+    if (!Admit(extra)) return;
     SetChoice(track, s, option);
     if (linked) SetChoice(1 - track, s, tracks[track].choice[s]);
     return;
@@ -1040,9 +1067,11 @@ FLASHMEM bool AppLoom::Admit(float extra) {
   if (extra <= 0.0f) return true;
   const float pending = millis() - admit_at < 1000 ? admit_pending : 0.0f;
   float account = CPU_BASE;
-  for (const Track& tr : tracks)
+  for (const Track& tr : tracks) {
+    account += SourceCost(tr, tr.choice[SOURCE]);
     for (int s = SOURCE + 1; s < SLOT_COUNT; s++)
       if (!(tr.bypass >> s & 1)) account += WorstCost(tr.current(s));
+  }
   if (account + extra <= CPU_ACCOUNT && audio_load * 100.0f + pending + extra <= CPU_BUDGET) {
     admit_pending = pending + extra;
     admit_at = millis();
@@ -1227,6 +1256,7 @@ FLASHMEM void AppLoom::KeepB() {
   k.player.Take(b.player);
   k.warp.Take(b.warp);
   k.sid.Take(b.sid);
+  k.dream.Take(b.dream);
   k.mix.Take(b.mix);
   for (int s = 0; s < SLOT_COUNT; s++)
     for (int o = 0; o < MAX_OPTIONS; o++) k.inst[s][o].Take(s > SOURCE ? b.inst[s][o] : nullptr);
@@ -1250,6 +1280,7 @@ FLASHMEM void AppLoom::BringBackB() {
   k.player.Give(b.player);
   k.warp.Give(b.warp);
   k.sid.Give(b.sid);
+  k.dream.Give(b.dream);
   k.mix.Give(b.mix);
   for (int s = SOURCE + 1; s < SLOT_COUNT; s++)
     for (int o = 0; o < MAX_OPTIONS; o++) k.inst[s][o].Give(b.inst[s][o]);
@@ -1297,6 +1328,10 @@ FLASHMEM void AppLoom::LinkCopy() {
   if (a.sid && b.sid) {  // the same tune and settings
     b.sid->LinkFrom(*a.sid);
     b.sid->ApplyAll();
+  }
+  if (a.dream && b.dream) {  // the same settings (the engine plays on one track only)
+    b.dream->CopyFrom(*a.dream);
+    b.dream->ApplyAll();
   }
   for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
     SetChoice(1 - master, s, a.choice[s]);
@@ -1747,25 +1782,30 @@ FLASHMEM void AppLoom::ModulateAll() {
 // the CV outputs: 0..1 -> 0..10 V. They go out through the shared IO frame,
 // which the core writes to the jacks every tick (writing the DAC directly
 // was overwritten by it)
-// SID playing a track's source (its CV on): A B C its voices' pitch, E F G
-// their gates, over the outputs' own sources (track A first)
-FLASHMEM loom::SidDevice* AppLoom::CvSid() const {
+// a source playing the CV outputs (SID's voices, DREAM's layers; its CV
+// on): the outputs it claims, over their own sources (track A first)
+FLASHMEM loom::CvSource* AppLoom::CvSrc() const {
   using namespace loom;
-  for (auto& tr : tracks)
+  for (auto& tr : tracks)  // a DREAM at CV ONLY first: the outputs are what it is for
+    if (tr.choice[SOURCE] == 5 && tr.dream && tr.dream->CvOnly()) return tr.dream;
+  for (auto& tr : tracks) {
     if (tr.choice[SOURCE] == 4 && tr.sid && tr.sid->CvOn()) return tr.sid;
+    if (tr.choice[SOURCE] == 5 && tr.dream && tr.dream->CvOn()) return tr.dream;
+  }
   return nullptr;
 }
-// the SID voice output o plays (0-2 pitch, 3-5 gate), or -1
-FLASHMEM static int SidOut(int o) { return o < 3 ? o : o >= 4 && o < 7 ? o - 1 : -1; }
 
 FLASHMEM float AppLoom::OutLevel(int o) const {
   using namespace loom;
   const int s = cv_out_src[o];
   float v = -1.0f;
   if (cv_out_bypass & (1 << o)) return 0.0f;
-  const int so = SidOut(o);
-  if (const SidDevice* sd = so >= 0 ? CvSid() : nullptr)  // (0..1: pitch over the 8.5 octaves)
-    return so < 3 ? constrain(sd->cv_semis[so] / (12.0f * 8.5f), 0.0f, 1.0f) : sd->cv_gate[so - 3] ? 1.0f : 0.0f;
+  if (const CvSource* cs = CvSrc()) {  // (0..1: a pitch over the 8.5 octaves)
+    float cv = 0.0f;
+    const int k = cs->CvOut(o, cv);
+    if (k == CvSource::CV_PITCH) return constrain(cv / (12.0f * 8.5f), 0.0f, 1.0f);
+    if (k == CvSource::CV_LEVEL) return constrain(cv, 0.0f, 1.0f);
+  }
   if (s >= OUT_CLOCK) v = clock_running && tempo_clock->out < 0.5f ? 1.0f : 0.0f;
   else if (s >= OUT_SHARED) v = tracks[0].mod_out[NUM_MODS + s - OUT_SHARED];
   else if (s >= OUT_R) v = tracks[1].mod_out[s - OUT_R];
@@ -1785,16 +1825,18 @@ FLASHMEM const loom::Modulator* AppLoom::OutMod(int o) const {
 }
 
 FLASHMEM void AppLoom::WriteOutputs() {
-  loom::SidDevice* sd = CvSid();
-  if (sd) sd->CvTick();
+  loom::CvSource* cs = CvSrc();
+  if (cs) cs->CvTick();
   for (int o = 0; o < loom::NUM_CV_OUTS && o < DAC_CHANNEL_COUNT; o++) {
-    // SID's pitches: a semitone is a semitone (the module's calibrated octave)
-    if (sd && SidOut(o) >= 0 && SidOut(o) < 3 && !(loom::cv_out_bypass & (1 << o))) {
-      HS::frame.Out(DAC_CHANNEL(o), int(std::min(sd->cv_semis[o], 12.0f * 8.5f) * (ONE_OCTAVE / 12.0f) + 0.5f));
+    float cv = 0.0f;
+    const int k = cs ? cs->CvOut(o, cv) : loom::CvSource::CV_NONE;
+    // the source's pitches: a semitone is a semitone (the module's calibrated octave)
+    if (k == loom::CvSource::CV_PITCH && !(loom::cv_out_bypass & (1 << o))) {
+      HS::frame.Out(DAC_CHANNEL(o), int(constrain(cv, 0.0f, 12.0f * 8.5f) * (ONE_OCTAVE / 12.0f) + 0.5f));
       continue;
     }
-    // (SID's gates: full 10 V, whatever the output's own source would scale)
-    const loom::Modulator* m = sd && SidOut(o) >= 0 ? nullptr : OutMod(o);
+    // (its levels and gates: 0..10 V, whatever the output's own source would scale)
+    const loom::Modulator* m = k ? nullptr : OutMod(o);
     // on notes: 4 octaves of the module's pitch (calibrated: 1.2 V per
     // octave on the 2X0, 1 V on the SX0), so a semitone is a semitone
     if (m && m->Pitched() && !(loom::cv_out_bypass & (1 << o)))
@@ -1852,6 +1894,19 @@ FLASHMEM void AppLoom::MainLoop() {
         if (tr.warp->thru_changed) { tr.warp->thru_changed = false; Repatch(t); }
       }
       if (tr.reel && tr.choice[SOURCE] == 1) tr.reel->Idle();
+      if (tr.dream && tr.choice[SOURCE] == 5) tr.dream->Idle();
+      // DREAM's SPACE drives the track's REPEAT (its reverb's LEVEL fully,
+      // the delay's by half) when REPEAT is in; else the engine's own space
+      {
+        DreamBase* dd = tr.dream && tr.choice[SOURCE] == 5 && tr.dream->ok() ? tr.dream : nullptr;
+        EchoDevice* e = Repeat(t);
+        if (e && (tr.bypass & (1u << ECHO))) e = nullptr;
+        if (dd) dd->SpaceOut(e != nullptr);
+        const int sp = dd && e ? dd->cur[DreamBase::SPACE] : 0;
+        for (int o = 1; o < MAX_OPTIONS; o++)  // (a REPEAT left behind: let go)
+          if (Device* r = tr.inst[ECHO][o]; r && r != e) { r->Link(0, -1, 0); r->Link(1, -1, 0); }
+        if (e) { e->Link(0, 4, sp); e->Link(1, 0, sp / 2); }
+      }
       for (int s = SOURCE + 1; s < SLOT_COUNT; s++)  // devices with main-loop work (STRETCH)
         if (Device* d = tr.current(s)) d->Idle();
     }
@@ -1956,13 +2011,17 @@ FLASHMEM void AppLoom::MainLoop() {
       // USB 'E' (testing): every device on both tracks back to its defaults
       g_heavy_request = 0;
       for (Track& tr : tracks) {
-        Device* own[] = {tr.input, tr.reel, tr.player, tr.warp, tr.sid, tr.mix};
+        Device* own[] = {tr.input, tr.reel, tr.player, tr.warp, tr.sid, tr.dream, tr.mix};
         for (Device* d : own) if (d) d->Reset();
         for (int s = SOURCE + 1; s < SLOT_COUNT; s++)
           for (Device* d : tr.inst[s]) if (d) d->Reset();
       }
       dirty = true;
       Serial.println("DEFAULTS: every device");
+    } else if (g_heavy_request == 5) {  // USB 'S': a snapshot, what is going on saved
+      g_heavy_request = 0;
+      SaveFile();
+      Serial.println("Loom: snapshot saved");
     } else if (g_heavy_request == 2) {
       g_heavy_request = 0;
       dirty = false;
@@ -1978,7 +2037,7 @@ FLASHMEM void AppLoom::MainLoop() {
         Track& tr = tracks[t];
         for (int s = 0; s < SLOT_COUNT; s++)
           for (int o = 0; o < MAX_OPTIONS; o++) fresh(tr.inst[s][o]);
-        fresh(tr.input); fresh(tr.reel); fresh(tr.player); fresh(tr.warp); fresh(tr.sid); fresh(tr.mix);
+        fresh(tr.input); fresh(tr.reel); fresh(tr.player); fresh(tr.warp); fresh(tr.sid); fresh(tr.dream); fresh(tr.mix);
         for (int m = 0; m < NUM_MODS; m++)
           for (int k = 0; k < MOD_TYPES; k++) fresh(tr.mods[m][k]);
       }
@@ -2159,7 +2218,18 @@ FLASHMEM void AppLoom::MainLoop() {
       if ((t == track || linked) && pl && loom::tracks[t].choice[loom::SOURCE] == 2 && pl->ActionLit(0)) pl->Action(0);
       loom::SidDevice* sd = loom::tracks[t].sid;
       if ((t == track || linked) && sd && loom::tracks[t].choice[loom::SOURCE] == 4) sd->Stop();
+      loom::DreamBase* dd = loom::tracks[t].dream;
+      if ((t == track || linked) && dd && loom::tracks[t].choice[loom::SOURCE] == 5) dd->Stop();
     }
+  }
+  // DREAM: the setting grabbed (STYLE browses while it is), B's hold so far
+  loom::g_edit_dev = view == DEVICE && editing && !mod_mode ? Focused() : nullptr;
+  loom::g_edit_p = int8_t(cursor);
+  loom::g_dream_hold = regrow_held ? std::min(1.0f, (millis() - regrow_hold) / float(HOLD_MS)) : 0.0f;
+  loom::g_dream_hold_track = int8_t(track);
+  if (regrow_held && millis() - regrow_hold >= HOLD_MS) {  // DREAM: a fresh piece
+    regrow_held = false;
+    if (loom::DreamBase* dd = loom::tracks[track].dream) dd->Regrow();
   }
   if (undo_held && millis() - undo_hold >= HOLD_MS) {
     undo_held = false;
@@ -2259,6 +2329,12 @@ FLASHMEM void AppLoom::MainLoop() {
       Serial.printf("  %c %s strikes %s %s / %s %s\n", t ? 'R' : 'L', d->def.tag,
         d->def.actions[0], a0, d->def.actions[1], a1);
     });
+  }
+  {
+    const loom::DreamLink& L = loom::g_dream_link;
+    Serial.printf("  DRM link: A %s %lu ms ago, pulses %lu, deg %d, root %d mode %d, tempo %d | B %s, flips %lu, degs %lu, deg %d\n",
+      L.playing ? "playing" : "resting", L.seen ? (unsigned long)(millis() - L.seen) : 0ul, (unsigned long)L.pulses,
+      L.deg, L.root, L.mode, L.tempo, L.b_linked ? "linked" : "free", (unsigned long)L.b_flips, (unsigned long)L.b_degs, L.b_deg);
   }
   Serial.printf("  cv outs");
   for (int o = 0; o < loom::NUM_CV_OUTS; o++) { char b[12]; loom::FormatOutSource(loom::cv_out_src[o], b, sizeof(b), false); Serial.printf(" %d:%s", o + 1, b); }
@@ -2426,6 +2502,11 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
       if (col == SOURCE && tracks[track].choice[SOURCE] == 4 && sd && sd->ActionLit(0) &&
           (view == CHAIN || (view == DEVICE && !focus_mod && !mod_mode && !trig_mode && !Listing())))
         stop_armed = stop_held = true;
+      // ... and a playing DREAM
+      const DreamBase* dd = tracks[track].dream;
+      if (col == SOURCE && tracks[track].choice[SOURCE] == 5 && dd && dd->ActionLit(0) &&
+          (view == CHAIN || (view == DEVICE && !focus_mod && !mod_mode && !trig_mode)))
+        stop_armed = stop_held = true;
       // a running WAVE / PICK / TREADLE on its page: held, it stops
       Modulator* sm = view == DEVICE && focus_mod && mod_cursor < CLK_CURSOR ? ModAt(track, mod_cursor) : nullptr;
       stop_mod = sm && sm->Stops() && !sm->stopped ? sm : nullptr;
@@ -2453,6 +2534,9 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
     if (event.type == UI::EVENT_BUTTON_DOWN) {
       clear_held = view == DEVICE && !focus_mod && col == SOURCE && tracks[track].choice[SOURCE] == 1;
       clear_hold = millis();
+      regrow_held = col == SOURCE && tracks[track].choice[SOURCE] == 5 && tracks[track].dream && tracks[track].dream->ok()
+          && (view == CHAIN || (view == DEVICE && !focus_mod && !mod_mode && !trig_mode));
+      regrow_hold = millis();
       // a device whose B plays while held (WARP's PLAY): on at once
       loom::Device* hd = view == DEVICE && !focus_mod && !mod_mode && !trig_mode && !Listing() ? Focused() : nullptr;
       if (hd && hd->Holds(1) && !BypassKey()) {
@@ -2462,6 +2546,7 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
       }
     } else if (event.type == UI::EVENT_BUTTON_PRESS || event.type == UI::EVENT_BUTTON_LONG_RELEASE) {
       clear_held = false;
+      regrow_held = false;
       if (held_dev) {  // ... and off when let go (no action besides)
         held_dev->Release(1);
         if (loom::Device* tw = Twin(held_dev)) tw->Release(1);
@@ -2808,6 +2893,8 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
     if (!left) amt = constrain(amt + dir * TurnSpeed(&amt, 0, dir, 4), -100, 100);  // (spun fast: up to 4 a click)
     else StepModOption(d, cursor, dir);
     d->Refresh(cursor);
+    Mirror(d, cursor);
+  } else if (left && editing && d->AltShown(cursor) && d->TurnAltLeft(cursor, dir)) {
     Mirror(d, cursor);
   } else if (left && d->AltName(cursor)) {
     // a setting with a second value (ROOM / GLINT): left shows the setting,
@@ -3259,7 +3346,8 @@ FLASHMEM void AppLoom::DrawChain() const {
                       : c == SOURCE ? (tr.choice[SOURCE] == 1 ? PSTR("SPL")
                                        : tr.choice[SOURCE] == 2 ? PSTR("SHU")
                                        : tr.choice[SOURCE] == 3 ? PSTR("WRP")
-                                       : tr.choice[SOURCE] == 4 ? PSTR("SID") : PSTR("IN"))
+                                       : tr.choice[SOURCE] == 4 ? PSTR("SID")
+                                       : tr.choice[SOURCE] == 5 ? PSTR("DRM") : PSTR("IN"))
                       : c == RESONATOR && tr.choice[c] == 2 ? PSTR("BTR")  // BEATER
                       : c == RESONATOR && tr.choice[c] == 3 ? PSTR("TWL")  // TWILL
                       : c == SPRAY && tr.choice[c] == 2 ? PSTR("DFT")      // DRAFT
@@ -3351,7 +3439,7 @@ FLASHMEM void AppLoom::DrawChain() const {
   // with where to
   if (Asking()) {
     char t[24];
-    snprintf(t, sizeof(t), "%s? LOOP GOES A:YES", ask_choice == 0 ? "IN" : ask_choice == 2 ? "SHU" : ask_choice == 4 ? "SID" : "WARP");
+    snprintf(t, sizeof(t), "%s? LOOP GOES A:YES", ask_choice == 0 ? "IN" : ask_choice == 2 ? "SHU" : ask_choice == 4 ? "SID" : ask_choice == 5 ? "DREAM" : "WARP");
     graphics.clearRect(0, 55, 128, 9);
     gfxPrint(1, 56, t);
     gfxInvert(0, 55, 128, 9);
@@ -3766,7 +3854,7 @@ FLASHMEM void AppLoom::DrawClockPage() const {
       if (editing) gfxInvert(47, y - 1, 6 * int(strlen(buf)) + 1, 9);
     }
   }
-  // "Loom Beta 2 40720f32": 20 characters, the screen's width
+  // "Loom Beta 3 40720f32": 20 characters, the screen's width
   gfxPrint(2, 47, OC::Strings::VERSION);
   gfxPrint(2 + 6 * int(strlen(OC::Strings::VERSION)), 47, OC::Strings::BUILD_TAG);
   // four beats, the current one filled while running
@@ -3874,9 +3962,11 @@ FLASHMEM void AppLoom::DrawOutputs() const {
     snprintf(buf, sizeof(buf), "%c", 'A' + o);
     gfxPrint(x + 2, y + 2, buf);
     const bool byp = cv_out_bypass & (1 << o);
-    const bool sid = CvSid() && SidOut(o) >= 0;  // played by SID's voices
+    float cv;
+    const CvSource* cs = CvSrc();
+    const bool src = cs && cs->CvOut(o, cv);  // played by the source (SID, DREAM)
     if (byp) snprintf(buf, sizeof(buf), "BP");
-    else if (sid) snprintf(buf, sizeof(buf), "%c%d", SidOut(o) < 3 ? 'P' : 'G', SidOut(o) % 3 + 1);
+    else if (src) cs->CvName(o, buf, sizeof(buf), false);
     else FormatOutSource(cv_out_src[o], buf, sizeof(buf), false);
     const int w = 6 * int(strlen(buf));
     gfxPrint(x + bw - 2 - w, y + 2, buf);
@@ -3891,8 +3981,9 @@ FLASHMEM void AppLoom::DrawOutputs() const {
   }
   const int o = mod_cursor - OUT_CURSOR;
   char buf[24];
-  if (CvSid() && SidOut(o) >= 0)
-    snprintf(buf, sizeof(buf), "SID voice %d %s", SidOut(o) % 3 + 1, SidOut(o) < 3 ? "pitch" : "gate");
+  float cv;
+  if (CvSrc() && CvSrc()->CvOut(o, cv))
+    CvSrc()->CvName(o, buf, sizeof(buf), true);
   else
   FormatOutSource(cv_out_src[o], buf, sizeof(buf), true);
   if (cv_out_bypass & (1 << o)) {
@@ -4238,6 +4329,7 @@ FLASHMEM void AppLoom::ForEachDevice(F f) const {
     if (tr.player) f(tr.player);
     if (tr.warp) f(tr.warp);
     if (tr.sid) f(tr.sid);
+    if (tr.dream) f(tr.dream);
     f(tr.mix);
     for (int s = SOURCE + 1; s < SLOT_COUNT; s++)
       for (auto d : tr.inst[s]) if (d) f(d);
@@ -4363,6 +4455,9 @@ FLASHMEM void AppLoom::SaveFile() const {
     }
     f.write(k, sizeof(k));
   }
+  // ... and DREAM's settings
+  f.write("N", 1);
+  for (auto& tr : tracks) WriteDevice(f, tr.dream);
   f.close();
   fs.remove(SAVE_FILE);
   fs.rename(SAVE_TMP, SAVE_FILE);
@@ -4575,6 +4670,8 @@ FLASHMEM void AppLoom::LoadFile() {
                 if (f.read(k, sizeof(k)) != sizeof(k)) break;
                 if (tr.sid) tr.sid->RestoreChips(k);
               }
+            if (f.read(&mark, 1) == 1 && mark == 'N')  // DREAM
+              for (auto& tr : tracks) if (!ReadDevice(f, tr.dream)) break;
           }
         }
       }

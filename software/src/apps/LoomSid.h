@@ -51,7 +51,7 @@ PROGMEM static const DeviceDef SID_DEF = {
   {"", ""},
 };
 
-class SidDevice : public Device, public AudioStream {
+class SidDevice : public Device, public AudioStream, public CvSource {
 public:
   enum { FILE_, SONG, CHIP, LEVEL, V1, V2, V3, FILT };
   // V1-V3: level, PAN their second value; FILT: on / off, CV its second
@@ -59,6 +59,7 @@ public:
   void FormatMode(int p, char* buf, size_t n) const override;
   // two or three chips: V1-V3's L knob picks the chip (their mode), no PAN
   bool Multi() const { return multi; }
+  int Chips() const { return loaded >= 0 ? nsid : 1; }  // (the CPU guard: each chip costs)
   void NudgeMode(int p, int dir) override;
   bool NameStop(int p) const override { return multi && p >= V1 && p <= V3 ? false : Device::NameStop(p); }
   int ModeCount(int p) const override { return multi && p >= V1 && p <= V3 ? nsid : Device::ModeCount(p); }
@@ -100,8 +101,22 @@ public:
   // the CV outputs: once a tick (main loop) the voices' pitch in semitones
   // above C0 and their gates; a note started again within the tick takes
   // its gate down for that tick, so an envelope fires again
-  bool CvOn() const { return mode[FILT] != 0 && ok(); }
-  void CvTick();
+  bool CvOn() const override { return mode[FILT] != 0 && ok(); }
+  void CvTick() override;
+  // A B C the voices' pitch, E F G their gates
+  static int VoiceOut(int o) { return o < 3 ? o : o >= 4 && o < 7 ? o - 1 : -1; }
+  int CvOut(int o, float& v) const override {
+    const int so = VoiceOut(o);
+    if (so < 0) return CV_NONE;
+    if (so < 3) { v = cv_semis[so]; return CV_PITCH; }
+    v = cv_gate[so - 3] ? 1.0f : 0.0f;
+    return CV_LEVEL;
+  }
+  void CvName(int o, char* buf, size_t n, bool long_name) const override {
+    const int so = VoiceOut(o);
+    if (long_name) snprintf(buf, n, "SID voice %d %s", so % 3 + 1, so < 3 ? "pitch" : "gate");
+    else snprintf(buf, n, "%c%d", so < 3 ? 'P' : 'G', so % 3 + 1);
+  }
   float cv_semis[3] = {};
   bool cv_gate[3] = {};
   bool HeaderInfo(char* buf, size_t n) const override;
