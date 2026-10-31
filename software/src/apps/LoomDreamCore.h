@@ -561,7 +561,10 @@ FLASHMEM void DreamDevice::Idle() {
     if (at_seen)
       for (int n = 0; n < 128; n++)
         if (key_deg[n] != NO_KEY && key_deg[n] >= 0) lp = std::max(lp, std::max(poly_at[n], chan_at));
-    en_lead_press = std::min<uint8_t>(lp, 127);
+    // (Sascha: it wobbled at the slightest touch) the first third does
+    // nothing, then a curve (squared): full only pressed right down
+    const float x = std::max(0.0f, (float(std::min<uint8_t>(lp, 127)) - 42.0f) / 85.0f);
+    en_lead_press = uint8_t(127.0f * x * x + 0.5f);
   }
   // the black keys' pressure: each effect as deep as its keys pressed
   if (midi_fx && at_seen) {

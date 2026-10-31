@@ -1179,6 +1179,10 @@ DREAM_RAM2 static uint8_t ar_cue;   /* (a moment for the Lead's theme: Solo ente
 static float ar_cr_f = 5000.0f, ar_cr_g = 1.0f;
 DREAM_RAM2 static float ar_push;
 DREAM_RAM2 static float ar_cr_env;   /* (the swell; the grid's Take-off) */
+DREAM_RAM2 static float tk_env;
+DREAM_RAM2 static float tk_f;
+DREAM_RAM2 static float tk_ph;   /* (Loom: Take-off's sub drop, ~110 Hz falling to 35, over ~1.5 s) */
+DREAM_RAM2 static int tk_st;   /* (Take-off's crash: stereo; the arc's own stays as it was) */
 DREAM_RAM2 static uint32_t ar_rng;
 DREAM_RAM2 volatile uint8_t en_swell;
 #ifdef EN_HOST
@@ -3590,8 +3594,9 @@ DREAM_FLASH static inline void echoes(float in, float *el, float *er)
             tape[tape_w] = s;
         } else {
             const float nova = fx_nova;          /* (the grid's Supernova) */
-            float g = fm_minf(echo_fb + 0.12f * perf_echo + 0.1f * dub_up + 0.35f * nova,
-                              fb_cap + 0.3f * nova);   /* (Dub: past the knob; Supernova, past full) */
+            float g = fm_minf(echo_fb + 0.12f * perf_echo + 0.1f * dub_up + 0.7f * nova,
+                              fb_cap + 0.3f * nova);   /* (Dub: past the knob; Supernova, past full: Loom, Sascha
+                                                  * heard nothing at 0.35, twice that) */
             if (ec_pp)
                 g *= g;                          /* (two repeats a turn round: the feedback squared) */
             tape_lp += tape_lpc * (f1 - tape_lp);   /* each time round: thinner, darker */
@@ -4015,6 +4020,7 @@ DREAM_FLASH void en_init(void)
     memset(phz, 0, sizeof phz);                  /* (and the Drone's phaser from the top) */
     ph_last[0] = ph_last[1] = ph_lfo = 0.0f;
     ar_cr_env = 0.0f;                            /* (no Crash ringing on) */
+    tk_env = 0.0f;
     for (i = 0; i < CL_LEN; i++)
         cl_buf[i] = 0;
     for (i = 0; i < CL_NG; i++)
@@ -5041,7 +5047,7 @@ DREAM_FLASH static void fx_ctl(uint32_t n)                   /* once a chunk: th
     fx_em = ec * fx_ts;
     fx_ek = fx_ts > 1.01f ? 0.004f : 0.001f;
     fx_rep += ((on >> EN_FX_REPEAT & 1u ? FXD(EN_FX_REPEAT) : 0.0f) - fx_rep) * fm_minf(t / 0.03f, 1.0f);
-    fx_nova += ((on >> EN_FX_SUPERNOVA & 1u ? FXD(EN_FX_SUPERNOVA) : 0.0f) - fx_nova) * fm_minf(t / (on >> EN_FX_SUPERNOVA & 1u ? 0.5f : 0.2f), 1.0f);
+    fx_nova += ((on >> EN_FX_SUPERNOVA & 1u ? FXD(EN_FX_SUPERNOVA) : 0.0f) - fx_nova) * fm_minf(t / (on >> EN_FX_SUPERNOVA & 1u ? 0.25f : 0.2f), 1.0f);
     /* the master filter's targets: Low-pass down to 350 Hz, High-pass up to 1.3 kHz */
     lpt = on >> EN_FX_LOWPASS & 1u ? 8.45f : 14.2f;
     hpt = on >> EN_FX_HIGHPASS & 1u ? 10.35f : 4.3f;
@@ -5067,7 +5073,9 @@ DREAM_FLASH static void fx_ctl(uint32_t n)                   /* once a chunk: th
     fx_wash += ((on >> EN_FX_WASH & 1u ? FXD(EN_FX_WASH) : 0.0f) - fx_wash) * fm_minf(t / (on >> EN_FX_WASH & 1u ? 0.4f : 0.8f), 1.0f);
     if (rise >> EN_FX_TAKEOFF & 1u)              /* Take-off: the arc's Crash, now (-9 dB: over any music, not only
                                                   * the ending's full) */
-        ar_cr_env = 1.0f, ar_cr_f = 5000.0f, ar_cr_g = 0.35f * FXD(EN_FX_TAKEOFF);
+        ar_cr_env = 1.0f, ar_cr_f = 5000.0f, ar_cr_g = 0.55f * FXD(EN_FX_TAKEOFF),   /* (Loom, Sascha: fatter:
+                                                  * louder, the noise in stereo, a sub drop under it) */
+        tk_env = FXD(EN_FX_TAKEOFF), tk_f = 110.0f, tk_st = 1;
     tw_amp += ((on >> EN_FX_TWITTER & 1u ? FXD(EN_FX_TWITTER) : 0.0f) - tw_amp) * fm_minf(t / (on >> EN_FX_TWITTER & 1u ? 0.02f : 0.3f), 1.0f);
     /* Shimmer: its feedback in over ~50 ms, out over ~0.15 s; once out (~1 s after it is let go), the shifter stops */
     if (on >> EN_FX_SHIMMER & 1u || fx_shm > 0.0f) {
@@ -5717,23 +5725,40 @@ DREAM_FLASH static void render_lead(uint32_t n)
 /* (BERLIN) the arc's Crash: a take-off, noise through a band-pass falling five octaves from ~5 kHz in 4 s, dying in
  * ~4 s, mostly into the echo */
 DREAM_RAM2 static float ar_cr_s[2];
+DREAM_RAM2 static float ar_cr_s2[2];   /* (Loom: Take-off's right side, its own noise) */
 DREAM_FLASH static void render_crash(uint32_t n)
 {
     float c[4], bp;
     uint32_t j;
-    if (ar_cr_env < 1e-4f)
+    if (ar_cr_env < 1e-4f && tk_env < 1e-4f)
         return;
     svf_coefs(c, ar_cr_f, 0.25f);
     for (j = 0; j < n; j++) {
-        float x;
+        float x, xr, bp2, sub;
         svf_lp(c, ar_cr_s, atm_noise(), &bp);
         x = 0.5f * ar_cr_g * bp * ar_cr_env;
-        mixl[j] += x;
-        mixr[j] += x;
-        esend[j] += 1.2f * x;
-        rsend[j] += 0.5f * x;
+        xr = x;
+        if (tk_st) {                             /* (Take-off: the right side its own noise, wide) */
+            svf_lp(c, ar_cr_s2, atm_noise(), &bp2);
+            xr = 0.5f * ar_cr_g * bp2 * ar_cr_env;
+        }
+        sub = 0.0f;
+        if (tk_env > 1e-4f) {                    /* (Take-off's sub drop, under it, dry) */
+            sub = 0.45f * tk_env * sine(tk_ph);
+            tk_ph += tk_f * (1.0f / EN_SR);
+            if (tk_ph >= 1.0f)
+                tk_ph -= 1.0f;
+            tk_f = fm_maxf(tk_f * 0.99997f, 35.0f);
+            tk_env *= 0.99992f;
+        }
+        mixl[j] += x + sub;
+        mixr[j] += xr + sub;
+        esend[j] += 0.6f * (x + xr);
+        rsend[j] += 0.25f * (x + xr);
         ar_cr_env *= 0.99996f;
     }
+    if (ar_cr_env < 1e-4f)
+        tk_st = 0;
     ar_cr_f = fm_maxf(ar_cr_f * fm_exp2f(-(float)n * (5.0f / (4.0f * EN_SR))), 120.0f);
 }
 
@@ -5804,7 +5829,7 @@ DREAM_FLASH static void render_chunk(int32_t *out, uint32_t n, float gain)
     eg += (1.0f - eg) * fx_wash;                 /* Wash: everything into the echo */
     {   /* (Loom, Sascha 2026-10-31: Repeat and Supernova were silent with the echo turned down) while held, the
          * echo's send opened to half at least, so their repeats are heard whatever ECHO is */
-        const float fl = 0.5f * fm_maxf(fx_rep, fx_nova) * ein_gain;
+        const float fl = fm_maxf(0.5f * fx_rep, 0.9f * fx_nova) * ein_gain;   /* (Supernova: nearly all in) */
         eg = fm_maxf(eg, fl);
     }
     epk = en_echo_pk;
