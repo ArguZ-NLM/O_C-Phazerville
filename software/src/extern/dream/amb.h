@@ -160,6 +160,12 @@ enum { EN_FX_REPEAT, EN_FX_TIME, EN_FX_TAPESTOP, EN_FX_SHIMMER, EN_FX_LOWPASS, E
        EN_NFX };
 extern const char *const EN_FX_NAME[EN_NFX];
 void en_fx(uint32_t mask);
+/* (Loom) each effect's depth while held, 0..100 (100: as the FM-1's; Loom: the keys' pressure, Take-off's crash the
+ * key's velocity); written by the UI, read once a chunk */
+extern volatile uint8_t en_fx_depth[EN_NFX];
+/* (Loom) the white keys' pressure on the Lead, 0..127: its vibrato deeper (to half a semitone more) and its filter
+ * open (to three times); written by the UI */
+extern volatile uint8_t en_lead_press;
 /* (BERLIN) the black keys' moves, held: every layer's filter opened together (Rise, +2 octaves), closed (Close, -4),
  * both sequences three scale steps up (Transpose) */
 enum { EN_MV_RISE = 1, EN_MV_CLOSE = 2, EN_MV_TRANSPOSE = 4 };

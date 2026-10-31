@@ -188,6 +188,10 @@ private:
   // the MIDI keys' black keys: the effects, several at once (key_deg holds
   // -1 - the effect for a black key held)
   uint16_t midi_fx = 0;     // the effects held by MIDI keys, a bit each
+  // ... how deep each goes, 0..100: the keys' pressure (aftertouch, poly or
+  // channel; 40 at rest, 100 pressed down: once the keyboard has sent any,
+  // else 100), Take-off's crash its key's velocity
+  uint8_t midi_fx_depth[5] = {100, 100, 100, 100, 100};
   uint16_t fx_sent = 0;     // MIDI's and CV 2's together, as sent
   static int BlackFx(int note);
   volatile float gain = 1.0f;
@@ -538,6 +542,7 @@ FLASHMEM void DreamDevice::Idle() {
     if (e.vel && (BLACK_PC >> (e.note % 12) & 1)) {  // a black key: its effect, held
       const int fx = BlackFx(e.note);
       if (fx >= 0) { kd = int8_t(-1 - fx); midi_fx |= 1u << fx; }
+      if (fx == 0) midi_fx_depth[0] = uint8_t(30 + 70 * e.vel / 127);  // (Take-off: the strike)
       g_dream_link.key_took = int16_t(-1 - fx);
     } else if (e.vel) {
       const int deg = KeyDeg(e.note);
@@ -548,6 +553,23 @@ FLASHMEM void DreamDevice::Idle() {
       midi_fx &= ~(1u << (-1 - kd));
       kd = NO_KEY;
     } else if (kd != NO_KEY) { en_lead_key(kd, 0); kd = NO_KEY; }
+  }
+  // the white keys' pressure on the Lead (its vibrato, its filter): the
+  // hardest pressed of the keys held
+  {
+    uint8_t lp = 0;
+    if (at_seen)
+      for (int n = 0; n < 128; n++)
+        if (key_deg[n] != NO_KEY && key_deg[n] >= 0) lp = std::max(lp, std::max(poly_at[n], chan_at));
+    en_lead_press = std::min<uint8_t>(lp, 127);
+  }
+  // the black keys' pressure: each effect as deep as its keys pressed
+  if (midi_fx && at_seen) {
+    uint8_t p[5] = {};
+    for (int n = 0; n < 128; n++)
+      if (key_deg[n] != NO_KEY && key_deg[n] < 0)
+        p[-1 - key_deg[n]] = std::max<uint8_t>(p[-1 - key_deg[n]], std::max(poly_at[n], chan_at));
+    for (int i = 1; i < 5; i++) midi_fx_depth[i] = uint8_t(40 + 60 * std::min<int>(p[i], 127) / 127);
   }
   CvKeys();
 }
@@ -607,14 +629,18 @@ FLASHMEM void DreamDevice::CvKeys() {
   cv_fx_on = int8_t(fx);
   // the effects held, MIDI's and CV 2's, to the engine
   const uint16_t held = midi_fx | (fx >= 0 ? 1u << fx : 0u);
+  static const uint8_t FX[8] = {EN_FX_TAKEOFF, EN_FX_SUPERNOVA, EN_FX_TWITTER, EN_FX_REPEAT,
+                                EN_FX_SHIMMER, EN_FX_FREEZE, EN_FX_OCTAVE, EN_FX_RETURN};
+  static const uint8_t MV[3] = {EN_MV_RISE, EN_MV_CLOSE, EN_MV_TRANSPOSE};
+  // the five the black keys hold, of the FM-1's eleven (0..7 its grid's
+  // effects, 8..10 Rise, Close, Transpose): its first five
+  static const uint8_t PICK[5] = {0, 1, 2, 3, 4};
+  // how deep each goes, all the time (the pressure moves while held): a
+  // MIDI key's pressure, CV 2's full
+  for (int i = 0; i < 5; i++)
+    if (PICK[i] < 8) en_fx_depth[FX[PICK[i]]] = (midi_fx >> i & 1) && !(fx == i) ? midi_fx_depth[i] : 100;
   if (held != fx_sent) {
-    static const uint8_t FX[8] = {EN_FX_TAKEOFF, EN_FX_SUPERNOVA, EN_FX_TWITTER, EN_FX_REPEAT,
-                                  EN_FX_SHIMMER, EN_FX_FREEZE, EN_FX_OCTAVE, EN_FX_RETURN};
-    static const uint8_t MV[3] = {EN_MV_RISE, EN_MV_CLOSE, EN_MV_TRANSPOSE};
     uint32_t fxm = 0, mvm = 0;
-    // the five the black keys hold, of the FM-1's eleven (0..7 its grid's
-    // effects, 8..10 Rise, Close, Transpose): its first five
-    static const uint8_t PICK[5] = {0, 1, 2, 3, 4};
     for (int i = 0; i < 5; i++)
       if (held >> i & 1) { const int k = PICK[i]; if (k < 8) fxm |= 1u << FX[k]; else mvm |= MV[k - 8]; }
     en_fx(fxm);

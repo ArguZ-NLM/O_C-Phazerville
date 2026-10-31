@@ -546,6 +546,8 @@ DREAM_FLASH void en_follow_deg(int d) { post(C_DEG, d, 0); }
 DREAM_FLASH void en_mute(uint32_t m) { post(C_MUTE, (int)(m & 0xFFu), 0); }
 DREAM_FLASH void en_perf(uint32_t f) { post(C_PERF, (int)(f & 0xFFu), 0); }
 DREAM_FLASH void en_fx(uint32_t m) { post(C_FX, 0, (int)(m & 0xFFFFu)); }
+volatile uint8_t en_fx_depth[EN_NFX] = {100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100};
+volatile uint8_t en_lead_press = 0;
 DREAM_FLASH void en_move(uint32_t m) { post(C_MOVE, 0, (int)(m & 0xFFu)); }
 DREAM_RAM2 static uint8_t mac_sent;   /* (the UI's turns of the master actions, counted: 6 bits) */
 DREAM_RAM2 volatile uint8_t en_mac_got;   /* (the engine's: the count with the last it took) */
@@ -5026,6 +5028,7 @@ DREAM_RAM2 static float tw_pan;
 DREAM_RAM2 static int32_t tw_wait;
 static uint32_t tw_rng = 0x1F83D9ABu;
 
+#define FXD(i) ((float)en_fx_depth[i] * 0.01f)   /* (Loom) an effect's depth while held */
 DREAM_FLASH static void fx_ctl(uint32_t n)                   /* once a chunk: the effects' easing, the filters' coefficients */
 {
     const float t = (float)n / EN_SR;
@@ -5037,8 +5040,8 @@ DREAM_FLASH static void fx_ctl(uint32_t n)                   /* once a chunk: th
     ec = on >> EN_FX_TIME & 1u ? (echo_len_t * 2.0f <= (float)(TAPE_N - 8) ? 2.0f : 0.5f) : 1.0f;
     fx_em = ec * fx_ts;
     fx_ek = fx_ts > 1.01f ? 0.004f : 0.001f;
-    fx_rep += ((on >> EN_FX_REPEAT & 1u ? 1.0f : 0.0f) - fx_rep) * fm_minf(t / 0.03f, 1.0f);
-    fx_nova += ((on >> EN_FX_SUPERNOVA & 1u ? 1.0f : 0.0f) - fx_nova) * fm_minf(t / (on >> EN_FX_SUPERNOVA & 1u ? 0.5f : 0.2f), 1.0f);
+    fx_rep += ((on >> EN_FX_REPEAT & 1u ? FXD(EN_FX_REPEAT) : 0.0f) - fx_rep) * fm_minf(t / 0.03f, 1.0f);
+    fx_nova += ((on >> EN_FX_SUPERNOVA & 1u ? FXD(EN_FX_SUPERNOVA) : 0.0f) - fx_nova) * fm_minf(t / (on >> EN_FX_SUPERNOVA & 1u ? 0.5f : 0.2f), 1.0f);
     /* the master filter's targets: Low-pass down to 350 Hz, High-pass up to 1.3 kHz */
     lpt = on >> EN_FX_LOWPASS & 1u ? 8.45f : 14.2f;
     hpt = on >> EN_FX_HIGHPASS & 1u ? 10.35f : 4.3f;
@@ -5049,7 +5052,7 @@ DREAM_FLASH static void fx_ctl(uint32_t n)                   /* once a chunk: th
         svf_coefs(mf_c[1], fm_exp2f(mf_hp), 1.2f);
     }
     /* Sweep: the Sequence's filter swept two octaves either way, a turn in ~3 s (from where it is: down first) */
-    fx_sw += ((on >> EN_FX_SWEEP & 1u ? 1.0f : 0.0f) - fx_sw) * fm_minf(t / 0.2f, 1.0f);
+    fx_sw += ((on >> EN_FX_SWEEP & 1u ? FXD(EN_FX_SWEEP) : 0.0f) - fx_sw) * fm_minf(t / 0.2f, 1.0f);
     if (fx_sw > 0.001f) {
         fx_swl += t * 0.33f;
         if (fx_swl >= 1.0f)
@@ -5058,17 +5061,17 @@ DREAM_FLASH static void fx_ctl(uint32_t n)                   /* once a chunk: th
         fx_swl = 0.5f;
     }
     fx_swm = fm_exp2f(2.0f * fx_sw * sine(fx_swl));
-    fx_ph += ((on >> EN_FX_PHASER & 1u ? 1.0f : 0.0f) - fx_ph) * fm_minf(t / 0.1f, 1.0f);
-    fx_vt += ((on >> EN_FX_REVERB & 1u ? 1.0f : 0.0f) - fx_vt) * fm_minf(t / 0.03f, 1.0f);
-    fx_cf += ((on >> EN_FX_FREEZE & 1u ? 1.0f : 0.0f) - fx_cf) * fm_minf(t / 0.1f, 1.0f);
-    fx_wash += ((on >> EN_FX_WASH & 1u ? 1.0f : 0.0f) - fx_wash) * fm_minf(t / (on >> EN_FX_WASH & 1u ? 0.4f : 0.8f), 1.0f);
+    fx_ph += ((on >> EN_FX_PHASER & 1u ? FXD(EN_FX_PHASER) : 0.0f) - fx_ph) * fm_minf(t / 0.1f, 1.0f);
+    fx_vt += ((on >> EN_FX_REVERB & 1u ? FXD(EN_FX_REVERB) : 0.0f) - fx_vt) * fm_minf(t / 0.03f, 1.0f);
+    fx_cf += ((on >> EN_FX_FREEZE & 1u ? FXD(EN_FX_FREEZE) : 0.0f) - fx_cf) * fm_minf(t / 0.1f, 1.0f);
+    fx_wash += ((on >> EN_FX_WASH & 1u ? FXD(EN_FX_WASH) : 0.0f) - fx_wash) * fm_minf(t / (on >> EN_FX_WASH & 1u ? 0.4f : 0.8f), 1.0f);
     if (rise >> EN_FX_TAKEOFF & 1u)              /* Take-off: the arc's Crash, now (-9 dB: over any music, not only
                                                   * the ending's full) */
-        ar_cr_env = 1.0f, ar_cr_f = 5000.0f, ar_cr_g = 0.35f;
-    tw_amp += ((on >> EN_FX_TWITTER & 1u ? 1.0f : 0.0f) - tw_amp) * fm_minf(t / (on >> EN_FX_TWITTER & 1u ? 0.02f : 0.3f), 1.0f);
+        ar_cr_env = 1.0f, ar_cr_f = 5000.0f, ar_cr_g = 0.35f * FXD(EN_FX_TAKEOFF);
+    tw_amp += ((on >> EN_FX_TWITTER & 1u ? FXD(EN_FX_TWITTER) : 0.0f) - tw_amp) * fm_minf(t / (on >> EN_FX_TWITTER & 1u ? 0.02f : 0.3f), 1.0f);
     /* Shimmer: its feedback in over ~50 ms, out over ~0.15 s; once out (~1 s after it is let go), the shifter stops */
     if (on >> EN_FX_SHIMMER & 1u || fx_shm > 0.0f) {
-        fx_shm += ((on >> EN_FX_SHIMMER & 1u ? 1.0f : 0.0f) - fx_shm) * fm_minf(t / (on >> EN_FX_SHIMMER & 1u ? 0.05f : 0.15f), 1.0f);
+        fx_shm += ((on >> EN_FX_SHIMMER & 1u ? FXD(EN_FX_SHIMMER) : 0.0f) - fx_shm) * fm_minf(t / (on >> EN_FX_SHIMMER & 1u ? 0.05f : 0.15f), 1.0f);
         if (!(on >> EN_FX_SHIMMER & 1u) && fx_shm < 0.001f)
             shm_stop();
         else
@@ -5657,7 +5660,9 @@ DREAM_FLASH static void render_lead(uint32_t n)
 {
     const int lv = (unsigned)par[P_LVOICE] < EN_NBV ? par[P_LVOICE] : 0;
     const float g = lead_vol * 0.45f, vib = (float)par[P_VIB] * 0.004f + (lv == 3 ? 0.25f : 0.0f), gl = 0.84f, gr = 1.08f,
-                tone = ld_tone * fo_mul(FO_LEAD);   /* (Tone, moved by the filter motion) */
+                pr = (float)en_lead_press * (1.0f / 127.0f),   /* (Loom: the keys' pressure) */
+                tone = ld_tone * fo_mul(FO_LEAD) * (1.0f + 2.0f * pr);   /* (Tone, moved by the filter motion; the
+                                                  * pressure opens it) */
     uint32_t j;
     float dt = 0.0f;
     if (!lead.on && lead.env < 1e-5f) {
@@ -5667,7 +5672,8 @@ DREAM_FLASH static void render_lead(uint32_t n)
     for (j = 0; j < n; j++) {
         float x, bp, a;
         if (!(j & 15u)) {                        /* the glide, the vibrato, the filter: every 16 */
-            const float vd = vib * fm_clampf((lead.vt - 0.4f) * 2.5f, 0.0f, 1.0f), f = mtof(lead.cur + vd * sine(lead.vph));
+            const float vd = vib * fm_clampf((lead.vt - 0.4f) * 2.5f, 0.0f, 1.0f) + 0.5f * pr,   /* (the pressure: deeper) */
+                        f = mtof(lead.cur + vd * sine(lead.vph));
             dt = f * (1.0f / EN_SR);
             svf_coefs(lead.c1, f * (3.0f + 6.0f * lead.fenv) * tone, 0.9f);
             svf_coefs(lead.c2, f * (3.0f + 6.0f * lead.fenv) * tone, 0.7f);
