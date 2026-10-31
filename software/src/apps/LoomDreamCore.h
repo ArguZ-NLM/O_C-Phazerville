@@ -56,8 +56,14 @@ PROGMEM static const DeviceDef DREAM_DEF = {
     {"ENRGY", -50, 50, 0, BI, 0, 11, 10},
     {"SPACE", -50, 50, 0, BI},
     // ONLY: the CV, no sound (and next to no CPU); the mode (B's): LINK, A's
-    // DREAM followed (B's own default: CV ONLY, LINK)
-    {"CV", 0, 2, DREAM_TRACK_B ? 2 : 1, LIST, 3, DREAM_TRACK_B ? 2 : 0, DREAM_TRACK_B, {"OFF", "ON", "ONLY"}, {"FREE", "LINK"}},
+    // DREAM followed (B's own default: CV ONLY, LINK); KEYS (both): CV in 1
+    // plays the Lead like the white keys, CV in 2 holds the black keys'
+    // effects (see CvKeys)
+#if DREAM_TRACK_B
+    {"CV", 0, 2, 2, LIST, 3, 4, 1, {"OFF", "ON", "ONLY"}, {"FREE", "LINK", "KEYS", "L+KEY"}},
+#else
+    {"CV", 0, 2, 1, LIST, 3, 2, 0, {"OFF", "ON", "ONLY"}, {"OFF", "KEYS"}},
+#endif
     // page 4, FX: the engine's own echo and plate, from the style's own (0);
     // the modes: the echo's TIME, the plate's SIZE (0: the style's)
     {"ECHO", -50, 50, 0, BI, 0, 7, 0},
@@ -95,7 +101,7 @@ public:
   void FormatMode(int p, char* buf, size_t n) const override;
   // TEMPO's SYNC, ROOT's MODE, the layers' voices: second values (L knob)
   const char* AltName(int p) const override {
-    return p == TEMPO ? "SYNC" : p == ROOT ? "MODE" : p >= DRONE && p <= SEQ2 ? "VOICE" : DREAM_TRACK_B && p == CV ? "LINK" : p == MOTION ? "LENGTH" : p == ENERGY ? "REPEAT" : p == ECHO ? "TIME" : p == PLATE ? "SIZE" : nullptr;
+    return p == TEMPO ? "SYNC" : p == ROOT ? "MODE" : p >= DRONE && p <= SEQ2 ? "VOICE" : p == CV ? (DREAM_TRACK_B ? "LINK" : "KEYS") : p == MOTION ? "LENGTH" : p == ENERGY ? "REPEAT" : p == ECHO ? "TIME" : p == PLATE ? "SIZE" : nullptr;
   }
   void Action(int a) override;
   bool ActionLit(int a) const override { return a == 0 && Owns() && (en_playing || joining); }
@@ -162,6 +168,22 @@ private:
   // FM-1's D4 .. E6) plays its keys in order wherever it sits
   static constexpr int KEY_WINDOW = 36;
   int key_shift = 0;
+  int KeyDeg(int note, int ns, uint32_t pool);
+  // KEYS (the CV setting's L knob: A's KEYS, B's KEYS / L+KEY): the FM-1's
+  // keyboard on two CV inputs, 1 V an octave, 0 V C0
+  bool KeysOn() const { return DREAM_TRACK_B ? mode[CV] >= 2 : mode[CV] == 1; }
+  void CvKeys(int ns, uint32_t pool);
+  struct CvKey {
+    int note = -1;          // the note it stands on (-1: not read yet)
+    int heard = -1;         // ... and the one acted on
+    uint32_t since = 0;     // when it got there
+  };
+  static bool CvKeyRead(CvKey& k, int ch, uint32_t now);
+  CvKey cv_key, cv_fx;
+  int8_t cv_deg = NO_KEY;   // CV 1's Lead note sounding (its degree)
+  uint32_t cv_deg_at = 0;   // ... since
+  int fx_shift = 0;         // CV 2's octaves moved (as key_shift)
+  int8_t cv_fx_on = -1;     // the effect CV 2 holds (0..10, -1: none)
   volatile float gain = 1.0f;
   // PIECE turned while playing: the sound fades out, the piece changes
   // (Idle), it fades back in (update ramps fade toward fade_to)
@@ -506,15 +528,83 @@ FLASHMEM void DreamDevice::Idle() {
     const NoteEv e = note_ev[notes_seen % NOTE_EVS];
     notes_seen++;
     if (e.vel) {
-      // (into the window: the octaves moved as few as it takes)
-      int rel = int(e.note) - 60 - cur[ROOT] + key_shift;
-      while (rel < 0) { rel += 12; key_shift += 12; }
-      while (rel >= KEY_WINDOW) { rel -= 12; key_shift -= 12; }
-      const int deg = (rel / 12) * ns + en_deg_of(pool, rel % 12);
+      const int deg = KeyDeg(e.note, ns, pool);
       key_deg[e.note & 127] = int8_t(deg);
       en_lead_key(deg, 1);
     }
     else if (key_deg[e.note & 127] != NO_KEY) { en_lead_key(key_deg[e.note & 127], 0); key_deg[e.note & 127] = NO_KEY; }
+  }
+  CvKeys(ns, pool);
+}
+
+// a key (MIDI note) as the Lead's scale degree: moved into the window by
+// whole octaves, as few as it takes (key_shift kept for the next)
+FLASHMEM int DreamDevice::KeyDeg(int note, int ns, uint32_t pool) {
+  int rel = note - 60 - RootNow() + key_shift;
+  while (rel < 0) { rel += 12; key_shift += 12; }
+  while (rel >= KEY_WINDOW) { rel -= 12; key_shift -= 12; }
+  return (rel / 12) * ns + en_deg_of(pool, rel % 12);
+}
+
+// a CV input as a note: true when there is a new one to act on
+FLASHMEM bool DreamDevice::CvKeyRead(CvKey& k, int ch, uint32_t now) {
+  const float semis = float(HS::frame.In(ch)) / 128.0f;  // (128 a semitone)
+  const int n = int(floorf(semis + 0.5f)) + 12;
+  if (k.note < 0) { k.note = k.heard = n; return false; }
+  if (n != k.note && fabsf(semis + 12.0f - float(k.note)) > 0.83f) { k.note = n; k.since = now; }
+  if (k.note != k.heard && now - k.since >= 4) { k.heard = k.note; return true; }
+  return false;
+}
+
+// KEYS: CV in 1 the white keys, CV in 2 the black keys, as the FM-1's.
+// Each is read as a note (1 V an octave, 0 V C0), taken once it has stood
+// still 4 ms (a sequencer's step between two notes isn't played), with a
+// third of a semitone either way before it moves (a still voltage doesn't
+// flicker). The level it stands on at the start plays nothing (an empty
+// jack: 0 V).
+//  CV 1: each new note plays the Lead (the octave as the MIDI keys': any),
+//   held until the next, let go after a beat standing still (so the Lead
+//   hears a pause, takes the notes as its theme and answers)
+//  CV 2: the eleven black keys F#3 .. F#5 (any octave: moved as CV 1's,
+//   into F3 .. G5), left to right Take-off, Supernova, Twitter, Repeat,
+//   Shimmer, Freeze, Octave, Return, Rise, Close, Transpose, each held
+//   while the CV stands on it; a white note: none
+FLASHMEM void DreamDevice::CvKeys(int ns, uint32_t pool) {
+  const uint32_t now = millis();
+  const bool on = KeysOn();
+  // CV 1: the Lead
+  if (on && CvKeyRead(cv_key, 0, now)) {
+    cv_deg = int8_t(KeyDeg(cv_key.note, ns, pool));
+    cv_deg_at = now;
+    en_lead_key(cv_deg, 1);
+  }
+  const float beat_ms = 60000.0f / float(std::max(30, TempoNow()));
+  if (cv_deg != NO_KEY && (!on || now - cv_deg_at >= uint32_t(beat_ms))) {
+    en_lead_key(cv_deg, 0);
+    cv_deg = NO_KEY;
+  }
+  if (!on) cv_key = CvKey{};
+  // CV 2: the effects
+  int fx = cv_fx_on;
+  if (on && CvKeyRead(cv_fx, 1, now)) {
+    static const uint8_t BLACK[12] = {0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0};
+    int rel = cv_fx.note - 53 + fx_shift;  // (F3: 0)
+    while (rel < 0) { rel += 12; fx_shift += 12; }
+    while (rel > 26) { rel -= 12; fx_shift -= 12; }  // (.. G5)
+    fx = -1;
+    if (BLACK[(rel + 5) % 12]) {
+      fx = 0;
+      for (int i = 0; i < rel; i++) fx += BLACK[(i + 5) % 12];
+    }
+  }
+  if (!on) { cv_fx = CvKey{}; fx = -1; }
+  if (fx != cv_fx_on) {
+    static const uint8_t FX[8] = {EN_FX_TAKEOFF, EN_FX_SUPERNOVA, EN_FX_TWITTER, EN_FX_REPEAT,
+                                  EN_FX_SHIMMER, EN_FX_FREEZE, EN_FX_OCTAVE, EN_FX_RETURN};
+    static const uint8_t MV[3] = {EN_MV_RISE, EN_MV_CLOSE, EN_MV_TRANSPOSE};
+    en_fx(fx >= 0 && fx < 8 ? 1u << FX[fx] : 0u);
+    en_move(fx >= 8 ? MV[fx - 8] : 0u);
+    cv_fx_on = int8_t(fx);
   }
 }
 
@@ -531,7 +621,7 @@ FLASHMEM void DreamDevice::Link() {
     L.seen = millis() | 1;
     return;
   }
-  const bool l = mode[CV] == 1 && L.Alive();
+  const bool l = (mode[CV] & 1) && L.Alive();
   if (l != linked) {
     if (l) {  // (playing on its own: it starts over on A's next bar)
       armed = armed || en_playing;
