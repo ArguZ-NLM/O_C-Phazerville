@@ -537,7 +537,7 @@ FLASHMEM void DreamDevice::Idle() {
     const NoteEv e = note_ev[notes_seen % NOTE_EVS];
     notes_seen++;
     int8_t& kd = key_deg[e.note & 127];
-    static const uint8_t BLACK_PC = 1 << 1 | 1 << 3 | 1 << 6 | 1 << 8 | 1 << 10;
+    static const uint16_t BLACK_PC = 1 << 1 | 1 << 3 | 1 << 6 | 1 << 8 | 1 << 10;
     if (e.vel && (BLACK_PC >> (e.note % 12) & 1)) {  // a black key: its effect, held
       const int fx = BlackFx(e.note, midi_fx_shift);
       if (fx >= 0) { kd = int8_t(-1 - fx); midi_fx |= 1u << fx; }
