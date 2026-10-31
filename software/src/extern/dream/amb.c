@@ -1662,6 +1662,8 @@ DREAM_FLASH static void pluck_voice(int l, int n, int vel, int rep)   /* rep: a 
     v->adec = l ? sq2_adec : sq_adec;
     v->edec = l ? sq2_edec : sq_edec;
     v->hold = (int32_t)(sq_gate * step_len * (par[P_SEQGRID] ? 1.0f : 2.0f));   /* (LENGTH: a share of its step) */
+    if (!l && (mvm & EN_MV_FULL))
+        v->hold = 0;                             /* (Loom: Full, plucked, as it was grown) */
     v->cut = l ? sq2_cut * fo_mul(FO_SEQ2) : sq_cut * fo_mul(FO_SEQ) * (perf & EN_PF_SWEEP ? 4.0f : 1.0f);   /* (the knob's,
                                                   * moved by the filter motion; PERFORM's Sweep held: the Sequence's two
                                                   * octaves open) */
@@ -1783,6 +1785,42 @@ DREAM_FLASH static int seq_note(const seq_t *q, int l, int s)   /* step s's note
     return n < 24 ? 24 : n > 108 ? 108 : n;
 }
 
+/* (Loom, Sascha 2026-10-31: Sequence 1 thinner, and moving over 16 bars as a drummer plays, as Loom's TREADLE does)
+ * Whether Sequence 1's step st plays now, from where the sixteenth falls in the bar: each step kept by its weight
+ * there (the one, the beats, the eighths, the sixteenths) and a little of its own (sq_prio), against a line that
+ * Density sets. Over 16 bars, four blocks of four: A (the line), A' (lower: a few more notes, soft, as ghosts), A''
+ * (the line again, other ghosts chosen), B (lower still: it builds); the fourth bar of each block a pickup on the
+ * last eighth's sixteenth into the next, the sixteenth bar a fill (its last beat, every sixteenth, rising). Full
+ * (the black key, held): the whole pattern as grown, every step. *ghost: the velocity's share, 0..100 */
+DREAM_FLASH static int seq1_phrase(const seq_t *q, int st, int *ghost)
+{
+    static const uint8_t MW[16] = {100, 15, 40, 15, 70, 15, 40, 15, 70, 15, 40, 15, 70, 15, 40, 20};
+    const int m = (int)(sixteenth & 15u), bar = (int)(sixteenth >> 4 & 15u), blk = bar >> 2, bib = bar & 3;
+    const int line = 112 - 3 * pe(P_DENSITY) / 5, lower = blk == 1 ? 12 : blk == 3 ? 22 : 0;
+    int jit, score;
+    (void)q;
+    *ghost = 100;
+    if (mvm & EN_MV_FULL)
+        return 1;
+    if (bar == 15 && m >= 12) {                  /* the fill: the last beat, rising */
+        *ghost = 60 + 13 * (m - 12);
+        return 1;
+    }
+    if (bib == 3 && m == 14) {                   /* the pickup into the next block */
+        *ghost = 70;
+        return 1;
+    }
+    jit = (int)((sq_prio[0][st] + (blk == 2 ? 53 : 0)) % 100);   /* (A'': other ghosts) */
+    score = MW[m] + (100 - jit) * 2 / 5;
+    if (score >= line)
+        return 1;
+    if (score >= line - lower) {                 /* a note the block adds: soft */
+        *ghost = 65;
+        return 1;
+    }
+    return 0;
+}
+
 DREAM_FLASH static void seq_tick(void)                       /* a sixteenth: the sequences' steps, the repeats */
 {
     static const uint8_t DT[6] = {2, 3, 4, 6, 8, 16};   /* the repeats' times (the echo's), in sixteenths */
@@ -1815,13 +1853,20 @@ DREAM_FLASH static void seq_tick(void)                       /* a sixteenth: the
                 q.len = q.base_len = (uint8_t)par[l ? P_SEQ2LEN : P_SEQLEN];
             }
             st = sq_pos[l] < q.len ? sq_pos[l] : 0;
-            if ((q.gate >> st & 1u) && !(q.skip >> st & 1u) &&
-                (sq_written[l] || pat || sq_prio[l][st] < 25 + 3 * pe(P_DENSITY) / 4) && (ch >= 100 || irand(100) < ch)) {
-                played = seq_note(&q, l, st) + (!l && fxm >> EN_FX_OCTAVE & 1u ? 12 : 0);   /* (the grid's Octave) */
-                vel = q.acc >> st & 1u ? 120 : 120 - 86 * par[P_SACCENT] / 100;   /* the root accented (Accent 50: 77,
+            {
+                int take, ghost = 100;   /* (ghost: the velocity's share, a note the phrase adds) */
+                if (!l && !sq_written[l] && !pat)
+                    take = seq1_phrase(&q, st, &ghost);
+                else
+                    take = sq_written[l] || pat || sq_prio[l][st] < 25 + 3 * pe(P_DENSITY) / 4;
+                if ((q.gate >> st & 1u) && !(q.skip >> st & 1u) && take && (ch >= 100 || irand(100) < ch)) {
+                    played = seq_note(&q, l, st) + (!l && fxm >> EN_FX_OCTAVE & 1u ? 12 : 0);   /* (the grid's Octave) */
+                    vel = q.acc >> st & 1u ? 120 : 120 - 86 * par[P_SACCENT] / 100;   /* the root accented (Accent 50: 77,
                                                                                * as Synth Seeker's 121 and 77); nothing
                                                                                * more (no hidden level: spec 3) */
-                pluck_voice(l, played, vel, 0);
+                    vel = vel * ghost / 100;
+                    pluck_voice(l, played, vel, 0);
+                }
             }
             sq_pos[l] = seq_next(&q, st);
             if (fxm >> EN_FX_RETURN & 1u && sq_pos[l] >= 4)   /* (the grid's Return: round its first four steps) */

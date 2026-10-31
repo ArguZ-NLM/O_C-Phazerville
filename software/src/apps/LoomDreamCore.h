@@ -635,12 +635,14 @@ FLASHMEM void DreamDevice::CvKeys() {
   const uint16_t held = midi_fx | (fx >= 0 ? 1u << fx : 0u);
   static const uint8_t FX[8] = {EN_FX_TAKEOFF, EN_FX_SUPERNOVA, EN_FX_TWITTER, EN_FX_REPEAT,
                                 EN_FX_SHIMMER, EN_FX_FREEZE, EN_FX_OCTAVE, EN_FX_RETURN};
-  static const uint8_t MV[3] = {EN_MV_RISE, EN_MV_CLOSE, EN_MV_TRANSPOSE};
+  static const uint8_t MV[4] = {EN_MV_RISE, EN_MV_CLOSE, EN_MV_TRANSPOSE, EN_MV_FULL};
   // the five the black keys hold, of the FM-1's eleven (0..7 its grid's
   // effects, 8..10 Rise, Close, Transpose): its first five
   // (2026-10-31, Sascha trying them: the other octave the next five,
   // Freeze, Octave, Return, Rise, Close; Transpose left out)
-  static const uint8_t PICK[NFX_KEYS] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+  // (11: Full, Sequence 1's whole pattern plucked; on F# for now, in
+  // Return's place)
+  static const uint8_t PICK[NFX_KEYS] = {0, 1, 2, 3, 4, 5, 6, 11, 8, 9};
   // how deep each goes, all the time (the pressure moves while held): a
   // MIDI key's pressure, CV 2's full
   for (int i = 0; i < NFX_KEYS; i++)

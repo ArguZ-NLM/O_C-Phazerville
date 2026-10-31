@@ -168,7 +168,8 @@ extern volatile uint8_t en_fx_depth[EN_NFX];
 extern volatile uint8_t en_lead_press;
 /* (BERLIN) the black keys' moves, held: every layer's filter opened together (Rise, +2 octaves), closed (Close, -4),
  * both sequences three scale steps up (Transpose) */
-enum { EN_MV_RISE = 1, EN_MV_CLOSE = 2, EN_MV_TRANSPOSE = 4 };
+enum { EN_MV_RISE = 1, EN_MV_CLOSE = 2, EN_MV_TRANSPOSE = 4, EN_MV_FULL = 8 };   /* (Loom: Full, Sequence 1's whole
+                                                * pattern, plucked, while held) */
 void en_move(uint32_t mask);
 /* MIDI clock in (as FoMni): ticks drive the 1/16 grid (6 a step) while they keep coming */
 enum { EN_CLK_TICK, EN_CLK_START, EN_CLK_CONTINUE, EN_CLK_STOP };
