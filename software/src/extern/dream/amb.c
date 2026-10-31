@@ -5796,6 +5796,11 @@ DREAM_FLASH static void render_chunk(int32_t *out, uint32_t n, float gain)
     if (fxm || tw_env > 1e-4f || fx_ph > 0.005f)
         render_fx(n);
     eg += (1.0f - eg) * fx_wash;                 /* Wash: everything into the echo */
+    {   /* (Loom, Sascha 2026-10-31: Repeat and Supernova were silent with the echo turned down) while held, the
+         * echo's send opened to half at least, so their repeats are heard whatever ECHO is */
+        const float fl = 0.5f * fm_maxf(fx_rep, fx_nova) * ein_gain;
+        eg = fm_maxf(eg, fl);
+    }
     epk = en_echo_pk;
     for (j = 0; j < n; j++) {
         float wl, wr, l, r, el, er, rin, cl, cr, sd, dry = 1.0f - 0.75f * fx_wash;
