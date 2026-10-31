@@ -156,6 +156,12 @@ private:
   uint32_t notes_seen = 0;    // the MIDI notes in taken so far (note_ev_n)
   static constexpr int8_t NO_KEY = INT8_MIN;
   int8_t key_deg[128];        // a MIDI note held: the Lead's degree it plays (NO_KEY: none)
+  // the keyboard's octave doesn't matter: its notes are moved by whole
+  // octaves (key_shift) into a 3-octave window from the Lead's root up; the
+  // shift stays until a key lands outside, so a 2-octave keyboard (or the
+  // FM-1's D4 .. E6) plays its keys in order wherever it sits
+  static constexpr int KEY_WINDOW = 36;
+  int key_shift = 0;
   volatile float gain = 1.0f;
   // PIECE turned while playing: the sound fades out, the piece changes
   // (Idle), it fades back in (update ramps fade toward fade_to)
@@ -490,7 +496,7 @@ FLASHMEM void DreamDevice::Idle() {
   if (!linked && mode[TEMPO] && clock_running && tempo_bpm > 0.0f)
     Send(P_TEMPO, constrain(int(tempo_bpm + 0.5f), 60, 160));
   // MIDI notes: the Lead plays them in the piece's scale, from its root up
-  // (C4 + ROOT is the root; a note between two of the scale's takes the
+  // (any octave: see key_shift; a note between two of the scale's takes the
   // nearer)
   int steps[12];
   const uint32_t pool = Pool();
@@ -499,10 +505,15 @@ FLASHMEM void DreamDevice::Idle() {
     if (note_ev_n - notes_seen > NOTE_EVS) notes_seen = note_ev_n - NOTE_EVS;  // (fell behind: the latest)
     const NoteEv e = note_ev[notes_seen % NOTE_EVS];
     notes_seen++;
-    const int rel = int(e.note) - 60 - cur[ROOT];
-    const int oct = rel >= 0 ? rel / 12 : -((11 - rel) / 12);
-    const int deg = oct * ns + en_deg_of(pool, rel - 12 * oct);
-    if (e.vel) { key_deg[e.note & 127] = int8_t(deg); en_lead_key(deg, 1); }
+    if (e.vel) {
+      // (into the window: the octaves moved as few as it takes)
+      int rel = int(e.note) - 60 - cur[ROOT] + key_shift;
+      while (rel < 0) { rel += 12; key_shift += 12; }
+      while (rel >= KEY_WINDOW) { rel -= 12; key_shift -= 12; }
+      const int deg = (rel / 12) * ns + en_deg_of(pool, rel % 12);
+      key_deg[e.note & 127] = int8_t(deg);
+      en_lead_key(deg, 1);
+    }
     else if (key_deg[e.note & 127] != NO_KEY) { en_lead_key(key_deg[e.note & 127], 0); key_deg[e.note & 127] = NO_KEY; }
   }
 }
