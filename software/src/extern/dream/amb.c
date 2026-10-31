@@ -1186,6 +1186,10 @@ DREAM_RAM2 static float tk_env;
 DREAM_RAM2 static float tk_f;
 DREAM_RAM2 static float tk_ph;   /* (Loom: Take-off's sub drop, ~110 Hz falling to 35, over ~1.5 s) */
 DREAM_RAM2 static int tk_st;   /* (Take-off's crash: stereo; the arc's own stays as it was) */
+/* (Loom, Sascha 2026-10-31: Take-off a different one each press) the noise's sweep (octaves a second), its top, its
+ * filter's width (q), its fall each sample, the sub's end and fall, the pan and its move each sample */
+DREAM_RAM2 static float tk_rate, tk_fmax, tk_q, tk_dec, tk_fend, tk_fdec, tk_pan, tk_pand;
+DREAM_RAM2 static int tk_var;
 DREAM_RAM2 static uint32_t ar_rng;
 DREAM_RAM2 volatile uint8_t en_swell;
 #ifdef EN_HOST
@@ -5096,6 +5100,10 @@ DREAM_RAM2 static float tw_glide;
 DREAM_RAM2 static float tw_ph;
 DREAM_RAM2 static float tw_pan;
 DREAM_RAM2 static int32_t tw_wait;
+/* (Loom, Sascha 2026-10-31: Twitter a different one each press) 0 Birds, 1 Flock, 2 Droid, 3 Morse, 4 Drops */
+DREAM_RAM2 static int tw_var;
+DREAM_RAM2 static float tw_dec;   /* the bleep's fall each sample */
+DREAM_RAM2 static float tw_wob;   /* (Droid) its wobble's phase */
 static uint32_t tw_rng = 0x1F83D9ABu;
 
 #define FXD(i) ((float)en_fx_depth[i] * 0.01f)   /* (Loom) an effect's depth while held */
@@ -5137,9 +5145,40 @@ DREAM_FLASH static void fx_ctl(uint32_t n)                   /* once a chunk: th
     fx_wash += ((on >> EN_FX_WASH & 1u ? FXD(EN_FX_WASH) : 0.0f) - fx_wash) * fm_minf(t / (on >> EN_FX_WASH & 1u ? 0.4f : 0.8f), 1.0f);
     if (rise >> EN_FX_TAKEOFF & 1u)              /* Take-off: the arc's Crash, now (-9 dB: over any music, not only
                                                   * the ending's full) */
-        ar_cr_env = 1.0f, ar_cr_f = 5000.0f, ar_cr_g = 0.55f * FXD(EN_FX_TAKEOFF),   /* (Loom, Sascha: fatter:
-                                                  * louder, the noise in stereo, a sub drop under it) */
-        tk_env = FXD(EN_FX_TAKEOFF), tk_f = 110.0f, tk_st = 1;
+    {   /* (Loom, Sascha: fatter, then a different one each press, never the same twice running):
+         * 0 Crash: the noise falling from 5 kHz, a sub drop 110 .. 35 Hz (the first, made fatter)
+         * 1 Riser: the noise climbing from 250 Hz to 9 kHz, no sub
+         * 2 Boom: a short burst, a big long sub 80 .. 28 Hz
+         * 3 Fly-by: a narrow whistling noise falling slowly, crossing left to right, a little sub
+         * 4 Whoosh: wide dark noise, slow, a sub 55 .. 20 Hz */
+        static const float V[5][9] = {   /* f0, octaves/s, top, q, fall, gain, sub, sub f0, sub end */
+            {5000.0f, -1.25f, 9000.0f, 0.25f, 0.99996f, 0.55f, 1.0f, 110.0f, 35.0f},
+            {250.0f, 2.2f, 9000.0f, 0.2f, 0.99998f, 0.5f, 0.0f, 60.0f, 60.0f},
+            {1500.0f, -3.0f, 9000.0f, 0.4f, 0.9997f, 0.45f, 1.3f, 80.0f, 28.0f},
+            {3500.0f, -0.9f, 9000.0f, 0.07f, 0.99997f, 0.6f, 0.4f, 60.0f, 30.0f},
+            {900.0f, -0.6f, 9000.0f, 0.6f, 0.99994f, 0.6f, 0.8f, 55.0f, 20.0f},
+        };
+        int v;
+        tw_rng = tw_rng * 1664525u + 1013904223u;
+        v = (int)((tw_rng >> 16) % 4u);
+        tk_var = v >= tk_var ? v + 1 : v;        /* (one of the other four) */
+        v = tk_var;
+        ar_cr_env = 1.0f, ar_cr_f = V[v][0], ar_cr_g = V[v][5] * FXD(EN_FX_TAKEOFF);
+        tk_rate = V[v][1], tk_fmax = V[v][2], tk_q = V[v][3], tk_dec = V[v][4];
+        tk_env = V[v][6] * FXD(EN_FX_TAKEOFF), tk_f = V[v][7], tk_fend = V[v][8];
+        tk_fdec = v == 2 ? 0.99995f : 0.99997f;
+        tk_pan = v == 3 ? 0.1f : 0.5f, tk_pand = v == 3 ? 0.8f / (3.0f * EN_SR) : 0.0f;
+        tk_st = 1;
+    }
+    if (rise >> EN_FX_TWITTER & 1u) {           /* (Loom: a different Twitter each press, never the same twice running;
+                                                  * Morse's one pitch for the press) */
+        int v;
+        tw_rng = tw_rng * 1664525u + 1013904223u;
+        v = (int)((tw_rng >> 16) % 4u);
+        tw_var = v >= tw_var ? v + 1 : v;
+        tw_f = 1500.0f + 1500.0f * (float)(tw_rng >> 24) * (1.0f / 256.0f);
+        tw_wait = 0;
+    }
     tw_amp += ((on >> EN_FX_TWITTER & 1u ? FXD(EN_FX_TWITTER) : 0.0f) - tw_amp) * fm_minf(t / (on >> EN_FX_TWITTER & 1u ? 0.02f : 0.3f), 1.0f);
     /* Shimmer: its feedback in over ~50 ms, out over ~0.15 s; once out (~1 s after it is let go), the shifter stops */
     if (on >> EN_FX_SHIMMER & 1u || fx_shm > 0.0f) {
@@ -5176,22 +5215,46 @@ DREAM_FLASH static void render_fx(uint32_t n)                /* Twitter (bleeps 
                                                   * gliding up to three octaves either way, gone in ~30 ms */
             float x;
             if (--tw_wait <= 0 && fxm >> EN_FX_TWITTER & 1u) {
+                /* (Loom) per variant: the pitch's bottom and span (octaves), the glide's span (octaves in 50 ms,
+                 * either way, or down only), the wait (s) and its spread, the fall (each sample) */
+                static const float TV[5][7] = {
+                    {1200.0f, 2.0f, 6.0f, -3.0f, 0.03f, 0.08f, 0.99925f},    /* Birds (the first) */
+                    {2400.0f, 2.0f, 3.0f, 0.0f, 0.015f, 0.025f, 0.9975f},   /* Flock: fast, high, short, up */
+                    {400.0f, 2.0f, 2.0f, -1.0f, 0.08f, 0.12f, 0.99975f},    /* Droid: low, long, wobbling */
+                    {0.0f, 0.0f, 0.0f, 0.0f, 0.06f, 0.0f, 0.9985f},         /* Morse: one pitch, steady */
+                    {3000.0f, 1.0f, 2.0f, -6.0f, 0.06f, 0.12f, 0.9992f},    /* Drops: high, falling steeply */
+                };
+                const float *v = TV[tw_var];
+                float r1, r2, r3;
                 tw_rng = tw_rng * 1664525u + 1013904223u;
-                tw_f = 1200.0f * fm_exp2f(2.0f * (float)(tw_rng >> 8) * (1.0f / 16777216.0f));
+                r1 = (float)(tw_rng >> 8) * (1.0f / 16777216.0f);
                 tw_rng = tw_rng * 1664525u + 1013904223u;
-                tw_glide = fm_exp2f((6.0f * (float)(tw_rng >> 8) * (1.0f / 16777216.0f) - 3.0f) / (0.05f * EN_SR));
+                r2 = (float)(tw_rng >> 8) * (1.0f / 16777216.0f);
                 tw_rng = tw_rng * 1664525u + 1013904223u;
-                tw_wait = (int32_t)(EN_SR * (0.03f + 0.08f * (float)(tw_rng >> 8) * (1.0f / 16777216.0f)));
+                r3 = (float)(tw_rng >> 8) * (1.0f / 16777216.0f);
+                if (tw_var != 3)
+                    tw_f = v[0] * fm_exp2f(v[1] * r1);
+                tw_glide = fm_exp2f((v[2] * r2 + v[3]) / (0.05f * EN_SR));
+                tw_wait = (int32_t)(EN_SR * (v[4] + v[5] * r3));
+                tw_dec = v[6];
                 tw_pan = (tw_rng & 1u) ? 0.3f : 0.7f;
-                tw_env = 1.0f;
+                tw_env = tw_var == 3 && r1 < 0.3f ? 0.0f : 1.0f;   /* (Morse: some dits left out) */
             }
             if (tw_env > 1e-4f) {
-                tw_ph += fm_clampf(tw_f, 100.0f, 15000.0f) * (1.0f / EN_SR);
+                float f = tw_f;
+                if (tw_var == 2) {               /* (Droid: a fast wobble, a third of an octave) */
+                    tw_wob += 18.0f * (1.0f / EN_SR);
+                    if (tw_wob >= 1.0f)
+                        tw_wob -= 1.0f;
+                    f *= 1.0f + 0.25f * sine(tw_wob);
+                }
+                tw_ph += fm_clampf(f, 100.0f, 15000.0f) * (1.0f / EN_SR);
                 if (tw_ph >= 1.0f)
                     tw_ph -= 1.0f;
-                tw_f *= tw_glide;
+                if (tw_var != 3)
+                    tw_f *= tw_glide;
                 x = sine(tw_ph) * tw_env * 0.07f * tw_amp;
-                tw_env *= 0.99925f;
+                tw_env *= tw_dec > 0.0f ? tw_dec : 0.99925f;
                 mixl[j] += x * (1.0f - tw_pan);
                 mixr[j] += x * tw_pan;
                 esend[j] += x * 1.5f;
@@ -5796,7 +5859,7 @@ DREAM_FLASH static void render_crash(uint32_t n)
     uint32_t j;
     if (ar_cr_env < 1e-4f && tk_env < 1e-4f)
         return;
-    svf_coefs(c, ar_cr_f, 0.25f);
+    svf_coefs(c, ar_cr_f, tk_st ? tk_q : 0.25f);
     for (j = 0; j < n; j++) {
         float x, xr, bp2, sub;
         svf_lp(c, ar_cr_s, atm_noise(), &bp);
@@ -5812,18 +5875,26 @@ DREAM_FLASH static void render_crash(uint32_t n)
             tk_ph += tk_f * (1.0f / EN_SR);
             if (tk_ph >= 1.0f)
                 tk_ph -= 1.0f;
-            tk_f = fm_maxf(tk_f * 0.99997f, 35.0f);
+            tk_f = fm_maxf(tk_f * tk_fdec, tk_fend);
             tk_env *= 0.99992f;
+        }
+        if (tk_st) {                             /* (Take-off: its pan, moving for Fly-by) */
+            x *= 2.0f * (1.0f - tk_pan);
+            xr *= 2.0f * tk_pan;
+            tk_pan = fm_minf(tk_pan + tk_pand, 0.9f);
         }
         mixl[j] += x + sub;
         mixr[j] += xr + sub;
         esend[j] += 0.6f * (x + xr);
         rsend[j] += 0.25f * (x + xr);
-        ar_cr_env *= 0.99996f;
+        ar_cr_env *= tk_st ? tk_dec : 0.99996f;
     }
+    if (tk_st)                                   /* (Take-off: its own sweep, down or up) */
+        ar_cr_f = fm_clampf(ar_cr_f * fm_exp2f((float)n * tk_rate * (1.0f / EN_SR)), 120.0f, tk_fmax);
+    else
+        ar_cr_f = fm_maxf(ar_cr_f * fm_exp2f(-(float)n * (5.0f / (4.0f * EN_SR))), 120.0f);
     if (ar_cr_env < 1e-4f)
         tk_st = 0;
-    ar_cr_f = fm_maxf(ar_cr_f * fm_exp2f(-(float)n * (5.0f / (4.0f * EN_SR))), 120.0f);
 }
 
 /* (BERLIN) the meters: each layer's activity, 0..1, at its level (a mute: 0), up at once and down over ~half a second */
