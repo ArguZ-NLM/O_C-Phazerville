@@ -802,6 +802,7 @@ DREAM_RAM2 static float echo_len;
 DREAM_RAM2 static float echo_len_t;
 static float fb_cap = 2.0f;                     /* stopped, the feedback eases under 90%: the tails die */
 static float fx_em = 1.0f, fx_ek = 0.001f, fx_ts = 1.0f;   /* the grid on the echo: its time's multiple, its easing; the tape stop */
+DREAM_RAM2 static float fx_rep;   /* the grid's Repeat, eased (declared here: the echo uses it too) */
 DREAM_RAM2 static float fx_nova;   /* (BERLIN) the grid's Supernova: the echo's feedback past full, eased */
 static float rev_in_gain = 1.0f;                /* falls to 0 while frozen */
 static float tape_lpc = 0.55f, tape_hpc = 0.08f; /* the echo's feedback band-pass */
@@ -3595,9 +3596,10 @@ DREAM_FLASH static inline void echoes(float in, float *el, float *er)
             tape[tape_w] = s;
         } else {
             const float nova = fx_nova;          /* (the grid's Supernova) */
-            float g = fm_minf(echo_fb + 0.12f * perf_echo + 0.1f * dub_up + 0.7f * nova,
+            float g = fm_minf(echo_fb + 0.12f * perf_echo + 0.1f * dub_up + 0.7f * nova + 0.25f * fx_rep,
                               fb_cap + 0.3f * nova);   /* (Dub: past the knob; Supernova, past full: Loom, Sascha
-                                                  * heard nothing at 0.35, twice that) */
+                                                  * heard nothing at 0.35, twice that; Repeat, the repeats ringing
+                                                  * on: a dub throw) */
             if (ec_pp)
                 g *= g;                          /* (two repeats a turn round: the feedback squared) */
             tape_lp += tape_lpc * (f1 - tape_lp);   /* each time round: thinner, darker */
@@ -5019,7 +5021,6 @@ static float fx_swm = 1.0f;
 DREAM_RAM2 static float fx_vt;
 DREAM_RAM2 static float fx_wash;
 DREAM_RAM2 static float fx_cf;
-DREAM_RAM2 static float fx_rep;
 DREAM_RAM2 static float fx_sw;
 DREAM_RAM2 static float fx_swl;
 DREAM_RAM2 static float fx_ph;
@@ -5830,7 +5831,7 @@ DREAM_FLASH static void render_chunk(int32_t *out, uint32_t n, float gain)
     eg += (1.0f - eg) * fx_wash;                 /* Wash: everything into the echo */
     {   /* (Loom, Sascha 2026-10-31: Repeat and Supernova were silent with the echo turned down) while held, the
          * echo's send opened to half at least, so their repeats are heard whatever ECHO is */
-        const float fl = fm_maxf(0.5f * fx_rep, 0.9f * fx_nova) * ein_gain;   /* (Supernova: nearly all in) */
+        const float fl = fm_maxf(0.9f * fx_rep, 0.9f * fx_nova) * ein_gain;   /* (Supernova, Repeat: nearly all in) */
         eg = fm_maxf(eg, fl);
     }
     epk = en_echo_pk;
