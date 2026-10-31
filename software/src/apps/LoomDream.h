@@ -16,8 +16,9 @@
 // piece's density and its echo / plate, around the piece's own), CV.
 // A: play (held for 2 s: stop), B: the next chord (held for 2 s: a fresh
 // piece, Loom.h). MIDI notes in play the Lead in the piece's scale (and it
-// answers them), any octave; the black keys hold the FM-1's eleven effects
-// (C#3 .. C#5, any octave). KEYS (CV's L knob): the same from CV in 1 and 2.
+// answers them): the white keys the scale's notes in turn, C the root, any
+// octave; the black keys hold five of the FM-1's effects (C# D# F# G# A#).
+// KEYS (CV's L knob): the same from CV in 1 and 2.
 //
 // CV (its CV on, while DREAM is the track's source): A the Sequence's
 // pitch, B Sequence 2's, C the Lead's, D the Drone's lowest note; E F a
