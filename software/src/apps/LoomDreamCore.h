@@ -184,6 +184,12 @@ private:
   uint32_t cv_deg_at = 0;   // ... since
   int fx_shift = 0;         // CV 2's octaves moved (as key_shift)
   int8_t cv_fx_on = -1;     // the effect CV 2 holds (0..10, -1: none)
+  // the MIDI keys' black keys: the same eleven effects, several at once
+  // (key_deg holds -1 - the effect for a black key held)
+  int midi_fx_shift = 0;
+  uint16_t midi_fx = 0;     // the effects held by MIDI keys, a bit each
+  uint16_t fx_sent = 0;     // MIDI's and CV 2's together, as sent
+  static int BlackFx(int note, int& shift);
   volatile float gain = 1.0f;
   // PIECE turned while playing: the sound fades out, the piece changes
   // (Idle), it fades back in (update ramps fade toward fade_to)
@@ -383,6 +389,8 @@ FLASHMEM bool DreamDevice::Activate() {
   linked = joining = false;  // (Idle links it again)
   sent_gate = -1;
   for (auto& k : key_deg) k = NO_KEY;
+  midi_fx = 0;
+  fx_sent = 0x8000;  // (sent again: none held)
   notes_seen = note_ev_n;
   LoadPiece(true);
   ApplyAll();
@@ -501,7 +509,8 @@ FLASHMEM void DreamDevice::Action(int a) {
   }
 }
 
-// main loop: the tempo after the clock (SYNC), MIDI notes to the Lead
+// main loop: the tempo after the clock (SYNC), MIDI notes to the Lead (the
+// black keys: the effects, as the FM-1's)
 FLASHMEM void DreamDevice::Idle() {
   if (!Owns()) return;
   if (browsed && !Browsing()) { browsed = false; Apply(PIECE); }  // STYLE let go: the one shown plays
@@ -527,12 +536,19 @@ FLASHMEM void DreamDevice::Idle() {
     if (note_ev_n - notes_seen > NOTE_EVS) notes_seen = note_ev_n - NOTE_EVS;  // (fell behind: the latest)
     const NoteEv e = note_ev[notes_seen % NOTE_EVS];
     notes_seen++;
-    if (e.vel) {
+    int8_t& kd = key_deg[e.note & 127];
+    static const uint8_t BLACK_PC = 1 << 1 | 1 << 3 | 1 << 6 | 1 << 8 | 1 << 10;
+    if (e.vel && (BLACK_PC >> (e.note % 12) & 1)) {  // a black key: its effect, held
+      const int fx = BlackFx(e.note, midi_fx_shift);
+      if (fx >= 0) { kd = int8_t(-1 - fx); midi_fx |= 1u << fx; }
+    } else if (e.vel) {
       const int deg = KeyDeg(e.note, ns, pool);
-      key_deg[e.note & 127] = int8_t(deg);
+      kd = int8_t(deg);
       en_lead_key(deg, 1);
-    }
-    else if (key_deg[e.note & 127] != NO_KEY) { en_lead_key(key_deg[e.note & 127], 0); key_deg[e.note & 127] = NO_KEY; }
+    } else if (kd != NO_KEY && kd < 0) {
+      midi_fx &= ~(1u << (-1 - kd));
+      kd = NO_KEY;
+    } else if (kd != NO_KEY) { en_lead_key(kd, 0); kd = NO_KEY; }
   }
   CvKeys(ns, pool);
 }
@@ -586,26 +602,36 @@ FLASHMEM void DreamDevice::CvKeys(int ns, uint32_t pool) {
   if (!on) cv_key = CvKey{};
   // CV 2: the effects
   int fx = cv_fx_on;
-  if (on && CvKeyRead(cv_fx, 1, now)) {
-    static const uint8_t BLACK[12] = {0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0};
-    int rel = cv_fx.note - 53 + fx_shift;  // (F3: 0)
-    while (rel < 0) { rel += 12; fx_shift += 12; }
-    while (rel > 26) { rel -= 12; fx_shift -= 12; }  // (.. G5)
-    fx = -1;
-    if (BLACK[(rel + 5) % 12]) {
-      fx = 0;
-      for (int i = 0; i < rel; i++) fx += BLACK[(i + 5) % 12];
-    }
-  }
+  if (on && CvKeyRead(cv_fx, 1, now)) fx = BlackFx(cv_fx.note, fx_shift);
   if (!on) { cv_fx = CvKey{}; fx = -1; }
-  if (fx != cv_fx_on) {
+  cv_fx_on = int8_t(fx);
+  // the effects held, MIDI's and CV 2's, to the engine
+  const uint16_t held = midi_fx | (fx >= 0 ? 1u << fx : 0u);
+  if (held != fx_sent) {
     static const uint8_t FX[8] = {EN_FX_TAKEOFF, EN_FX_SUPERNOVA, EN_FX_TWITTER, EN_FX_REPEAT,
                                   EN_FX_SHIMMER, EN_FX_FREEZE, EN_FX_OCTAVE, EN_FX_RETURN};
     static const uint8_t MV[3] = {EN_MV_RISE, EN_MV_CLOSE, EN_MV_TRANSPOSE};
-    en_fx(fx >= 0 && fx < 8 ? 1u << FX[fx] : 0u);
-    en_move(fx >= 8 ? MV[fx - 8] : 0u);
-    cv_fx_on = int8_t(fx);
+    uint32_t fxm = 0, mvm = 0;
+    for (int i = 0; i < 11; i++)
+      if (held >> i & 1) { if (i < 8) fxm |= 1u << FX[i]; else mvm |= MV[i - 8]; }
+    en_fx(fxm);
+    en_move(mvm);
+    fx_sent = held;
   }
+}
+
+// a note as one of the FM-1's eleven black keys, F#3 .. F#5 left to right
+// (0..10; any octave: moved into F3 .. G5 as the keys are, `shift` kept);
+// a white note: -1
+FLASHMEM int DreamDevice::BlackFx(int note, int& shift) {
+  static const uint8_t BLACK[12] = {0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0};
+  int rel = note - 53 + shift;  // (F3: 0)
+  while (rel < 0) { rel += 12; shift += 12; }
+  while (rel > 26) { rel -= 12; shift -= 12; }  // (.. G5)
+  if (!BLACK[(rel + 5) % 12]) return -1;
+  int fx = 0;
+  for (int i = 0; i < rel; i++) fx += BLACK[(i + 5) % 12];
+  return fx;
 }
 
 // LINK, the main loop's half. A's DREAM: what it plays, for B's. B's: linked
