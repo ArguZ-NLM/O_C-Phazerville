@@ -47,6 +47,7 @@
 #undef en_fx
 #undef en_fx_depth
 #undef en_lead_press
+#undef en_echo_lvl
 #undef en_hit_vel
 #undef en_hits
 #undef en_init

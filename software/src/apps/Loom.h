@@ -2336,8 +2336,8 @@ FLASHMEM void AppLoom::MainLoop() {
       L.playing ? "playing" : "resting", L.seen ? (unsigned long)(millis() - L.seen) : 0ul, (unsigned long)L.pulses,
       L.deg, L.root, L.mode, L.tempo, L.b_linked ? "linked" : "free", (unsigned long)L.b_flips, (unsigned long)L.b_degs, L.b_deg);
   }
-  Serial.printf("  DRM keys: last note %d took %d (<0: effect -1-n, else the Lead's degree), effects held %03x\n",
-    loom::g_dream_link.key_note, loom::g_dream_link.key_took, loom::g_dream_link.fx_held);
+  Serial.printf("  DRM keys: last note %d took %d (<0: effect -1-n, else the Lead's degree), effects held %03x, echo %.3f\n",
+    loom::g_dream_link.key_note, loom::g_dream_link.key_took, loom::g_dream_link.fx_held, double(loom::dream_a::en_echo_lvl));
   Serial.printf("  cv outs");
   for (int o = 0; o < loom::NUM_CV_OUTS; o++) { char b[12]; loom::FormatOutSource(loom::cv_out_src[o], b, sizeof(b), false); Serial.printf(" %d:%s", o + 1, b); }
   Serial.println();

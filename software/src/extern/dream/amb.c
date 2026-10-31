@@ -607,6 +607,7 @@ DREAM_RAM2 volatile uint32_t en_seq_reps[2];   /* (BERLIN) each sequence's notes
 DREAM_RAM2 static float atm_g_out;   /* (the Atmosphere's gain this chunk, for its meter) */
 DREAM_RAM2 volatile float en_atm_gain;
 DREAM_RAM2 volatile float en_echo_pk;
+volatile float en_echo_lvl;
 DREAM_RAM2 volatile uint8_t en_load;
 DREAM_RAM2 static int32_t shed_left;   /* samples the shedding lasts (a heavy block: half a second) */
 #define SHED (shed_left > 0)
@@ -5833,10 +5834,12 @@ DREAM_FLASH static void render_chunk(int32_t *out, uint32_t n, float gain)
         eg = fm_maxf(eg, fl);
     }
     epk = en_echo_pk;
+    float epc = 0.0f;
     for (j = 0; j < n; j++) {
         float wl, wr, l, r, el, er, rin, cl, cr, sd, dry = 1.0f - 0.75f * fx_wash;
         echoes(esend[j] * eg, &el, &er);
         epk = fm_maxf(epk, fm_fabsf(el + er));   /* (the screen's ripples: the echo as it comes out) */
+        epc = fm_maxf(epc, fm_fabsf(el + er));
         rin = (rsend[j] * rg + (el + er) * 0.12f * rev_send) * 0.8f;   /* (the classics pass: less of the echo into
                                                   * the plate, 0.25 before: the repeats stay distinct) */
         if (dry_pl > 0.0f)                       /* Reverb, Wash, Shimmer: the dry into the plate */
@@ -5911,6 +5914,8 @@ DREAM_FLASH static void render_chunk(int32_t *out, uint32_t n, float gain)
         }
     }
     en_echo_pk = epk;
+    en_echo_lvl = fm_maxf(en_echo_lvl * fm_exp2f(-(float)n / (0.15f * EN_SR)), epc);   /* (Loom: the USB status' echo
+                                                  * level, its own peak, falling) */
     ms_lp1 = fm_flush(ms_lp1);
     ms_lp2 = fm_flush(ms_lp2);
 }

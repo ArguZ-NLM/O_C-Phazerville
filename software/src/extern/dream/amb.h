@@ -304,6 +304,7 @@ extern volatile float en_layer_act[5];           /* (BERLIN) the Drone's, the Se
                                                   * Atmosphere's activity at its level, 0..1 (the meters) */
 extern volatile uint32_t en_seq_hits[2], en_seq_reps[2];   /* (BERLIN) each sequence's notes and repeats, so far */
 extern volatile float en_echo_pk;               /* the echo's output, its peak since the screen last took it */
+extern volatile float en_echo_lvl;              /* (Loom, USB status) the echo's output, its peak, falling ~0.5 s */
 /* the noise's events, for the screen's specks: a ring of the last few (kind: 0 a click, 1 a pop, 2 a dust grain; its
  * strength as heard, 0..255; its side, 0 left .. 255 right), en_nev_w where the next goes */
 /* the audio's load, the last block's time against its budget, in % (set by the device's audio handler; 0 elsewhere):

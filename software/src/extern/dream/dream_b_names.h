@@ -48,6 +48,7 @@
 #define en_fx dreamb_en_fx
 #define en_fx_depth dreamb_en_fx_depth
 #define en_lead_press dreamb_en_lead_press
+#define en_echo_lvl dreamb_en_echo_lvl
 #define en_hit_vel dreamb_en_hit_vel
 #define en_hits dreamb_en_hits
 #define en_init dreamb_en_init
