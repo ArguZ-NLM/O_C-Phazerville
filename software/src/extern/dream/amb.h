@@ -166,6 +166,8 @@ extern volatile uint8_t en_fx_depth[EN_NFX];
 /* (Loom) the white keys' pressure on the Lead, 0..127: its vibrato deeper (to half a semitone more) and its filter
  * open (to three times); written by the UI */
 extern volatile uint8_t en_lead_press;
+/* (Loom) Full's depth, 0..100: how many more of the Sequences' steps play while it is held (100: all, plucked) */
+extern volatile uint8_t en_full_depth;
 /* (BERLIN) the black keys' moves, held: every layer's filter opened together (Rise, +2 octaves), closed (Close, -4),
  * both sequences three scale steps up (Transpose) */
 enum { EN_MV_RISE = 1, EN_MV_CLOSE = 2, EN_MV_TRANSPOSE = 4, EN_MV_FULL = 8 };   /* (Loom: Full, the Sequences' whole

@@ -548,6 +548,7 @@ DREAM_FLASH void en_perf(uint32_t f) { post(C_PERF, (int)(f & 0xFFu), 0); }
 DREAM_FLASH void en_fx(uint32_t m) { post(C_FX, 0, (int)(m & 0xFFFFu)); }
 volatile uint8_t en_fx_depth[EN_NFX] = {100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100};
 volatile uint8_t en_lead_press = 0;
+volatile uint8_t en_full_depth = 100;
 DREAM_FLASH void en_move(uint32_t m) { post(C_MOVE, 0, (int)(m & 0xFFu)); }
 DREAM_RAM2 static uint8_t mac_sent;   /* (the UI's turns of the master actions, counted: 6 bits) */
 DREAM_RAM2 volatile uint8_t en_mac_got;   /* (the engine's: the count with the last it took) */
@@ -1662,7 +1663,7 @@ DREAM_FLASH static void pluck_voice(int l, int n, int vel, int rep)   /* rep: a 
     v->adec = l ? sq2_adec : sq_adec;
     v->edec = l ? sq2_edec : sq_edec;
     v->hold = (int32_t)(sq_gate * step_len * (par[P_SEQGRID] ? 1.0f : 2.0f));   /* (LENGTH: a share of its step) */
-    if (mvm & EN_MV_FULL)
+    if ((mvm & EN_MV_FULL) && en_full_depth >= 95)
         v->hold = 0;                             /* (Loom: Full, plucked, as it was grown) */
     v->cut = l ? sq2_cut * fo_mul(FO_SEQ2) : sq_cut * fo_mul(FO_SEQ) * (perf & EN_PF_SWEEP ? 4.0f : 1.0f);   /* (the knob's,
                                                   * moved by the filter motion; PERFORM's Sweep held: the Sequence's two
@@ -1805,10 +1806,13 @@ DREAM_FLASH static int seq_phrase(int l, int st, int s1, int *ghost)
     const int m = (int)(sixteenth & 15u), bar = (int)(sixteenth >> 4 & 15u), bib = bar & 3;
     const int blk = l ? 3 - (bar >> 2) : bar >> 2;   /* (Sequence 2: the blocks in reverse) */
     const int line = 112 - 3 * pe(P_DENSITY) / 5, lower = blk & 1 ? 12 : 0;
-    int jit, score;
+    int jit, score, full = 0;
     *ghost = 100;
-    if (mvm & EN_MV_FULL)
-        return 1;
+    if (mvm & EN_MV_FULL) {                      /* Full: the harder the key's pressed, the more steps (all at 100) */
+        full = en_full_depth;
+        if (full >= 95)
+            return 1;
+    }
     if (!l && bar == 15 && m >= 12) {            /* Sequence 1's fill: the last beat, rising */
         *ghost = 60 + 13 * (m - 12);
         return 1;
@@ -1817,10 +1821,10 @@ DREAM_FLASH static int seq_phrase(int l, int st, int s1, int *ghost)
         *ghost = 70;
         return 1;
     }
-    if (l && s1)                                 /* (Sequence 2: not over Sequence 1) */
+    if (l && s1 && full < 50)                    /* (Sequence 2: not over Sequence 1; pressed hard, Full lets it) */
         return 0;
     jit = (int)((sq_prio[l][st] + ROT[blk]) % 100);
-    score = MW[l][m] + (100 - jit) * 2 / 5;
+    score = MW[l][m] + (100 - jit) * 2 / 5 + full * 6 / 5;
     if (score >= line)
         return 1;
     if (score >= line - lower) {                 /* a note the block adds: soft */
