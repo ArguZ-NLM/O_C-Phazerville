@@ -19,19 +19,19 @@
 // answers them): the white keys the scale's notes in turn, C the root, any
 // octave; the black keys hold Take-off, Supernova, Twitter, Full (the
 // Sequences fuller, by the key's pressure) and Shimmer (C# D# F# G# A#).
-// KEYS (CV's L knob): the same from CV in 1 and 2.
+// CVIN (CVOUT's L knob): the same from CV in 1 and 2.
 //
-// CV (its CV on, while DREAM is the track's source): A the Sequence's
+// CVOUT (on, while DREAM is the track's source): A the Sequence's
 // pitch, B Sequence 2's, C the Lead's, D the Drone's lowest note; E F a
 // trigger on each sequence's notes (half a sixteenth), G the Lead's gate,
 // H the arc: the Drone's filter moving through the sections, 0..10 V.
 //
 // Each track has an engine of its own (A's amb.c, B's the same source again
-// as amb_b.c, its names renamed): A can play a piece while B's, at CV ONLY,
-// plays none of its sound and drives the CV outputs alone (CV ONLY wins the
-// outputs over CV ON).
+// as amb_b.c, its names renamed): A can play a piece while B's, at LEVEL 0,
+// plays none of its sound and drives the CV outputs alone (CVOUT ON at LEVEL
+// 0 wins the outputs over a CVOUT ON with sound).
 //
-// LINK (B's CV, the L knob; B's own default, with CV ONLY): B's DREAM follows
+// LINK (B's CVOUT, the L knob; B's own default, at LEVEL 0): B's DREAM follows
 // A's: A's clock pulse by pulse (they start and stop together, B's A pressed
 // while A plays joins on A's next bar), its tempo, key, mode and chord. B's
 // own piece plays its sequences, its lead, its arc over them: the same music,
@@ -51,17 +51,18 @@ namespace loom {
 class DreamBase : public Device, public AudioStream, public CvSource {
 public:
   enum { PIECE, TEMPO, ROOT, LEVEL, DRONE, SEQ, LEAD, SEQ2, MOTION, ENERGY, SPACE, CV, ECHO, FDBK, PLATE, TONE };
-  enum { CV_OFF, CV_ON, CV_ONLY };
+  enum { CV_OFF, CV_ON };
   explicit DreamBase(const DeviceDef& d) : Device(d), AudioStream(0, nullptr) {}
   int8_t track = 0;
   virtual void Stop() = 0;    // A held (Loom.h)
   virtual void Regrow() = 0;  // B held (Loom.h)
   virtual void SpaceOut(bool on) = 0;  // REPEAT on the track: SPACE moves it
-  // (ONLY claims the outputs while it plays: stopped, a CV ON elsewhere has them)
-  bool CvOnly() const override { return cur[CV] == CV_ONLY && ok() && Playing(); }
+  // (CVOUT ON at LEVEL 0, silent: it claims the outputs while it plays;
+  // stopped, a CVOUT ON elsewhere has them)
+  bool CvOnly() const override { return cur[CV] == CV_ON && cur[LEVEL] == 0 && ok() && Playing(); }
   virtual bool Playing() const = 0;
   // the CPU it takes (the guard, Loom.h): next to none for the CV alone
-  float Cost() const { return cur[CV] == CV_ONLY ? 4.0f : 38.0f; }
+  float Cost() const { return cur[LEVEL] == 0 ? 4.0f : 38.0f; }
 };
 
 // LINK: track A's DREAM as it plays (A writes it, B's follows it)

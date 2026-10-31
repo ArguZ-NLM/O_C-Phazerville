@@ -42,7 +42,7 @@ PROGMEM static const DeviceDef DREAM_DEF = {
     {"STYLE", 0, EN_NPIECES + DREAM_USER_N - 1, 0, UNI},   // the piece (then U1..U8, the user's)
     {"TEMPO", 60, 160, 96, UNI, 0, 2, 0, {}, {"OFF", "ON"}},   // mode: SYNC to Loom's clock
     {"ROOT", 0, 11, 2, UNI, 0, EN_NMODES, 5},                 // mode: the MODE (scale)
-    {"LEVEL", 0, 100, 100, UNI},
+    {"LEVEL", 0, 100, DREAM_TRACK_B ? 0 : 100, UNI},  // (0: silent, the piece going on for the CV; B's own start)
     // each layer's level; the mode (L knob) its voice (as piece 1 has them)
     // (and its octave: five each)
     {"DRONE", 0, 100, 60, UNI, 0, 5 * EN_NCV, 0},
@@ -55,14 +55,15 @@ PROGMEM static const DeviceDef DREAM_DEF = {
     {"MOTN", 0, 100, 50, UNI, 0, 11, 0},
     {"ENRGY", -50, 50, 0, BI, 0, 11, 10},
     {"SPACE", -50, 50, 0, BI},
-    // ONLY: the CV, no sound (and next to no CPU); the mode (B's): LINK, A's
-    // DREAM followed (B's own default: CV ONLY, LINK); KEYS (both): CV in 1
-    // plays the Lead like the white keys, CV in 2 holds the black keys'
-    // effects (see CvKeys)
+    // CVOUT: the notes on the CV outputs; its L knob CVIN: CV in 1 plays the
+    // Lead like the white keys, CV in 2 holds the black keys' effects (see
+    // CvKeys). B's L knob also LINK, A's DREAM followed (bit 0; CVIN bit 1,
+    // so the old saves' FREE / LINK / KEYS / L+KEY read the same). No ONLY
+    // (Sascha, 2026-10-31: it cut the music at once): LEVEL 0 is silent
 #if DREAM_TRACK_B
-    {"CV", 0, 2, 2, LIST, 3, 4, 1, {"OFF", "ON", "ONLY"}, {"FREE", "LINK", "KEYS", "L+KEY"}},
+    {"CVOUT", 0, 1, 1, LIST, 2, 4, 1, {"OFF", "ON"}, {"OFF", "LINK", "ON", "L+IN"}},
 #else
-    {"CV", 0, 2, 1, LIST, 3, 2, 0, {"OFF", "ON", "ONLY"}, {"OFF", "KEYS"}},
+    {"CVOUT", 0, 1, 1, LIST, 2, 2, 0, {"OFF", "ON"}, {"OFF", "ON"}},
 #endif
     // page 4, FX: the engine's own echo and plate, from the style's own (0);
     // the modes: the echo's TIME, the plate's SIZE (0: the style's)
@@ -101,7 +102,7 @@ public:
   void FormatMode(int p, char* buf, size_t n) const override;
   // TEMPO's SYNC, ROOT's MODE, the layers' voices: second values (L knob)
   const char* AltName(int p) const override {
-    return p == TEMPO ? "SYNC" : p == ROOT ? "MODE" : p >= DRONE && p <= SEQ2 ? "VOICE" : p == CV ? (DREAM_TRACK_B ? "LINK" : "KEYS") : p == MOTION ? "LENGTH" : p == ENERGY ? "REPEAT" : p == ECHO ? "TIME" : p == PLATE ? "SIZE" : nullptr;
+    return p == TEMPO ? "SYNC" : p == ROOT ? "MODE" : p >= DRONE && p <= SEQ2 ? "VOICE" : p == CV ? "CVIN" : p == MOTION ? "LENGTH" : p == ENERGY ? "REPEAT" : p == ECHO ? "TIME" : p == PLATE ? "SIZE" : nullptr;
   }
   void Action(int a) override;
   bool ActionLit(int a) const override { return a == 0 && Owns() && (en_playing || joining); }
@@ -171,9 +172,9 @@ private:
   static constexpr int KEY_WINDOW = 21;
   int key_shift = 0;
   int KeyDeg(int note);
-  // KEYS (the CV setting's L knob: A's KEYS, B's KEYS / L+KEY): the FM-1's
+  // CVIN (CVOUT's L knob: A's ON, B's ON / L+IN): the FM-1's
   // keyboard on two CV inputs, 1 V an octave, 0 V C0
-  bool KeysOn() const { return DREAM_TRACK_B ? mode[CV] >= 2 : mode[CV] == 1; }
+  bool KeysOn() const { return DREAM_TRACK_B ? (mode[CV] & 2) : mode[CV] == 1; }
   void CvKeys();
   struct CvKey {
     int note = -1;          // the note it stands on (-1: not read yet)
@@ -438,7 +439,10 @@ FLASHMEM void DreamDevice::Apply(int p) {
         sent_deg = -1;  // (LINK: a new scale walks its own chord: A's again)
       }
       break;
-    case LEVEL: gain = cur[LEVEL] * 0.01f; break;
+    case LEVEL:
+      gain = cur[LEVEL] * 0.01f;
+      if (Owns()) en_silent = cur[LEVEL] == 0;  // (0: the piece goes on, unheard, next to no CPU)
+      break;
     case DRONE: case SEQ: case LEAD: case SEQ2:
       Send(DREAM_LAYER_P[p - DRONE], cur[p]);
       if (!Owns() || !en_playing) SendVoice(p - DRONE);
@@ -451,7 +455,13 @@ FLASHMEM void DreamDevice::Apply(int p) {
       Send(P_MOTION, cur[MOTION]);
       if (Owns() && sent_gate != mode[MOTION]) { sent_gate = int8_t(mode[MOTION]); en_gate(10 * mode[MOTION]); }
       break;
-    case CV: if (Owns()) en_silent = cur[CV] == CV_ONLY; break;  // ONLY: the piece goes on, unheard
+    case CV:
+      if (val[CV] > CV_ON) {  // (an old save's ONLY: ON, silent)
+        val[CV] = cur[CV] = CV_ON;
+        val[LEVEL] = cur[LEVEL] = 0;
+        Apply(LEVEL);
+      }
+      break;
     case ENERGY:
       if (sent_ok) {  // REPEAT: the style's repeats, scaled
         Send(P_TAPA, base_tapa * std::min<int>(mode[ENERGY], 10) / 10);
@@ -601,7 +611,7 @@ FLASHMEM bool DreamDevice::CvKeyRead(CvKey& k, int ch, uint32_t now) {
   return false;
 }
 
-// KEYS: CV in 1 the white keys, CV in 2 the black keys, as the FM-1's.
+// CVIN: CV in 1 the white keys, CV in 2 the black keys, as the FM-1's.
 // Each is read as a note (1 V an octave, 0 V C0), taken once it has stood
 // still 4 ms (a sequencer's step between two notes isn't played), with a
 // third of a semitone either way before it moves (a still voltage doesn't
