@@ -78,6 +78,10 @@ struct DreamLink {
   volatile bool b_linked = false;
   volatile uint32_t b_flips = 0, b_degs = 0;
   volatile int8_t b_deg = 0;
+  // (USB status) the black keys' effects held (MIDI + CV 2, a bit each) and
+  // the last MIDI key taken: its note and what it became (an effect, a degree)
+  volatile uint16_t fx_held = 0;
+  volatile int16_t key_note = -1, key_took = 0;
 };
 inline DreamLink g_dream_link;
 

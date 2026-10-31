@@ -537,14 +537,17 @@ FLASHMEM void DreamDevice::Idle() {
     const NoteEv e = note_ev[notes_seen % NOTE_EVS];
     notes_seen++;
     int8_t& kd = key_deg[e.note & 127];
+    if (e.vel) g_dream_link.key_note = e.note;
     static const uint16_t BLACK_PC = 1 << 1 | 1 << 3 | 1 << 6 | 1 << 8 | 1 << 10;
     if (e.vel && (BLACK_PC >> (e.note % 12) & 1)) {  // a black key: its effect, held
       const int fx = BlackFx(e.note, midi_fx_shift);
       if (fx >= 0) { kd = int8_t(-1 - fx); midi_fx |= 1u << fx; }
+      g_dream_link.key_took = int16_t(-1 - fx);
     } else if (e.vel) {
       const int deg = KeyDeg(e.note, ns, pool);
       kd = int8_t(deg);
       en_lead_key(deg, 1);
+      g_dream_link.key_took = int16_t(deg);
     } else if (kd != NO_KEY && kd < 0) {
       midi_fx &= ~(1u << (-1 - kd));
       kd = NO_KEY;
@@ -617,6 +620,7 @@ FLASHMEM void DreamDevice::CvKeys(int ns, uint32_t pool) {
     en_fx(fxm);
     en_move(mvm);
     fx_sent = held;
+    g_dream_link.fx_held = held;
   }
 }
 
