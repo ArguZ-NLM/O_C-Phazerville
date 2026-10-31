@@ -5836,9 +5836,11 @@ DREAM_FLASH static void render_chunk(int32_t *out, uint32_t n, float gain)
     }
     epk = en_echo_pk;
     float epc = 0.0f;
+    const float rep_all = 0.5f * fx_rep * ein_gain;   /* (Loom, Sascha: Repeat too subtle, the Sequences alone often
+                                                  * quiet: while held the whole music thrown into the echo, a dub throw) */
     for (j = 0; j < n; j++) {
         float wl, wr, l, r, el, er, rin, cl, cr, sd, dry = 1.0f - 0.75f * fx_wash;
-        echoes(esend[j] * eg, &el, &er);
+        echoes(esend[j] * eg + rep_all * (mixl[j] + mixr[j]), &el, &er);   /* (Loom: Repeat throws all of it in) */
         epk = fm_maxf(epk, fm_fabsf(el + er));   /* (the screen's ripples: the echo as it comes out) */
         epc = fm_maxf(epc, fm_fabsf(el + er));
         rin = (rsend[j] * rg + (el + er) * 0.12f * rev_send) * 0.8f;   /* (the classics pass: less of the echo into
