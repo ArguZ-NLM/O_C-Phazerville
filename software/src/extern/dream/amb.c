@@ -1662,7 +1662,7 @@ DREAM_FLASH static void pluck_voice(int l, int n, int vel, int rep)   /* rep: a 
     v->adec = l ? sq2_adec : sq_adec;
     v->edec = l ? sq2_edec : sq_edec;
     v->hold = (int32_t)(sq_gate * step_len * (par[P_SEQGRID] ? 1.0f : 2.0f));   /* (LENGTH: a share of its step) */
-    if (!l && (mvm & EN_MV_FULL))
+    if (mvm & EN_MV_FULL)
         v->hold = 0;                             /* (Loom: Full, plucked, as it was grown) */
     v->cut = l ? sq2_cut * fo_mul(FO_SEQ2) : sq_cut * fo_mul(FO_SEQ) * (perf & EN_PF_SWEEP ? 4.0f : 1.0f);   /* (the knob's,
                                                   * moved by the filter motion; PERFORM's Sweep held: the Sequence's two
@@ -1785,33 +1785,42 @@ DREAM_FLASH static int seq_note(const seq_t *q, int l, int s)   /* step s's note
     return n < 24 ? 24 : n > 108 ? 108 : n;
 }
 
-/* (Loom, Sascha 2026-10-31: Sequence 1 thinner, and moving over 16 bars as a drummer plays, as Loom's TREADLE does)
- * Whether Sequence 1's step st plays now, from where the sixteenth falls in the bar: each step kept by its weight
- * there (the one, the beats, the eighths, the sixteenths) and a little of its own (sq_prio), against a line that
- * Density sets. Over 16 bars, four blocks of four: A (the line), A' (lower: a few more notes, soft, as ghosts), A''
- * (the line again, other ghosts chosen), B (lower still: it builds); the fourth bar of each block a pickup on the
- * last eighth's sixteenth into the next, the sixteenth bar a fill (its last beat, every sixteenth, rising). Full
- * (the black key, held): the whole pattern as grown, every step. *ghost: the velocity's share, 0..100 */
-DREAM_FLASH static int seq1_phrase(const seq_t *q, int st, int *ghost)
+/* (Loom, Sascha 2026-10-31: the Sequences thinner, and moving over 16 bars as a drummer plays, as Loom's TREADLE
+ * does; then: no busy fourth block, and Sequence 2 the other way round, so the two play with each other, not over
+ * each other) Whether Sequence l's step st plays now, from where the sixteenth falls in the bar: each step kept by its
+ * weight there and a little of its own (sq_prio), against a line that Density sets. Sequence 1's weights favour the
+ * one, the beats, then the eighths; Sequence 2's the off-beats (the "and"s, then the sixteenths), the beats least.
+ * Over 16 bars, four blocks of four: Sequence 1 A (the line), A' (a few more, soft, as ghosts), A'' (the line, other
+ * steps' turn), A''' (a few more, others again); Sequence 2 the same blocks in reverse (its busier where 1 is
+ * plainer). Sequence 1: the fourth bar of each block a pickup into the next, the sixteenth bar a fill (its last beat,
+ * every sixteenth, rising). Sequence 2 never on a sixteenth Sequence 1 has just played (s1: it did). Full (the black
+ * key, held): both whole as grown, every step. *ghost: the velocity's share, 0..100 */
+DREAM_FLASH static int seq_phrase(int l, int st, int s1, int *ghost)
 {
-    static const uint8_t MW[16] = {100, 15, 40, 15, 70, 15, 40, 15, 70, 15, 40, 15, 70, 15, 40, 20};
-    const int m = (int)(sixteenth & 15u), bar = (int)(sixteenth >> 4 & 15u), blk = bar >> 2, bib = bar & 3;
-    const int line = 112 - 3 * pe(P_DENSITY) / 5, lower = blk == 1 ? 12 : blk == 3 ? 22 : 0;
+    static const uint8_t MW[2][16] = {
+        {100, 15, 40, 15, 70, 15, 40, 15, 70, 15, 40, 15, 70, 15, 40, 20},   /* (Sequence 1: on the beat) */
+        {10, 45, 80, 45, 10, 45, 80, 45, 10, 45, 80, 45, 10, 45, 80, 30},    /* (Sequence 2: off it) */
+    };
+    static const uint8_t ROT[4] = {0, 0, 53, 29};   /* (each block's turn of the steps' own share) */
+    const int m = (int)(sixteenth & 15u), bar = (int)(sixteenth >> 4 & 15u), bib = bar & 3;
+    const int blk = l ? 3 - (bar >> 2) : bar >> 2;   /* (Sequence 2: the blocks in reverse) */
+    const int line = 112 - 3 * pe(P_DENSITY) / 5, lower = blk & 1 ? 12 : 0;
     int jit, score;
-    (void)q;
     *ghost = 100;
     if (mvm & EN_MV_FULL)
         return 1;
-    if (bar == 15 && m >= 12) {                  /* the fill: the last beat, rising */
+    if (!l && bar == 15 && m >= 12) {            /* Sequence 1's fill: the last beat, rising */
         *ghost = 60 + 13 * (m - 12);
         return 1;
     }
-    if (bib == 3 && m == 14) {                   /* the pickup into the next block */
+    if (!l && bib == 3 && m == 14) {             /* ... its pickup into the next block */
         *ghost = 70;
         return 1;
     }
-    jit = (int)((sq_prio[0][st] + (blk == 2 ? 53 : 0)) % 100);   /* (A'': other ghosts) */
-    score = MW[m] + (100 - jit) * 2 / 5;
+    if (l && s1)                                 /* (Sequence 2: not over Sequence 1) */
+        return 0;
+    jit = (int)((sq_prio[l][st] + ROT[blk]) % 100);
+    score = MW[l][m] + (100 - jit) * 2 / 5;
     if (score >= line)
         return 1;
     if (score >= line - lower) {                 /* a note the block adds: soft */
@@ -1825,7 +1834,7 @@ DREAM_FLASH static void seq_tick(void)                       /* a sixteenth: the
 {
     static const uint8_t DT[6] = {2, 3, 4, 6, 8, 16};   /* the repeats' times (the echo's), in sixteenths */
     const int on_grid = par[P_SEQGRID] || !(sixteenth & 1u);
-    int l;
+    int l, s1_played = 0;   /* (Sequence 1 played this sixteenth: Sequence 2 keeps out of its way) */
     if (!(sixteenth & 15u)) {
         ar_tick_bar();
         seq_publish();
@@ -1855,8 +1864,8 @@ DREAM_FLASH static void seq_tick(void)                       /* a sixteenth: the
             st = sq_pos[l] < q.len ? sq_pos[l] : 0;
             {
                 int take, ghost = 100;   /* (ghost: the velocity's share, a note the phrase adds) */
-                if (!l && !sq_written[l] && !pat)
-                    take = seq1_phrase(&q, st, &ghost);
+                if (!sq_written[l] && !pat)
+                    take = seq_phrase(l, st, s1_played, &ghost);
                 else
                     take = sq_written[l] || pat || sq_prio[l][st] < 25 + 3 * pe(P_DENSITY) / 4;
                 if ((q.gate >> st & 1u) && !(q.skip >> st & 1u) && take && (ch >= 100 || irand(100) < ch)) {
@@ -1866,6 +1875,8 @@ DREAM_FLASH static void seq_tick(void)                       /* a sixteenth: the
                                                                                * more (no hidden level: spec 3) */
                     vel = vel * ghost / 100;
                     pluck_voice(l, played, vel, 0);
+                    if (!l)
+                        s1_played = 1;
                 }
             }
             sq_pos[l] = seq_next(&q, st);
