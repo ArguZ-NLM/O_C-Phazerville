@@ -661,9 +661,10 @@ FLASHMEM void DreamDevice::CvKeys() {
 // halves when the keyboard moved); a white note: -1
 FLASHMEM int DreamDevice::BlackFx(int note) {
   static const int8_t BLACK[12] = {-1, 0, -1, 1, -1, -1, 2, -1, 3, -1, 4, -1};
-  // (for trying: odd octaves the other five; C1's octave even, Sascha's
-  // keyboard: its first octave the five, its second the others)
-  return BLACK[note % 12] < 0 ? -1 : BLACK[note % 12] + ((note / 12) & 1) * 5;
+  // (for trying: Sascha's keyboard moves, so not by octave: every octave
+  // the other five for now; back to the chosen five afterwards)
+  // (now: the other five in every octave, to compare by ear)
+  return BLACK[note % 12] < 0 ? -1 : BLACK[note % 12] + 5;
 }
 
 // LINK, the main loop's half. A's DREAM: what it plays, for B's. B's: linked
