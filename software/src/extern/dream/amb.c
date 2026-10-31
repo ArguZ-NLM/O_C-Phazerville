@@ -1805,8 +1805,8 @@ DREAM_FLASH static int seq_phrase(int l, int st, int s1, int *ghost)
     static const uint8_t ROT[4] = {0, 0, 53, 29};   /* (each block's turn of the steps' own share) */
     const int m = (int)(sixteenth & 15u), bar = (int)(sixteenth >> 4 & 15u), bib = bar & 3;
     const int blk = l ? 3 - (bar >> 2) : bar >> 2;   /* (Sequence 2: the blocks in reverse) */
-    const int line = 112 - 3 * pe(P_DENSITY) / 5 + (l ? 0 : 30),   /* (Sequence 1 far sparser: Sascha, "way down":
-                                                  * the one, a beat now and then) */
+    const int line = 112 - 3 * pe(P_DENSITY) / 5 + 30,   /* (both far sparser: Sascha, "way down": Sequence 1 the
+                                                  * one and a beat now and then, Sequence 2 an off-beat or two) */
               lower = blk & 1 ? 12 : 0;
     int jit, score, full = 0;
     *ghost = 100;

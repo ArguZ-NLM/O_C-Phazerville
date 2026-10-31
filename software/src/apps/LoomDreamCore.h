@@ -195,6 +195,10 @@ private:
   uint8_t midi_fx_depth[NFX_KEYS] = {100, 100, 100, 100, 100};
   uint16_t fx_sent = 0;     // MIDI's and CV 2's together, as sent
   static int BlackFx(int note);
+  // a key's pressure (aftertouch 0..127) as 0..1: only its top third counts
+  // (Sascha, 2026-10-31: the effects and the Lead moved at the slightest
+  // touch); below 85 nothing, 127 full
+  static float Press(int p);
   volatile float gain = 1.0f;
   // PIECE turned while playing: the sound fades out, the piece changes
   // (Idle), it fades back in (update ramps fade toward fade_to)
@@ -562,10 +566,7 @@ FLASHMEM void DreamDevice::Idle() {
     if (at_seen)
       for (int n = 0; n < 128; n++)
         if (key_deg[n] != NO_KEY && key_deg[n] >= 0) lp = std::max(lp, std::max(poly_at[n], chan_at));
-    // (Sascha: it wobbled at the slightest touch) the first third does
-    // nothing, then a curve (squared): full only pressed right down
-    const float x = std::max(0.0f, (float(std::min<uint8_t>(lp, 127)) - 42.0f) / 85.0f);
-    en_lead_press = uint8_t(127.0f * x * x + 0.5f);
+    en_lead_press = uint8_t(127.0f * Press(lp) + 0.5f);
   }
   // the black keys' pressure: each effect as deep as its keys pressed
   if (midi_fx && at_seen) {
@@ -573,8 +574,8 @@ FLASHMEM void DreamDevice::Idle() {
     for (int n = 0; n < 128; n++)
       if (key_deg[n] != NO_KEY && key_deg[n] < 0)
         p[-1 - key_deg[n]] = std::max<uint8_t>(p[-1 - key_deg[n]], std::max(poly_at[n], chan_at));
-    for (int i = 1; i < NFX_KEYS; i++) midi_fx_depth[i] = uint8_t(40 + 60 * std::min<int>(p[i], 127) / 127);
-    midi_fx_depth[3] = uint8_t(10 + 90 * std::min<int>(p[3], 127) / 127);  // (G#, Full: a few more at rest)
+    for (int i = 1; i < NFX_KEYS; i++) midi_fx_depth[i] = uint8_t(40 + 60 * Press(p[i]));
+    midi_fx_depth[3] = uint8_t(10 + 90 * Press(p[3]));  // (G#, Full: a few more at rest)
   }
   CvKeys();
 }
@@ -660,6 +661,8 @@ FLASHMEM void DreamDevice::CvKeys() {
     g_dream_link.fx_held = held;
   }
 }
+
+FLASHMEM float DreamDevice::Press(int p) { return std::max(0.0f, float(std::min(p, 127) - 85) / 42.0f); }
 
 // a note as one of the black keys' five effects, C# D# F# G# A# (0..4, the
 // same in every octave: Sascha, 2026-10-31, eleven over two octaves swapped
