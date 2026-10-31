@@ -55,15 +55,18 @@ PROGMEM static const DeviceDef DREAM_DEF = {
     {"MOTN", 0, 100, 50, UNI, 0, 11, 0},
     {"ENRGY", -50, 50, 0, BI, 0, 11, 10},
     {"SPACE", -50, 50, 0, BI},
-    // CVOUT: the notes on the CV outputs; its L knob CVIN: CV in 1 plays the
-    // Lead like the white keys, CV in 2 holds the black keys' effects (see
-    // CvKeys). B's L knob also LINK, A's DREAM followed (bit 0; CVIN bit 1,
-    // so the old saves' FREE / LINK / KEYS / L+KEY read the same). No ONLY
-    // (Sascha, 2026-10-31: it cut the music at once): LEVEL 0 is silent
+    // CVOUT: the notes on the CV outputs; its L knob CVIN: a pair of CV
+    // inputs, the first playing the Lead like the white keys, the second
+    // holding the black keys' effects (see CvKeys): OFF, 1+3, 2+4, 5+7, 6+8
+    // (Sascha, 2026-10-31: inputs 1 and 2 are wanted elsewhere). B's L knob
+    // also LINK, A's DREAM followed: its mode the pair x 2 + LINK (so the old
+    // saves' OFF / LINK / ON / L+IN read OFF / LINK / 1+3 / L1+3). Shown by
+    // FormatMode. No ONLY (Sascha: it cut the music at once): LEVEL 0 is
+    // silent
 #if DREAM_TRACK_B
-    {"CVOUT", 0, 1, 1, LIST, 2, 4, 1, {"OFF", "ON"}, {"OFF", "LINK", "ON", "L+IN"}},
+    {"CVOUT", 0, 1, 1, LIST, 2, 10, 1, {"OFF", "ON"}, {}},
 #else
-    {"CVOUT", 0, 1, 1, LIST, 2, 2, 0, {"OFF", "ON"}, {"OFF", "ON"}},
+    {"CVOUT", 0, 1, 1, LIST, 2, 5, 0, {"OFF", "ON"}, {}},
 #endif
     // page 4, FX: the engine's own echo and plate, from the style's own (0);
     // the modes: the echo's TIME, the plate's SIZE (0: the style's)
@@ -174,7 +177,9 @@ private:
   int KeyDeg(int note);
   // CVIN (CVOUT's L knob: A's ON, B's ON / L+IN): the FM-1's
   // keyboard on two CV inputs, 1 V an octave, 0 V C0
-  bool KeysOn() const { return DREAM_TRACK_B ? (mode[CV] & 2) : mode[CV] == 1; }
+  int KeysPair() const { return DREAM_TRACK_B ? mode[CV] >> 1 : mode[CV]; }  // (0: off, 1..4: 1+3 2+4 5+7 6+8)
+  bool KeysOn() const { return KeysPair() > 0; }
+  int8_t keys_pair_was = 0;  // (the pair changed: both read afresh)
   void CvKeys();
   struct CvKey {
     int note = -1;          // the note it stands on (-1: not read yet)
@@ -505,6 +510,12 @@ FLASHMEM void DreamDevice::FormatMode(int p, char* buf, size_t n) const {
   else if ((p == ECHO || p == PLATE) && !m) snprintf(buf, n, "STYLE");
   else if (p == ECHO) en_param_text(P_ETIME, std::min(m, 6) - 1, buf);
   else if (p == PLATE) snprintf(buf, n, "%d%%", 10 * m);
+  else if (p == CV) {  // CVIN: the pair (B: L before it, linked)
+    static const char* const PAIR[5] = {"OFF", "1+3", "2+4", "5+7", "6+8"};
+    const int k = KeysPair();
+    if (DREAM_TRACK_B && (m & 1)) snprintf(buf, n, k ? "L%s" : "LINK", PAIR[std::min(k, 4)]);
+    else snprintf(buf, n, "%s", PAIR[std::min(k, 4)]);
+  }
   else if (p >= DRONE && p <= SEQ2) {  // the voice; moved an octave or two: "MOG-1"
     const int l = p - DRONE, v = Voice(l), o = Oct(l);
     static const char* const* const LONG[4] = {EN_CV_NAME, DREAM_SEQ_VOICE, EN_BV_NAME, EN_SV_NAME};
@@ -617,6 +628,7 @@ FLASHMEM bool DreamDevice::CvKeyRead(CvKey& k, int ch, uint32_t now) {
 // third of a semitone either way before it moves (a still voltage doesn't
 // flicker). The level it stands on at the start plays nothing (an empty
 // jack: 0 V).
+// (CV 1 and CV 2 below: the pair's first and second input)
 //  CV 1: each new note plays the Lead as the white keys do (a black note:
 //   the white one below; any octave), held until the next, let go after a
 //   beat standing still (so the Lead hears a pause, takes the notes as its
@@ -626,8 +638,16 @@ FLASHMEM bool DreamDevice::CvKeyRead(CvKey& k, int ch, uint32_t now) {
 FLASHMEM void DreamDevice::CvKeys() {
   const uint32_t now = millis();
   const bool on = KeysOn();
-  // CV 1: the Lead
-  if (on && CvKeyRead(cv_key, 0, now)) {
+  // the pair's inputs: 1+3, 2+4, 5+7, 6+8 (0-based: 0 2, 1 3, 4 6, 5 7)
+  static const uint8_t IN_A[5] = {0, 0, 1, 4, 5}, IN_B[5] = {1, 2, 3, 6, 7};
+  const int pair = std::min(KeysPair(), 4);
+  if (pair != keys_pair_was) {  // (another pair: the levels there play nothing at first)
+    keys_pair_was = int8_t(pair);
+    cv_key = CvKey{};
+    cv_fx = CvKey{};
+  }
+  // the first input: the Lead
+  if (on && CvKeyRead(cv_key, IN_A[pair], now)) {
     cv_deg = int8_t(KeyDeg(cv_key.note));
     cv_deg_at = now;
     en_lead_key(cv_deg, 1);
@@ -640,7 +660,7 @@ FLASHMEM void DreamDevice::CvKeys() {
   if (!on) cv_key = CvKey{};
   // CV 2: the effects
   int fx = cv_fx_on;
-  if (on && CvKeyRead(cv_fx, 1, now)) fx = BlackFx(cv_fx.note);
+  if (on && CvKeyRead(cv_fx, IN_B[pair], now)) fx = BlackFx(cv_fx.note);
   if (!on) { cv_fx = CvKey{}; fx = -1; }
   cv_fx_on = int8_t(fx);
   // the effects held, MIDI's and CV 2's, to the engine
