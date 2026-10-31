@@ -584,8 +584,8 @@ FLASHMEM bool DreamDevice::CvKeyRead(CvKey& k, int ch, uint32_t now) {
 //  CV 1: each new note plays the Lead (the octave as the MIDI keys': any),
 //   held until the next, let go after a beat standing still (so the Lead
 //   hears a pause, takes the notes as its theme and answers)
-//  CV 2: the eleven black keys F#3 .. F#5 (any octave: moved as CV 1's,
-//   into F3 .. G5), left to right Take-off, Supernova, Twitter, Repeat,
+//  CV 2: the eleven black keys C#3 .. C#5 (any octave: moved as CV 1's,
+//   into C3 .. D5), left to right Take-off, Supernova, Twitter, Repeat,
 //   Shimmer, Freeze, Octave, Return, Rise, Close, Transpose, each held
 //   while the CV stands on it; a white note: none
 FLASHMEM void DreamDevice::CvKeys(int ns, uint32_t pool) {
@@ -624,17 +624,18 @@ FLASHMEM void DreamDevice::CvKeys(int ns, uint32_t pool) {
   }
 }
 
-// a note as one of the FM-1's eleven black keys, F#3 .. F#5 left to right
-// (0..10; any octave: moved into F3 .. G5 as the keys are, `shift` kept);
-// a white note: -1
+// a note as one of the eleven black keys of a 16-key keyboard from C,
+// C#3 .. C#5 left to right (0..10; any octave: moved into C3 .. D5 as the
+// keys are, `shift` kept); a white note: -1. (The FM-1's own run F# .. F#,
+// but it sends none: a keyboard from C reaches all eleven, Sascha's)
 FLASHMEM int DreamDevice::BlackFx(int note, int& shift) {
   static const uint8_t BLACK[12] = {0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0};
-  int rel = note - 53 + shift;  // (F3: 0)
+  int rel = note - 48 + shift;  // (C3: 0)
   while (rel < 0) { rel += 12; shift += 12; }
-  while (rel > 26) { rel -= 12; shift -= 12; }  // (.. G5)
-  if (!BLACK[(rel + 5) % 12]) return -1;
+  while (rel > 26) { rel -= 12; shift -= 12; }  // (.. D5)
+  if (!BLACK[rel % 12]) return -1;
   int fx = 0;
-  for (int i = 0; i < rel; i++) fx += BLACK[(i + 5) % 12];
+  for (int i = 0; i < rel; i++) fx += BLACK[i % 12];
   return fx;
 }
 
