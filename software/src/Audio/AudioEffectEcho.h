@@ -49,15 +49,17 @@ public:
 
   // allocate and clear everything; call while the stream is disconnected
   bool Acquire() {
-    if (!mem) mem = static_cast<float*>(calloc(MEM_TOTAL, sizeof(float)));
+    // (RAM2 first, for speed; PSRAM when RAM2's heap is short: with every
+    // device in use it can be, and REPEAT then didn't play at all)
+    if (!mem) mem = static_cast<float*>(Ram2OrPsram(MEM_TOTAL * sizeof(float), true));
     // the pre-delay in RAM2 (it was in PSRAM: a read and a write per sample
     // there made it the reverb's most costly part)
     if (!pre) {
-      pre = static_cast<float*>(malloc(2 * PRE_H * sizeof(float)));
+      pre = static_cast<float*>(Ram2OrPsram(2 * PRE_H * sizeof(float), false));
       if (pre) std::fill(pre, pre + 2 * PRE_H, 0.0f);
     }
     if (!rv) rv = TakeLines();
-    if (!sh) sh = static_cast<int16_t*>(malloc(2 * SH_LEN * sizeof(int16_t)));
+    if (!sh) sh = static_cast<int16_t*>(Ram2OrPsram(2 * SH_LEN * sizeof(int16_t), false));
     if (!shd) shd = static_cast<int16_t*>(PsramAlloc(2 * SHD_LEN * sizeof(int16_t)));
     for (auto& b : dbuf) {
       if (!b) b = static_cast<int16_t*>(PsramAlloc(dlen * sizeof(int16_t)));
@@ -67,13 +69,13 @@ public:
   }
 
   void Release() {
-    free(mem);
+    FreeAny(mem);
     mem = nullptr;
-    free(pre);
+    FreeAny(pre);
     pre = nullptr;
     GiveLines(rv);
     rv = nullptr;
-    free(sh);
+    FreeAny(sh);
     sh = nullptr;
     if (shd) PsramFree(shd);
     shd = nullptr;
@@ -93,7 +95,7 @@ public:
     __disable_irq();
     mem = nullptr; pre = nullptr; sh = nullptr;
     __enable_irq();
-    free(m); free(p); free(s);
+    FreeAny(m); FreeAny(p); FreeAny(s);
   }
   bool ready() const { return mem && rv && pre && sh && dbuf[0] && dbuf[1]; }
   bool HoldsRam2() const { return mem || pre || sh; }
@@ -255,6 +257,8 @@ private:
   const size_t short_len;  // ... at the full rate
   bool half = false;       // LONG: stored at half the rate
   void WriteBlock(const int16_t* const* wr);
+  static void* Ram2OrPsram(size_t n, bool zero);
+  static void FreeAny(void* p);
   void Install(int16_t* l, int16_t* r, size_t len, bool h);
   int16_t* dbuf[2] = {nullptr, nullptr};
   size_t wpos = 0;
@@ -1047,4 +1051,13 @@ FLASHMEM bool AudioEffectEcho::SetLong(bool on, size_t long_len) {
   }
   Install(l, r, n, on);
   return true;
+}
+
+FLASHMEM void* AudioEffectEcho::Ram2OrPsram(size_t n, bool zero) {
+  void* p = zero ? calloc(n, 1) : malloc(n);
+  return p ? p : PsramAlloc(n);
+}
+FLASHMEM void AudioEffectEcho::FreeAny(void* p) {
+  if (!p) return;
+  if (IsPsram(p)) PsramFree(p); else free(p);
 }
