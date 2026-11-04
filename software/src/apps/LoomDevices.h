@@ -3700,6 +3700,10 @@ private:
   bool expanding = false;
   bool trim_wanted = false;  // its page left: trim as soon as it can (not in a crossfade, the BPM found)
   bool page_open = false;
+  // SNAP left BEAT by hand: the loop stays where the beats (and the fine
+  // tune) had put it, the fine tune then 0 (OFF / ZERO go on from there)
+  int8_t snap_was = -1;  // -1: none yet (a new file, the settings loading)
+  void SnapChanged();
   uint32_t trim_try_at = 0;  // (tried at most every 200 ms: each try copies the loop)
   size_t exp_got = 0;
   int16_t* exp_buf[2] = {nullptr, nullptr};
@@ -4139,6 +4143,7 @@ FLASHMEM void PlayerDevice::Deactivate() {
 
 // reads the WAV header, then Idle() fills the buffer
 FLASHMEM void PlayerDevice::Load(int i) {
+  snap_was = -1;  // (a new file: nothing to keep from the last one's beats)
   play_after = active && Playing();  // (before the old file stops below)
   WriteMeta();  // what the last file had, before it goes
   fx.CancelPress();  // a start waiting for its beat was for the old file
@@ -4558,7 +4563,7 @@ FLASHMEM void PlayerDevice::Apply(int p) {
       mode[p == START ? END : START] = mode[p];  // one zoom for both
       Window();
       break;
-    case SNAP: Window(); break;
+    case SNAP: SnapChanged(); Window(); break;
     case XFADE:  // up to 1 s (finer at the short end); CROSS or INOUT (a dip)
       fx.SetSeam(XfadeFrames());
       stream.SetSeam(XfadeFrames());
@@ -4676,6 +4681,22 @@ FLASHMEM void PlayerDevice::NudgeMode(int p, int dir) {
   const uint16_t bit = uint16_t(1u << SNAP);
   mode_named = uint16_t(k ? mode_named | bit : mode_named & ~bit);
   Apply(SNAP);
+}
+
+FLASHMEM void PlayerDevice::SnapChanged() {
+  const int was = snap_was;
+  snap_was = int8_t(cur[SNAP]);
+  if (was != SNAP_BEAT || cur[SNAP] == SNAP_BEAT || cur[SNAP] != val[SNAP]) return;  // (modulated: as it was)
+  if (!page_open || loading || analysing || streaming || bpm <= 0.0f || !Frames()) return;
+  size_t a, b;
+  cur[SNAP] = SNAP_BEAT;  // where BEAT had them
+  LoopEdges(a, b);
+  cur[SNAP] = int16_t(snap_was);
+  ex_pos[0] = uint32_t(a); ex_pos[1] = uint32_t(b);
+  ex_valid = true;
+  mode[SNAP] = 0;  // the fine tune is in the edges now
+  mode_named = uint16_t(mode_named & ~(1u << SNAP));
+  EdgesToSettings();
 }
 
 // A: play / stop; B: back to the start
