@@ -4040,7 +4040,7 @@ namespace loom {
   // 14: DRAFT in FIBRE's order SPEED SIZE PITCH POS (was PITCH POS SIZE SPEED)
   // 15: DRAFT page 2 DIFF TONE SPRD MIX (was TONE FDBK SPRD MIX, TONE's mode
   //     the diffusion)
-  constexpr uint8_t SAVE_VERSION = 34;  // 34: REPEAT's TIME 3 s (was 6); 33: TABBY's page 2 ROLL GATE RESET START; 32: TABBY's DENS (4th setting) became CHANC; 31: SPOOL IN MON LEVEL first, CLOTH PLUSH / SPLIT; 21: TREADLE, a 6th modulator type; 22: PICK, a 7th; 23: TREADLE's LEN per part; 24: TREADLE's CHAOS -32..32; 25: TREADLE's pages; 26: STYLE / BEAT for X / Y; 27: TWILL's HITS; 28: TWILL's TONE gone, HITS in its place; 29: TWILL's VARI; 30: TWILL sound / strike pages
+  constexpr uint8_t SAVE_VERSION = 35;  // 35: REPEAT's TIME 16 s (its clock values in 20 .. 16000); 34: REPEAT's TIME 3 s (was 6); 33: TABBY's page 2 ROLL GATE RESET START; 32: TABBY's DENS (4th setting) became CHANC; 31: SPOOL IN MON LEVEL first, CLOTH PLUSH / SPLIT; 21: TREADLE, a 6th modulator type; 22: PICK, a 7th; 23: TREADLE's LEN per part; 24: TREADLE's CHAOS -32..32; 25: TREADLE's pages; 26: STYLE / BEAT for X / Y; 27: TWILL's HITS; 28: TWILL's TONE gone, HITS in its place; 29: TWILL's VARI; 30: TWILL sound / strike pages
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -4174,9 +4174,10 @@ namespace loom {
     const bool dens_gone = use && !memcmp(tag, "PCK", 4) && load_version < 32;  // TABBY: DENS -> CHANC
     // before v33 TABBY's page 2 was START ROLL RESET GATE: now ROLL GATE RESET START
     const bool tabby_v33 = use && !memcmp(tag, "PCK", 4) && load_version < 33;
-    // until v34 REPEAT's TIME went to 6 s (20 .. 6000): on the clock its note
-    // value is kept (the same place in 20 .. 3000); free, over 3 s is 3 s
-    const bool echo_v34 = use && !memcmp(tag, "ECO", 4) && load_version < 34;
+    // REPEAT's TIME on the clock: its note value was kept in 20 .. 6000
+    // until v34, in 20 .. 3000 in v34, in 20 .. 16000 since v35 (the same
+    // note value, the same place in the range); free it is in ms anyway
+    const int echo_hi = use && !memcmp(tag, "ECO", 4) ? (load_version < 34 ? 6000 : load_version < 35 ? 3000 : 0) : 0;
     static constexpr int8_t TABBY_V33[8] = {0, 1, 2, 3, PickMod::P_START, PickMod::P_ROLL, PickMod::P_RESET, PickMod::P_GATE};
     int old_dub = -1;
     // before v13 CLOTH's page 2 was band gains (0.5 dB steps; LOW's mode the
@@ -4253,7 +4254,7 @@ namespace loom {
       }
       d->mod_amt2[p] = constrain(amt2, -100, 100);
       d->mod_bus2[p] = bus2 <= MIDI_BUS ? bus2 : 0;
-      if (echo_v34 && p == EchoDevice::TIME && md != SYNC_FREE) v = int16_t(20 + (int(v) - 20) * 2981 / 5981);
+      if (echo_hi && p == EchoDevice::TIME && md != SYNC_FREE) v = int16_t(20 + (int(v) - 20) * 15981 / (echo_hi - 19));
       const ParamDef& pd = d->param(p);
       d->val[p] = constrain(v, pd.min, pd.max);
       d->mode[p] = pd.nmodes ? constrain(md, 0, pd.nmodes - 1) : 0;
