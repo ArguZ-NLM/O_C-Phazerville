@@ -34,13 +34,13 @@ inline bool IsPsram(const void* p) { return (uint32_t(p) >> 28) == 7; }
 // go through extmem_malloc, so they are told about here)
 void PsramTraceAdd(void* p, size_t n, uint32_t at);
 void PsramTraceDrop(void* p);
-// where the block is taken: an address in the function PsramAlloc went
-// into (addr2line -i names it)
-#define PSRAM_HERE() ({ uint32_t pc_; asm volatile("mov %0, pc" : "=r"(pc_)); pc_; })
+// who took the block: PsramAlloc's caller (it is never inlined, so this
+// is the device's own code)
+#define PSRAM_HERE() uint32_t(__builtin_return_address(0))
 #endif
 
 // a zeroed block, in PSRAM if there is room (else in RAM2, like extmem_calloc)
-inline void* PsramAlloc(size_t n) {
+__attribute__((noinline)) inline void* PsramAlloc(size_t n) {
 #if defined(ARDUINO_TEENSY41)
   if (external_psram_size) {
     smalloc_pool& pool = extmem_smalloc_pool;
