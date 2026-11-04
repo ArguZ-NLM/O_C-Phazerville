@@ -3533,7 +3533,8 @@ public:
   int Step(int p, int v, int dir) const override;
   bool ModeIsView(int p) const override { return p == START || p == END; }
   // START / END: a click is one pixel of the picture at its zoom
-  int MaxAccel(int p) const override { return p == START || p == END ? 8 : Device::MaxAccel(p); }
+  // (on the beats: one step a click however fast it is turned)
+  int MaxAccel(int p) const override { return p == START || p == END ? (OnBeats() ? 1 : 8) : Device::MaxAccel(p); }
   void Format(int p, char* buf, size_t n) const override;
   void FormatMode(int p, char* buf, size_t n) const override;
   void Action(int a) override;
