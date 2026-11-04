@@ -301,7 +301,7 @@ FLASHMEM void AudioEffectClouds::UpdateEco(audio_block_t** in, audio_block_t** o
         for (auto& g : e.g) g.active = false;
         for (auto& g : grains) g.active = false;
         burst_ = 0;
-        memset(feedback_buf_, 0, sizeof(feedback_buf_));
+        memset(feedback_buf_, 0, MAX_CHANNELS * AUDIO_BLOCK_SAMPLES * sizeof(float));
         release_blocks(in, out);
         return;
     }
@@ -354,7 +354,7 @@ FLASHMEM void AudioEffectClouds::UpdateEco(audio_block_t** in, audio_block_t** o
 
     // the grains: each one's stretch copied from PSRAM, read with Hermite,
     // coloured, windowed (every 8 samples, glided between), panned
-    memset(accum_, 0, sizeof(accum_));
+    memset(accum_, 0, MAX_CHANNELS * AUDIO_BLOCK_SAMPLES * sizeof(float));
     const bool stereo = nch_ > 1;
     for (auto& g : e.g) {
         if (!g.active) continue;

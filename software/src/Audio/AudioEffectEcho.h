@@ -1056,11 +1056,5 @@ FLASHMEM bool AudioEffectEcho::SetLong(bool on, size_t long_len) {
   return true;
 }
 
-FLASHMEM void* AudioEffectEcho::Ram2OrPsram(size_t n, bool zero) {
-  void* p = zero ? calloc(n, 1) : malloc(n);
-  return p ? p : PsramAlloc(n);
-}
-FLASHMEM void AudioEffectEcho::FreeAny(void* p) {
-  if (!p) return;
-  if (IsPsram(p)) PsramFree(p); else free(p);
-}
+FLASHMEM void* AudioEffectEcho::Ram2OrPsram(size_t n, bool) { return FastAlloc(n); }
+FLASHMEM void AudioEffectEcho::FreeAny(void* p) { FastFree(p); }

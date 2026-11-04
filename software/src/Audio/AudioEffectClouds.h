@@ -57,9 +57,12 @@ public:
           g_buffer{ CloudsCircBuffer<int16_t>(buf_len), CloudsCircBuffer<int16_t>(buf_len) },
           nch_(channels > 1 ? 2 : 1) {}
 
-    void Acquire() { for (int c = 0; c < nch_; c++) g_buffer[c].Acquire(); }
-    void Release() { for (int c = 0; c < nch_; c++) g_buffer[c].Release(); }
+    // the buffers, and the working memory only while in use (Loom keeps a
+    // FIBRE and a FLOCK on each track: unused they held 3 KB of RAM2 each)
+    void Acquire();
+    void Release();
     bool IsReady() const {
+        if (!work_) return false;
         for (int c = 0; c < nch_; c++) if (!g_buffer[c].IsReady()) return false;
         return true;
     }
@@ -181,11 +184,13 @@ private:
     const int nch_;
 
     // Feedback and grain sums — member arrays (not stack) to avoid stack pressure.
-    float feedback_buf_[MAX_CHANNELS][AUDIO_BLOCK_SAMPLES] = {};
-    float accum_[MAX_CHANNELS][AUDIO_BLOCK_SAMPLES] = {};
+    struct Work;
+    Work* work_ = nullptr;
+    float (*feedback_buf_)[AUDIO_BLOCK_SAMPLES] = nullptr;  // [MAX_CHANNELS], in work_
+    float (*accum_)[AUDIO_BLOCK_SAMPLES] = nullptr;         // [MAX_CHANNELS], in work_
     // one grain's samples for the current block, read from PSRAM in one go
     static const int SPAN_MAX = AUDIO_BLOCK_SAMPLES * 4 + 8;
-    int16_t span_[SPAN_MAX];
+    int16_t* span_ = nullptr;  // [SPAN_MAX], in work_
 
     struct Grain;
     void SlowGrain(Grain& g, int first, float t, float t_step,
@@ -310,7 +315,7 @@ FASTRUN void AudioEffectClouds::update() {
     if (rest) {
         for (auto& g : grains) g.active = false;  // none left over on return
         burst_ = 0;
-        memset(feedback_buf_, 0, sizeof(feedback_buf_));
+        memset(feedback_buf_, 0, MAX_CHANNELS * AUDIO_BLOCK_SAMPLES * sizeof(float));
         release_blocks(in, out);
         return;
     }
@@ -363,7 +368,7 @@ FASTRUN void AudioEffectClouds::update() {
     //   (1/len per side precomputed at spawn — 0 per-sample cost).
     //
     // Hann: read Q15 LUT, convert with one fmul. No sinf in the hot path.
-    memset(accum_, 0, sizeof(accum_));
+    memset(accum_, 0, MAX_CHANNELS * AUDIO_BLOCK_SAMPLES * sizeof(float));
     const uint8_t active_at_start = ActiveGrainCount();
     const bool stereo = nch_ > 1;
 
@@ -587,6 +592,38 @@ FLASHMEM void AudioEffectClouds::spawnGrain(float cur_pos, float cur_size, float
     g->scatter       = eff_pos - cur_pos;
     g->semis         = rand_semis;
     g->active        = true;
+}
+
+struct AudioEffectClouds::Work {
+    float feedback[MAX_CHANNELS][AUDIO_BLOCK_SAMPLES];
+    float accum[MAX_CHANNELS][AUDIO_BLOCK_SAMPLES];
+    int16_t span[SPAN_MAX];
+};
+
+FLASHMEM void AudioEffectClouds::Acquire() {
+    for (int c = 0; c < nch_; c++) g_buffer[c].Acquire();
+    if (!work_) {
+        Work* w = static_cast<Work*>(FastAlloc(sizeof(Work)));
+        if (!w) return;
+        AudioNoInterrupts();
+        feedback_buf_ = w->feedback;
+        accum_ = w->accum;
+        span_ = w->span;
+        work_ = w;  // (IsReady from here on)
+        AudioInterrupts();
+    }
+}
+
+FLASHMEM void AudioEffectClouds::Release() {
+    Work* w = work_;
+    AudioNoInterrupts();
+    work_ = nullptr;
+    feedback_buf_ = nullptr;
+    accum_ = nullptr;
+    span_ = nullptr;
+    AudioInterrupts();
+    FastFree(w);
+    for (int c = 0; c < nch_; c++) g_buffer[c].Release();
 }
 
 FLASHMEM bool AudioEffectClouds::Resize(size_t samples) {

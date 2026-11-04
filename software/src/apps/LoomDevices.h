@@ -6686,7 +6686,11 @@ private:
   volatile float head_f = 0.0f;  // hist_pos + hist_blocks, set in one go
   // Clouds' diffuser: four allpasses a side, its lengths (at 32 kHz) x 1.5
   static constexpr int AP_MEM = 1529 + 1511;
-  float ap_mem[AP_MEM] = {};
+  float* ap_mem = nullptr;  // [AP_MEM], only while DRAFT is in use (12 KB: RAM2, else PSRAM)
+public:
+  bool TakeDiffuser() { if (!ap_mem) ap_mem = static_cast<float*>(FastAlloc(AP_MEM * sizeof(float))); return ap_mem; }
+  void GiveDiffuser() { float* m = ap_mem; ap_mem = nullptr; FastFree(m); }
+private:
   int ap_at[2][4] = {};
   float diff_a = 0.0f;  // the amount as heard (ramped per block)
   float mix_g = 1.0f;   // MIX's variation, as a gain on the wet part
@@ -6727,6 +6731,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioStretch::Diffuse(float* x, flo
   constexpr float kap = 0.625f;
   const float step = (to - from) / AUDIO_BLOCK_SAMPLES;
   float* mem = ap_mem;
+  if (!mem) { diff_a = 0.0f; return; }
   for (int c = 0; c < 2; c++) {
     float* b[4];
     int at[4];
@@ -6768,7 +6773,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioStretch::update() {  // (O2: t
   if (resting) {  // back: fresh windows, no old filter state
     resting = false;
     voice.Restart();
-    memset(ap_mem, 0, sizeof(ap_mem));
+    if (ap_mem) memset(ap_mem, 0, AP_MEM * sizeof(float));
     for (int c = 0; c < 2; c++) lp_z[c] = hp_z[c] = 0.0f;
   }
   audio_block_t* o[2] = {allocate(), allocate()};
@@ -6871,12 +6876,14 @@ public:
   bool ok() const override { return fx.voice.ok(); }
   bool Activate() override {
     if (!fx.voice.Init(BUF_SECS)) return false;
+    fx.TakeDiffuser();  // (none: DIFF does nothing)
     ApplyAll();
     active = true;
     return true;
   }
   void Deactivate() override {
     fx.voice.Free();  // (lets the audio go first itself)
+    fx.GiveDiffuser();
     active = false;
   }
   // the correlator's search, from the main loop: each time a whole search

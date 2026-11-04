@@ -29,6 +29,19 @@ inline void PsramZero(void* p, size_t n) {
 
 inline bool IsPsram(const void* p) { return (uint32_t(p) >> 28) == 7; }
 
+// the memory budget: what the module has (0, 8 or 16 MB of PSRAM, read at
+// start) and what Loom's blocks hold of it, counted as they are taken and
+// given back, so a device can ask what is left without walking the pool
+inline size_t psram_used = 0;
+inline size_t PsramTotal() {
+#if defined(ARDUINO_TEENSY41)
+  return size_t(external_psram_size) << 20;
+#else
+  return 0;
+#endif
+}
+inline size_t PsramRoom() { const size_t t = PsramTotal(); return t > psram_used ? t - psram_used : 0; }
+
 #ifdef PSRAM_TRACE
 // (PsramTrace.cpp: USB 'A' lists who holds the PSRAM; these blocks don't
 // go through extmem_malloc, so they are told about here)
@@ -52,6 +65,7 @@ __attribute__((noinline)) inline void* PsramAlloc(size_t n) {
       // (cleared all the same: an engine still writing while its block
       // went back would leave something in "free" memory)
       PsramZero(p, n);
+      psram_used += n;
 #ifdef PSRAM_TRACE
       PsramTraceAdd(p, n, PSRAM_HERE());
 #endif
@@ -61,6 +75,17 @@ __attribute__((noinline)) inline void* PsramAlloc(size_t n) {
 #endif
   return calloc(n, 1);
 }
+
+inline void PsramFree(void* p);
+
+// working memory an engine touches every block: RAM2 if there is room
+// (quicker), PSRAM when RAM2's heap is short. Zeroed. FastFree gives
+// either kind back
+inline void* FastAlloc(size_t n) {
+  void* p = calloc(n, 1);
+  return p ? p : PsramAlloc(n);
+}
+inline void FastFree(void* p);
 
 inline void PsramFree(void* p) {
   if (!p) return;
@@ -74,6 +99,7 @@ inline void PsramFree(void* p) {
     // long, cleared by sm_free itself) and the slack, up to rsz + a header
     const size_t rsz = static_cast<const size_t*>(p)[-3];
     const size_t usz = static_cast<const size_t*>(p)[-2];
+    psram_used = psram_used > usz ? psram_used - usz : 0;
     constexpr size_t HDR = 3 * sizeof(size_t);
     PsramZero(p, usz);
     smalloc_pool& pool = extmem_smalloc_pool;
@@ -84,6 +110,14 @@ inline void PsramFree(void* p) {
     if (rsz > usz) PsramZero(static_cast<char*>(p) + usz + HDR, rsz - usz);
     return;
   }
+#endif
+  free(p);
+}
+
+inline void FastFree(void* p) {
+  if (!p) return;
+#if defined(ARDUINO_TEENSY41)
+  if (IsPsram(p)) { PsramFree(p); return; }
 #endif
   free(p);
 }
