@@ -3579,6 +3579,13 @@ public:
   void RestoreEdges(uint32_t a, uint32_t b) { ex_pos[0] = a; ex_pos[1] = b; ex_valid = true; keep_exact = true; loaded = -1; }
   size_t EdgeAt(int p) const;  // START / END in frames
   void DrawViz(int x, int y, int w, int h) override;
+  // the cursor on SNAP (snapping, in memory): the loop's start and end close
+  // up side by side, each centred on where it lands (SNAP_VIEW_MS across)
+  static constexpr int SNAP_VIEW_MS = 64;
+  void DrawEdgeClose(int x, int w, int wy, int wh, size_t at, bool start) const;
+  // SNAP BEAT with a tempo: which beat of the file a frame is nearest, the
+  // first beat in the file being 1
+  int BeatNumber(size_t at) const;
   void DrawMini(int x, int y, int w, int h) override;
   void CpuMax(float parts[2]) override {
     parts[0] = fx.processorUsageMax();
@@ -4587,6 +4594,10 @@ FLASHMEM void PlayerDevice::Format(int p, char* buf, size_t n) const {
     // its share of the file (USB '=' tries values out without moving the
     // live edge, which kept showing the same time for all of them)
     const size_t at = cur[p] == val[p] ? EdgeAt(p) : size_t(uint64_t(val[p]) * fr / 10000);
+    if (cur[SNAP] == SNAP_BEAT && bpm > 0.0f && !streaming) {  // on the beats: the beat it lands on
+      snprintf(buf, n, "B%d", BeatNumber(at));
+      return;
+    }
     const uint32_t ms = uint32_t(uint64_t(at) * 1000 / uint64_t(AUDIO_SAMPLE_RATE_EXACT * rate));
     FormatSeconds(ms, buf, n);
   } else if (p == SPEED) {  // SYNC: as it really plays (the file's tempo to the clock's)
@@ -4686,7 +4697,8 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
   // the whole second page (START END XFADE SNAP) keeps the zoom, centred on
   // START or END, whichever the cursor was on last
   if (view_cursor == START || view_cursor == END) zoom_edge = view_cursor;
-  const bool zoomed = view_cursor == START || view_cursor == END || view_cursor == XFADE || view_cursor == SNAP;
+  const bool snap_view = view_cursor == SNAP && cur[SNAP] && !streaming && Frames();  // (its own close-ups, see below)
+  const bool zoomed = !snap_view && (view_cursor == START || view_cursor == END || view_cursor == XFADE || view_cursor == SNAP);
   const int zm = zoomed ? mode[START] : 0;
   {
     // the top line: the name, then the zoom (time across), then one tag at
@@ -4718,6 +4730,15 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
   // nothing yet: the file isn't read in until Idle() gets to it (start-up,
   // a new FILE); "can't read" only once a load of this file has failed
   if (!n) { gfxPrint(x + 28, cy - 4, loaded == fi ? PSTR("can't read") : PSTR("loading")); return; }
+  if (snap_view) {
+    size_t a, b;
+    LoopEdges(a, b);
+    const int wy = y + 9, wh = h - 9, hw = w / 2;
+    DrawEdgeClose(x, hw - 1, wy, wh, a, true);
+    DrawEdgeClose(x + hw + 1, w - hw - 1, wy, wh, b, false);
+    for (int yy = wy; yy <= base; yy += 2) gfxPixel(x + hw, yy);  // between the two
+    return;
+  }
   // zoomed: the point being set stays in the middle (down to a sample per
   // pixel); otherwise the START..END section with a little room, or the whole
   // file. Past the file's ends there is a dotted line.
@@ -4857,6 +4878,54 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
     const int hx = sx(size_t((streaming ? stream.HeadPos() : fx.HeadPos()) * n));
     if (hx >= x && hx < x + w) gfxInvert(hx, wy, 1, wh);
   }
+}
+
+// one close-up of a loop edge: the wave lowest to highest per column (from
+// memory), solid inside the loop, every other column outside it (what the
+// edge leaves out: a silent start shows as a flat line before it), the edge
+// a line in the middle, the beats as ticks along the bottom, the head
+FLASHMEM void PlayerDevice::DrawEdgeClose(int x, int w, int wy, int wh, size_t at, bool start) const {
+  const size_t n = Frames();
+  const int64_t span = std::max<int64_t>(w, int64_t(SNAP_VIEW_MS * 0.001 * FileRate()));
+  const int64_t v0 = int64_t(at) - span / 2;
+  const int wc = wy + wh / 2, base = wy + wh - 1;
+  const int16_t* l = fx.Data(0);
+  const int16_t* r = fx.Data(1);
+  for (int c = 0; c < w; c++) {
+    const int64_t a = v0 + int64_t(c) * span / w, b = std::max(a + 1, v0 + int64_t(c + 1) * span / w);
+    const bool inside = start ? a >= int64_t(at) : a < int64_t(at);
+    if (b <= 0 || a >= int64_t(n)) { if (c % 2 == 0) gfxPixel(x + c, wc); continue; }
+    if (!inside && c % 2) continue;
+    int lo = 32767, hi = -32768;
+    for (int64_t i = std::max<int64_t>(0, a); i < std::min<int64_t>(int64_t(n), b); i++) {
+      const int v = (l[i] + r[i]) / 2;
+      lo = std::min(lo, v); hi = std::max(hi, v);
+    }
+    if (lo > hi) continue;
+    gfxLine(x + c, wc - int(hi / 32768.0f * (wh / 2 - 1)), x + c, wc - int(lo / 32768.0f * (wh / 2 - 1)));
+  }
+  auto sx = [&](double pos) { return x + int((pos - double(v0)) * (w - 1) / double(span)); };
+  if (cur[SNAP] == SNAP_BEAT && bpm > 0.0f) {
+    const double beat = BeatFrames();
+    for (double pos = bpm_phase + std::ceil((double(v0) - bpm_phase) / beat) * beat; pos < double(v0 + span); pos += beat) {
+      const int bx = sx(pos);
+      if (bx >= x && bx < x + w) gfxLine(bx, base - 2, bx, base);
+    }
+  }
+  const int ex = x + w / 2;
+  graphics.clearRect(ex - 1, wy, 3, wh);
+  gfxLine(ex, wy, ex, base);
+  if (Playing()) {
+    const int hx = sx(double(fx.HeadPos()) * double(n));
+    if (hx >= x && hx < x + w) gfxInvert(hx, wy, 1, wh);
+  }
+}
+
+FLASHMEM int PlayerDevice::BeatNumber(size_t at) const {
+  const double beat = BeatFrames();
+  const double ph = bpm_phase + double(trim_off);  // (counted in the whole, also while trimmed)
+  const double first = std::ceil(-ph / beat);  // (the first beat at or after the start)
+  return int(std::lround((double(at + trim_off) - ph) / beat) - first) + 1;
 }
 
 // the header: playing, the head's place in the whole file (m:ss.t);
