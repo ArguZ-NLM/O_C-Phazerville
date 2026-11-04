@@ -949,7 +949,7 @@ FLASHMEM static float WorstCost(const Device* d) {
   if (!strcmp(t, "SID")) return 34.0f + 23.0f * float(static_cast<const SidDevice*>(d)->Chips() - 1);
   if (!strcmp(t, "DRM")) return static_cast<const DreamBase*>(d)->Cost();
   if (!strcmp(t, "SPR")) return 6.0f;   // FIBRE
-  if (!strcmp(t, "FLK")) return 10.0f;  // FLOCK (up to 20 grains, from flash)
+  if (!strcmp(t, "FLK")) return 20.0f;  // FLOCK (up to 20 grains, from flash; 18 % measured at its defaults)
   if (!strcmp(t, "RES")) return 3.0f;   // REED
   return 3.0f;
 }
