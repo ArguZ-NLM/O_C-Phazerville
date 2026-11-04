@@ -3703,6 +3703,12 @@ private:
   // SNAP left BEAT by hand: the loop stays where the beats (and the fine
   // tune) had put it, the fine tune then 0 (OFF / ZERO go on from there)
   int8_t snap_was = -1;  // -1: none yet (a new file, the settings loading)
+  // ... and back to BEAT with the edges untouched since: the grid points and
+  // the fine tune it had, so it lands exactly where it was again (the quiet
+  // spot found near the grid, rounded again, could reach the next sixteenth)
+  bool beat_keep = false;
+  uint32_t beat_grid[2] = {0, 0}, beat_raw[2] = {0, 0};
+  uint8_t beat_shift = 0;
   void SnapChanged();
   uint32_t trim_try_at = 0;  // (tried at most every 200 ms: each try copies the loop)
   size_t exp_got = 0;
@@ -4144,6 +4150,7 @@ FLASHMEM void PlayerDevice::Deactivate() {
 // reads the WAV header, then Idle() fills the buffer
 FLASHMEM void PlayerDevice::Load(int i) {
   snap_was = -1;  // (a new file: nothing to keep from the last one's beats)
+  beat_keep = false;
   play_after = active && Playing();  // (before the old file stops below)
   WriteMeta();  // what the last file had, before it goes
   fx.CancelPress();  // a start waiting for its beat was for the old file
@@ -4686,13 +4693,31 @@ FLASHMEM void PlayerDevice::NudgeMode(int p, int dir) {
 FLASHMEM void PlayerDevice::SnapChanged() {
   const int was = snap_was;
   snap_was = int8_t(cur[SNAP]);
-  if (was != SNAP_BEAT || cur[SNAP] == SNAP_BEAT || cur[SNAP] != val[SNAP]) return;  // (modulated: as it was)
-  if (!page_open || loading || analysing || streaming || bpm <= 0.0f || !Frames()) return;
+  if (cur[SNAP] != val[SNAP]) return;  // (modulated: as it was)
+  if (!page_open || loading || analysing || streaming || bpm <= 0.0f || !Frames()) { beat_keep = false; return; }
+  if (cur[SNAP] == SNAP_BEAT && was >= 0 && was != SNAP_BEAT) {  // back to BEAT
+    if (beat_keep && ex_valid && ex_pos[0] == beat_raw[0] && ex_pos[1] == beat_raw[1]) {
+      ex_pos[0] = beat_grid[0]; ex_pos[1] = beat_grid[1];
+      mode[SNAP] = beat_shift;
+      mode_named = uint16_t(SnapShift() ? mode_named | (1u << SNAP) : mode_named & ~(1u << SNAP));
+      EdgesToSettings();
+    }
+    beat_keep = false;
+    return;
+  }
+  if (was != SNAP_BEAT || cur[SNAP] == SNAP_BEAT) return;
   size_t a, b;
   cur[SNAP] = SNAP_BEAT;  // where BEAT had them
   LoopEdges(a, b);
   cur[SNAP] = int16_t(snap_was);
-  ex_pos[0] = uint32_t(a); ex_pos[1] = uint32_t(b);
+  const double step = BeatFrames() / 16.0;  // (the grid points the edges were on)
+  for (int k = 0; k < 2; k++) {
+    const double g = bpm_phase + std::round((double(EdgeAt(k ? END : START)) - bpm_phase) / step) * step;
+    beat_grid[k] = uint32_t(std::clamp(g, 0.0, double(Frames())));
+  }
+  beat_shift = mode[SNAP];
+  ex_pos[0] = beat_raw[0] = uint32_t(a); ex_pos[1] = beat_raw[1] = uint32_t(b);
+  beat_keep = true;
   ex_valid = true;
   mode[SNAP] = 0;  // the fine tune is in the edges now
   mode_named = uint16_t(mode_named & ~(1u << SNAP));
