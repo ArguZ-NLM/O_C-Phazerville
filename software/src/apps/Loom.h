@@ -753,6 +753,17 @@ FLASHMEM void AppLoom::SetChoice(int t, int s, int option) {
   if (!active) return;
   Device* now = tr.current(s);
   if (now) now->Activate();
+  if (now && old && old != now && !now->ok()) {
+    // no room for both (the new one takes its memory before the old one
+    // lets go, for the crossfade): the old one goes first, the slot passing
+    // the sound on meanwhile, and the new one tries again
+    tr.choice[s] = 0;
+    Repatch(t);
+    old->Deactivate();
+    old = nullptr;
+    tr.choice[s] = option;
+    now->Activate();
+  }
   Repatch(t);
   if (old) old->Deactivate();
 }

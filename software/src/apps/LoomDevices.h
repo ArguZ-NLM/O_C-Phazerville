@@ -4161,7 +4161,8 @@ FLASHMEM void PlayerDevice::Load(int i) {
         clipped = true;
       }
       // up to 16 s: into memory, in a buffer of the file's own length
-      if (frames <= max_frames && fx.Resize(std::max<size_t>(frames, MIN_BUF))) {
+      // (no room next to the last file: that one goes first)
+      if (frames <= max_frames && fx.ResizeFreeing(std::max<size_t>(frames, MIN_BUF))) {
         loading = true;
         return;
       }
@@ -6187,7 +6188,9 @@ FLASHMEM SprayDevice::SprayDevice(bool eco_on)
 
 // called while the stream is not patched in
 FLASHMEM bool SprayDevice::Activate() {
-  if (active) return fx.IsReady() && (!eco || fx.IsEco());
+  if (active && fx.IsReady() && (!eco || fx.IsEco())) return true;
+  // (again after a failed try: memory may have come free since; what it
+  // got the first time it keeps)
   fx.Acquire();
   if (eco) fx.EcoAcquire();
   fx.setGrainSource(0.0f);

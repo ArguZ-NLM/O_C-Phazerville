@@ -34,10 +34,13 @@ struct Impl {
 FLASHMEM bool StretchVoice::Init(float seconds) {
   if (ready_) return true;
   const int32_t frames = int32_t(seconds * AUDIO_SAMPLE_RATE_EXACT);
+  // the Clouds objects in RAM2 (quicker), in PSRAM when RAM2's heap is
+  // short (with every device in use it has a few KB left)
   void* im = malloc(sizeof(Impl));
+  if (!im) im = PsramAlloc(sizeof(Impl));
   buf_ = static_cast<int16_t*>(PsramAlloc(size_t(frames) * 2 * sizeof(int16_t)));
   if (!im || !buf_) {
-    free(im);
+    if (im) { if (IsPsram(im)) PsramFree(im); else free(im); }
     if (buf_) PsramFree(buf_);
     buf_ = nullptr;
     return false;
@@ -65,7 +68,7 @@ FLASHMEM void StretchVoice::Free() {
   buf_ = nullptr;
   AudioInterrupts();
   p->~Impl();
-  free(p);
+  if (IsPsram(p)) PsramFree(p); else free(p);
   PsramFree(b);
 }
 

@@ -51,6 +51,21 @@ public:
     for (auto b : old) if (b) PsramFree(b);
     return true;
   }
+  // the same, but when both don't fit the old one goes first (a moment
+  // without a buffer: the stream passes silence): SHUTTLE's next file,
+  // whose old one stops anyway. false: no room even then, and no buffer
+  bool ResizeFreeing(size_t n) {
+    if (Resize(n)) return true;
+    int16_t* old[2];
+    AudioNoInterrupts();
+    old[0] = buf[0]; old[1] = buf[1];
+    buf[0] = buf[1] = nullptr;
+    cap = 0;
+    Reset();
+    AudioInterrupts();
+    for (auto b : old) if (b) PsramFree(b);
+    return Resize(n);
+  }
   // --- SPOOL: memory only for what is recorded ---
   // Empty, it keeps just PARK frames (the live input still passes through);
   // REC first takes the longest buffer that fits (Grow, whole seconds down
