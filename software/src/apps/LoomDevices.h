@@ -3555,7 +3555,7 @@ public:
   // SNAP BEAT with a tempo found (in memory): START / END's L knob picks the
   // grid instead of the zoom: 0 all (beats), 1 BEAT, 2 1/2, 3 1/4, 4 1/8,
   // 5 1/16; the picture then shows 4 steps of it across (4 beats .. a
-  // quarter beat), a click of START / END is one step, SNAP lands on it
+  // quarter beat), a click of START / END is one step onto it (SNAP lands on sixteenths, so the grid can change without moving the loop)
   static constexpr int GRID_MODES = 6;
   bool OnBeats() const;
   int GridDiv() const;          // steps per beat: 1 2 4 8 16
@@ -4393,7 +4393,10 @@ FLASHMEM size_t PlayerDevice::SnapQuiet(size_t at) const {
 FLASHMEM size_t PlayerDevice::SnapPoint(size_t at) const {
   const size_t n = Frames();
   if (cur[SNAP] != SNAP_BEAT || bpm <= 0.0f || !n) return SnapQuiet(at);
-  const double beat = GridFrames();  // (the grid START / END's L knob picked)
+  // (the finest grid, sixteenths: an edge on any of the grids stays where
+  // it is, so START / END's L knob only changes the view and the steps,
+  // never the sound)
+  const double beat = BeatFrames() / 16.0;
   const double g = bpm_phase + std::round((double(at) - bpm_phase) / beat) * beat;
   return SnapQuiet(size_t(std::clamp(g, 0.0, double(n - 1))));
 }
@@ -4411,7 +4414,7 @@ FLASHMEM void PlayerDevice::LoopEdges(size_t& a, size_t& b) const {
   a = EdgeAt(START), b = EdgeAt(END);
   if (cur[SNAP]) {
     a = SnapPoint(a); b = SnapPoint(b);
-    if (cur[SNAP] == SNAP_BEAT && bpm > 0.0f && b <= a) b = std::min(n, SnapQuiet(std::min(n - 1, a + size_t(GridFrames()))));  // at least a step
+    if (cur[SNAP] == SNAP_BEAT && bpm > 0.0f && b <= a) b = std::min(n, SnapQuiet(std::min(n - 1, a + size_t(BeatFrames() / 16.0))));  // at least a step
     a = Shifted(a, n); b = Shifted(b, n);  // the fine tune (L knob)
   }
   if (b <= a + AUDIO_BLOCK_SAMPLES) b = std::min(n, a + AUDIO_BLOCK_SAMPLES * 2);
@@ -4853,7 +4856,7 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
   size_t ea = ea0, eb = eb0;
   if (!streaming && cur[SNAP]) {
     ea = SnapPoint(ea); eb = SnapPoint(eb);
-    if (cur[SNAP] == SNAP_BEAT && bpm > 0.0f && eb <= ea) eb = std::min(n, SnapQuiet(std::min(n - 1, ea + size_t(GridFrames()))));
+    if (cur[SNAP] == SNAP_BEAT && bpm > 0.0f && eb <= ea) eb = std::min(n, SnapQuiet(std::min(n - 1, ea + size_t(BeatFrames() / 16.0))));
     ea = Shifted(ea, n); eb = Shifted(eb, n);
   }
   // SNAP BEAT with a tempo found: the beats as ticks along the bottom (when
