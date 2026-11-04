@@ -4415,7 +4415,11 @@ FLASHMEM size_t PlayerDevice::SnapPoint(size_t at) const {
   // never the sound)
   const double beat = BeatFrames() / 16.0;
   const double g = bpm_phase + std::round((double(at) - bpm_phase) / beat) * beat;
-  return SnapQuiet(size_t(std::clamp(g, 0.0, double(n - 1))));
+  const size_t gp = size_t(std::clamp(g, 0.0, double(n - 1)));
+  // in memory: the fine tune on the grid point, then the nearest zero
+  // crossing to that (a beat found is seldom on the sample, nor is the music)
+  if (!streaming) return ZeroCross(Shifted(gp, n), 0, 220);
+  return SnapQuiet(gp);
 }
 
 FLASHMEM size_t PlayerDevice::ZeroCross(size_t at, int dir, size_t r) const {
@@ -4462,7 +4466,7 @@ FLASHMEM void PlayerDevice::LoopEdges(size_t& a, size_t& b) const {
   if (cur[SNAP]) {
     if (!held) { a = SnapPoint(a); b = SnapPoint(b); }
     if (cur[SNAP] == SNAP_BEAT && bpm > 0.0f && b <= a) b = std::min(n, SnapQuiet(std::min(n - 1, a + size_t(BeatFrames() / 16.0))));  // at least a step
-    a = Shifted(a, n); b = Shifted(b, n);  // the fine tune (L knob)
+    if (!OnBeats()) { a = Shifted(a, n); b = Shifted(b, n); }  // the fine tune (L knob; BEAT has it in SnapPoint, before the crossing)
   }
   if (b <= a + AUDIO_BLOCK_SAMPLES) b = std::min(n, a + AUDIO_BLOCK_SAMPLES * 2);
 }
