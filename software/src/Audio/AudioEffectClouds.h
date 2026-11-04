@@ -124,7 +124,26 @@ public:
 
     void update() override;
 
+    // ECO (Loom): this buffer played by ECHOFIELD's grain rules instead
+    // (AudioEffectEco.h): EcoAcquire() switches it on, EcoRelease() off
+    static const int ECO_MAX = 24;
+    static inline int eco_limit = 20;  // grains at once (fewer when the CPU is short)
+    bool EcoAcquire();
+    void EcoRelease();
+    bool IsEco() const { return eco_ != nullptr; }
+    // reverse odds 0..1, harmony 0..1, grain tone -1 (dark) .. +1 (thin), drift 0..1
+    void setReverse(float r)         { eco_rev_  = r; }
+    void setHarmony(float h)         { eco_harm_ = h; }
+    void setTone(float t)            { eco_tone_ = t; }
+    void setDrift(float d)           { eco_drift_ = d; }
+
 private:
+    struct EcoState;
+    EcoState* eco_ = nullptr;
+    volatile float eco_rev_ = 0.1f, eco_harm_ = 0.3f, eco_tone_ = -0.1f, eco_drift_ = 0.35f;
+    void UpdateEco(audio_block_t** in, audio_block_t** out);
+    void EcoSpawn(float pos, float size, float spray, float pitch, float psprd, float texture,
+                  float rate, size_t buf_size, size_t head, int pre_delay);
     uint8_t hist_[HIST] = {};
     int hist_pos_ = 0, hist_peak_ = 0;
     float hist_blocks_ = 0.0f;
@@ -230,6 +249,7 @@ FASTRUN void AudioEffectClouds::update() {
         if (!out[c]) ok = false;
     }
     if (!ok) { release_blocks(in, out); return; }
+    if (eco_) { UpdateEco(in, out); return; }  // ECO (AudioEffectEco.h)
 
     // Snapshot volatile params once for this block.
     const float  cur_pos      = pos_;
@@ -625,3 +645,5 @@ const int16_t AudioEffectClouds::hann_lut_[256] = {
     1106,   965,   833,   711,   598,   495,   401,   317,
      243,   179,   124,    80,    45,    20,     5,     0,
 };
+
+#include "AudioEffectEco.h"

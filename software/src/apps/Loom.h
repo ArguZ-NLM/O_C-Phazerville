@@ -949,6 +949,7 @@ FLASHMEM static float WorstCost(const Device* d) {
   if (!strcmp(t, "SID")) return 34.0f + 23.0f * float(static_cast<const SidDevice*>(d)->Chips() - 1);
   if (!strcmp(t, "DRM")) return static_cast<const DreamBase*>(d)->Cost();
   if (!strcmp(t, "SPR")) return 6.0f;   // FIBRE
+  if (!strcmp(t, "ECF")) return 10.0f;  // ECO (up to 20 grains, from flash)
   if (!strcmp(t, "RES")) return 3.0f;   // REED
   return 3.0f;
 }
@@ -1591,6 +1592,7 @@ static void FollowLoad() {
   AudioEffectChime::lite = lite;
   AudioEffectDirt::lite = lite;   // HEDDLE's PHASE: at most 8 stages
   AudioEffectClouds::grain_limit = lite ? 5 : 8;
+  AudioEffectClouds::eco_limit = lite ? 10 : 20;  // ECO
 }
 }  // namespace loom
 
@@ -3354,6 +3356,7 @@ FLASHMEM void AppLoom::DrawChain() const {
                       : c == RESONATOR && tr.choice[c] == 2 ? PSTR("BTR")  // BEATER
                       : c == RESONATOR && tr.choice[c] == 3 ? PSTR("TWL")  // TWILL
                       : c == SPRAY && tr.choice[c] == 2 ? PSTR("DFT")      // DRAFT
+                      : c == SPRAY && tr.choice[c] == 3 ? PSTR("ECO")      // ECO
                       : c == TEXTURE && tr.choice[c] == 2 ? PSTR("HDL")    // HEDDLE
                       : SLOT_DEFS[c].tag;
       if (strlen(tag) <= 3) {

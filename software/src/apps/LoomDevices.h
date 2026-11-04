@@ -6098,14 +6098,42 @@ PROGMEM static const DeviceDef SPRAY_DEF = {
   {"", ""},
 };
 
+/////////////////////////////////////////////////////////////////
+// ECO: FIBRE's buffer and pages, its grains played by ECHOFIELD's rules
+// (Philip Bos, MIT; AudioEffectEco.h): each grain's level by the overlap,
+// a little detune on every grain, SHAPE through five windows (plucked ..
+// swelling). Page 3 holds what FIBRE has not: REVRS (odds a grain plays
+// backwards), HARM (odds of an octave / fifth), TONE (each grain darker /
+// thinner), DRIFT (place and pitch wander). The same device class as FIBRE
+// (SprayDevice, eco on)
+/////////////////////////////////////////////////////////////////
+PROGMEM static const DeviceDef ECO_DEF = {
+  "ECO", "ECF", 12, {"FRZ", "GRN"},
+  {
+    {"RATE", -100, 100, 75, BI, 0, 2, 0, {}, {"FREE", "CLOCK"}},  // R13: about ECHOFIELD's CLOUD
+    {"SIZE", 0, 100, 90, UNI, 0, 21, 0},   // 631 ms
+    {"PITCH", -24, 24, 0, BI, 0, 25, 0},
+    {"POS", 0, 100, 50, UNI, 0, 21, 5},
+    {"SHAPE", 0, 100, 50, UNI, 0, 21, 0},  // 0 plucked, 25 flat, 50 round, 75 soft, 100 swelling
+    {"FDBK", 0, 100, 0, UNI, 0, 21, 0},
+    {"SPRD", 0, 100, 85, UNI, 0, 21, 0},
+    {"MIX", 0, 100, 50, UNI, 0, 21, 0},
+    {"REVRS", 0, 100, 10, UNI, 0, 21, 0},  // ECHOFIELD's defaults on page 3
+    {"HARM", 0, 100, 30, UNI, 0, 21, 0},
+    {"TONE", -50, 50, -5, BI, 0, 21, 0},
+    {"DRIFT", 0, 100, 35, UNI, 0, 21, 0},
+  },
+  {"", "", ""},
+};
+
 class SprayDevice : public Device {
 public:
-  enum { RATE, SIZE, PITCH, POS, SHAPE, FDBK, SPREAD, LEVEL };
-  bool Varies(int p) const override { return p == SHAPE || p == FDBK || p == SPREAD || p == LEVEL; }
+  enum { RATE, SIZE, PITCH, POS, SHAPE, FDBK, SPREAD, LEVEL, REVRS, HARM, TONE, DRIFT };
+  bool Varies(int p) const override { return p >= SHAPE; }
   // the variations' bars: all +-, out from the middle
   int BarStyle(int p) const override { return p == PITCH || p == SIZE || p == POS ? BAR_CENTRE : Device::BarStyle(p); }
   static constexpr float BUF_SECS = 4.0f;
-  SprayDevice();
+  SprayDevice(bool eco = false);
   // each grain takes PITCH, SIZE and POS once as it starts: the
   // modulator's step, never half a glide (a grain fired with the step
   // would get the old note)
@@ -6131,6 +6159,7 @@ public:
 private:
   AudioEffectClouds fx;
   bool frozen = false;
+  bool eco;  // ECO (ECO_DEF) instead of FIBRE
   // 0.5 .. 40 Hz either side of the middle, 0 in it
   static float RateHz(int v) { return v ? 0.5f * powf(80.0f, (abs(v) - 1) / 99.0f) : 0.0f; }
   // P on the clock (RATE's mode CLK): one of the clock's note values (the
@@ -6153,21 +6182,23 @@ private:
   float SizeSecs() const { return 0.01f * powf(100.0f, cur[SIZE] * 0.01f); } // 10 ms .. 1 s
 };
 
-FLASHMEM SprayDevice::SprayDevice()
-  : Device(SPRAY_DEF), fx(size_t(BUF_SECS * AUDIO_SAMPLE_RATE_EXACT), 2) {}
+FLASHMEM SprayDevice::SprayDevice(bool eco_on)
+  : Device(eco_on ? ECO_DEF : SPRAY_DEF), fx(size_t(BUF_SECS * AUDIO_SAMPLE_RATE_EXACT), 2), eco(eco_on) {}
 
 // called while the stream is not patched in
 FLASHMEM bool SprayDevice::Activate() {
-  if (active) return fx.IsReady();
+  if (active) return fx.IsReady() && (!eco || fx.IsEco());
   fx.Acquire();
+  if (eco) fx.EcoAcquire();
   fx.setGrainSource(0.0f);
   ApplyAll();
   active = true;
-  return fx.IsReady();
+  return fx.IsReady() && (!eco || fx.IsEco());
 }
 
 FLASHMEM void SprayDevice::Deactivate() {
   if (!active) return;
+  if (eco) fx.EcoRelease();
   fx.Release();
   active = false;
 }
@@ -6189,6 +6220,10 @@ FLASHMEM void SprayDevice::Apply(int p) {
     case FDBK:  fx.setFeedback(0.9f * v * v); break;  // gentle start: 25 -> 6%, 50 -> 23%
     case SPREAD: fx.setStereoSpread(v); break;
     case LEVEL: wet = v; break;
+    case REVRS: fx.setReverse(v); break;
+    case HARM:  fx.setHarmony(v); break;
+    case TONE:  fx.setTone(cur[TONE] * 0.02f); break;
+    case DRIFT: fx.setDrift(v); break;
   }
 }
 
@@ -8280,7 +8315,7 @@ struct SlotDef {
 
 PROGMEM static const SlotDef SLOT_DEFS[SLOT_COUNT] = {
   {"SOURCE",   "SRC", 6, 6},  // INPUT, SPOOL, PLAYER, WARP, SID, DREAM (owned by the track, not made here)
-  {"FIBRE",    "FIB", 3, 1},  // BYPASS, FIBRE (grains), DRAFT (pitch / time)
+  {"FIBRE",    "FIB", 4, 1},  // BYPASS, FIBRE (grains), DRAFT (pitch / time), ECO (ECHOFIELD's grains)
   {"REED",     "RD",  4, 1},  // BYPASS, REED (filter bank), BEATER (struck object), TWILL (tuned resonators)
   {"TEXTURE",  "TEX", 3, 1},  // BYPASS, TEXTURE, HEDDLE (shifter / phaser)
   {"REPEAT",   "RPT", 2, 1},  // BYPASS, REPEAT (delay, reverb)
@@ -8291,7 +8326,7 @@ PROGMEM static const SlotDef SLOT_DEFS[SLOT_COUNT] = {
 static const char* ShownTag(const char* tag) {
   static const char map[][2][5] = {
     {"SPR", "FIB"}, {"STR", "DFT"}, {"RES", "REED"}, {"MDL", "BTR"},
-    {"CHM", "TWL"}, {"ECO", "RPT"}, {"MIX", "CLTH"}, {"REL", "SPL"}, {"PCK", "TAB"}};
+    {"CHM", "TWL"}, {"ECO", "RPT"}, {"ECF", "ECO"}, {"MIX", "CLTH"}, {"REL", "SPL"}, {"PCK", "TAB"}};
   for (auto& m : map) if (!strcmp(tag, m[0])) return m[1];
   return tag;
 }
@@ -8300,6 +8335,7 @@ static const char* ShownTag(const char* tag) {
 FLASHMEM static Device* MakeDevice(int slot, int option) {
   if (slot == SPRAY && option == 1) return new SprayDevice;
   if (slot == SPRAY && option == 2) return new StretchDevice;
+  if (slot == SPRAY && option == 3) return new SprayDevice(true);  // ECO
   if (slot == RESONATOR && option == 1) return new ResonatorDevice;
   if (slot == RESONATOR && option == 2) return new ModalDevice;
   if (slot == RESONATOR && option == 3) return new ChimeDevice;
