@@ -3736,7 +3736,11 @@ FLASHMEM void AppLoom::DrawDevice() const {
         && (d->ModeIsView(p) ? sel && ((editing && l_held) || (edit_mode && mode_shown < 1500)) : d->ModeNamed(p));
       char mb[8];
       if (show_mode) d->FormatMode(p, mb, sizeof(mb));
-      const char* nm = d->AltShown(p) ? alt : show_mode ? mb : d->Name(p);
+      // being edited: some say more up here until the edit ends (SHUTTLE's
+      // START / END: their zoom, or where in the beat they are)
+      char eb[8];
+      const bool edit_label = sel && editing && !d->AltShown(p) && d->EditLabel(p, eb, sizeof(eb));
+      const char* nm = edit_label ? eb : d->AltShown(p) ? alt : show_mode ? mb : d->Name(p);
       PrintCentred(x, 43, nm);
     }
     // has modes (the left knob): a small square at the right end of the

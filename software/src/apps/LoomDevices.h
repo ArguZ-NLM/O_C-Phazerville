@@ -448,6 +448,9 @@ public:
   // its mode only sets the picture (a zoom, a view), no variation of the
   // sound: the upper row keeps the setting's name (START / END, VIEW)
   virtual bool ModeIsView(int p) const { return false; }
+  // the upper row while the setting is being edited (R clicked), until the
+  // edit ends, instead of its name: true if it has one
+  virtual bool EditLabel(int p, char* buf, size_t n) const { return false; }
   // the setting's name is the first stop of its L knob, left of its first
   // mode: there the upper row reads the name (what it is for), one click
   // right shows the mode it is on (nothing changes yet), on from there the
@@ -3532,6 +3535,7 @@ public:
   }
   int Step(int p, int v, int dir) const override;
   bool ModeIsView(int p) const override { return p == START || p == END; }
+  bool EditLabel(int p, char* buf, size_t n) const override;
   // START / END: a click is one pixel of the picture at its zoom
   // (on the beats: one step a click however fast it is turned)
   int MaxAccel(int p) const override { return p == START || p == END ? (OnBeats() ? 1 : 8) : Device::MaxAccel(p); }
@@ -3596,7 +3600,7 @@ public:
   void DrawEdgeClose(int x, int w, int wy, int wh, size_t at, bool start) const;
   // SNAP BEAT with a tempo: the beat (and step of the grid) a frame is
   // nearest, the first beat in the file being 1
-  void FormatBeat(size_t at, char* buf, size_t n) const;
+  void FormatBeat(size_t at, char* buf, size_t n, int* sub_out = nullptr) const;
   void DrawMini(int x, int y, int w, int h) override;
   void CpuMax(float parts[2]) override {
     parts[0] = fx.processorUsageMax();
@@ -4957,16 +4961,32 @@ FLASHMEM void PlayerDevice::DrawEdgeClose(int x, int w, int wy, int wh, size_t a
   }
 }
 
-// "B8", on a finer grid "B8.3" (the third step in beat 8)
-FLASHMEM void PlayerDevice::FormatBeat(size_t at, char* buf, size_t n) const {
+// "B8": the beat (on a finer grid the one before; the steps past it in sub_out)
+FLASHMEM void PlayerDevice::FormatBeat(size_t at, char* buf, size_t n, int* sub_out) const {
   const int div = GridDiv();
   const double step = BeatFrames() / div;
   const double ph = bpm_phase + double(trim_off);  // (counted in the whole, also while trimmed)
   const long first = long(std::ceil(-ph / BeatFrames()));  // (the first beat at or after the start)
   const long k = long(std::floor((double(at + trim_off) - ph) / step + 0.5)) - first * div;
   const long b = k >= 0 ? k / div : -((-k + div - 1) / div), sub = k - b * div;
-  if (div == 1) snprintf(buf, n, "B%ld", b + 1);
-  else snprintf(buf, n, "B%ld.%ld", b + 1, sub + 1);
+  if (sub_out) *sub_out = int(sub);
+  snprintf(buf, n, "B%ld", b + 1);
+}
+
+// START / END being edited: the zoom; on the beats the grid, and off the
+// beat how far into it the edge is ("3/16": three sixteenths past the beat
+// the number below shows; "0/16" on the beat)
+FLASHMEM bool PlayerDevice::EditLabel(int p, char* buf, size_t n) const {
+  if (p != START && p != END) return false;
+  if (!OnBeats()) { FormatZoom(mode[p], buf, n); return true; }
+  const int div = GridDiv();
+  if (div == 1) { FormatMode(p, buf, n); return true; }  // all / BEAT
+  char tmp[12];
+  int sub = 0;
+  const size_t fr = Frames();
+  FormatBeat(cur[p] == val[p] ? EdgeAt(p) : size_t(uint64_t(val[p]) * fr / 10000), tmp, sizeof(tmp), &sub);
+  snprintf(buf, n, "%d/%d", sub, div);
+  return true;
 }
 
 FLASHMEM bool PlayerDevice::OnBeats() const { return cur[SNAP] == SNAP_BEAT && bpm > 0.0f && !streaming; }
