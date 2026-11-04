@@ -49,6 +49,10 @@ void __wrap_extmem_free(void* p) {
 }
 }
 
+// PsramAlloc / PsramFree (PsramAlloc.h): Loom's own blocks
+void PsramTraceAdd(void* p, size_t n, uint32_t at) { Add(p, n, at); }
+void PsramTraceDrop(void* p) { Drop(p); }
+
 // USB 'A': the blocks in use, biggest first
 void PsramTraceReport() {
   uint32_t total = 0;

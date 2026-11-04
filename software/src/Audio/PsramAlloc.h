@@ -29,6 +29,16 @@ inline void PsramZero(void* p, size_t n) {
 
 inline bool IsPsram(const void* p) { return (uint32_t(p) >> 28) == 7; }
 
+#ifdef PSRAM_TRACE
+// (PsramTrace.cpp: USB 'A' lists who holds the PSRAM; these blocks don't
+// go through extmem_malloc, so they are told about here)
+void PsramTraceAdd(void* p, size_t n, uint32_t at);
+void PsramTraceDrop(void* p);
+// where the block is taken: an address in the function PsramAlloc went
+// into (addr2line -i names it)
+#define PSRAM_HERE() ({ uint32_t pc_; asm volatile("mov %0, pc" : "=r"(pc_)); pc_; })
+#endif
+
 // a zeroed block, in PSRAM if there is room (else in RAM2, like extmem_calloc)
 inline void* PsramAlloc(size_t n) {
 #if defined(ARDUINO_TEENSY41)
@@ -42,6 +52,9 @@ inline void* PsramAlloc(size_t n) {
       // (cleared all the same: an engine still writing while its block
       // went back would leave something in "free" memory)
       PsramZero(p, n);
+#ifdef PSRAM_TRACE
+      PsramTraceAdd(p, n, PSRAM_HERE());
+#endif
       return p;
     }
   }
@@ -53,6 +66,9 @@ inline void PsramFree(void* p) {
   if (!p) return;
 #if defined(ARDUINO_TEENSY41)
   if (IsPsram(p)) {
+#ifdef PSRAM_TRACE
+    PsramTraceDrop(p);
+#endif
     // the block's sizes sit in its header, just before it (smalloc: rsz,
     // usz, tag); after the user's usz bytes come a check tag (one header
     // long, cleared by sm_free itself) and the slack, up to rsz + a header
