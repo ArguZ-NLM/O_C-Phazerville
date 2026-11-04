@@ -1,5 +1,5 @@
 #pragma once
-// ECO: the grain rules of ECHOFIELD (Philip Bos's granular sampler firmware
+// FLOCK (first called ECO): the grain rules of ECHOFIELD (Philip Bos's granular sampler firmware
 // for the M-VAVE FM-1, its engine.c, CLOUD mode) played on FIBRE's live
 // buffer. Included at the end of AudioEffectClouds.h: the recording, the
 // buffer, FREEZE, FDBK, the picture's history and grain view are FIBRE's;

@@ -124,7 +124,7 @@ public:
 
     void update() override;
 
-    // ECO (Loom): this buffer played by ECHOFIELD's grain rules instead
+    // FLOCK (Loom, was ECO): this buffer played by ECHOFIELD's grain rules instead
     // (AudioEffectEco.h): EcoAcquire() switches it on, EcoRelease() off
     static const int ECO_MAX = 24;
     static inline int eco_limit = 20;  // grains at once (fewer when the CPU is short)
@@ -249,7 +249,7 @@ FASTRUN void AudioEffectClouds::update() {
         if (!out[c]) ok = false;
     }
     if (!ok) { release_blocks(in, out); return; }
-    if (eco_) { UpdateEco(in, out); return; }  // ECO (AudioEffectEco.h)
+    if (eco_) { UpdateEco(in, out); return; }  // FLOCK (AudioEffectEco.h)
 
     // Snapshot volatile params once for this block.
     const float  cur_pos      = pos_;

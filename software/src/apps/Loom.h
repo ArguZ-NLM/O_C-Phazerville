@@ -949,7 +949,7 @@ FLASHMEM static float WorstCost(const Device* d) {
   if (!strcmp(t, "SID")) return 34.0f + 23.0f * float(static_cast<const SidDevice*>(d)->Chips() - 1);
   if (!strcmp(t, "DRM")) return static_cast<const DreamBase*>(d)->Cost();
   if (!strcmp(t, "SPR")) return 6.0f;   // FIBRE
-  if (!strcmp(t, "ECF")) return 10.0f;  // ECO (up to 20 grains, from flash)
+  if (!strcmp(t, "FLK")) return 10.0f;  // FLOCK (up to 20 grains, from flash)
   if (!strcmp(t, "RES")) return 3.0f;   // REED
   return 3.0f;
 }
@@ -957,6 +957,18 @@ FLASHMEM static float WorstCost(const Device* d) {
 // others are in CPU_BASE)
 FLASHMEM static float SourceCost(const Track& tr, int option) {
   return option == 4 ? WorstCost(tr.sid) : option == 5 ? WorstCost(tr.dream) : 0.0f;
+}
+}  // namespace loom
+
+namespace loom {
+// SOURCE as the R knob turns through it: IN, SHUTTLE, SPOOL, WARP, DREAM,
+// SID (Sascha's order, 2026-11-04). The option numbers stay as they were
+// (0 IN, 1 SPOOL, 2 SHUTTLE, 3 WARP, 4 SID, 5 DREAM): saved files keep them
+FLASHMEM static int SourceStep(int option, int dir) {
+  static const int8_t ORDER[6] = {0, 2, 1, 3, 5, 4};
+  int at = 0;
+  for (int i = 0; i < 6; i++) if (ORDER[i] == option) at = i;
+  return ORDER[constrain(at + dir, 0, 5)];
 }
 }  // namespace loom
 
@@ -1592,7 +1604,7 @@ static void FollowLoad() {
   AudioEffectChime::lite = lite;
   AudioEffectDirt::lite = lite;   // HEDDLE's PHASE: at most 8 stages
   AudioEffectClouds::grain_limit = lite ? 5 : 8;
-  AudioEffectClouds::eco_limit = lite ? 10 : 20;  // ECO
+  AudioEffectClouds::eco_limit = lite ? 10 : 20;  // FLOCK
 }
 }  // namespace loom
 
@@ -2867,13 +2879,13 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
           loop_there = true;
       if (loop_there) {
         const int from = Asking() && ask_track == track ? ask_choice : tracks[track].shown_choice(col);
-        ask_choice = constrain(from + dir, 0, SLOT_DEFS[SOURCE].noptions - 1);
+        ask_choice = SourceStep(from, dir);
         ask_track = track;
         ask_at = ask_choice == 1 ? 0 : millis() | 1;
         return;
       }
       ask_at = 0;
-      SetChoiceLinked(col, tracks[track].shown_choice(col) + dir);  // INPUT / SPOOL ...
+      SetChoiceLinked(col, SourceStep(tracks[track].shown_choice(col), dir));  // IN / SHU / SPL / WRP / DRM / SID
     } else {
       // the effect slots' devices only: no device (0) is not dialled in (B
       // bypasses)
@@ -3356,7 +3368,7 @@ FLASHMEM void AppLoom::DrawChain() const {
                       : c == RESONATOR && tr.choice[c] == 2 ? PSTR("BTR")  // BEATER
                       : c == RESONATOR && tr.choice[c] == 3 ? PSTR("TWL")  // TWILL
                       : c == SPRAY && tr.choice[c] == 2 ? PSTR("DFT")      // DRAFT
-                      : c == SPRAY && tr.choice[c] == 3 ? PSTR("ECO")      // ECO
+                      : c == SPRAY && tr.choice[c] == 3 ? PSTR("FLK")      // FLOCK
                       : c == TEXTURE && tr.choice[c] == 2 ? PSTR("HDL")    // HEDDLE
                       : SLOT_DEFS[c].tag;
       if (strlen(tag) <= 3) {
