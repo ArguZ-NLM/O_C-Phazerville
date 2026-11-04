@@ -3546,7 +3546,17 @@ public:
   // zoom steps: how much time is across the picture, the same for short and
   // long files (0 = the whole file)
   static constexpr uint32_t ZOOM_US[10] = {0, 16000000, 4000000, 1000000, 250000, 60000, 15000, 4000, 1000, 300};
-  size_t ZoomSpan(int m) const {  // in frames, for zoom step m
+  size_t ZoomSpan(int m) const;  // in frames, for zoom step m (on the beats: GridDiv's)
+  // SNAP BEAT with a tempo found (in memory): START / END's L knob picks the
+  // grid instead of the zoom: 0 all (beats), 1 BEAT, 2 1/2, 3 1/4, 4 1/8,
+  // 5 1/16; the picture then shows 4 steps of it across (4 beats .. a
+  // quarter beat), a click of START / END is one step, SNAP lands on it
+  static constexpr int GRID_MODES = 6;
+  bool OnBeats() const;
+  int GridDiv() const;          // steps per beat: 1 2 4 8 16
+  double GridFrames() const;    // one step, in frames
+  int ModeCount(int p) const override;
+  size_t ZoomSpanTime(int m) const {
     const size_t n = Frames();
     const uint32_t us = ZOOM_US[constrain(m, 0, 9)];
     if (!us) return std::max<size_t>(MIN_SPAN, n);
@@ -3583,9 +3593,9 @@ public:
   // up side by side, each centred on where it lands (SNAP_VIEW_MS across)
   static constexpr int SNAP_VIEW_MS = 64;
   void DrawEdgeClose(int x, int w, int wy, int wh, size_t at, bool start) const;
-  // SNAP BEAT with a tempo: which beat of the file a frame is nearest, the
-  // first beat in the file being 1
-  int BeatNumber(size_t at) const;
+  // SNAP BEAT with a tempo: the beat (and step of the grid) a frame is
+  // nearest, the first beat in the file being 1
+  void FormatBeat(size_t at, char* buf, size_t n) const;
   void DrawMini(int x, int y, int w, int h) override;
   void CpuMax(float parts[2]) override {
     parts[0] = fx.processorUsageMax();
@@ -4378,7 +4388,7 @@ FLASHMEM size_t PlayerDevice::SnapQuiet(size_t at) const {
 FLASHMEM size_t PlayerDevice::SnapPoint(size_t at) const {
   const size_t n = Frames();
   if (cur[SNAP] != SNAP_BEAT || bpm <= 0.0f || !n) return SnapQuiet(at);
-  const double beat = BeatFrames();
+  const double beat = GridFrames();  // (the grid START / END's L knob picked)
   const double g = bpm_phase + std::round((double(at) - bpm_phase) / beat) * beat;
   return SnapQuiet(size_t(std::clamp(g, 0.0, double(n - 1))));
 }
@@ -4396,7 +4406,7 @@ FLASHMEM void PlayerDevice::LoopEdges(size_t& a, size_t& b) const {
   a = EdgeAt(START), b = EdgeAt(END);
   if (cur[SNAP]) {
     a = SnapPoint(a); b = SnapPoint(b);
-    if (cur[SNAP] == SNAP_BEAT && bpm > 0.0f && b <= a) b = std::min(n, SnapQuiet(std::min(n - 1, a + size_t(BeatFrames()))));  // at least a beat
+    if (cur[SNAP] == SNAP_BEAT && bpm > 0.0f && b <= a) b = std::min(n, SnapQuiet(std::min(n - 1, a + size_t(GridFrames()))));  // at least a step
     a = Shifted(a, n); b = Shifted(b, n);  // the fine tune (L knob)
   }
   if (b <= a + AUDIO_BLOCK_SAMPLES) b = std::min(n, a + AUDIO_BLOCK_SAMPLES * 2);
@@ -4570,8 +4580,8 @@ FLASHMEM int PlayerDevice::Step(int p, int v, int dir) const {
     // SNAP BEAT with a tempo: a click is the next beat (the edge goes onto
     // the grid; SNAP's L knob does the fine tune)
     int64_t to = int64_t(e) + dir * px;
-    if (cur[SNAP] == SNAP_BEAT && bpm > 0.0f && !streaming) {
-      const double beat = BeatFrames();
+    if (OnBeats()) {
+      const double beat = GridFrames();
       to = int64_t(std::floor(bpm_phase + (std::round((double(e) - bpm_phase) / beat) + dir) * beat + 0.5));
     }
     e = uint32_t(end ? constrain(to, std::min(GAP, nn), nn)
@@ -4602,7 +4612,7 @@ FLASHMEM void PlayerDevice::Format(int p, char* buf, size_t n) const {
     // live edge, which kept showing the same time for all of them)
     const size_t at = cur[p] == val[p] ? EdgeAt(p) : size_t(uint64_t(val[p]) * fr / 10000);
     if (cur[SNAP] == SNAP_BEAT && bpm > 0.0f && !streaming) {  // on the beats: the beat it lands on
-      snprintf(buf, n, "B%d", BeatNumber(at));
+      FormatBeat(at, buf, n);
       return;
     }
     const uint32_t ms = uint32_t(uint64_t(at) * 1000 / uint64_t(AUDIO_SAMPLE_RATE_EXACT * rate));
@@ -4617,6 +4627,13 @@ FLASHMEM void PlayerDevice::Format(int p, char* buf, size_t n) const {
 // START / END: their zoom
 FLASHMEM void PlayerDevice::FormatMode(int p, char* buf, size_t n) const {
   if (p == START || p == END) {
+    if (OnBeats()) {  // the grid
+      const int m = std::min<int>(mode[p], GRID_MODES - 1);
+      if (!m) snprintf(buf, n, "all");
+      else if (m == 1) snprintf(buf, n, "BEAT");
+      else snprintf(buf, n, "1/%d", GridDiv());
+      return;
+    }
     FormatZoom(mode[p], buf, n);
     return;
   }
@@ -4640,6 +4657,11 @@ FLASHMEM size_t PlayerDevice::Shifted(size_t e, size_t n) const {
 // SNAP's offset: 1 ms a click, linear along the knob (its
 // mode keeps it in its own order, see SnapShift); the name shows again at 0
 FLASHMEM void PlayerDevice::NudgeMode(int p, int dir) {
+  if ((p == START || p == END) && OnBeats()) {  // the grid: 6 stops
+    mode[p] = uint8_t(std::clamp(std::min<int>(mode[p], GRID_MODES - 1) + dir, 0, GRID_MODES - 1));
+    Apply(p);
+    return;
+  }
   if (p != SNAP) { Device::NudgeMode(p, dir); return; }
   const int k = std::clamp(SnapShift() + dir, -SNAP_SHIFTS, SNAP_SHIFTS);
   mode[SNAP] = uint8_t(k >= 0 ? k : k + 2 * SNAP_SHIFTS + 1);
@@ -4726,7 +4748,7 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
     if (tag[0]) gfxPrint(x + w - 6 * int(strlen(tag)), y, tag);
     char zt[8] = {};
     if (zm > 0) {
-      FormatZoom(zm, zt, sizeof(zt));
+      if (OnBeats()) FormatMode(START, zt, sizeof(zt)); else FormatZoom(zm, zt, sizeof(zt));  // (on the beats: the grid)
       right -= 6 * int(strlen(zt)) + 2;
       gfxPrint(right + 2, y, zt);
     }
@@ -4826,19 +4848,25 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
   size_t ea = ea0, eb = eb0;
   if (!streaming && cur[SNAP]) {
     ea = SnapPoint(ea); eb = SnapPoint(eb);
-    if (cur[SNAP] == SNAP_BEAT && bpm > 0.0f && eb <= ea) eb = std::min(n, SnapQuiet(std::min(n - 1, ea + size_t(BeatFrames()))));
+    if (cur[SNAP] == SNAP_BEAT && bpm > 0.0f && eb <= ea) eb = std::min(n, SnapQuiet(std::min(n - 1, ea + size_t(GridFrames()))));
     ea = Shifted(ea, n); eb = Shifted(eb, n);
   }
   // SNAP BEAT with a tempo found: the beats as ticks along the bottom (when
   // they are at least 4 pixels apart)
   if (cur[SNAP] == SNAP_BEAT && bpm > 0.0f) {
-    const double beat = BeatFrames();
-    if (beat * (w - 1) / double(span) >= 4.0) {
-      double k = std::ceil((double(v0) - bpm_phase) / beat);
-      for (double pos = bpm_phase + k * beat; pos < double(v0) + double(span); pos += beat) {
+    // (the grid's steps between them as dots, when they are apart enough)
+    const int div = GridDiv();
+    const double beat = BeatFrames(), step = beat / div;
+    const bool beats = beat * (w - 1) / double(span) >= 4.0, steps = div > 1 && step * (w - 1) / double(span) >= 4.0;
+    if (beats || steps) {
+      const double d = steps ? step : beat;
+      double k = std::ceil((double(v0) - bpm_phase) / d);
+      for (double pos = bpm_phase + k * d; pos < double(v0) + double(span); pos += d, k += 1.0) {
         if (pos < 0.0 || pos >= double(n)) continue;
         const int bx = sx(size_t(pos));
-        if (bx >= x && bx < x + w) gfxLine(bx, base - 2, bx, base);
+        if (bx < x || bx >= x + w) continue;
+        if (!steps || std::fmod(k, double(div)) == 0.0) gfxLine(bx, base - 2, bx, base);
+        else gfxPixel(bx, base);
       }
     }
   }
@@ -4928,11 +4956,31 @@ FLASHMEM void PlayerDevice::DrawEdgeClose(int x, int w, int wy, int wh, size_t a
   }
 }
 
-FLASHMEM int PlayerDevice::BeatNumber(size_t at) const {
-  const double beat = BeatFrames();
+// "B8", on a finer grid "B8.3" (the third step in beat 8)
+FLASHMEM void PlayerDevice::FormatBeat(size_t at, char* buf, size_t n) const {
+  const int div = GridDiv();
+  const double step = BeatFrames() / div;
   const double ph = bpm_phase + double(trim_off);  // (counted in the whole, also while trimmed)
-  const double first = std::ceil(-ph / beat);  // (the first beat at or after the start)
-  return int(std::lround((double(at + trim_off) - ph) / beat) - first) + 1;
+  const long first = long(std::ceil(-ph / BeatFrames()));  // (the first beat at or after the start)
+  const long k = long(std::floor((double(at + trim_off) - ph) / step + 0.5)) - first * div;
+  const long b = k >= 0 ? k / div : -((-k + div - 1) / div), sub = k - b * div;
+  if (div == 1) snprintf(buf, n, "B%ld", b + 1);
+  else snprintf(buf, n, "B%ld.%ld", b + 1, sub + 1);
+}
+
+FLASHMEM bool PlayerDevice::OnBeats() const { return cur[SNAP] == SNAP_BEAT && bpm > 0.0f && !streaming; }
+FLASHMEM int PlayerDevice::GridDiv() const {
+  const int m = std::min<int>(mode[START], GRID_MODES - 1);
+  return OnBeats() && m > 1 ? 1 << (m - 1) : 1;
+}
+FLASHMEM double PlayerDevice::GridFrames() const { return BeatFrames() / GridDiv(); }
+FLASHMEM int PlayerDevice::ModeCount(int p) const {
+  return (p == START || p == END) && OnBeats() ? GRID_MODES : Device::ModeCount(p);
+}
+FLASHMEM size_t PlayerDevice::ZoomSpan(int m) const {
+  if (!OnBeats() || m <= 0) return ZoomSpanTime(m);
+  const size_t n = Frames();
+  return std::max<size_t>(MIN_SPAN, std::min<size_t>(size_t(4.0 * GridFrames()), std::max<size_t>(MIN_SPAN, n)));
 }
 
 // the header: playing, the head's place in the whole file (m:ss.t);
