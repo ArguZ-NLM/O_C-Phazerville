@@ -2872,7 +2872,7 @@ FLASHMEM void TapeRecorder::Finish() {
 // PSRAM (up to 16 s, like SPOOL) and played by the same engine: START / END
 // pick the loop, SPEED plays it at any rate (backwards below zero), XFADE
 // is the fade at the loop ends. START / END zoom the picture (their mode)
-// and SNAP lands them on the quietest point nearby (ZERO) or on the nearest
+// and SNAP lands them on the nearest zero crossing (ZERO) or on the nearest
 // beat when a tempo was found (BEAT). Longer files stream
 // from the card (FILE mode STRM); FILE mode MEM copies a section of them
 // (START..END when switched, at most 16 s) into memory and plays that as
@@ -2888,7 +2888,7 @@ PROGMEM static const DeviceDef PLAYER_DEF = {
     {"START", 0, 10000, 0, UNI, 0, 10, 0},      // mode: zoom, all .. 0.3 ms across
     {"END", 0, 10000, 10000, UNI, 0, 10, 0},
     {"FADE", 0, 100, 20, UNI, 0, 2, 0, {}, {"CROSS", "INOUT"}},  // the loop's seam
-    {"SNAP", 0, 2, 0, LIST, 3, 201, 0, {"OFF", "ZERO", "BEAT"}},  // ZERO: the quietest point; BEAT: the nearest beat; mode: the loop moved a few ms (see SnapShift)
+    {"SNAP", 0, 2, 0, LIST, 3, 201, 0, {"OFF", "ZERO", "BEAT"}},  // ZERO: the nearest zero crossing; BEAT: the nearest beat; mode: the loop moved a few ms (see SnapShift)
   },
   {"", ""},
 };
@@ -3801,6 +3801,10 @@ private:
   void Load(int i);
   void Window();
   size_t SnapQuiet(size_t at) const;
+  // SNAP ZERO (in memory): a zero crossing of (L+R) - the nearest within r
+  // frames (dir 0), or the next one from at on that way (dir +-1); none
+  // found: the quietest point nearby (dir 0) or at itself
+  size_t ZeroCross(size_t at, int dir, size_t r) const;
 };
 
 // both tracks' SHUTTLEs, for the clock (set when the tracks are made)
@@ -4404,6 +4408,7 @@ FLASHMEM size_t PlayerDevice::SnapQuiet(size_t at) const {
 // nearest beat, then the quietest sample just around it
 FLASHMEM size_t PlayerDevice::SnapPoint(size_t at) const {
   const size_t n = Frames();
+  if (cur[SNAP] == SNAP_ZERO && !streaming && n) return ZeroCross(at, 0, 220);
   if (cur[SNAP] != SNAP_BEAT || bpm <= 0.0f || !n) return SnapQuiet(at);
   // (the finest grid, sixteenths: an edge on any of the grids stays where
   // it is, so START / END's L knob only changes the view and the steps,
@@ -4411,6 +4416,33 @@ FLASHMEM size_t PlayerDevice::SnapPoint(size_t at) const {
   const double beat = BeatFrames() / 16.0;
   const double g = bpm_phase + std::round((double(at) - bpm_phase) / beat) * beat;
   return SnapQuiet(size_t(std::clamp(g, 0.0, double(n - 1))));
+}
+
+FLASHMEM size_t PlayerDevice::ZeroCross(size_t at, int dir, size_t r) const {
+  const size_t n = Frames();
+  if (n < 2) return at;
+  const int16_t* l = fx.Data(0);
+  const int16_t* rr = fx.Data(1);
+  // a crossing at i: the sign changes from i - 1 to i, or i is 0 itself
+  auto cross = [&](size_t i) {
+    if (i < 1 || i >= n) return false;
+    const int a = l[i - 1] + rr[i - 1], b = l[i] + rr[i];
+    return b == 0 || ((a < 0) != (b < 0));
+  };
+  if (!dir) {
+    for (size_t d = 0; d <= r; d++) {
+      if (cross(at + d)) return at + d;
+      if (d <= at && cross(at - d)) return at - d;
+    }
+    return SnapQuiet(at);
+  }
+  for (size_t d = 0; d <= r; d++) {
+    if (dir < 0 && d > at) break;
+    const size_t i = dir > 0 ? at + d : at - d;
+    if (i >= n) break;
+    if (cross(i)) return i;
+  }
+  return at;
 }
 
 // to the sample when set by hand; from the setting when it is modulated
@@ -4611,6 +4643,12 @@ FLASHMEM int PlayerDevice::Step(int p, int v, int dir) const {
     if (OnBeats()) {
       const double beat = GridFrames();
       to = int64_t(std::floor(bpm_phase + (std::round((double(e) - bpm_phase) / beat) + dir) * beat + 0.5));
+    } else if (cur[SNAP] == SNAP_ZERO && !streaming && nn > 2) {
+      // ZERO: from the crossing it is on, a pixel on, then on to the next
+      // crossing that way (close in: crossing to crossing; far out: as OFF,
+      // each landing on one). Up to 100 ms looked through
+      const int64_t from = int64_t(ZeroCross(e, 0, 220)) + dir * px;
+      to = int64_t(ZeroCross(size_t(constrain(from, int64_t(1), nn - 1)), dir, size_t(0.1 * FileRate())));
     }
     e = uint32_t(end ? constrain(to, std::min(GAP, nn), nn)
                      : constrain(to, int64_t(0), std::max<int64_t>(0, nn - GAP)));
