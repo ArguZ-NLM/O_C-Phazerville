@@ -3910,7 +3910,7 @@ FLASHMEM void PlayerDevice::WriteMeta() {
 }
 
 FLASHMEM void PlayerDevice::BpmStart() {
-  if (bpm_env) { free(bpm_env); bpm_env = nullptr; }
+  if (bpm_env) { AudioEffectEcho::FreeAny(bpm_env); bpm_env = nullptr; }
   bpm_got = -1;
   // the same file in the other mode: memory and the card measure a
   // different stretch, so a new measure would come out a little apart
@@ -3946,7 +3946,7 @@ FLASHMEM void PlayerDevice::BpmStart() {
     Serial.printf("BPM: %d levels from %u of %u, too short\n", bpm_n, unsigned(bpm_from), unsigned(n));
     return;
   }
-  bpm_env = static_cast<float*>(malloc(sizeof(float) * bpm_n));
+  bpm_env = static_cast<float*>(AudioEffectEcho::Ram2OrPsram(sizeof(float) * bpm_n, false));  // (RAM2's heap is often short)
   if (bpm_env) bpm_got = 0;
   Serial.printf("BPM: start, %d levels from frame %u of %u%s\n", bpm_n, unsigned(bpm_from), unsigned(n), bpm_env ? "" : ", NO MEMORY");  // over USB
 }
@@ -3962,7 +3962,7 @@ FLASHMEM void PlayerDevice::BpmIdle() {
   }
   if (bpm_got < bpm_n) return;
   BpmSolve();
-  free(bpm_env);
+  AudioEffectEcho::FreeAny(bpm_env);
   bpm_env = nullptr;
   bpm_got = -1;
 }
@@ -3983,7 +3983,7 @@ FLASHMEM void PlayerDevice::BpmSolve() {
   for (int i = 0; i < n; i++) o[i] -= mean;
   const float bin_s = IDX_FRAMES / FileRate();
   const int lmax = std::min(bpm_loop ? n - 1 : n / 2, int(4.0f * 60.0f / (70.0f * bin_s)) + 2);
-  float* r = static_cast<float*>(malloc(sizeof(float) * (lmax + 1)));
+  float* r = static_cast<float*>(AudioEffectEcho::Ram2OrPsram(sizeof(float) * (lmax + 1), false));
   if (!r) { Serial.println("BPM: no memory to solve"); return; }
   for (int l = 0; l <= lmax; l++) {
     float acc = 0.0f;
@@ -3995,7 +3995,7 @@ FLASHMEM void PlayerDevice::BpmSolve() {
       r[l] = acc / float(n - l);
     }
   }
-  if (r[0] <= 0.0f) { free(r); Serial.println("BPM: flat (no level changes)"); return; }
+  if (r[0] <= 0.0f) { AudioEffectEcho::FreeAny(r); Serial.println("BPM: flat (no level changes)"); return; }
   auto at = [&](float l) {
     const int i = int(l);
     if (i + 1 > lmax) return 0.0f;
@@ -4012,7 +4012,7 @@ FLASHMEM void PlayerDevice::BpmSolve() {
     sc *= expf(-0.5f * oct * oct);
     if (sc > best_s) { best_s = sc; best = b; }
   }
-  free(r);
+  AudioEffectEcho::FreeAny(r);
   bpm = best_s > 0.25f ? best : 0.0f;  // too little alike: no clear beat
   Serial.printf("BPM: best %d.%d, score %d%% (needs 25%%)\n", int(best), int(best * 10) % 10, int(best_s * 100));
   if (bpm <= 0.0f) return;
@@ -4067,7 +4067,7 @@ FLASHMEM void PlayerDevice::Deactivate() {
   loading = streaming = analysing = false;
   stream.Release();
   if (idx) { PsramFree(idx); idx = nullptr; idx2 = nullptr; }
-  if (bpm_env) { free(bpm_env); bpm_env = nullptr; }
+  if (bpm_env) { AudioEffectEcho::FreeAny(bpm_env); bpm_env = nullptr; }
   bpm_got = -1;
   fx.Release();
   loaded = -1;
@@ -4080,7 +4080,7 @@ FLASHMEM void PlayerDevice::Load(int i) {
   WriteMeta();  // what the last file had, before it goes
   fx.CancelPress();  // a start waiting for its beat was for the old file
   stream.CancelPlay();
-  if (bpm_env) { free(bpm_env); bpm_env = nullptr; }
+  if (bpm_env) { AudioEffectEcho::FreeAny(bpm_env); bpm_env = nullptr; }
   bpm_got = -1;
   bpm_keep = bpm;  // (dropped below if it is another file)
   phase_keep = bpm_phase + (clipped ? double(sec_off) : 0.0);  // (MEM on a long file: a section of it)

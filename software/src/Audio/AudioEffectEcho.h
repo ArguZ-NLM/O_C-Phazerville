@@ -102,6 +102,10 @@ public:
   // what it holds, for the status: m r p s d d (a dash: missing)
   void Holds(char* b) const { b[0] = mem ? 'm' : '-'; b[1] = rv ? 'r' : '-'; b[2] = pre ? 'p' : '-'; b[3] = sh ? 's' : '-'; b[4] = dbuf[0] ? 'd' : '-'; b[5] = dbuf[1] ? 'd' : '-'; b[6] = 0; }
 
+  // a block in RAM2 if there is room, else PSRAM (also for others: SHUTTLE's BPM)
+  static void* Ram2OrPsram(size_t n, bool zero);
+  static void FreeAny(void* p);
+
   void Reset() {
     if (mem) std::fill(mem, mem + MEM_TOTAL, 0.0f);
     if (rv) memset(rv, 0, RV_TOTAL * sizeof(int16_t));
@@ -257,8 +261,7 @@ private:
   const size_t short_len;  // ... at the full rate
   bool half = false;       // LONG: stored at half the rate
   void WriteBlock(const int16_t* const* wr);
-  static void* Ram2OrPsram(size_t n, bool zero);
-  static void FreeAny(void* p);
+
   void Install(int16_t* l, int16_t* r, size_t len, bool h);
   int16_t* dbuf[2] = {nullptr, nullptr};
   size_t wpos = 0;
