@@ -4829,7 +4829,7 @@ PROGMEM static const DeviceDef ECHO_DEF = {
   {
     // page 1: the delay, page 2: the reverb and TONE
     {"LEVEL", 0, 100, 40, UNI, 0, 2, 1, {}, {"MIX", "SEND"}},  // the delay's; mode: crossfade / added (SEND first)
-    {"TIME", 20, 6000, 450, UNI, 0, 2, 0, {}, {"FREE", "CLOCK"}},
+    {"TIME", 20, 3000, 450, UNI, 0, 2, 0, {}, {"FREE", "CLOCK"}},  // (6 s until 2026-11-04: 3 s frees 1.1 MB of PSRAM)
     // mode: the playback heads, one of HEAD_PATTERNS (named there)
     {"FDBK", 0, 100, 45, UNI, 0, 13, 0},
     {"SPRD", 0, 100, 40, UNI, 0, 3, 1, {}, {"PHASE", "PING", "DIFF"}},
@@ -4879,7 +4879,7 @@ public:
   float DecaySecs() const { return 0.4f * powf(40.0f, cur[ROOM] * 0.01f); }
   enum { PHASE, PING, DIFFUSE };
   static constexpr int TAPS = AudioEffectEcho::TAPS;
-  static constexpr float MAX_SECS = 6.0f;
+  static constexpr float MAX_SECS = 3.0f;  // (was 6: Sascha, 3 s is enough)
 
   EchoDevice();
   AudioStream* in() override { return &echo; }
@@ -4915,8 +4915,8 @@ public:
     Device::NudgeMode(p, dir);
     if (p != TIME || mode[TIME] == was) return;
     if (mode[TIME] == SYNC_FREE) {
-      const float secs = DivSeconds(NUM_DIVS - 1 - DivIndex(val[TIME], 20, 6000));
-      val[TIME] = int16_t(constrain(int(secs * 1000.0f + 0.5f), 20, 6000));
+      const float secs = DivSeconds(NUM_DIVS - 1 - DivIndex(val[TIME], 20, 3000));
+      val[TIME] = int16_t(constrain(int(secs * 1000.0f + 0.5f), 20, 3000));
     } else {
       const float secs = val[TIME] * 0.001f;
       int best = NUM_DIVS - 1;
@@ -4927,7 +4927,7 @@ public:
         const float e = fabsf(log2f(d / secs));
         if (e < err) { err = e; best = i; }
       }
-      val[TIME] = int16_t(DivValue(NUM_DIVS - 1 - best, 20, 6000));
+      val[TIME] = int16_t(DivValue(NUM_DIVS - 1 - best, 20, 3000));
     }
     Refresh(TIME);
   }
@@ -5017,7 +5017,7 @@ FLASHMEM void EchoDevice::CpuMax(float parts[2]) {
 
 FLASHMEM void EchoDevice::SetTimes() {
   const float secs = mode[TIME] == SYNC_FREE ? cur[TIME] * 0.001f
-    : DivSeconds(NUM_DIVS - 1 - DivIndex(cur[TIME], 20, 6000));  // (the longest at the top)
+    : DivSeconds(NUM_DIVS - 1 - DivIndex(cur[TIME], 20, 3000));  // (the longest at the top)
   // PHASE: the right side's heads up to half as late again (a wide stereo echo)
   const float phase = mode[SPREAD] == PHASE ? 1.0f + 0.5f * cur[SPREAD] * 0.01f : 1.0f;
   for (int c = 0; c < 2; c++) {
@@ -5094,13 +5094,13 @@ FLASHMEM void EchoDevice::Apply(int p) {
 
 FLASHMEM int EchoDevice::Step(int p, int v, int dir) const {
   if (p == TIME && mode[TIME] != SYNC_FREE)
-    return DivValue(DivIndex(v, 20, 6000) + dir, 20, 6000);
+    return DivValue(DivIndex(v, 20, 3000) + dir, 20, 3000);
   return v + dir;  // FREE: 1 ms a click (more spun fast: see Turn)
 }
 
 FLASHMEM void EchoDevice::Format(int p, char* buf, size_t n) const {
   if (p == TIME && mode[TIME] != SYNC_FREE) {
-    FormatDiv(NUM_DIVS - 1 - DivIndex(val[TIME], 20, 6000), buf, n);
+    FormatDiv(NUM_DIVS - 1 - DivIndex(val[TIME], 20, 3000), buf, n);
   } else if (p == TIME) {
     const int ms = val[TIME];
     if (ms < 1000) snprintf(buf, n, "%dms", ms);
