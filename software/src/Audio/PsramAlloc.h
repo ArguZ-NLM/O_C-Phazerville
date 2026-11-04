@@ -33,9 +33,13 @@ inline bool IsPsram(const void* p) { return (uint32_t(p) >> 28) == 7; }
 // start) and what Loom's blocks hold of it, counted as they are taken and
 // given back, so a device can ask what is left without walking the pool
 inline size_t psram_used = 0;
+extern "C" uint32_t _extram_start, _extram_end;  // (the linker's: Loom's fixed EXTMEM variables)
+// what the pool can hand out: the chips less the fixed EXTMEM variables
 inline size_t PsramTotal() {
 #if defined(ARDUINO_TEENSY41)
-  return size_t(external_psram_size) << 20;
+  if (!external_psram_size) return 0;
+  const size_t fixed = size_t(reinterpret_cast<char*>(&_extram_end) - reinterpret_cast<char*>(&_extram_start));
+  return (size_t(external_psram_size) << 20) - fixed;
 #else
   return 0;
 #endif

@@ -2396,7 +2396,7 @@ FLASHMEM void AppLoom::MainLoop() {
     const long beyond = long((char*)&_heap_end - top);
     const long inside = long(mallinfo().fordblks);  // freed blocks it can use again
     Serial.printf("  RAM2 heap left %ld KB (beyond freed blocks) + %ld KB freed inside\n", beyond / 1024, inside / 1024);
-    Serial.printf("  MEM budget: PSRAM %u MB, Loom holds %u KB, room %u KB\n", unsigned(PsramTotal() >> 20),
+    Serial.printf("  MEM budget: PSRAM %u MB (%u KB for blocks), Loom holds %u KB, room %u KB\n", unsigned(external_psram_size), unsigned(PsramTotal() >> 10),
                   unsigned(psram_used / 1024), unsigned(PsramRoom() / 1024));
   }
   const float mx = mixer->processorUsageMax();
