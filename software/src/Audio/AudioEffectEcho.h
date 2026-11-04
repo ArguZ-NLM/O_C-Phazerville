@@ -38,7 +38,14 @@ public:
   };
 
   explicit AudioEffectEcho(size_t delay_samples)
-    : AudioStream(2, input_queue_array), dlen(delay_samples) {}
+    : AudioStream(2, input_queue_array), dlen(delay_samples), short_len(delay_samples) {}
+
+  // LONG (REPEAT's TIME mode): the delay lines at half the rate, long_len
+  // samples each (16 s at 24 kHz: 1.5 MB for both sides instead of 0.56),
+  // the echoes a little darker. Main loop only; the echoes start over.
+  // false: no room (it stays as it was, or short if even that went)
+  bool SetLong(bool on, size_t long_len);
+  bool IsLong() const { return half; }
 
   // allocate and clear everything; call while the stream is disconnected
   bool Acquire() {
@@ -116,7 +123,9 @@ public:
   // --- parameters, set from the UI thread ---
   // tap delay in samples, at least MIN_TAP
   void tap(int ch, int t, int samples) {
-    tap_[ch][t].target = constrain(samples, MIN_TAP, int(dlen) - 1);
+    // (half rate: a stored sample is two; one block more kept clear of the head)
+    tap_[ch][t].target = half ? constrain(samples, 2 * MIN_TAP, int(2 * dlen) - 2 * MIN_TAP)
+                              : constrain(samples, MIN_TAP, int(dlen) - 1);
   }
   // a head's level in the echoes, 0 (off) .. 1
   void tap_gain(int t, float g) { if (t >= 0 && t < TAPS) tap_gt[t] = constrain(g, 0.0f, 1.0f); }
@@ -242,7 +251,11 @@ private:
   };
 
   audio_block_t* input_queue_array[2];
-  const size_t dlen;
+  size_t dlen;             // the lines' length (stored samples)
+  const size_t short_len;  // ... at the full rate
+  bool half = false;       // LONG: stored at half the rate
+  void WriteBlock(const int16_t* const* wr);
+  void Install(int16_t* l, int16_t* r, size_t len, bool h);
   int16_t* dbuf[2] = {nullptr, nullptr};
   size_t wpos = 0;
   Tap tap_[2][TAPS];
@@ -367,6 +380,17 @@ private:
   // copy one block from `delay` samples back (wrapping around the buffer)
   void ReadBlock(int ch, int delay, int16_t* out) const {
     const int16_t* b = dbuf[ch];
+    if (half) {  // LONG: half as many stored samples, each read twice (the odd ones between two)
+      constexpr int H = AUDIO_BLOCK_SAMPLES / 2;
+      int16_t s[H + 1];
+      const size_t start = (wpos + dlen - size_t((delay + 1) / 2)) % dlen;
+      for (int i = 0; i <= H; i++) s[i] = b[(start + i) % dlen];
+      for (int i = 0; i < H; i++) {
+        out[2 * i] = s[i];
+        out[2 * i + 1] = int16_t((int(s[i]) + int(s[i + 1])) >> 1);
+      }
+      return;
+    }
     size_t start = (wpos + dlen - delay) % dlen;
     const size_t first = std::min<size_t>(AUDIO_BLOCK_SAMPLES, dlen - start);
     memcpy(out, b + start, first * sizeof(int16_t));
@@ -938,15 +962,11 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
     if (pre_xf <= 0) { pre_xf = 0; pre_cur = pre_next; }
   }
 
-  // write this block into the delay lines
-  for (int c = 0; c < 2; c++) {
-    int16_t* b = dbuf[c];
-    const size_t first = std::min<size_t>(AUDIO_BLOCK_SAMPLES, dlen - wpos);
-    memcpy(b + wpos, wr[c], first * sizeof(int16_t));
-    if (first < AUDIO_BLOCK_SAMPLES)
-      memcpy(b, wr[c] + first, (AUDIO_BLOCK_SAMPLES - first) * sizeof(int16_t));
+  // write this block into the delay lines (from flash: RAM1 is full)
+  {
+    const int16_t* const w2[2] = {wr[0], wr[1]};
+    WriteBlock(w2);
   }
-  wpos = (wpos + AUDIO_BLOCK_SAMPLES) % dlen;
 
   transmit(out[0], 0);
   transmit(out[1], 1);
@@ -960,4 +980,71 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
   viz.in = std::max(viz.in, peak_in * q);
   viz.out = std::max(viz.out, peak_out * q);
   viz.blocks++;
+}
+
+// this block into the delay lines; LONG: each pair of samples as one
+__attribute__((noinline)) FLASHMEM void AudioEffectEcho::WriteBlock(const int16_t* const* wr) {
+  if (!half) {
+    for (int c = 0; c < 2; c++) {
+      int16_t* b = dbuf[c];
+      const size_t first = std::min<size_t>(AUDIO_BLOCK_SAMPLES, dlen - wpos);
+      memcpy(b + wpos, wr[c], first * sizeof(int16_t));
+      if (first < AUDIO_BLOCK_SAMPLES)
+        memcpy(b, wr[c] + first, (AUDIO_BLOCK_SAMPLES - first) * sizeof(int16_t));
+    }
+    wpos = (wpos + AUDIO_BLOCK_SAMPLES) % dlen;
+    return;
+  }
+  constexpr int H = AUDIO_BLOCK_SAMPLES / 2;
+  for (int c = 0; c < 2; c++) {
+    int16_t* b = dbuf[c];
+    for (int i = 0; i < H; i++) b[(wpos + i) % dlen] = int16_t((int(wr[c][2 * i]) + int(wr[c][2 * i + 1])) >> 1);
+  }
+  wpos = (wpos + H) % dlen;
+}
+
+FLASHMEM static int16_t* EchoTake(size_t k) { return static_cast<int16_t*>(PsramAlloc(k * sizeof(int16_t))); }
+
+// new lines in (or none), the old ones let go; the heads kept inside them
+FLASHMEM void AudioEffectEcho::Install(int16_t* l, int16_t* r, size_t len, bool h) {
+  int16_t* old[2];
+  const int top = int(h ? 2 * len : len) - 2 * MIN_TAP;
+  AudioNoInterrupts();
+  old[0] = dbuf[0]; old[1] = dbuf[1];
+  dbuf[0] = l; dbuf[1] = r;
+  dlen = len; half = h; wpos = 0;
+  for (auto& tp : tap_)
+    for (auto& t : tp) {
+      const int v = std::min(int(t.target), top);
+      t.cur = t.next = t.target = v;
+      t.phase = XFADE;
+    }
+  AudioInterrupts();
+  for (auto b : old) if (b) PsramFree(b);
+  // (PsramAlloc hands them over cleared)
+}
+
+FLASHMEM bool AudioEffectEcho::SetLong(bool on, size_t long_len) {
+  if (on == half && dbuf[0] && dbuf[1]) return true;
+  const size_t n = on ? long_len : short_len;
+  int16_t* l = EchoTake(n);
+  int16_t* r = l ? EchoTake(n) : nullptr;
+  if (!l || !r) {
+    // no room for both: the old lines go first (the echoes stop either way)
+    if (l) PsramFree(l);
+    Install(nullptr, nullptr, dlen, half);
+    l = EchoTake(n);
+    r = l ? EchoTake(n) : nullptr;
+    if (!l || !r) {
+      if (l) PsramFree(l);
+      // not even that: back to the short lines, if they fit
+      l = EchoTake(short_len);
+      r = l ? EchoTake(short_len) : nullptr;
+      if (l && r) Install(l, r, short_len, false);
+      else if (l) PsramFree(l);
+      return false;
+    }
+  }
+  Install(l, r, n, on);
+  return true;
 }

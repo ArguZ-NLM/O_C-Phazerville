@@ -4829,7 +4829,7 @@ PROGMEM static const DeviceDef ECHO_DEF = {
   {
     // page 1: the delay, page 2: the reverb and TONE
     {"LEVEL", 0, 100, 40, UNI, 0, 2, 1, {}, {"MIX", "SEND"}},  // the delay's; mode: crossfade / added (SEND first)
-    {"TIME", 20, 3000, 450, UNI, 0, 2, 0, {}, {"FREE", "CLOCK"}},  // (6 s until 2026-11-04: 3 s frees 1.1 MB of PSRAM)
+    {"TIME", 20, 3000, 450, UNI, 0, 3, 0, {}, {"FREE", "CLOCK", "LONG"}},  // (6 s until 2026-11-04: 3 s frees 1.1 MB of PSRAM)
     // mode: the playback heads, one of HEAD_PATTERNS (named there)
     {"FDBK", 0, 100, 45, UNI, 0, 13, 0},
     {"SPRD", 0, 100, 40, UNI, 0, 3, 1, {}, {"PHASE", "PING", "DIFF"}},
@@ -4892,7 +4892,7 @@ public:
   void Shimmer();  // GLINT to the engine
   const char* AltName(int p) const override { return p == ROOM ? "GLINT" : p == WALL ? "PRSET" : nullptr; }
   int Step(int p, int v, int dir) const override;
-  int MaxAccel(int p) const override { return p == TIME && mode[TIME] != SYNC_FREE ? 1 : Device::MaxAccel(p); }
+  int MaxAccel(int p) const override { return p == TIME && mode[TIME] == SYNC_CLOCK ? 1 : Device::MaxAccel(p); }
   void Format(int p, char* buf, size_t n) const override;
   void FormatMode(int p, char* buf, size_t n) const override;
   // the LEVELs are named by their mode: SEND or MIX
@@ -4905,32 +4905,21 @@ public:
   void DrawViz(int x, int y, int w, int h) override;
   void DrawMini(int x, int y, int w, int h) override;
   void CpuMax(float parts[2]) override;
-  void TempoChanged() override { if (mode[TIME] != SYNC_FREE) SetTimes(); }
+  void TempoChanged() override { if (mode[TIME] == SYNC_CLOCK) SetTimes(); }
   uint32_t TailMs() const override;
   // TIME's mode turned: FREE takes the time it was on in sync (in ms), and
   // back on the clock it snaps to the note value nearest it
   bool NameStop(int p) const override { return p != DELAY && p != REVERB && Device::NameStop(p); }
-  void NudgeMode(int p, int dir) override {
-    const int was = mode[TIME];
-    Device::NudgeMode(p, dir);
-    if (p != TIME || mode[TIME] == was) return;
-    if (mode[TIME] == SYNC_FREE) {
-      const float secs = DivSeconds(NUM_DIVS - 1 - DivIndex(val[TIME], 20, 3000));
-      val[TIME] = int16_t(constrain(int(secs * 1000.0f + 0.5f), 20, 3000));
-    } else {
-      const float secs = val[TIME] * 0.001f;
-      int best = NUM_DIVS - 1;
-      float err = 1e9f;
-      for (int i = 0; i < NUM_DIVS; i++) {
-        const float d = DivSeconds(i);
-        if (d > MAX_SECS - 0.01f && i < NUM_DIVS - 1) continue;  // (longer than the delay holds)
-        const float e = fabsf(log2f(d / secs));
-        if (e < err) { err = e; best = i; }
-      }
-      val[TIME] = int16_t(DivValue(NUM_DIVS - 1 - best, 20, 3000));
-    }
-    Refresh(TIME);
-  }
+  void NudgeMode(int p, int dir) override;
+  // LONG (TIME's third mode): 3 .. 16 s on the R knob, the delay lines at
+  // half the rate (1.5 MB a track, only while LONG is on)
+  static constexpr int TIME_LONG = 2;
+  static constexpr float LONG_SECS = 16.0f;
+  static float LongSecs(int v);
+  static int LongVal(float secs);
+  float TimeSecs(int v) const;  // TIME's v as seconds, in the mode it is in
+  float MaxSecs() const;
+  uint32_t long_fail_at = 0;     // LONG found no memory (TIME shows NO MEM a moment)
   void Parked() override { if (mem_ok) echo.Reset(); }  // no old tail on return
   // parked: its RAM2 memory given back (two REPEATs don't fit there at
   // once); back in the chain (or after a failed try): taken again
@@ -4976,6 +4965,44 @@ private:
 
 constexpr size_t ECHO_DELAY_SAMPLES
   = static_cast<size_t>(EchoDevice::MAX_SECS * AUDIO_SAMPLE_RATE_EXACT) + 512;
+// LONG: stored at half the rate
+constexpr size_t ECHO_LONG_SAMPLES
+  = static_cast<size_t>(EchoDevice::LONG_SECS * AUDIO_SAMPLE_RATE_EXACT * 0.5f) + 512;
+
+FLASHMEM float EchoDevice::LongSecs(int v) { return 3.0f + float(v - 20) * (13.0f / 2980.0f); }
+FLASHMEM int EchoDevice::LongVal(float secs) {
+  return constrain(int(20.0f + (secs - 3.0f) * (2980.0f / 13.0f) + 0.5f), 20, 3000);
+}
+FLASHMEM float EchoDevice::TimeSecs(int v) const {
+  return mode[TIME] == SYNC_CLOCK ? DivSeconds(NUM_DIVS - 1 - DivIndex(v, 20, 3000))  // (the longest at the top)
+       : mode[TIME] == TIME_LONG ? LongSecs(v) : v * 0.001f;
+}
+FLASHMEM float EchoDevice::MaxSecs() const { return echo.IsLong() ? LONG_SECS : MAX_SECS; }
+
+// TIME's mode turned: each takes the time it was on (FREE in ms, up to 3 s;
+// LONG from 3 s; back on the clock the note value nearest it that fits)
+FLASHMEM void EchoDevice::NudgeMode(int p, int dir) {
+  const int was = mode[TIME];
+  const float secs = TimeSecs(val[TIME]);
+  Device::NudgeMode(p, dir);
+  if (p != TIME || mode[TIME] == was) return;
+  if (mode[TIME] == SYNC_FREE) {
+    val[TIME] = int16_t(constrain(int(secs * 1000.0f + 0.5f), 20, 3000));
+  } else if (mode[TIME] == TIME_LONG) {
+    val[TIME] = int16_t(LongVal(std::max(secs, 3.0f)));
+  } else {
+    int best = NUM_DIVS - 1;
+    float err = 1e9f;
+    for (int i = 0; i < NUM_DIVS; i++) {
+      const float d = DivSeconds(i);
+      if (d > MAX_SECS - 0.01f && i < NUM_DIVS - 1) continue;  // (longer than the delay holds)
+      const float e = fabsf(log2f(d / std::min(secs, MAX_SECS)));
+      if (e < err) { err = e; best = i; }
+    }
+    val[TIME] = int16_t(DivValue(NUM_DIVS - 1 - best, 20, 3000));
+  }
+  Refresh(TIME);
+}
 
 FLASHMEM EchoDevice::EchoDevice() : Device(ECHO_DEF), echo(ECHO_DELAY_SAMPLES) {}
 
@@ -5016,15 +5043,25 @@ FLASHMEM void EchoDevice::CpuMax(float parts[2]) {
 }
 
 FLASHMEM void EchoDevice::SetTimes() {
-  const float secs = mode[TIME] == SYNC_FREE ? cur[TIME] * 0.001f
-    : DivSeconds(NUM_DIVS - 1 - DivIndex(cur[TIME], 20, 3000));  // (the longest at the top)
+  float secs = TimeSecs(cur[TIME]);
+  // LONG on or off: the lines change (no room: back to FREE at 3 s)
+  if (active && mem_ok && echo.IsLong() != (mode[TIME] == TIME_LONG)) {
+    if (!echo.SetLong(mode[TIME] == TIME_LONG, ECHO_LONG_SAMPLES) && mode[TIME] == TIME_LONG) {
+      mode[TIME] = SYNC_FREE;
+      val[TIME] = cur[TIME] = 3000;
+      secs = 3.0f;
+      long_fail_at = millis() | 1;
+    }
+    mem_ok = echo.ready();
+  }
+  const float top = MaxSecs() - 0.01f;
   // PHASE: the right side's heads up to half as late again (a wide stereo echo)
   const float phase = mode[SPREAD] == PHASE ? 1.0f + 0.5f * cur[SPREAD] * 0.01f : 1.0f;
   for (int c = 0; c < 2; c++) {
     for (int t = 0; t < TAPS; t++) {
       // each head at its share of TIME (the silent ones simply at TIME)
       float s = secs * HeadPos(t) * (c ? phase : 1.0f);
-      s = std::min(s, MAX_SECS - 0.01f);
+      s = std::min(s, top);
       tap_secs[c][t] = s;
       echo.tap(c, t, int(s * AUDIO_SAMPLE_RATE_EXACT));
       echo.tap_gain(t, HeadGain(t));
@@ -5093,16 +5130,18 @@ FLASHMEM void EchoDevice::Apply(int p) {
 }
 
 FLASHMEM int EchoDevice::Step(int p, int v, int dir) const {
-  if (p == TIME && mode[TIME] != SYNC_FREE)
+  if (p == TIME && mode[TIME] == SYNC_CLOCK)
     return DivValue(DivIndex(v, 20, 3000) + dir, 20, 3000);
   return v + dir;  // FREE: 1 ms a click (more spun fast: see Turn)
 }
 
 FLASHMEM void EchoDevice::Format(int p, char* buf, size_t n) const {
-  if (p == TIME && mode[TIME] != SYNC_FREE) {
+  if (p == TIME && long_fail_at && millis() - long_fail_at < 1500) {
+    snprintf(buf, n, "NO MEM");  // (LONG had no room)
+  } else if (p == TIME && mode[TIME] == SYNC_CLOCK) {
     FormatDiv(NUM_DIVS - 1 - DivIndex(val[TIME], 20, 3000), buf, n);
   } else if (p == TIME) {
-    const int ms = val[TIME];
+    const int ms = mode[TIME] == TIME_LONG ? int(LongSecs(val[TIME]) * 1000.0f + 0.5f) : val[TIME];
     if (ms < 1000) snprintf(buf, n, "%dms", ms);
     else snprintf(buf, n, "%d.%02ds", ms / 1000, (ms % 1000) / 10);
   } else if (p == PRE) {
@@ -5164,7 +5203,8 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
     // the FDBK amount; with SPRD up the right side's repeats dotted next to them.
     {
       const int tw = w - 4;
-      auto px = [&](float sec) { return x + int(constrain(sec / MAX_SECS, 0.0f, 1.0f) * tw); };
+      const float top_s = MaxSecs();
+      auto px = [&](float sec) { return x + int(constrain(sec / top_s, 0.0f, 1.0f) * tw); };
       if (cur[DELAY] > 0) {
         const int bh = std::max(1, (h - 2) * cur[DELAY] / 100);
         const float period = tap_secs[0][TAPS - 1], period_r = tap_secs[1][TAPS - 1];
@@ -5203,7 +5243,7 @@ FLASHMEM void EchoDevice::DrawViz(int x, int y, int w, int h) {
             const int rh = int(bh * g * HeadGain(t));
             if (rh < 1) continue;
             const float sec = round * period + tap_secs[0][t];
-            if (sec > MAX_SECS) break;
+            if (sec > top_s) break;
             const int lx = px(sec);
             const int hl = side_h(rh, round, false), hr = side_h(rh, round, true);
             if (hl > 0) gfxLine(lx, base - hl + 1, lx, base);
