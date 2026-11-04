@@ -4567,8 +4567,15 @@ FLASHMEM int PlayerDevice::Step(int p, int v, int dir) const {
     const bool end = p == END;
     uint32_t& e = ex_pos[end];
     uint32_t& o = ex_pos[!end];
-    e = uint32_t(end ? constrain(int64_t(e) + dir * px, std::min(GAP, nn), nn)
-                     : constrain(int64_t(e) + dir * px, int64_t(0), std::max<int64_t>(0, nn - GAP)));
+    // SNAP BEAT with a tempo: a click is the next beat (the edge goes onto
+    // the grid; SNAP's L knob does the fine tune)
+    int64_t to = int64_t(e) + dir * px;
+    if (cur[SNAP] == SNAP_BEAT && bpm > 0.0f && !streaming) {
+      const double beat = BeatFrames();
+      to = int64_t(std::floor(bpm_phase + (std::round((double(e) - bpm_phase) / beat) + dir) * beat + 0.5));
+    }
+    e = uint32_t(end ? constrain(to, std::min(GAP, nn), nn)
+                     : constrain(to, int64_t(0), std::max<int64_t>(0, nn - GAP)));
     const int64_t want = end ? std::max<int64_t>(0, int64_t(e) - GAP) : std::min(nn, int64_t(e) + GAP);
     if (end ? int64_t(o) > want : int64_t(o) < want) {
       o = uint32_t(want);
