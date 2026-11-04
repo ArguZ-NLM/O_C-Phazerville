@@ -4424,8 +4424,11 @@ FLASHMEM size_t PlayerDevice::EdgeAt(int p) const {
 FLASHMEM void PlayerDevice::LoopEdges(size_t& a, size_t& b) const {
   const size_t n = Frames();
   a = EdgeAt(START), b = EdgeAt(END);
+  // (just taken over from BEAT, untouched since: ZERO leaves them there)
+  const bool held = cur[SNAP] == SNAP_ZERO && beat_keep && ex_valid && cur[START] == val[START] && cur[END] == val[END]
+                    && ex_pos[0] == beat_raw[0] && ex_pos[1] == beat_raw[1];
   if (cur[SNAP]) {
-    a = SnapPoint(a); b = SnapPoint(b);
+    if (!held) { a = SnapPoint(a); b = SnapPoint(b); }
     if (cur[SNAP] == SNAP_BEAT && bpm > 0.0f && b <= a) b = std::min(n, SnapQuiet(std::min(n - 1, a + size_t(BeatFrames() / 16.0))));  // at least a step
     a = Shifted(a, n); b = Shifted(b, n);  // the fine tune (L knob)
   }
@@ -4476,6 +4479,10 @@ FLASHMEM void PlayerDevice::TrimToLoop() {
   trim_wanted = false;
   trim_off += base;
   bpm_phase -= double(base);
+  for (int k = 0; k < 2; k++) {  // (what SNAP keeps from BEAT moves along)
+    beat_raw[k] = uint32_t(beat_raw[k] > base ? beat_raw[k] - base : 0);
+    beat_grid[k] = uint32_t(beat_grid[k] > base ? beat_grid[k] - base : 0);
+  }
   ex_pos[0] = uint32_t(e0 > base ? e0 - base : 0);
   ex_pos[1] = uint32_t(e1 > base ? e1 - base : 0);
   ex_valid = true;
@@ -4520,6 +4527,7 @@ FLASHMEM void PlayerDevice::ExpandStep() {
   exp_buf[0] = exp_buf[1] = nullptr;
   expanding = false;
   bpm_phase += double(trim_off);
+  if (beat_keep) for (int k = 0; k < 2; k++) { beat_raw[k] += uint32_t(trim_off); beat_grid[k] += uint32_t(trim_off); }
   trim_off = 0;
   ex_pos[0] = uint32_t(e0);
   ex_pos[1] = uint32_t(e1);
@@ -4900,11 +4908,7 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
   // where they are set (a new loop waits for the old one to come round,
   // the lines show the new one at once); SNAP shown for files in memory
   size_t ea = ea0, eb = eb0;
-  if (!streaming && cur[SNAP]) {
-    ea = SnapPoint(ea); eb = SnapPoint(eb);
-    if (cur[SNAP] == SNAP_BEAT && bpm > 0.0f && eb <= ea) eb = std::min(n, SnapQuiet(std::min(n - 1, ea + size_t(BeatFrames() / 16.0))));
-    ea = Shifted(ea, n); eb = Shifted(eb, n);
-  }
+  if (!streaming && cur[SNAP]) LoopEdges(ea, eb);  // (where they snap to, as played)
   // SNAP BEAT with a tempo found: the beats as ticks along the bottom (when
   // they are at least 4 pixels apart)
   if (cur[SNAP] == SNAP_BEAT && bpm > 0.0f) {
