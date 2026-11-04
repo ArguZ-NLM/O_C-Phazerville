@@ -476,6 +476,8 @@ private:
   bool reset_held = false;  // R held on a device page ...
   uint32_t reset_hold = 0;  // ... since then
   loom::PlayerDevice* meta_page = nullptr;  // the PLAYER whose page is open
+  loom::Device* page_dev = nullptr;   // the device whose page is open (PageOpen)
+  loom::Device* page_twin = nullptr;  // ... and its linked twin
   void Mirror(loom::Device* d, int p) const;
   void SetByText(bool want_mode, const char* text, bool smooth = false);
   // USB 'w' (videos): a value walked to as a hand dials, a step every
@@ -1476,8 +1478,9 @@ FLASHMEM void AppLoom::StereoOn(int master) {
     snprintf(player_stash.name, sizeof(player_stash.name), "%s", p->FileName());
     memcpy(player_stash.val, p->val, sizeof(player_stash.val));
     memcpy(player_stash.mode, p->mode, sizeof(player_stash.mode));
-    player_stash.ex[0] = p->ex_pos[0]; player_stash.ex[1] = p->ex_pos[1];
-    player_stash.ex_valid = p->ex_valid;
+    // (in frames of what was loaded: a trimmed loop is the whole file again when it comes back)
+    player_stash.ex[0] = uint32_t(p->SavedEdge(PlayerDevice::START)); player_stash.ex[1] = uint32_t(p->SavedEdge(PlayerDevice::END));
+    player_stash.ex_valid = true;
     player_stash.sec[0] = p->sec_off; player_stash.sec[1] = p->sec_len;
     player_stash.valid = true;
     p->LinkFrom(*a.player);
@@ -2271,6 +2274,20 @@ FLASHMEM void AppLoom::MainLoop() {
         && loom::tracks[track].choice[loom::SOURCE] == 2 ? loom::tracks[track].player : nullptr;
     if (meta_page && on != meta_page) meta_page->WriteMeta();
     meta_page = on;
+    // a device page opened / left (and its linked twin): open, it may hold
+    // what it likes; left, it gives back what it doesn't need
+    {
+      loom::Device* pg = view == DEVICE && !focus_mod && !mod_mode ? Focused() : nullptr;
+      loom::Device* tw = pg ? Twin(pg) : nullptr;
+      if (pg != page_dev || tw != page_twin) {
+        if (page_dev && page_dev != pg && page_dev != tw) page_dev->PageOpen(false);
+        if (page_twin && page_twin != pg && page_twin != tw) page_twin->PageOpen(false);
+        if (pg && pg != page_dev && pg != page_twin) pg->PageOpen(true);
+        if (tw && tw != page_dev && tw != page_twin) tw->PageOpen(true);
+        page_dev = pg;
+        page_twin = tw;
+      }
+    }
     for (int t = 0; t < loom::NUM_TRACKS; t++) {
       SwitchChoices(t);
       ApplyBypass(t);  // follows SPRAY LEVEL
@@ -4422,7 +4439,7 @@ FLASHMEM void AppLoom::SaveFile() const {
   f.write("X", 1);
   for (auto& tr : tracks) {
     uint32_t e[2] = {0, 0};
-    if (tr.player) { e[0] = tr.player->EdgeAt(PlayerDevice::START); e[1] = tr.player->EdgeAt(PlayerDevice::END); }
+    if (tr.player) { e[0] = tr.player->SavedEdge(PlayerDevice::START); e[1] = tr.player->SavedEdge(PlayerDevice::END); }
     f.write(reinterpret_cast<uint8_t*>(e), 8);
   }
   // ... and the shared MOD E-H

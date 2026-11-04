@@ -66,6 +66,15 @@ public:
     for (auto b : old) if (b) PsramFree(b);
     return Resize(n);
   }
+  // --- SHUTTLE: only the loop in memory while its page is closed ---
+  // (main loop) new buffers of n frames holding this one's frames from
+  // `base` on, swapped in between two audio updates, the play going on at
+  // the same sound. Trim copies them out of this buffer; Swap2 takes
+  // buffers the caller filled (Expand: the whole file again, this buffer at
+  // `-base` in them). false: not now (a crossfade or new window pending, or
+  // the loop not inside) or no room; nothing changed
+  bool Trim(size_t base, size_t n);
+  bool Swap2(int16_t* l, int16_t* r, size_t n, long base);
   // --- SPOOL: memory only for what is recorded ---
   // Empty, it keeps just PARK frames (the live input still passes through);
   // REC first takes the longest buffer that fits (Grow, whole seconds down
@@ -622,4 +631,37 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectReel::update() {  // (O2
   transmit(out[1], 1);
   for (auto b : out) release(b);
   for (auto b : in) if (b) release(b);
+}
+
+FLASHMEM static size_t ReelShifted(size_t v, long base) { return size_t(std::max(0L, long(v) - base)); }
+
+FLASHMEM bool AudioEffectReel::Trim(size_t base, size_t n) {
+  if (!ready() || st == REC || st == EMPTY || dub || base + n > len || !n) return false;
+  int16_t* l = static_cast<int16_t*>(PsramAlloc(n * sizeof(int16_t)));
+  int16_t* r = l ? static_cast<int16_t*>(PsramAlloc(n * sizeof(int16_t))) : nullptr;
+  if (!l || !r) { if (l) PsramFree(l); return false; }
+  memcpy(l, buf[0] + base, n * sizeof(int16_t));
+  memcpy(r, buf[1] + base, n * sizeof(int16_t));
+  if (Swap2(l, r, n, long(base))) return true;
+  PsramFree(l); PsramFree(r);
+  return false;
+}
+FLASHMEM bool AudioEffectReel::Swap2(int16_t* l, int16_t* r, size_t n, long base) {
+  int16_t* old[2];
+  AudioNoInterrupts();
+  // every window in use must be inside the new buffers
+  const long lo = base, hi = base + long(n);
+  const bool ok = st != REC && !dub && !xf && !pend && long(ws) >= lo && long(ws + wl) <= hi &&
+                  (!exact || (long(ex_ws) >= lo && long(ex_ws + ex_wl) <= hi));
+  if (!ok) { AudioInterrupts(); return false; }
+  old[0] = buf[0]; old[1] = buf[1];
+  buf[0] = l; buf[1] = r;
+  ws = ReelShifted(ws, base); o_ws = ReelShifted(o_ws, base); lt_ws = ReelShifted(lt_ws, base); p_ws = ReelShifted(p_ws, base);
+  if (exact) ex_ws = ReelShifted(ex_ws, base);
+  cap = len = n;
+  AudioInterrupts();
+  for (auto b : old) if (b) PsramFree(b);
+  std::fill(hist, hist + HIST, 0);
+  for (size_t i = 0; i < n; i += 64) Mark(i, buf[0][i], buf[1][i]);  // (the picture's levels again)
+  return true;
 }

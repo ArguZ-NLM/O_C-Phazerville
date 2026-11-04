@@ -376,6 +376,10 @@ public:
   // a tail can ring out first; Parked() runs then, with the stream idle
   virtual uint32_t TailMs() const;
   virtual void Parked() {}
+  // its page opened (true) or left (false), the main loop's: while it is
+  // open a device may hold all the memory it likes, left it gives back what
+  // it doesn't need (SHUTTLE: only the loop stays)
+  virtual void PageOpen(bool) {}
   // parked (unpatched) or back in the chain: a device whose audio object
   // would otherwise keep computing on silence stops while parked
   virtual void Rest(bool on) {}
@@ -3599,7 +3603,7 @@ public:
   bool Section(char* path, size_t n, uint32_t& a, uint32_t& b) const {
     if (!nfiles || loading || analysing || !Frames()) return false;
     snprintf(path, n, "%s/%s", strcmp(dir, "/") ? dir : "", FileName());
-    const size_t off = clipped ? sec_off : 0;
+    const size_t off = (clipped ? sec_off : 0) + trim_off;
     a = uint32_t(EdgeAt(START) + off);
     b = uint32_t(EdgeAt(END) + off);
     if (b < a) std::swap(a, b);
@@ -3618,7 +3622,7 @@ public:
     ex_valid = false;  // the edges from START / END (the section in memory stays)
     ApplyAll();
   }
-  void KeepMore(Saved& k) const override { k.ex[0] = ex_pos[0]; k.ex[1] = ex_pos[1]; k.ex_valid = ex_valid; }
+  void KeepMore(Saved& k) const override;
   void RestoreMore(const Saved& k) override { ex_pos[0] = k.ex[0]; ex_pos[1] = k.ex[1]; ex_valid = k.ex_valid; }
   // the file list (R push on FILE)
   int FileParam() const override { return FILE_; }
@@ -3651,6 +3655,28 @@ private:
   bool indexing = false;   // streaming, and the level index still being read
   uint32_t indexed_at = 0;
   size_t data_off = 0, done = 0;  // where the samples start in the file; analysis progress
+  // MEM, its page left: only the loop (+ a margin) stays in memory. trim_off:
+  // where the buffer starts in what was loaded (full_len frames, from the
+  // file's frame clipped ? sec_off : 0); its page opened: the rest read in
+  // again alongside (expanding), swapped in once it is all there
+  size_t trim_off = 0, full_len = 0, pcm_off = 0;
+  bool expanding = false;
+  bool trim_wanted = false;  // its page left: trim as soon as it can (not in a crossfade, the BPM found)
+  bool page_open = false;
+  uint32_t trim_try_at = 0;  // (tried at most every 200 ms: each try copies the loop)
+  size_t exp_got = 0;
+  int16_t* exp_buf[2] = {nullptr, nullptr};
+  void TrimToLoop();
+  void StartExpand();
+  void ExpandStep();
+  void DropExpand();
+  void LoopEdges(size_t& a, size_t& b) const;  // the loop as Window() plays it
+public:
+  void PageOpen(bool open) override;
+  // START / END in frames of what was loaded (as the saved settings and the
+  // .loom file keep them: the trim left out)
+  size_t SavedEdge(int p) const { return EdgeAt(p) + trim_off; }
+private:
   uint8_t* idx = nullptr;         // level per IDX_FRAMES frames, for the picture
   // and per IDX2 entries of it (after the fine one, in the same block), so
   // a picture of a whole long file doesn't read every entry (13 ms a frame)
@@ -3706,7 +3732,7 @@ private:
   size_t HeadFrame() const {
     const size_t n = Frames();
     const size_t at = size_t((streaming ? stream.HeadPos() : fx.HeadPos()) * n);
-    return at + (clipped ? sec_off : 0);
+    return at + trim_off + (clipped ? sec_off : 0);
   }
   // START / END settings from the exact edges, once the length is known
   void EdgesToSettings() {
@@ -3848,8 +3874,8 @@ FLASHMEM void PlayerDevice::TakeMeta(Meta& m) const {
   memset(&m, 0, sizeof(m));
   for (int p = 0; p < num_params(); p++) { m.val[p] = val[p]; m.mode[p] = mode[p]; }
   m.val[FILE_] = 0;  // the file is the one this is next to
-  m.ex[0] = uint32_t(EdgeAt(START));
-  m.ex[1] = uint32_t(EdgeAt(END));
+  m.ex[0] = uint32_t(SavedEdge(START));
+  m.ex[1] = uint32_t(SavedEdge(END));
   m.sec_off = sec_off;
   m.sec_len = sec_len;
 }
@@ -4083,7 +4109,10 @@ FLASHMEM void PlayerDevice::Load(int i) {
   if (bpm_env) { AudioEffectEcho::FreeAny(bpm_env); bpm_env = nullptr; }
   bpm_got = -1;
   bpm_keep = bpm;  // (dropped below if it is another file)
-  phase_keep = bpm_phase + (clipped ? double(sec_off) : 0.0);  // (MEM on a long file: a section of it)
+  phase_keep = bpm_phase + double(trim_off) + (clipped ? double(sec_off) : 0.0);  // (MEM on a long file: a section of it)
+  DropExpand();
+  trim_off = full_len = 0;
+  trim_wanted = false;
   bpm = 0.0f;
   if (loading || streaming || analysing) lf.close();
   loading = streaming = analysing = false;
@@ -4145,6 +4174,7 @@ FLASHMEM void PlayerDevice::Load(int i) {
       is_float = tag == 3;
       if (tag != 1 && tag != 3) bits = 0;
     } else if (!memcmp(c, "data", 4)) {
+      pcm_off = lf.position();  // (the file's samples start here)
       const bool ok_bits = is_float ? bits == 32 : (bits == 8 || bits == 16 || bits == 24 || bits == 32);
       if (!ok_bits || chans < 1) break;
       bytes = bits / 8;
@@ -4227,6 +4257,8 @@ FLASHMEM void PlayerDevice::Idle() {
   if (!nfiles && millis() - scanned_at > 3000) Scan();  // card / files may come later
   if ((loaded != cur[FILE_] || loaded_mode != mode[FILE_]) && !loading && !analysing) Load(cur[FILE_]);
   DMAMEM static int16_t tl[IO_CHUNK], tr[IO_CHUNK];  // (RAM2)
+  if (expanding) { ExpandStep(); return; }
+  if (trim_wanted && millis() - trim_try_at > 200) { trim_try_at = millis(); TrimToLoop(); }
   if (loading) {  // short file: all of it into fx
     const size_t rd = ReadFrames(fx.Data(0) + got, fx.Data(1) + got, std::min(IO_CHUNK, frames - got));
     fx.MarkRange(got, got + rd);
@@ -4235,6 +4267,9 @@ FLASHMEM void PlayerDevice::Idle() {
       lf.close();
       loading = false;
       fx.FinishLoad(got);
+      full_len = got;
+      trim_off = 0;
+      trim_wanted = !page_open;  // (loaded with its page closed, at power-up say: only the loop stays)
       EdgesToSettings();
       ApplyAll();
       MetaBaseline();
@@ -4334,17 +4369,117 @@ FLASHMEM size_t PlayerDevice::EdgeAt(int p) const {
   return size_t(uint64_t(cur[p]) * n / 10000);
 }
 
-FLASHMEM void PlayerDevice::Window() {
+FLASHMEM void PlayerDevice::LoopEdges(size_t& a, size_t& b) const {
   const size_t n = Frames();
-  if (!n) return;
-  size_t a = EdgeAt(START), b = EdgeAt(END);
+  a = EdgeAt(START), b = EdgeAt(END);
   if (cur[SNAP]) {
     a = SnapPoint(a); b = SnapPoint(b);
     if (cur[SNAP] == SNAP_BEAT && bpm > 0.0f && b <= a) b = std::min(n, SnapQuiet(std::min(n - 1, a + size_t(BeatFrames()))));  // at least a beat
   }
   if (b <= a + AUDIO_BLOCK_SAMPLES) b = std::min(n, a + AUDIO_BLOCK_SAMPLES * 2);
+}
+
+FLASHMEM void PlayerDevice::Window() {
+  const size_t n = Frames();
+  if (!n) return;
+  size_t a, b;
+  LoopEdges(a, b);
   if (streaming) stream.SetWindow(a, b);
   else fx.SetWindowSamples(a, b - a);
+}
+
+// its page left: MEM keeps only the loop and a margin (a quarter of the loop
+// either side, at least the crossfade, a beat with SNAP on the beat, 0.1 s),
+// the rest goes back for the other devices. Not while START / END are
+// modulated (they move: the whole file stays), nor while it loads or the
+// BPM is still being found
+FLASHMEM void PlayerDevice::KeepMore(Saved& k) const {
+  if (trim_off) { k.ex[0] = uint32_t(SavedEdge(START)); k.ex[1] = uint32_t(SavedEdge(END)); k.ex_valid = true; return; }
+  k.ex[0] = ex_pos[0]; k.ex[1] = ex_pos[1]; k.ex_valid = ex_valid;
+}
+
+FLASHMEM void PlayerDevice::PageOpen(bool open) {
+  trim_wanted = !open;
+  page_open = open;
+  if (open) StartExpand();
+  else { DropExpand(); TrimToLoop(); }
+}
+
+FLASHMEM void PlayerDevice::TrimToLoop() {
+  // (not now: tried again from Idle while trim_wanted)
+  if (!active || loading || analysing || expanding || bpm_env) return;
+  if (streaming || !full_len || Modded(START) || Modded(END)) { trim_wanted = false; return; }
+  const size_t n = Frames();
+  if (!n || n != fx.Length()) { trim_wanted = false; return; }
+  size_t a, b;
+  LoopEdges(a, b);
+  if (b < a) std::swap(a, b);
+  size_t m = std::max<size_t>({(b - a) / 4, size_t(XfadeFrames()) + 1024, size_t(0.1f * AUDIO_SAMPLE_RATE_EXACT)});
+  if (cur[SNAP] == SNAP_BEAT && bpm > 0.0f) m += size_t(BeatFrames());
+  const size_t base = a > m ? a - m : 0, end = std::min(n, b + m);
+  if (end <= base || (end - base) > n - n / 5) { trim_wanted = false; return; }  // (not worth it: under a fifth to gain)
+  const size_t e0 = EdgeAt(START), e1 = EdgeAt(END);
+  if (!fx.Trim(base, end - base)) return;
+  trim_wanted = false;
+  trim_off += base;
+  bpm_phase -= double(base);
+  ex_pos[0] = uint32_t(e0 > base ? e0 - base : 0);
+  ex_pos[1] = uint32_t(e1 > base ? e1 - base : 0);
+  ex_valid = true;
+  wv_any = false;
+  EdgesToSettings();
+  Serial.printf("SHUTTLE: kept %u of %u frames (the loop and a margin)\n", unsigned(end - base), unsigned(n));
+}
+
+// its page opened: what was left out read in again from the card,
+// alongside (the trimmed loop plays on), then swapped in
+FLASHMEM void PlayerDevice::StartExpand() {
+  if (expanding || !active || streaming || loading || analysing || !full_len || fx.Length() >= full_len) return;
+  if (!nfiles || loaded < 0 || loaded >= nfiles) return;
+  exp_buf[0] = static_cast<int16_t*>(PsramAlloc(full_len * sizeof(int16_t)));
+  exp_buf[1] = exp_buf[0] ? static_cast<int16_t*>(PsramAlloc(full_len * sizeof(int16_t))) : nullptr;
+  if (!exp_buf[1]) { DropExpand(); return; }  // no room: the loop alone (it stays as it is)
+  char path[192];
+  snprintf(path, sizeof(path), "%s/%s", strcmp(dir, "/") ? dir : "", names[loaded]);
+  lf = SD.open(path, FILE_READ);
+  if (!lf) { DropExpand(); return; }
+  lf.seek(pcm_off + size_t(clipped ? sec_off : 0) * size_t(bytes) * chans);
+  exp_got = 0;
+  expanding = true;
+}
+
+FLASHMEM void PlayerDevice::ExpandStep() {
+  if (exp_got < full_len) {
+    const size_t rd = ReadFrames(exp_buf[0] + exp_got, exp_buf[1] + exp_got, std::min(IO_CHUNK, full_len - exp_got));
+    exp_got += rd;
+    if (rd) return;
+  }
+  if (exp_got < full_len) { lf.close(); DropExpand(); return; }  // (the card failed: as it was)
+  lf.close();
+  // the whole again, the trimmed buffer at trim_off in it (the play goes on)
+  const size_t e0 = EdgeAt(START) + trim_off, e1 = EdgeAt(END) + trim_off;
+  if (!fx.Swap2(exp_buf[0], exp_buf[1], full_len, -long(trim_off))) {
+    // a crossfade or new window just then: the next main loop tries again
+    lf = File();
+    exp_got = full_len;
+    return;
+  }
+  exp_buf[0] = exp_buf[1] = nullptr;
+  expanding = false;
+  bpm_phase += double(trim_off);
+  trim_off = 0;
+  ex_pos[0] = uint32_t(e0);
+  ex_pos[1] = uint32_t(e1);
+  ex_valid = true;
+  wv_any = false;
+  EdgesToSettings();
+  Serial.println("SHUTTLE: the whole file back in memory");
+}
+
+FLASHMEM void PlayerDevice::DropExpand() {
+  if (expanding && lf) lf.close();
+  expanding = false;
+  for (auto& b : exp_buf) { if (b) PsramFree(b); b = nullptr; }
 }
 
 FLASHMEM void PlayerDevice::Apply(int p) {
@@ -4363,7 +4498,7 @@ FLASHMEM void PlayerDevice::Apply(int p) {
           ex_valid = keep_exact = true;
         } else if (mode[FILE_] == 0 && clipped) {
           // MEM -> STRM: the edges back to where they are in the whole file
-          ex_pos[0] = sec_off + EdgeAt(START); ex_pos[1] = sec_off + EdgeAt(END);
+          ex_pos[0] = sec_off + SavedEdge(START); ex_pos[1] = sec_off + SavedEdge(END);
           ex_valid = keep_exact = true;
         }
       }
