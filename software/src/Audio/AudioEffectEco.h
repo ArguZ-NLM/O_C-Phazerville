@@ -37,8 +37,6 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-#include <new>
-
 struct AudioEffectClouds::EcoState {
     static const int WIN_N = 256;
     struct G {
@@ -57,7 +55,6 @@ struct AudioEffectClouds::EcoState {
         float   scatter, semis;
     } g[ECO_MAX];
     float win[5][WIN_N + 2];
-    int16_t span[SPAN_MAX];
     float spawn_wait, rate_est;
     uint32_t since;          // samples since the last grain
     // DRIFT: walks and swings (ECHOFIELD's walk_pos / walk_pitch / lfo1 / lfo2)
@@ -102,7 +99,9 @@ FLASHMEM static float EcoWindowShape(int w, float x) {
 
 FLASHMEM bool AudioEffectClouds::EcoAcquire() {
     if (eco_) return true;
-    EcoState* e = new (std::nothrow) EcoState();  // (zeroed)
+    // in PSRAM (zeroed): RAM2's heap has next to nothing left with every
+    // device in use; each grain's span is read into FIBRE's span_ (unused here)
+    EcoState* e = static_cast<EcoState*>(PsramAlloc(sizeof(EcoState)));
     if (!e) return false;
     for (int w = 0; w < 5; w++) {
         for (int i = 0; i <= EcoState::WIN_N; i++) e->win[w][i] = EcoWindowShape(w, (float)i / EcoState::WIN_N);
@@ -121,7 +120,7 @@ FLASHMEM void AudioEffectClouds::EcoRelease() {
     eco_ = nullptr;
     for (auto& g : grains) g.active = false;
     AudioInterrupts();
-    delete e;
+    if (e) PsramFree(e);
 }
 
 // one window value: table a and the next blended by mix, at t 0..1
@@ -364,7 +363,7 @@ FLASHMEM void AudioEffectClouds::UpdateEco(audio_block_t** in, audio_block_t** o
         const int steps = std::min<int>(AUDIO_BLOCK_SAMPLES - first, (int)(g.len - g.phase));
         const float inc = (float)g.inc_int + g.inc_frac;
         const int16_t* src = stereo ? buf[g.source] : buf[0];
-        int16_t* sp = e.span;
+        int16_t* sp = span_;
         size_t start;
         int count, li;
         if (!g.rev) {
