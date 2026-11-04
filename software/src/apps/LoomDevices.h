@@ -470,6 +470,9 @@ public:
   // how many modes the setting has right now (the bar's parts); TWILL's
   // SPRD: as many as DIR's bells allow
   virtual int ModeCount(int p) const { return param(p).nmodes; }
+  // where the mode sits along its bar (0 .. ModeCount - 1); SHUTTLE's SNAP
+  // keeps its offset in its own order (0 = none, saved files unchanged)
+  virtual int ModeAt(int p) const { return mode[p]; }
   // a variation up or down by a percentage: "±35%" (the font's ± is char 127, LOOM_PM)
   static void FormatVar(char* buf, size_t n, int pct) { snprintf(buf, n, LOOM_PM "%d%%", pct); }
   uint16_t alt_on = 0;  // which of those show their second value (the page's, not saved)
@@ -2882,7 +2885,7 @@ PROGMEM static const DeviceDef PLAYER_DEF = {
     {"START", 0, 10000, 0, UNI, 0, 10, 0},      // mode: zoom, all .. 0.3 ms across
     {"END", 0, 10000, 10000, UNI, 0, 10, 0},
     {"FADE", 0, 100, 20, UNI, 0, 2, 0, {}, {"CROSS", "INOUT"}},  // the loop's seam
-    {"SNAP", 0, 2, 0, LIST, 3, 0, 0, {"OFF", "ZERO", "BEAT"}},  // ZERO: the quietest point; BEAT: the nearest beat
+    {"SNAP", 0, 2, 0, LIST, 3, 201, 0, {"OFF", "ZERO", "BEAT"}},  // ZERO: the quietest point; BEAT: the nearest beat; mode: the loop moved a few ms (see SnapShift)
   },
   {"", ""},
 };
@@ -3490,6 +3493,18 @@ public:
   // FILE's number row already says STRM / MEM (the file's name is above)
   const char* Name(int p) const override { return p == FILE_ ? "MODE" : Device::Name(p); }
   bool NameIsMode(int p) const override { return p == FILE_; }  // (the number row shows STRM / MEM)
+  // SNAP's L knob: a fine tune of the snapped loop, both edges moved
+  // earlier / later in ms (1 a click, up to 100 either way; the beats stay
+  // where they are). Kept in its mode as 0..100 = 0..+100 ms and
+  // 101..200 = -100..-1 ms, so 0 is no offset (the saved settings and .loom
+  // files from before read as none). The upper row shows it while not 0
+  static constexpr int SNAP_SHIFTS = 100;
+  int SnapShift() const;
+  int ModeAt(int p) const override;
+  bool NameStop(int p) const override;
+  void NudgeMode(int p, int dir) override;
+  // a snapped edge moved by SNAP's offset (in frames of the file)
+  size_t Shifted(size_t e, size_t n) const;
   static float MaxSecs() { return BigSecs(); }
   static constexpr size_t MIN_BUF = 11025;  // 0.25 s: the buffer before a file
   // FILE mode MEM on a long file: the section in memory, in file frames
@@ -4375,6 +4390,7 @@ FLASHMEM void PlayerDevice::LoopEdges(size_t& a, size_t& b) const {
   if (cur[SNAP]) {
     a = SnapPoint(a); b = SnapPoint(b);
     if (cur[SNAP] == SNAP_BEAT && bpm > 0.0f && b <= a) b = std::min(n, SnapQuiet(std::min(n - 1, a + size_t(BeatFrames()))));  // at least a beat
+    a = Shifted(a, n); b = Shifted(b, n);  // the fine tune (L knob)
   }
   if (b <= a + AUDIO_BLOCK_SAMPLES) b = std::min(n, a + AUDIO_BLOCK_SAMPLES * 2);
 }
@@ -4586,7 +4602,32 @@ FLASHMEM void PlayerDevice::FormatMode(int p, char* buf, size_t n) const {
     FormatZoom(mode[p], buf, n);
     return;
   }
+  if (p == SNAP) {  // the loop's fine tune
+    const int k = SnapShift();
+    if (k) snprintf(buf, n, "%+dms", k); else snprintf(buf, n, "0ms");
+    return;
+  }
   else Device::FormatMode(p, buf, n);
+}
+
+// (out of the class: RAM1 has no room for them)
+FLASHMEM int PlayerDevice::SnapShift() const { const int m = mode[SNAP]; return m <= SNAP_SHIFTS ? m : m - (2 * SNAP_SHIFTS + 1); }
+FLASHMEM int PlayerDevice::ModeAt(int p) const { return p == SNAP ? SnapShift() + SNAP_SHIFTS : mode[p]; }
+FLASHMEM bool PlayerDevice::NameStop(int p) const { return p != SNAP && Device::NameStop(p); }
+FLASHMEM size_t PlayerDevice::Shifted(size_t e, size_t n) const {
+  const long k = std::lround(SnapShift() * 0.001 * FileRate());
+  return size_t(std::clamp<long>(long(e) + k, 0, long(n)));
+}
+
+// SNAP's offset: 1 ms a click, linear along the knob (its
+// mode keeps it in its own order, see SnapShift); the name shows again at 0
+FLASHMEM void PlayerDevice::NudgeMode(int p, int dir) {
+  if (p != SNAP) { Device::NudgeMode(p, dir); return; }
+  const int k = std::clamp(SnapShift() + dir, -SNAP_SHIFTS, SNAP_SHIFTS);
+  mode[SNAP] = uint8_t(k >= 0 ? k : k + 2 * SNAP_SHIFTS + 1);
+  const uint16_t bit = uint16_t(1u << SNAP);
+  mode_named = uint16_t(k ? mode_named | bit : mode_named & ~bit);
+  Apply(SNAP);
 }
 
 // A: play / stop; B: back to the start
@@ -4758,6 +4799,7 @@ FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
   if (!streaming && cur[SNAP]) {
     ea = SnapPoint(ea); eb = SnapPoint(eb);
     if (cur[SNAP] == SNAP_BEAT && bpm > 0.0f && eb <= ea) eb = std::min(n, SnapQuiet(std::min(n - 1, ea + size_t(BeatFrames()))));
+    ea = Shifted(ea, n); eb = Shifted(eb, n);
   }
   // SNAP BEAT with a tempo found: the beats as ticks along the bottom (when
   // they are at least 4 pixels apart)

@@ -3748,7 +3748,7 @@ FLASHMEM void AppLoom::DrawDevice() const {
     // Two dots at the name's ends drowned in the digits
     if (pd.nmodes && !(sel && mod_mode)) {
       constexpr int bx = 1, bw = 30;  // in the column
-      const int n = std::max<int>(1, d->ModeCount(p)), mm = constrain(int(d->mode[p]), 0, n - 1);
+      const int n = std::max<int>(1, d->ModeCount(p)), mm = constrain(d->ModeAt(p), 0, n - 1);
       const float amt = n > 1 ? float(mm) / (n - 1) : 0.0f;
       int a, b;
       switch (d->BarStyle(p)) {
