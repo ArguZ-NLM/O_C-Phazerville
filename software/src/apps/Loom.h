@@ -2047,7 +2047,7 @@ FLASHMEM void AppLoom::MainLoop() {
       }
       dirty = true;
       Serial.println("DEFAULTS: every device");
-    } else if (g_heavy_request == 5) {  // USB 'S': a snapshot, what is going on saved
+    } else if (g_heavy_request == 5) {  // USB 'a': a snapshot, what is going on saved
       g_heavy_request = 0;
       SaveFile();
       Serial.println("Loom: snapshot saved");

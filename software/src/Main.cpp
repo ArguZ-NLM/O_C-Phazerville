@@ -820,7 +820,7 @@ void FASTRUN loop() {
           case 'h':  // ... and back to the saved settings (not saving these)
             g_heavy_request = 2;
             break;
-          case 'S':  // Loom: these settings saved (a snapshot before a flash: they load at power-up)
+          case 'a':  // Loom: these settings saved (not 'S': that asks for the screen) (a snapshot before a flash: they load at power-up)
             g_heavy_request = 5;
             break;
           case 'E':  // Loom: every device back to its defaults (testing)
