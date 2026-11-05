@@ -930,8 +930,8 @@ FLASHMEM void ClockDevice::Format(int p, char* buf, size_t n) const {
     else if (val[p] == 1) snprintf(buf, n, "MIDI");
     else if (val[p] >= CLK_SHU) snprintf(buf, n, "SHU %c", 'A' + (val[p] - CLK_SHU));
     else FormatTrig(val[p] - 1, buf, n);
-  } else if (p == P_BPM && CvTempo() >= 0) {  // what you set, where the CV has it now, which CV
-    snprintf(buf, n, "%d.%d (%d) CV%d", val[P_BPM] / 10, val[P_BPM] % 10, int(tempo_bpm + 0.5f), CvTempo() + 1);
+  } else if (p == P_BPM && CvTempo() >= 0) {  // what you set, and which CV moves it
+    snprintf(buf, n, "%d.%d CV%d", val[P_BPM] / 10, val[P_BPM] % 10, CvTempo() + 1);
   } else if (p == P_BPM && external()) {
     snprintf(buf, n, "%d", int(tempo_bpm + 0.5f));
   } else if (p == P_BPM) {  // (tenths)
