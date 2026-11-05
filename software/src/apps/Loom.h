@@ -2395,6 +2395,11 @@ FLASHMEM void AppLoom::MainLoop() {
     loom::g_dream_link.key_note, loom::g_dream_link.key_took, loom::g_dream_link.fx_held, int(loom::dream_a::en_echo_lvl * 1000.0f),
     (unsigned long)loom::dream_a::en_seq_hits[0], (unsigned long)loom::dream_a::en_seq_hits[1], (unsigned long)loom::dream_a::en_bars);
   // the CV inputs as Loom reads them (In(ch) / 1536 = volts), and the ADC's own reading
+  {  // the hardware as read from its ID resistor at power-up (0.4 V Serge, 0.5 V Buchla)
+    extern float id_voltage;
+    Serial.printf("  hw: ID %d mV -> %s\n", int(id_voltage * 1000.0f),
+                  NorthernLightModular ? "NLM Buchla" : NLMSerge ? "NLM Serge" : "other");
+  }
   Serial.printf("  cv ins");
   for (int i = 0; i < ADC_CHANNEL_COUNT; i++)
     Serial.printf(" %d:%dmV(%d)", i + 1, int(HS::frame.In(i) * 1000 / 1536), int(OC::ADC::value(ADC_CHANNEL(i))));
