@@ -784,7 +784,7 @@ PROGMEM static const DeviceDef CLOCK_DEF = {
   "CLOCK", "CLK", 4, {"TAP", "RST"},  // B: the beat from one again (all on the clock with it)
   {
     {"SOURC", 0, CLK_SHU + 1, 0, UNI},
-    {"BPM", 30, 300, 120, UNI, 0, 9, 0, {}, {}},  // mode (L knob): a CV input that moves it, off / CV1-8
+    {"BPM", 300, 3000, 1200, UNI, 0, 9, 0, {}, {}},  // in tenths: 30.0 .. 300.0 (saves before v36 in whole BPM)  // mode (L knob): a CV input that moves it, off / CV1-8
     {"PPQN", 0, 3, 0, LIST, 4, 0, 0, {"1", "2", "4", "24"}},
     {"BOOT", 0, BOOT_UNTIL_MOVE, 2, UNI},  // the boot picture: off, 1-9 s, until move
   }
@@ -863,7 +863,7 @@ FLASHMEM void ClockDevice::Tick(const ModCtx& ctx) {
     // a CV input: added to BPM in a straight line, 27 BPM a volt (0-10 V
     // spans 30-300 from BPM 30), held to 30-300, smoothed
     const float volts = HS::frame.In(CvTempo()) / 1536.0f;
-    const float target = constrain(cur[P_BPM] + volts * 27.0f, 30.0f, 300.0f);
+    const float target = constrain(cur[P_BPM] * 0.1f + volts * 27.0f, 30.0f, 300.0f);
     measured = have_measure ? measured + 0.02f * (target - measured) : target;
     have_measure = true;
   } else if (src >= 2) {
@@ -875,7 +875,7 @@ FLASHMEM void ClockDevice::Tick(const ModCtx& ctx) {
       last_edge_us = now;
     }
   }
-  tempo_bpm = ((src || CvTempo() >= 0) && have_measure) ? measured : float(cur[P_BPM]);  // (internal + CV: BPM moved by it)
+  tempo_bpm = ((src || CvTempo() >= 0) && have_measure) ? measured : cur[P_BPM] * 0.1f;  // (internal + CV: BPM moved by it)
 
   // beat blink for the picture, and a 0..1 ramp per beat as output
   if (Restarted()) { beat_ph = 0.0f; beat = 0; flash = 0.08f; clock_beat_n = 0; }
@@ -918,7 +918,7 @@ FLASHMEM void ClockDevice::Action(int a) {
   const int need = tap_set && now - tap_set_us < 5000000 ? 2 : 3;
   if (tap_n < need) return;
   const float mean = float(tap_last - tap_first) / (tap_n - 1);
-  val[P_BPM] = constrain(int(60e6f / mean + 0.5f), 30, 300);
+  val[P_BPM] = constrain(int(600e6f / mean + 0.5f), 300, 3000);  // (tenths)
   Refresh(P_BPM);
   tap_set = true;
   tap_set_us = now;
@@ -931,9 +931,11 @@ FLASHMEM void ClockDevice::Format(int p, char* buf, size_t n) const {
     else if (val[p] >= CLK_SHU) snprintf(buf, n, "SHU %c", 'A' + (val[p] - CLK_SHU));
     else FormatTrig(val[p] - 1, buf, n);
   } else if (p == P_BPM && CvTempo() >= 0) {  // what you set, where the CV has it now, which CV
-    snprintf(buf, n, "%d (%d) CV%d", val[P_BPM], int(tempo_bpm + 0.5f), CvTempo() + 1);
+    snprintf(buf, n, "%d.%d (%d) CV%d", val[P_BPM] / 10, val[P_BPM] % 10, int(tempo_bpm + 0.5f), CvTempo() + 1);
   } else if (p == P_BPM && external()) {
     snprintf(buf, n, "%d", int(tempo_bpm + 0.5f));
+  } else if (p == P_BPM) {  // (tenths)
+    snprintf(buf, n, "%d.%d", val[P_BPM] / 10, val[P_BPM] % 10);
   } else if (p == P_BOOT) {
     if (val[p] == 0) snprintf(buf, n, "off");
     else if (val[p] >= BOOT_UNTIL_MOVE) snprintf(buf, n, "until move");
