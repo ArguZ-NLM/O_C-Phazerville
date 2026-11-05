@@ -3934,7 +3934,7 @@ FLASHMEM void AppLoom::DrawClockPage() const {
     else if (p == ClockDevice::P_PPQN && (!c->external() || c->Shuttle() >= 0)) snprintf(buf, sizeof(buf), "-");
     else c->Format(p, buf, sizeof(buf));
     gfxPrint(48, y, buf);
-    if (p == cursor) {
+    if (p == cursor && !fw_row) {  // (on REFLASH: only that one lit)
       gfxInvert(1, y - 1, 41, 9);
       if (editing) gfxInvert(47, y - 1, 6 * int(strlen(buf)) + 1, 9);
     }
