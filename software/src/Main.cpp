@@ -486,7 +486,7 @@ FLASHMEM void setup() {
   // --- more hardware init
 #if defined(ARDUINO_TEENSY41)
   // this takes a couple seconds to timeout if no card
-  SDcard_Ready = SD.begin(BUILTIN_SDCARD);
+  SdTry();  // (no card: no 2 s wait)
 
   if (I2S2_Audio_ADC && I2S2_Audio_DAC) {
     OC::AudioIO::Init();

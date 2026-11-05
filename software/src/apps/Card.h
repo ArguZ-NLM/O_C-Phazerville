@@ -221,7 +221,7 @@ FLASHMEM void AppCard::Converted() {
 
 FLASHMEM void AppCard::HandleAppEvent(OC::AppEvent event) {
   if (event == OC::APP_EVENT_RESUME) {
-    if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
+    SdTry();
     if (!started) {
       MTP.begin();
       if (SDcard_Ready) MTP.addFilesystem(SD, "SD_Card");

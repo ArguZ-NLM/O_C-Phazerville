@@ -214,7 +214,7 @@ private:
 // the .sid files in the folder, sorted by name
 FLASHMEM void SidDevice::Scan() {
   nfiles = 0;
-  if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
+  SdTry();
   if (!SDcard_Ready) return;
   if (!names) names = static_cast<char(*)[NAME_LEN]>(PsramAlloc(BROWSE_MAX * NAME_LEN));
   if (!names) return;

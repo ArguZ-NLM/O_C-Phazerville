@@ -23,6 +23,9 @@ extern bool I2S2_Audio_DAC;
 extern bool I2C_Expansion;
 extern bool MIDI_Uses_Serial8;
 extern bool SDcard_Ready;
+// SD.begin only when a card sits in the slot (its DAT3 pin pulls up): without
+// a card SD.begin hangs ~2 s, and the background rescans stalled the module
+bool SdTry();
 #ifdef ARDUINO_TEENSY41
 extern bool DAC_20Vpp;
 extern bool CalSynthXL;

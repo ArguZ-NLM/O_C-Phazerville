@@ -28,6 +28,17 @@ bool MIDI_Uses_Serial8=false;
 float id_voltage = 0.0;
 bool flip_mode = false;
 bool SDcard_Ready = false;
+#include <SD.h>
+FLASHMEM bool SdTry() {
+  if (SDcard_Ready) return true;
+#ifdef ARDUINO_TEENSY41
+  pinMode(46, INPUT_PULLDOWN);  // DAT3: a card's pull-up lifts it
+  delayMicroseconds(5);
+  if (!digitalReadFast(46)) return false;
+  SDcard_Ready = SD.begin(BUILTIN_SDCARD);
+#endif
+  return SDcard_Ready;
+}
 #ifdef ARDUINO_TEENSY41
 bool DAC_20Vpp = false;
 bool CalSynthXL = false;

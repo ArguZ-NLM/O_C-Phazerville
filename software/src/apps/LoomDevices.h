@@ -3151,7 +3151,7 @@ FLASHMEM void LoomBrowser::ListGroups() {
 }
 
 FLASHMEM void LoomBrowser::Open(const void* who, const char* dir, const char* select, const char* extra, const char* ext) {
-  if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
+  SdTry();
   snprintf(bdir, sizeof(bdir), "%s", dir && dir[0] ? dir : "/");
   snprintf(extra_, sizeof(extra_), "%s", extra ? extra : "");
   snprintf(ext_, sizeof(ext_), "%s", ext ? ext : ".WAV");
@@ -3863,7 +3863,7 @@ FLASHMEM void ThrumFill::Step() {
   if (!checked) {
     if (tried_at && millis() - tried_at < 5000) return;
     tried_at = millis() | 1;
-    if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
+    SdTry();
     if (!SDcard_Ready) return;
     checked = true;
     Folders();
@@ -3884,7 +3884,7 @@ FLASHMEM void ThrumFill::Step() {
 FLASHMEM void PlayerDevice::Scan() {
   nfiles = 0;
   scanned_at = millis() | 1;
-  if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
+  SdTry();
   if (!SDcard_Ready) return;
   // the folder was /SCULPT before the app became Loom: move it over once
   if (!SD.exists(LOOP_DIR) && SD.exists("/SCULPT")) SD.rename("/SCULPT", LOOP_DIR);
@@ -8183,7 +8183,7 @@ FLASHMEM void WarpDevice::Begin(const char* path, uint32_t from, uint32_t count,
 FLASHMEM void WarpDevice::BeginRead(const char* path, uint32_t from, uint32_t count) {
   no_mem = false;
   memset(over, 0, sizeof(over));
-  if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
+  SdTry();
   lf = SD.open(path, FILE_READ);
   if (!lf) return;
   uint8_t h[12];
@@ -8378,7 +8378,7 @@ FLASHMEM void WarpDevice::ThrumIdle() {
     char t[sizeof(thrum)];
     snprintf(t, sizeof(t), "%s/%s", THRUM_DIR, thrum + 12);
     snprintf(thrum, sizeof(thrum), "%s", t);
-    if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
+    SdTry();
     if (!SD.exists(THRUM_DIR) && SD.exists("/LOOM/WAVES")) SD.rename("/LOOM/WAVES", THRUM_DIR);
   }
   if (!thrum[0] && !PickRandomThrum()) return;
@@ -8434,7 +8434,7 @@ FLASHMEM void WarpDevice::Reversed() {
 
 // a random WAV from a random folder of /LOOM/WAVES (or WAVES itself)
 FLASHMEM bool WarpDevice::PickRandomThrum() {
-  if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
+  SdTry();
   if (!SD.exists(THRUM_DIR) && SD.exists("/LOOM/WAVES")) SD.rename("/LOOM/WAVES", THRUM_DIR);
   static uint32_t seed = 0;
   if (!seed) seed = rtc_get() ^ ARM_DWT_CYCCNT ^ micros();
@@ -8520,7 +8520,7 @@ FLASHMEM void WarpDevice::ThrumList() {
     tcount = 0;
     if (!tnames) tnames = static_cast<char(*)[TLEN]>(malloc(TMAX * TLEN));
     if (!tnames) return;
-    if (!SDcard_Ready) SDcard_Ready = SD.begin(BUILTIN_SDCARD);
+    SdTry();
     File d = SD.open(dir);
     for (File e = d ? d.openNextFile() : File(); e && tcount < TMAX; e = d.openNextFile()) {
       const char* nm = e.name();
