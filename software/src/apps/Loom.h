@@ -3935,10 +3935,16 @@ FLASHMEM void AppLoom::DrawClockPage() const {
   const ClockDevice* c = tempo_clock;
   static const char* const names[4] = {"SOURCE", "BPM", "PPQN", "BOOT"};
   for (int p = 0; p < 4; p++) {
-    const int y = 12 + p * 9;
+    const int y = p == ClockDevice::P_BOOT ? 47 : 12 + p * 9;  // (BOOT under the beat graph)
     gfxPrint(2, y, names[p]);
     char buf[20];
-    if (p == ClockDevice::P_SOURCE && c->val[p] == 0) snprintf(buf, sizeof(buf), "internal");
+    if (p == ClockDevice::P_BPM && !(editing && cursor == p)) {
+      // the tempo as it runs, two decimals (a CV playing it: which one);
+      // grabbed, what you set
+      const int cb = int(tempo_bpm * 100.0f + 0.5f);
+      if (c->CvTempo() >= 0) snprintf(buf, sizeof(buf), "%d.%02d CV%d", cb / 100, cb % 100, c->CvTempo() + 1);
+      else snprintf(buf, sizeof(buf), "%d.%02d", cb / 100, cb % 100);
+    } else if (p == ClockDevice::P_SOURCE && c->val[p] == 0) snprintf(buf, sizeof(buf), "internal");
     else if (p == ClockDevice::P_SOURCE && c->val[p] == 1) snprintf(buf, sizeof(buf), "MIDI clock");
     else if (p == ClockDevice::P_SOURCE && c->val[p] >= CLK_SHU) snprintf(buf, sizeof(buf), "SHUTTLE %c", 'A' + (c->val[p] - CLK_SHU));
     else if (p == ClockDevice::P_PPQN && (!c->external() || c->Shuttle() >= 0)) snprintf(buf, sizeof(buf), "-");
@@ -3954,23 +3960,23 @@ FLASHMEM void AppLoom::DrawClockPage() const {
   // dots blinking while it waits for an outside clock), filled up to the
   // play head, and the beat just struck flashing
   {
-    constexpr int x0 = 1, gw = 126, gy = 51;
+    constexpr int x0 = 1, gw = 126, gy = 42;
     const bool waiting = clock_running && c->Waiting();
     const bool runs = clock_running && !waiting;
     for (int b = 0; b <= 4; b++) {
       const int x = x0 + b * gw / 4;
-      if (b % 4 == 0) gfxLine(x, 47, x, 54);
-      else gfxLine(x, 49, x, 53);
+      if (b % 4 == 0) gfxLine(x, 39, x, 45);
+      else gfxLine(x, 40, x, 44);
     }
     if (runs) {
       const float pos = (float(c->Beat()) + clock_beat_ph) * 0.25f;
       const int px = x0 + int(pos * gw);
       gfxLine(x0, gy, x0 + gw, gy);
       gfxRect(x0, gy - 1, std::max(1, px - x0), 3);  // played so far in the bar
-      gfxLine(px, 47, px, 54);                      // the play head
+      gfxLine(px, 39, px, 45);                      // the play head
       if (clock_beat_ph < 0.2f) {                   // the beat just struck
         const int bx = x0 + c->Beat() * gw / 4;
-        gfxRect(std::max(0, bx - 2), 48, 5, 6);
+        gfxRect(std::max(0, bx - 2), 40, 5, 5);
       }
     } else if (!waiting || (millis() / 400) % 2) {
       gfxDottedLine(x0, gy, x0 + gw, gy, 3);
