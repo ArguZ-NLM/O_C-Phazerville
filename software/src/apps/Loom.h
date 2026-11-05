@@ -2394,6 +2394,11 @@ FLASHMEM void AppLoom::MainLoop() {
   Serial.printf("  DRM keys: last note %d took %d (<0: effect -1-n, else the Lead's degree), effects held %03x, echo %d/1000, seq1 notes %lu, seq2 notes %lu, sixteenths %lu\n",
     loom::g_dream_link.key_note, loom::g_dream_link.key_took, loom::g_dream_link.fx_held, int(loom::dream_a::en_echo_lvl * 1000.0f),
     (unsigned long)loom::dream_a::en_seq_hits[0], (unsigned long)loom::dream_a::en_seq_hits[1], (unsigned long)loom::dream_a::en_bars);
+  // the CV inputs as Loom reads them (In(ch) / 1536 = volts), and the ADC's own reading
+  Serial.printf("  cv ins");
+  for (int i = 0; i < ADC_CHANNEL_COUNT; i++)
+    Serial.printf(" %d:%+.2fV(%d)", i + 1, HS::frame.In(i) / 1536.0f, int(OC::ADC::value(ADC_CHANNEL(i))));
+  Serial.println();
   Serial.printf("  cv outs");
   for (int o = 0; o < loom::NUM_CV_OUTS; o++) { char b[12]; loom::FormatOutSource(loom::cv_out_src[o], b, sizeof(b), false); Serial.printf(" %d:%s", o + 1, b); }
   Serial.println();
