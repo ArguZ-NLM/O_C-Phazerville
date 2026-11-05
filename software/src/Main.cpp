@@ -132,6 +132,13 @@ volatile bool OC::CORE::display_update_enabled = false;
 volatile bool OC::CORE::app_loop_enabled = false;
 volatile uint32_t OC::CORE::ticks = 0;
 
+// Loom's build number is a commit count; the commit itself in the status line
+#ifdef OC_BUILD_HASH
+#define BUILD_HASH_NOTE ", commit " OC_BUILD_HASH
+#else
+#define BUILD_HASH_NOTE ""
+#endif
+
 void FASTRUN CORE_timer_ISR() {
   DEBUG_PIN_SCOPE(OC_GPIO_DEBUG_PIN2);
   OC_DEBUG_PROFILE_SCOPE(OC::DEBUG::ISR_cycles);
@@ -633,7 +640,7 @@ FLASHMEM void setup() {
           display::frame_buffer.capture_request();
           cap_idx = 0;
         } else if (c == 'V') {
-          Serial.printf("Version (build %s%s) clock %lu\n", OC::Strings::VERSION, OC::Strings::BUILD_TAG, (unsigned long)rtc_get());
+          Serial.printf("Version (build %s%s%s) clock %lu\n", OC::Strings::VERSION, OC::Strings::BUILD_TAG, BUILD_HASH_NOTE, (unsigned long)rtc_get());
         }
       }
       const uint8_t* cap = display::frame_buffer.captured();
@@ -808,7 +815,7 @@ void FASTRUN loop() {
             break;
 #endif
           case 'V':  // the version only (answered by the boot picture too, without ending it)
-            Serial.printf("Version (build %s%s) clock %lu\n", OC::Strings::VERSION, OC::Strings::BUILD_TAG, (unsigned long)rtc_get());
+            Serial.printf("Version (build %s%s%s) clock %lu\n", OC::Strings::VERSION, OC::Strings::BUILD_TAG, BUILD_HASH_NOTE, (unsigned long)rtc_get());
             break;
 #ifdef LOOM_ONLY
           case 'C':  // Loom <-> CARD, as Z held + R push

@@ -20,6 +20,16 @@ tag = get_git_rev()
 build_flags = env.ParseFlags(env['BUILD_FLAGS'])
 defines = build_flags.get("CPPDEFINES")
 
+def is_loom():
+    return any((d[0] if isinstance(d, (list, tuple)) else d) == "LOOM_ONLY" for d in (defines or []))
+
+if is_loom():
+    # Loom: a build number that only goes up (the count of commits), so the
+    # .hex files sort by age; the commit itself stays in OC_BUILD_HASH
+    count = subprocess.check_output(["git", "rev-list", "--count", "HEAD"]).decode().strip()
+    env.Append(BUILD_FLAGS=[ f'-DOC_BUILD_HASH=\\"{tag}\\"' ])
+    tag = count + ("dirty" if tag.endswith("dirty") else "")
+
 env.Append(BUILD_FLAGS=[ f'-DOC_BUILD_TAG=\\"{tag}\\"' ])
 
 if "USB_AUDIO" in defines:
