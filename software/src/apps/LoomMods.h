@@ -862,7 +862,9 @@ FLASHMEM void ClockDevice::Tick(const ModCtx& ctx) {
   } else if (CvTempo() >= 0) {
     // a CV input: added to BPM in a straight line, 27 BPM a volt (0-10 V
     // spans 30-300 from BPM 30), held to 30-300, smoothed
-    const float volts = HS::frame.In(CvTempo()) / 1536.0f;
+    // (In() counts octaves, 1536 each: 1 V on most hardware, 1.2 V on the
+    // NLM Buchla, whose 0-10 V then reached only 8.3 "volts", 255 BPM)
+    const float volts = HS::frame.In(CvTempo()) / 1536.0f * (NorthernLightModular ? 1.2f : 1.0f);
     const float target = constrain(cur[P_BPM] * 0.1f + volts * 27.0f, 30.0f, 300.0f);
     measured = have_measure ? measured + 0.02f * (target - measured) : target;
     have_measure = true;

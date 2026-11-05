@@ -90,11 +90,11 @@ FLASHMEM const OC::CalibrationStep* StepAt(int i) {
       s.calibration_type = OC::CALIBRATE_ADC_OFFSET; s.min = 0; s.max = 4095;
       break;
     case OC::ADC_PITCH_C2:
-      name(PSTR("ADC octave +1")); s.message = PSTR("CV1: Input 1.0V"); s.help = hold;
+      name(PSTR("ADC octave +1")); s.message = NorthernLightModular ? PSTR("CV1: Input 1.2V") : PSTR("CV1: Input 1.0V"); s.help = hold;
       s.calibration_type = OC::CALIBRATE_ADC_1V; s.index = 1;
       break;
     case OC::ADC_PITCH_C4:
-      name(PSTR("ADC octave +3")); s.message = PSTR("CV1: Input 3.0V"); s.help = hold;
+      name(PSTR("ADC octave +3")); s.message = NorthernLightModular ? PSTR("CV1: Input 3.6V") : PSTR("CV1: Input 3.0V"); s.help = hold;  // (1.2 V an octave on the Buchla)
       s.calibration_type = OC::CALIBRATE_ADC_3V; s.index = 3;
       break;
     case OC::CALIBRATION_SCREENSAVER_TIMEOUT:

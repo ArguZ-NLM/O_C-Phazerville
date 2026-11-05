@@ -2394,7 +2394,7 @@ FLASHMEM void AppLoom::MainLoop() {
   Serial.printf("  DRM keys: last note %d took %d (<0: effect -1-n, else the Lead's degree), effects held %03x, echo %d/1000, seq1 notes %lu, seq2 notes %lu, sixteenths %lu\n",
     loom::g_dream_link.key_note, loom::g_dream_link.key_took, loom::g_dream_link.fx_held, int(loom::dream_a::en_echo_lvl * 1000.0f),
     (unsigned long)loom::dream_a::en_seq_hits[0], (unsigned long)loom::dream_a::en_seq_hits[1], (unsigned long)loom::dream_a::en_bars);
-  // the CV inputs as Loom reads them (In(ch) / 1536 = volts), and the ADC's own reading
+  // the CV inputs in volts (In(ch) / 1536 = octaves: 1 V, on the NLM Buchla 1.2 V), and the ADC's own reading
   {  // the hardware as read from its ID resistor at power-up (0.4 V Serge, 0.5 V Buchla)
     extern float id_voltage;
     Serial.printf("  hw: ID %d mV -> %s\n", int(id_voltage * 1000.0f),
@@ -2402,7 +2402,7 @@ FLASHMEM void AppLoom::MainLoop() {
   }
   Serial.printf("  cv ins");
   for (int i = 0; i < ADC_CHANNEL_COUNT; i++)
-    Serial.printf(" %d:%dmV(%d)", i + 1, int(HS::frame.In(i) * 1000 / 1536), int(OC::ADC::value(ADC_CHANNEL(i))));
+    Serial.printf(" %d:%dmV(%d)", i + 1, int(HS::frame.In(i) * (NorthernLightModular ? 1200 : 1000) / 1536), int(OC::ADC::value(ADC_CHANNEL(i))));
   Serial.println();
   Serial.printf("  cv outs");
   for (int o = 0; o < loom::NUM_CV_OUTS; o++) { char b[12]; loom::FormatOutSource(loom::cv_out_src[o], b, sizeof(b), false); Serial.printf(" %d:%s", o + 1, b); }
