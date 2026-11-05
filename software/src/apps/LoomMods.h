@@ -864,9 +864,11 @@ FLASHMEM void ClockDevice::Tick(const ModCtx& ctx) {
     // spans 30-300 from BPM 30), held to 30-300, smoothed
     // (In() counts octaves, 1536 each: 1 V on most hardware, 1.2 V on the
     // NLM Buchla, whose 0-10 V then reached only 8.3 "volts", 255 BPM)
-    const float volts = HS::frame.In(CvTempo()) / 1536.0f * (NorthernLightModular ? 1.2f : 1.0f);
+    float volts = HS::frame.In(CvTempo()) / 1536.0f * (NorthernLightModular ? 1.2f : 1.0f);
+    if (fabsf(volts) < 0.03f) volts = 0.0f;  // (nothing in: a few mV of noise, the BPM set stays exact)
     const float target = constrain(cur[P_BPM] * 0.1f + volts * 27.0f, 30.0f, 300.0f);
-    measured = have_measure ? measured + 0.02f * (target - measured) : target;
+    // smoothed (~0.4 s): the input's noise is ~0.15 BPM at 27 BPM a volt
+    measured = have_measure ? measured + 0.005f * (target - measured) : target;
     have_measure = true;
   } else if (src >= 2) {
     if (SrcEdge(src - 1, ctx.edges, prev_gate[0])) {
