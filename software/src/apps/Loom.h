@@ -3941,7 +3941,11 @@ FLASHMEM void AppLoom::DrawClockPage() const {
     if (p == ClockDevice::P_BPM && !(editing && cursor == p)) {
       // the tempo as it runs, two decimals (a CV playing it: which one);
       // grabbed, what you set
-      const int cb = int(tempo_bpm * 100.0f + 0.5f);
+      // (held until it moves 0.03 BPM: a CV or an outside clock is never
+      // quite still, and the last digit flickered)
+      static float shown = 0.0f;
+      if (fabsf(tempo_bpm - shown) >= 0.03f) shown = tempo_bpm;
+      const int cb = int(shown * 100.0f + 0.5f);
       if (c->CvTempo() >= 0) snprintf(buf, sizeof(buf), "%d.%02d CV%d", cb / 100, cb % 100, c->CvTempo() + 1);
       else snprintf(buf, sizeof(buf), "%d.%02d", cb / 100, cb % 100);
     } else if (p == ClockDevice::P_SOURCE && c->val[p] == 0) snprintf(buf, sizeof(buf), "internal");
