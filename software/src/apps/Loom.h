@@ -2404,6 +2404,15 @@ FLASHMEM void AppLoom::MainLoop() {
   for (int i = 0; i < ADC_CHANNEL_COUNT; i++)
     Serial.printf(" %d:%dmV(%d)", i + 1, int(HS::frame.In(i) * (NorthernLightModular ? 1200 : 1000) / 1536), int(OC::ADC::value(ADC_CHANNEL(i))));
   Serial.println();
+  // the stored calibration: per output its octave points, then the inputs' zero offsets
+  for (int c = 0; c < DAC_CHANNEL_COUNT; c++) {
+    Serial.printf("  cal out %d:", c + 1);
+    for (int i = 0; i < OCTAVES; i++) Serial.printf(" %u", unsigned(OC::calibration_data.dac.calibrated_octaves[c][i]));
+    Serial.println();
+  }
+  Serial.printf("  cal in offsets");
+  for (int i = 0; i < ADC_CHANNEL_COUNT; i++) Serial.printf(" %u", unsigned(OC::calibration_data.adc.offset[i]));
+  Serial.printf(" scale %u\n", unsigned(OC::calibration_data.adc.pitch_cv_scale));
   Serial.printf("  cv outs");
   for (int o = 0; o < loom::NUM_CV_OUTS; o++) { char b[12]; loom::FormatOutSource(loom::cv_out_src[o], b, sizeof(b), false); Serial.printf(" %d:%s", o + 1, b); }
   Serial.println();
