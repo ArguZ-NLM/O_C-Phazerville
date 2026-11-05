@@ -867,8 +867,11 @@ FLASHMEM void ClockDevice::Tick(const ModCtx& ctx) {
     float volts = HS::frame.In(CvTempo()) / 1536.0f * (NorthernLightModular ? 1.2f : 1.0f);
     if (fabsf(volts) < 0.03f) volts = 0.0f;  // (nothing in: a few mV of noise, the BPM set stays exact)
     const float target = constrain(cur[P_BPM] * 0.1f + volts * 27.0f, 30.0f, 300.0f);
-    // smoothed (~0.4 s): the input's noise is ~0.15 BPM at 27 BPM a volt
-    measured = have_measure ? measured + 0.005f * (target - measured) : target;
+    // smoothed by how far it has to go: a real move (several BPM) follows
+    // at once, the input's noise (~0.15 BPM at 27 BPM a volt) is calmed slowly
+    const float gap = fabsf(target - measured);
+    const float k = 0.005f + 0.2f * std::min(1.0f, gap / 3.0f);
+    measured = have_measure ? measured + k * (target - measured) : target;
     have_measure = true;
   } else if (src >= 2) {
     if (SrcEdge(src - 1, ctx.edges, prev_gate[0])) {
