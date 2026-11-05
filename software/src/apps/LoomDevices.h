@@ -3740,13 +3740,19 @@ private:
     int16_t val[MAX_PARAMS];
     uint8_t mode[MAX_PARAMS];
     uint32_t ex[2], sec_off, sec_len;
+    uint32_t tempo_u, tempo_at;  // a tempo taken from the loop (millionths of a BPM; 0: found by ear) and a beat's frame
     bool operator==(const Meta& o) const { return !memcmp(this, &o, sizeof(Meta)); }
   };
   char meta_path[200] = "";  // the .loom of the file loaded
   Meta meta_was = {};        // what it holds (or held when read)
   bool meta_known = false;   // meta_was is what is on the card
   void TakeMeta(Meta& m) const;
-  bool ReadMeta();
+  bool ReadMeta(bool tempo_only = false);
+  // BEAT again after START / END were set by hand (ZERO / OFF): a loop of
+  // nearly whole beats gives the exact tempo, its START a beat (false: not
+  // near enough whole beats, nothing changed)
+  bool FitTempo(int was);
+  bool bpm_fit = false;       // bpm came from the loop (FitTempo), not from listening
   // the file is in: what it has now is the start (only changes get written,
   // so stepping through files leaves nothing behind)
   void MetaBaseline() { if (!meta_known) { TakeMeta(meta_was); meta_known = true; } BpmStart(); }
@@ -3929,11 +3935,15 @@ FLASHMEM void PlayerDevice::TakeMeta(Meta& m) const {
   m.ex[1] = uint32_t(SavedEdge(END));
   m.sec_off = sec_off;
   m.sec_len = sec_len;
+  if (bpm_fit && bpm > 0.0f) {
+    m.tempo_u = uint32_t(double(bpm) * 1e6 + 0.5);
+    m.tempo_at = uint32_t(std::max(0.0, bpm_phase + double(trim_off) + (clipped ? double(sec_off) : 0.0)) + 0.5);
+  }
 }
 
 // a text file, one setting per line: NAME value mode; EDGES start end (in
 // frames of what is loaded); SECTION offset length (MEM on a long file)
-FLASHMEM bool PlayerDevice::ReadMeta() {
+FLASHMEM bool PlayerDevice::ReadMeta(bool tempo_only) {
   if (!SDcard_Ready) return false;
   File f = SD.open(meta_path, FILE_READ);
   if (!f) return false;
@@ -3950,7 +3960,11 @@ FLASHMEM bool PlayerDevice::ReadMeta() {
     char name[8];
     long a = 0, b = 0;
     if (sscanf(line, "%7s %ld %ld", name, &a, &b) != 3) continue;
-    if (!strcmp(name, "EDGES")) {
+    if (!strcmp(name, "TEMPO")) {  // (BpmStart takes it instead of listening)
+      if (a > 0) { bpm_keep = float(double(a) * 1e-6); phase_keep = double(std::max(0L, b)); bpm_fit = true; }
+    } else if (tempo_only) {
+      continue;
+    } else if (!strcmp(name, "EDGES")) {
       ex_pos[0] = uint32_t(std::max(0L, a)); ex_pos[1] = uint32_t(std::max(0L, b));
       edges = true;
     } else if (!strcmp(name, "SECTION")) {
@@ -3965,6 +3979,7 @@ FLASHMEM bool PlayerDevice::ReadMeta() {
     }
   }
   f.close();
+  if (tempo_only) return true;
   ex_valid = edges;  // EdgesToSettings() turns them into START / END
   return true;
 }
@@ -3981,6 +3996,7 @@ FLASHMEM void PlayerDevice::WriteMeta() {
   for (int p = 0; p < num_params(); p++) f.printf("%s %d %d\n", param(p).name, m.val[p], m.mode[p]);
   f.printf("EDGES %lu %lu\n", (unsigned long)m.ex[0], (unsigned long)m.ex[1]);
   f.printf("SECTION %lu %lu\n", (unsigned long)m.sec_off, (unsigned long)m.sec_len);
+  if (m.tempo_u) f.printf("TEMPO %lu %lu\n", (unsigned long)m.tempo_u, (unsigned long)m.tempo_at);
   f.close();
   meta_was = m;
   meta_known = true;
@@ -4002,6 +4018,7 @@ FLASHMEM void PlayerDevice::BpmStart() {
     return;
   }
   bpm = 0.0f;
+  bpm_fit = false;  // (listened for again)
   const size_t n = Frames();
   // in memory (MEM): the loop, START to END, as a loop: it comes round, so
   // ~1.5 s of it is enough. Streamed: ~32 s from START (or the beginning)
@@ -4188,8 +4205,10 @@ FLASHMEM void PlayerDevice::Load(int i) {
   strlcat(mp, ".loom", sizeof(mp));
   if (strcmp(mp, meta_path)) {  // another file (not just STRM / MEM)
     bpm_keep = 0.0f;
+    bpm_fit = false;
     snprintf(meta_path, sizeof(meta_path), "%s", mp);
     meta_known = false;
+    if (restoring) ReadMeta(true);  // (the saved settings bring the rest; a tempo from the loop is only in there)
     if (!restoring && ReadMeta()) {
       applied_file = cur[FILE_];  // not another file for Apply(FILE_): the
       applied_mode = mode[FILE_]; // section and edges just read stay
@@ -4415,7 +4434,7 @@ FLASHMEM size_t PlayerDevice::SnapPoint(size_t at) const {
   // never the sound)
   const double beat = BeatFrames() / 16.0;
   const double g = bpm_phase + std::round((double(at) - bpm_phase) / beat) * beat;
-  const size_t gp = size_t(std::clamp(g, 0.0, double(n - 1)));
+  const size_t gp = size_t(std::clamp(g + 0.5, 0.0, double(n - 1)));
   // in memory: the fine tune on the grid point, then the nearest zero
   // crossing to that (a beat found is seldom on the sample, nor is the music)
   if (!streaming) return ZeroCross(Shifted(gp, n), 0, 220);
@@ -4740,6 +4759,32 @@ FLASHMEM void PlayerDevice::NudgeMode(int p, int dir) {
   Apply(SNAP);
 }
 
+FLASHMEM bool PlayerDevice::FitTempo(int was) {
+  size_t a, b;
+  const int16_t now = cur[SNAP];
+  cur[SNAP] = int16_t(was);  // the loop as it played (ZERO / OFF, the fine tune in it)
+  LoopEdges(a, b);
+  cur[SNAP] = now;
+  if (b <= a) return false;
+  const double len = double(b - a), f = len / BeatFrames(), nb = std::floor(f + 0.5);
+  // whole beats to within a tenth of a beat, and a tempo no more than 3 %
+  // off what was heard (else it is not a loop of beats)
+  if (nb < 1.0 || std::fabs(f - nb) > 0.1 || std::fabs(f / nb - 1.0) > 0.03) return false;
+  bpm = float(nb * 60.0 * double(FileRate()) / len);
+  bpm_phase = double(a);
+  bpm_fit = true;
+  ex_pos[0] = uint32_t(a); ex_pos[1] = uint32_t(b);
+  ex_valid = true;
+  mode[SNAP] = 0;  // (the fine tune is in the edges)
+  mode_named = uint16_t(mode_named & ~(1u << SNAP));
+  EdgesToSettings();
+  if (mode[SPEED] == DIR_SYNC) Refresh(SPEED);
+  WriteMeta();
+  const long mb = long(double(bpm) * 1000.0 + 0.5);
+  Serial.printf("BPM: %d beats in the loop -> %ld.%03ld\n", int(nb), mb / 1000, mb % 1000);
+  return true;
+}
+
 FLASHMEM void PlayerDevice::SnapChanged() {
   const int was = snap_was;
   snap_was = int8_t(cur[SNAP]);
@@ -4751,6 +4796,8 @@ FLASHMEM void PlayerDevice::SnapChanged() {
       mode[SNAP] = beat_shift;
       mode_named = uint16_t(SnapShift() ? mode_named | (1u << SNAP) : mode_named & ~(1u << SNAP));
       EdgesToSettings();
+    } else {
+      FitTempo(was);
     }
     beat_keep = false;
     return;
