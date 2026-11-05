@@ -598,14 +598,19 @@ void ADC::Read(IOFrame *ioframe)
       Serial.println();
       #endif
       const int mult = 2;
-      update<ADC_CHANNEL_5>(sum[0] * mult / count);
-      update<ADC_CHANNEL_6>(sum[1] * mult / count);
-      update<ADC_CHANNEL_7>(sum[2] * mult / count);
-      update<ADC_CHANNEL_8>(sum[3] * mult / count);
-      update<ADC_CHANNEL_1>(sum[4] * mult / count);
-      update<ADC_CHANNEL_2>(sum[5] * mult / count);
-      update<ADC_CHANNEL_3>(sum[6] * mult / count);
-      update<ADC_CHANNEL_4>(sum[7] * mult / count);
+      // NLM Buchla (2X0, 0.5 V ID): each reading belongs to the input one
+      // mux step earlier (measured jack by jack on 2026-11-05: jack 1 read as
+      // input 2 ... jack 8 as input 1), so the frame is taken one place on.
+      // (The Serge variant is not measured yet.)
+      const int r = NorthernLightModular ? 1 : 0;
+      update<ADC_CHANNEL_5>(sum[(0 + r) & 7] * mult / count);
+      update<ADC_CHANNEL_6>(sum[(1 + r) & 7] * mult / count);
+      update<ADC_CHANNEL_7>(sum[(2 + r) & 7] * mult / count);
+      update<ADC_CHANNEL_8>(sum[(3 + r) & 7] * mult / count);
+      update<ADC_CHANNEL_1>(sum[(4 + r) & 7] * mult / count);
+      update<ADC_CHANNEL_2>(sum[(5 + r) & 7] * mult / count);
+      update<ADC_CHANNEL_3>(sum[(6 + r) & 7] * mult / count);
+      update<ADC_CHANNEL_4>(sum[(7 + r) & 7] * mult / count);
       old_poffset = (old_poffset + count * sizeof(adc33131_frame_t)) % sizeof(adc_buffer);
     }
     return;
