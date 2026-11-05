@@ -479,6 +479,7 @@ private:
   // cursor on it as a REFLASH button; R held there 2 s saves and hands over
   // to the Teensy Loader (firmware update without the program button)
   bool fw_row = false, fw_held = false;
+  bool fw_confirm = false;  // held to the end: R flash mode, L cancel (Loom still runs)
   uint32_t fw_hold = 0;
   bool OnClockPage() const { return view == DEVICE && focus_mod && mod_cursor == loom::CLK_CURSOR && !mod_mode && !trig_mode; }
   void FirmwareUpdate();
@@ -2238,7 +2239,7 @@ FLASHMEM void AppLoom::MainLoop() {
   }
   if (fw_held && millis() - fw_hold >= HOLD_MS) {
     fw_held = false;
-    FirmwareUpdate();
+    fw_confirm = OnClockPage();  // R: flash mode, L: cancel
   }
   if (tape_held && millis() - tape_hold >= TAPE_HOLD_MS) {
     tape_held = false;
@@ -2449,7 +2450,15 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
     return;
   }
   ask_at = 0;
-  if (fw_row && !OnClockPage()) fw_row = fw_held = false;
+  if (fw_row && !OnClockPage()) fw_row = fw_held = fw_confirm = false;
+  if (fw_confirm) {
+    // the question over the clock page: R flash mode, L back; nothing else meanwhile
+    if (event.type == UI::EVENT_BUTTON_PRESS) {
+      if (event.control == OC::CONTROL_BUTTON_R) FirmwareUpdate();
+      else if (event.control == OC::CONTROL_BUTTON_L) fw_confirm = false;
+    }
+    return;
+  }
   if (fw_row && (event.control == OC::CONTROL_BUTTON_R || event.control == OC::CONTROL_BUTTON_L)) {
     // on REFLASH: R held is the update (not the clock's defaults), L does nothing
     if (event.control == OC::CONTROL_BUTTON_R) {
@@ -2496,7 +2505,7 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
       focus_mod = true;
       mod_cursor = CLK_CURSOR;
       cursor = 0;
-      fw_row = fw_held = false;
+      fw_row = fw_held = fw_confirm = false;
       editing = mod_mode = trig_mode = out_editing = false;
     }
     return;
@@ -2856,7 +2865,8 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
     g_browser->Move(dir);  // either knob scrolls the file list
     return;
   }
-  if (fw_row && !OnClockPage()) fw_row = fw_held = false;
+  if (fw_row && !OnClockPage()) fw_row = fw_held = fw_confirm = false;
+  if (fw_confirm) return;  // (the question waits for R or L)
   if (OnClockPage() && !editing) {
     // R past BOOT: the REFLASH button; back up: BOOT again
     if (fw_row) {
@@ -3939,28 +3949,57 @@ FLASHMEM void AppLoom::DrawClockPage() const {
       if (editing) gfxInvert(47, y - 1, 6 * int(strlen(buf)) + 1, 9);
     }
   }
+  // the divider: one bar of the clock as a graph. A tick on each beat (the
+  // first taller), the line solid while it runs (dotted when stopped, the
+  // dots blinking while it waits for an outside clock), filled up to the
+  // play head, and the beat just struck flashing
+  {
+    constexpr int x0 = 1, gw = 126, gy = 51;
+    const bool waiting = clock_running && c->Waiting();
+    const bool runs = clock_running && !waiting;
+    for (int b = 0; b <= 4; b++) {
+      const int x = x0 + b * gw / 4;
+      if (b % 4 == 0) gfxLine(x, 47, x, 54);
+      else gfxLine(x, 49, x, 53);
+    }
+    if (runs) {
+      const float pos = (float(c->Beat()) + clock_beat_ph) * 0.25f;
+      const int px = x0 + int(pos * gw);
+      gfxLine(x0, gy, x0 + gw, gy);
+      gfxRect(x0, gy - 1, std::max(1, px - x0), 3);  // played so far in the bar
+      gfxLine(px, 47, px, 54);                      // the play head
+      if (clock_beat_ph < 0.2f) {                   // the beat just struck
+        const int bx = x0 + c->Beat() * gw / 4;
+        gfxRect(std::max(0, bx - 2), 48, 5, 6);
+      }
+    } else if (!waiting || (millis() / 400) % 2) {
+      gfxDottedLine(x0, gy, x0 + gw, gy, 3);
+    }
+  }
   if (fw_row) {
     // the cursor on the version: a REFLASH button, a small bar filling while R is held
-    gfxPrint(2, 47, PSTR("REFLASH"));
-    gfxInvert(1, 46, 43, 9);
+    gfxPrint(2, 56, PSTR("REFLASH"));
+    gfxInvert(1, 55, 43, 9);
     if (fw_held) {
       const int w = std::min<int>(74, (millis() - fw_hold) * 74 / HOLD_MS);
-      gfxFrame(50, 47, 76, 7);
-      if (w > 0) gfxRect(51, 48, w, 5);
+      gfxFrame(50, 56, 76, 7);
+      if (w > 0) gfxRect(51, 57, w, 5);
     } else {
-      gfxPrint(50, 47, PSTR("hold R"));
+      gfxPrint(50, 56, PSTR("hold R"));
     }
   } else {
     // "Loom Beta 3 40720f32": 20 characters, the screen's width
-    gfxPrint(2, 47, OC::Strings::VERSION);
-    gfxPrint(2 + 6 * int(strlen(OC::Strings::VERSION)), 47, OC::Strings::BUILD_TAG);
+    gfxPrint(2, 56, OC::Strings::VERSION);
+    gfxPrint(2 + 6 * int(strlen(OC::Strings::VERSION)), 56, OC::Strings::BUILD_TAG);
   }
-  // four beats, the current one filled while running
-  for (int b = 0; b < 4; b++) {
-    gfxFrame(2 + b * 11, 55, 9, 9);
-    if (clock_running && b == c->Beat()) gfxRect(4 + b * 11, 57, 5, 5);
+  if (fw_confirm) {  // held to the end: the question
+    graphics.clearRect(10, 14, 108, 32);
+    gfxFrame(10, 14, 108, 32);
+    gfxPrint(19, 17, PSTR("FIRMWARE UPDATE"));
+    gfxInvert(11, 15, 106, 10);
+    gfxPrint(16, 27, PSTR("R: flash mode"));
+    gfxPrint(16, 36, PSTR("L: cancel"));
   }
-  gfxPrint(50, 56, !clock_running ? PSTR("stopped") : c->Waiting() ? PSTR("waiting...") : PSTR("running"));
 }
 
 // REFLASH held: the settings saved, then the Teensy's own loader waits for
@@ -3981,7 +4020,6 @@ FLASHMEM void AppLoom::FirmwareUpdate() {
     gfxPrint(0, 16, PSTR("Ready for the"));
     gfxPrint(0, 25, PSTR("Teensy Loader:"));
     gfxPrint(0, 34, PSTR("open the .hex file."));
-    gfxPrint(0, 52, PSTR("(power off: cancel)"));
     GRAPHICS_END_FRAME();
   }
   Serial.println("FIRMWARE UPDATE: waiting for the Teensy Loader");
