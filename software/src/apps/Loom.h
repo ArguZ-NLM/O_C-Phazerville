@@ -2397,7 +2397,7 @@ FLASHMEM void AppLoom::MainLoop() {
   // the CV inputs as Loom reads them (In(ch) / 1536 = volts), and the ADC's own reading
   Serial.printf("  cv ins");
   for (int i = 0; i < ADC_CHANNEL_COUNT; i++)
-    Serial.printf(" %d:%+.2fV(%d)", i + 1, HS::frame.In(i) / 1536.0f, int(OC::ADC::value(ADC_CHANNEL(i))));
+    Serial.printf(" %d:%dmV(%d)", i + 1, int(HS::frame.In(i) * 1000 / 1536), int(OC::ADC::value(ADC_CHANNEL(i))));
   Serial.println();
   Serial.printf("  cv outs");
   for (int o = 0; o < loom::NUM_CV_OUTS; o++) { char b[12]; loom::FormatOutSource(loom::cv_out_src[o], b, sizeof(b), false); Serial.printf(" %d:%s", o + 1, b); }
