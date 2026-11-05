@@ -898,8 +898,10 @@ FLASHMEM void ClockDevice::Tick(const ModCtx& ctx) {
 }
 
 // TAP: tap the tempo on A (internal clock), in sequences: a press whose
-// gap breaks the run (more than a third off its steady gap, or a pause over
-// 2 s) starts a new sequence, and only the sequence under way counts. The
+// gap breaks the run (more than a third off its steady gap, or a pause: over
+// 1.5 x the steady gap once there is one, else over 2.1 s, so the slowest
+// tempo, 30 BPM, can still be tapped) starts a new sequence, and only the
+// sequence under way counts. The
 // first sequence sets the tempo from its third press on; one that follows
 // within 5 s of a tapped tempo already from its second
 FLASHMEM void ClockDevice::Action(int a) {
@@ -907,7 +909,8 @@ FLASHMEM void ClockDevice::Action(int a) {
   const uint32_t now = micros();
   const uint32_t gap = now - tap_last;
   const float steady = tap_n >= 2 ? float(tap_last - tap_first) / (tap_n - 1) : 0.0f;
-  const bool broken = !tap_n || gap > 2000000 || gap < 150000
+  const float pause = steady > 0.0f ? std::min(2100000.0f, steady * 1.5f) : 2100000.0f;
+  const bool broken = !tap_n || gap > pause || gap < 150000
                    || (steady > 0.0f && fabsf(gap - steady) > steady * 0.35f);
   if (broken) { tap_first = now; tap_n = 1; }
   else tap_n++;
