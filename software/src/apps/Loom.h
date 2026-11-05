@@ -479,10 +479,12 @@ private:
   // cursor on it as a REFLASH button; R held there 2 s saves and hands over
   // to the Teensy Loader (firmware update without the program button)
   bool fw_row = false, fw_held = false;
+  bool fw_left = false;     // the held one is L (CALIBRATE), else R (REFLASH)
   bool fw_confirm = false;  // held to the end: R flash mode, L cancel (Loom still runs)
   uint32_t fw_hold = 0;
   bool OnClockPage() const { return view == DEVICE && focus_mod && mod_cursor == loom::CLK_CURSOR && !mod_mode && !trig_mode; }
   void FirmwareUpdate();
+  void Calibrate();
   loom::PlayerDevice* meta_page = nullptr;  // the PLAYER whose page is open
   loom::Device* page_dev = nullptr;   // the device whose page is open (PageOpen)
   loom::Device* page_twin = nullptr;  // ... and its linked twin
@@ -2239,7 +2241,10 @@ FLASHMEM void AppLoom::MainLoop() {
   }
   if (fw_held && millis() - fw_hold >= HOLD_MS) {
     fw_held = false;
-    fw_confirm = OnClockPage();  // R: flash mode, L: cancel
+    if (OnClockPage()) {
+      if (fw_left) Calibrate();  // (its first page asks, L leaves)
+      else fw_confirm = true;    // R: flash mode, L: cancel
+    }
   }
   if (tape_held && millis() - tape_hold >= TAPE_HOLD_MS) {
     tape_held = false;
@@ -2479,10 +2484,12 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
     return;
   }
   if (fw_row && (event.control == OC::CONTROL_BUTTON_R || event.control == OC::CONTROL_BUTTON_L)) {
-    // on REFLASH: R held is the update (not the clock's defaults), L does nothing
-    if (event.control == OC::CONTROL_BUTTON_R) {
-      if (event.type == UI::EVENT_BUTTON_DOWN) { fw_held = true; fw_hold = millis(); }
-      else if (event.type == UI::EVENT_BUTTON_PRESS || event.type == UI::EVENT_BUTTON_LONG_RELEASE) fw_held = false;  // let go early: nothing
+    // on the bottom row: L held calibrates, R held is the update (not the clock's defaults)
+    if (event.type == UI::EVENT_BUTTON_DOWN) {
+      fw_held = true; fw_hold = millis();
+      fw_left = event.control == OC::CONTROL_BUTTON_L;
+    } else if (event.type == UI::EVENT_BUTTON_PRESS || event.type == UI::EVENT_BUTTON_LONG_RELEASE) {
+      fw_held = false;  // let go early: nothing
     }
     return;
   }
@@ -4006,15 +4013,21 @@ FLASHMEM void AppLoom::DrawClockPage() const {
     }
   }
   if (fw_row) {
-    // the cursor on the version: a REFLASH button, a small bar filling while R is held
-    gfxPrint(2, 56, PSTR("REFLASH"));
-    gfxInvert(1, 55, 43, 9);
+    // the cursor past BOOT: two buttons, CALIBRATE (hold L) and REFLASH (hold R);
+    // while one is held a bar fills where the other was
+    const int w = fw_held ? std::min<int>(64, (millis() - fw_hold) * 64 / HOLD_MS) : 0;
+    if (!fw_held || fw_left) {
+      gfxPrint(2, 56, PSTR("CALIBRATE"));
+      gfxInvert(1, 55, 56, 9);
+    }
+    if (!fw_held || !fw_left) {
+      gfxPrint(86, 56, PSTR("REFLASH"));
+      gfxInvert(85, 55, 43, 9);
+    }
     if (fw_held) {
-      const int w = std::min<int>(74, (millis() - fw_hold) * 74 / HOLD_MS);
-      gfxFrame(50, 56, 76, 7);
-      if (w > 0) gfxRect(51, 57, w, 5);
-    } else {
-      gfxPrint(50, 56, PSTR("hold R"));
+      const int bx = fw_left ? 61 : 1;
+      gfxFrame(bx, 56, 66, 7);
+      if (w > 0) gfxRect(fw_left ? bx + 1 : bx + 65 - w, 57, w, 5);  // (grows out of the button held)
     }
   } else {
     // "Loom Beta 3 40720f32": 20 characters, the screen's width
@@ -4029,6 +4042,15 @@ FLASHMEM void AppLoom::DrawClockPage() const {
     gfxPrint(16, 27, PSTR("R: flash mode"));
     gfxPrint(16, 36, PSTR("L: cancel"));
   }
+}
+
+// CALIBRATE held: Phazerville's calibration steps over Loom (sound goes on);
+// the outputs belong to the calibration meanwhile, so the app's interrupt work
+// (which sends Loom's CV to the DAC) pauses
+FLASHMEM void AppLoom::Calibrate() {
+  OC::CORE::app_isr_enabled = false;
+  loom::RunCalibration();
+  OC::CORE::app_isr_enabled = true;
 }
 
 // REFLASH held: the settings saved, then the Teensy's own loader waits for

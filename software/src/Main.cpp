@@ -535,7 +535,9 @@ FLASHMEM void setup() {
 
   bool start_cal = false;
   if (ui_mode == OC::UI_MODE_CALIBRATE) {
+#ifndef LOOM_ONLY
     start_cal = true;
+#endif
     ui_mode = OC::UI_MODE_MENU;
   }
   OC::ui.set_screensaver_timeout(OC::calibration_data.screensaver_timeout);
@@ -663,9 +665,7 @@ FLASHMEM void setup() {
 #endif
 
 #ifdef LOOM_ONLY
-  // L held at power-up: the CV calibration (Phazerville's steps and data, no
-  // Settings app in this firmware), then Loom starts as usual
-  if (start_cal) loom::RunCalibration();
+  // (the CV calibration is on Loom's clock page: CALIBRATE, hold L; not L held at power-up)
 #else
   if (start_cal)
     OC::start_calibration();
