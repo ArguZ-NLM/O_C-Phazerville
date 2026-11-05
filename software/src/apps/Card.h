@@ -39,15 +39,6 @@ private:
   // X held on a file: delete it after 2 s
   bool del_held = false;
   uint32_t del_since = 0, deleted_at = 0;
-#ifdef LOOM_ONLY
-  // A held 2 s: firmware update. The settings are saved, then the Teensy
-  // waits for the Teensy Loader (as its program button); no app menu holds
-  // Phazerville's [Reflash] in this firmware
-  bool fw_held = false;
-  uint32_t fw_since = 0;
-  void FirmwareUpdate();
-#endif
-  void DrawCard() const;
   void List();
   // MP3s on the card become WAVs, one at a time: an MP3 is taken once its
   // size stayed the same between two looks (copied in full)
@@ -276,36 +267,7 @@ FLASHMEM void AppCard::HandleAppEvent(OC::AppEvent event) {
   }
 }
 
-#ifdef LOOM_ONLY
-extern "C" void _reboot_Teensyduino_();
-FLASHMEM void AppCard::FirmwareUpdate() {
-  GRAPHICS_BEGIN_FRAME(true);
-  gfxPrint(0, 1, "FIRMWARE UPDATE");
-  gfxInvert(0, 0, 128, 9);
-  gfxPrint(0, 22, "saving settings...");
-  GRAPHICS_END_FRAME();
-  OC::SaveAppData();  // (Loom writes its settings file when they changed)
-  const uint32_t t0 = millis();
-  while (millis() - t0 < 500) {  // (the frame reaches the screen before the reset)
-    GRAPHICS_BEGIN_FRAME(true);
-    gfxPrint(0, 1, "FIRMWARE UPDATE");
-    gfxInvert(0, 0, 128, 9);
-    gfxPrint(0, 16, "Ready for the");
-    gfxPrint(0, 25, "Teensy Loader:");
-    gfxPrint(0, 34, "open the .hex file.");
-    gfxPrint(0, 52, "(power off: cancel)");
-    GRAPHICS_END_FRAME();
-  }
-  Serial.println("FIRMWARE UPDATE: waiting for the Teensy Loader");
-  delay(50);
-  _reboot_Teensyduino_();  // the Teensy's own loader takes over (as the program button)
-}
-#endif
-
 FLASHMEM void AppCard::Loop() {
-#ifdef LOOM_ONLY
-  if (fw_held && millis() - fw_since >= 2000) { fw_held = false; FirmwareUpdate(); }
-#endif
   if (!serving) return;
   // (a computer connecting while an MP3 is converted waits for it)
   if (conv.state() != Mp3ToWav::BUSY) {
@@ -344,20 +306,6 @@ FLASHMEM void AppCard::Loop() {
 // the top line: whether a program on the computer has the card open (an MTP
 // session; it can't tell which program - macOS's photo import counts too)
 FLASHMEM void AppCard::DrawMenu() const {
-  DrawCard();
-#ifdef LOOM_ONLY
-  if (fw_held) {  // A held: a box, the bar filling over the 2 s
-    graphics.clearRect(8, 26, 112, 24);
-    gfxFrame(8, 26, 112, 24);
-    gfxPrint(12, 29, "UPDATE");
-    gfxPrint(12, 38, "FIRMWARE");
-    const int fill = std::min<int>(106, (millis() - fw_since) * 106 / 2000);
-    gfxInvert(11, 28, fill, 20);
-  }
-#endif
-}
-
-FLASHMEM void AppCard::DrawCard() const {
   const bool on = Connected();
   if (conv.state() == Mp3ToWav::BUSY) {
     // an MP3 being converted: its name, and the line fills up as it goes
@@ -480,15 +428,8 @@ FLASHMEM void AppCard::HandleEncoderEvent(const UI::Event& event) {
 }
 
 // R push: open the folder; Y: up; B: listen (held: AUTO); X held: delete
-// the file; A held: firmware update (Loom firmware)
+// the file
 FLASHMEM void AppCard::HandleButtonEvent(const UI::Event& event) {
-#ifdef LOOM_ONLY
-  if (event.control == OC::CONTROL_BUTTON_A) {
-    if (event.type == UI::EVENT_BUTTON_DOWN) { fw_held = true; fw_since = millis(); }
-    else if (event.type == UI::EVENT_BUTTON_PRESS || event.type == UI::EVENT_BUTTON_LONG_RELEASE) fw_held = false;  // let go early: nothing
-    return;
-  }
-#endif
 #ifdef CARD_LISTEN
   if (event.control == OC::CONTROL_BUTTON_B) {
     if (event.type == UI::EVENT_BUTTON_LONG_PRESS) {
