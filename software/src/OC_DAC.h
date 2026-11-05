@@ -300,14 +300,16 @@ public:
     #if defined(__IMXRT1062__) && defined(ARDUINO_TEENSY41)
       if (DAC8568_Uses_SPI) {
         if (DAC_is_inverted) {
-          dac8568_set_channel(0, values_[0]);
-          dac8568_set_channel(1, values_[1]);
-          dac8568_set_channel(2, values_[2]);
-          dac8568_set_channel(3, values_[3]);
-          dac8568_set_channel(4, values_[4]);
-          dac8568_set_channel(5, values_[5]);
-          dac8568_set_channel(6, values_[6]);
-          dac8568_set_channel(7, values_[7]);
+          // NLM Serge: the DAC's channel 0 drives jack 8, channel 1 jack 1 ...
+          // so output n goes out on channel n+1 (output 8 on channel 0)
+          dac8568_set_channel(1, values_[0]);
+          dac8568_set_channel(2, values_[1]);
+          dac8568_set_channel(3, values_[2]);
+          dac8568_set_channel(4, values_[3]);
+          dac8568_set_channel(5, values_[4]);
+          dac8568_set_channel(6, values_[5]);
+          dac8568_set_channel(7, values_[6]);
+          dac8568_set_channel(0, values_[7]);
         } else {
           dac8568_set_channel(0, MAX_VALUE - values_[0]);
           dac8568_set_channel(1, MAX_VALUE - values_[1]);
