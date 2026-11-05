@@ -44,6 +44,9 @@ void DrawTitle();  // a big LOOM in the middle
 // button or knob is touched; set from the saved settings at start-up
 constexpr uint8_t BOOT_UNTIL_MOVE = 10;
 extern uint8_t boot_screen;
+#ifdef LOOM_ONLY
+void RunCalibration();  // L held at power-up (LoomCalibrate.cpp)
+#endif
 }
 #endif
 

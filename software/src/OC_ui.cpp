@@ -262,6 +262,14 @@ UiMode Ui::DispatchEvents(const RuntimeSlot &appslot) {
   }
 }
 
+FLASHMEM bool Ui::NextEvent(UI::Event &event) {
+  while (event_queue_.available()) {
+    event = event_queue_.PullEvent();
+    if (!IgnoreEvent(event)) return true;
+  }
+  return false;
+}
+
 FLASHMEM
 UiMode Ui::Splashscreen(bool &reset_settings, uint8_t phase) {
 

@@ -662,8 +662,14 @@ FLASHMEM void setup() {
   }
 #endif
 
+#ifdef LOOM_ONLY
+  // L held at power-up: the CV calibration (Phazerville's steps and data, no
+  // Settings app in this firmware), then Loom starts as usual
+  if (start_cal) loom::RunCalibration();
+#else
   if (start_cal)
     OC::start_calibration();
+#endif
 
   OC::app_switcher.current_app()->DispatchAppEvent(OC::APP_EVENT_RESUME);
   Trace(6);

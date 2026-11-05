@@ -87,6 +87,8 @@ public:
               uint16_t held = 0);
 
   void Poll();
+  // the next panel event, without an app to dispatch to (Loom's calibration at power-up)
+  bool NextEvent(UI::Event &event);
   void Poke();
 
   // the panel's own events with their time (USB 'e', for videos: what was
