@@ -341,6 +341,50 @@ FLASHMEM void Handle(Cal& c, const UI::Event& e) {
   }
 }
 
+// USB while calibrating (Loom's main loop, which answers it, waits meanwhile):
+// 'S' sends the screen as hex (for the manual's pictures), and the remote
+// panel's keys work: '[' / ']' L / R push, ',' '.' L turn, '<' '>' R turn,
+// '+' '-' A / B press
+FLASHMEM void UsbPoll() {
+  static size_t cap_idx = 0;
+  while (Serial && Serial.available() > 0) {
+    const int cmd = Serial.read();
+    switch (cmd) {
+      case 'S': display::frame_buffer.capture_request(); cap_idx = 0; break;
+      case '[': case ']': case '+': case '-': {
+        const uint16_t b = cmd == '[' ? OC::CONTROL_BUTTON_L : cmd == ']' ? OC::CONTROL_BUTTON_R
+                         : cmd == '+' ? OC::CONTROL_BUTTON_A : OC::CONTROL_BUTTON_B;
+        OC::ui.Inject(UI::EVENT_BUTTON_DOWN, b, 0, 0);
+        OC::ui.Inject(UI::EVENT_BUTTON_PRESS, b, 0, 0);
+        break;
+      }
+      case ',': case '.': OC::ui.Inject(UI::EVENT_ENCODER, OC::CONTROL_ENCODER_L, cmd == '.' ? 1 : -1, 0); break;
+      case '<': case '>': OC::ui.Inject(UI::EVENT_ENCODER, OC::CONTROL_ENCODER_R, cmd == '>' ? 1 : -1, 0); break;
+      default: break;
+    }
+  }
+  const uint8_t* cap = display::frame_buffer.captured();
+  while (cap && Serial.availableForWrite() >= 64) {
+    static const char hexd[] = "0123456789ABCDEF";
+    char hx[64];
+    size_t k = 0;
+    bool done = false;
+    for (size_t i = 0; i < 32; i++) {
+      const uint8_t n = cap[cap_idx];
+      hx[k++] = hexd[n >> 4];
+      hx[k++] = hexd[n & 15];
+      if (++cap_idx >= display::frame_buffer.kFrameSize) { done = true; break; }
+    }
+    Serial.write(hx, k);
+    if (done) {
+      Serial.println();
+      cap_idx = 0;
+      display::frame_buffer.capture_retire();
+      break;
+    }
+  }
+}
+
 }  // namespace
 
 FLASHMEM void RunCalibration() {
@@ -354,6 +398,7 @@ FLASHMEM void RunCalibration() {
   OC::ui.encoder_enable_acceleration(OC::CONTROL_ENCODER_R, true);
   while (!c.done) {
     watchdog_feed();  // (Loom's main loop, which feeds it, waits meanwhile: 128 s and the module restarted)
+    UsbPoll();
     UI::Event e;
     while (!c.done && OC::ui.NextEvent(e)) Handle(c, e);
     if (c.done) break;
