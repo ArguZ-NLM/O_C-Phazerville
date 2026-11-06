@@ -4068,7 +4068,7 @@ FLASHMEM void AppLoom::WriteTestOutputs() {
   for (int o = 0; o < DAC_CHANNEL_COUNT; o++) {
     float v = 0.0f;
     switch (test_mode) {
-      case 0: v = int((ms / 500) % 8) == o ? (buchla ? 8.0f : 5.0f) : 0.0f; break;
+      case 0: v = int((ms / 500) % 8) == o ? (buchla ? 10.0f : 5.0f) : 0.0f; break;
       // whole octaves, exactly the calibrated points: Buchla A 1.2 V .. H 9.6 V,
       // Serge A -3 V .. H +4 V
       case 1: v = buchla ? 1.2f * (o + 1) : float(o - 3); break;
@@ -4128,7 +4128,7 @@ FLASHMEM void AppLoom::DrawTestPage() const {
   }
   static const char* const names[2][4] = {
     {"R: CHASE A-H 5V", "R: STEPS -3V..+4V", "R: RAMP -5..+5V", "R: ZERO all 0V"},
-    {"R: CHASE A-H 8V", "R: STEPS 1.2-9.6V", "R: RAMP 0..10V", "R: ZERO all 0V"}};
+    {"R: CHASE A-H 10V", "R: STEPS 1.2-9.6V", "R: RAMP 0..10V", "R: ZERO all 0V"}};
   gfxPrint(1, 57, names[buchla][test_mode]);
 }
 
