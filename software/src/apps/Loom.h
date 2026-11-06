@@ -4035,9 +4035,10 @@ FLASHMEM void AppLoom::DrawClockPage() const {
     }
   }
   if (fw_row) {
-    // the cursor past BOOT: CALIBRATE TEST FLASH, evenly spaced (5 px apart
-    // and from the edges), the one R points at lit; an R click opens it
-    static constexpr int X[3] = {5, 64, 93}, N[3] = {9, 4, 5};
+    // the cursor past BOOT: CALIBRATE at the left edge, FLASH at the right,
+    // TEST centred between them (9 px either side); the one R points at lit,
+    // an R click opens it
+    static constexpr int X[3] = {2, 65, 97}, N[3] = {9, 4, 5};
     gfxPrint(X[0], 56, PSTR("CALIBRATE"));
     gfxPrint(X[1], 56, PSTR("TEST"));
     gfxPrint(X[2], 56, PSTR("FLASH"));
