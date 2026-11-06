@@ -486,7 +486,7 @@ private:
   int fw_sel = 0;           // its option R points at: TEST, CALIBRATE, FLASH
   bool cal_pending = false; // CALIBRATE clicked: runs from the main loop
   bool test_page = false;   // TEST (Z on that row): the inputs live, the outputs a test pattern
-  int test_mode = 0;        // the outputs: CHASE, STEPS, RAMP, SET, ZERO (R turns)
+  int test_mode = 0;        // the outputs: CHASE, OCTAVES, RAMP, SET, ZERO (R turns)
   void DrawTestPage() const;
   void WriteTestOutputs();
   bool fw_confirm = false;  // held to the end: R flash mode, L cancel (Loom still runs)
@@ -4060,7 +4060,7 @@ FLASHMEM void AppLoom::DrawClockPage() const {
 
 // TEST: the outputs play a pattern for checking the jacks (R picks it):
 // CHASE one output high after the other A..H (its LED shows which jack),
-// STEPS an octave each (A 1.2 V .. H 9.6 V; on the Serge A -3 V .. H +4 V),
+// OCTAVES an octave each (A 1.2 V .. H 9.6 V; on the Serge A -3 V .. H +4 V),
 // RAMP up and down the whole range in 4 s, each output 1/8 behind the one
 // before (evenly spread), ZERO all at 0 V
 FLASHMEM void AppLoom::WriteTestOutputs() {
@@ -4129,9 +4129,10 @@ FLASHMEM void AppLoom::DrawTestPage() const {
     gfxPrint(o * 16 + 5, 48, l);
     if (o == lit) gfxInvert(o * 16 + 1, 47, 14, 9);
   }
+  // (all as NAME A-H VOLTS; R turns to the next)
   static const char* const names[2][5] = {
-    {"R: CHASE A-H 5V", "R: STEPS -3V..+4V", "R: RAMP -5..+5V", "R: SET A-H -5/+5V", "R: ZERO all 0V"},
-    {"R: CHASE A-H 10V", "R: STEPS 1.2-9.6V", "R: RAMP 0..10V", "R: SET A-H 10V", "R: ZERO all 0V"}};
+    {"CHASE A-H 5V", "OCTAVES A-H -3V..+4V", "RAMP A-H -5V..+5V", "SET A-H -5V/+5V", "ZERO A-H 0V"},
+    {"CHASE A-H 10V", "OCTAVES A-H 1.2..9.6V", "RAMP A-H 0V..10V", "SET A-H 10V", "ZERO A-H 0V"}};
   gfxPrint(1, 57, names[buchla][test_mode]);
 }
 
