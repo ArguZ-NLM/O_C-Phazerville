@@ -46,6 +46,12 @@ bool SlotUsed(uint8_t slot);
 
 static constexpr size_t kNameLen = 16;
 const char *SlotName(uint8_t slot);
+// what a slot holds, in two short lines (Loom: each track's nodes), noted
+// when it is stored; the app on screen fills them (weak: none)
+static constexpr size_t kSummaryLen = 20;
+const char *SlotSummary(uint8_t slot, int line);
+void SetSlotSummary(uint8_t slot, const char *a, const char *b);
+bool AppSlotSummary(char *a, char *b, size_t n);
 void SetSlotName(uint8_t slot, const char *name);
 void FlushSlotNames();
 bool LastWasSave();
@@ -118,6 +124,9 @@ inline void BootRecall() {}
 inline void NoteAppOnScreen() {}
 inline bool BootAppChoice(uint16_t *) { return false; }
 inline void ForgetCurrent() {}
+static constexpr size_t kSummaryLen = 20;
+inline const char *SlotSummary(uint8_t, int) { return ""; }
+inline void SetSlotSummary(uint8_t, const char *, const char *) {}
 inline bool SlotUsed(uint8_t) { return false; }
 static constexpr size_t kNameLen = 16;
 inline const char *SlotName(uint8_t) { return ""; }

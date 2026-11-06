@@ -34,7 +34,11 @@ static constexpr uint16_t kUnlockButtons =
 static constexpr uint32_t kUnlockHoldMs = 3000;
 static uint32_t unlock_hold_ms = 0;
 static bool unlock_fired = false;
+#ifdef LOOM_ONLY  // Loom: no BANKS page (cursor 4, Phazerville's Quadrants banks)
+FLASHMEM static int8_t last_cursor() { return manager_unlocked ? kLastCursor : 3; }
+#else
 FLASHMEM static int8_t last_cursor() { return manager_unlocked ? kLastCursor : kLastCursor - 1; }
+#endif
 
 static bool active_mode = false;
 static bool mode_dirty = false;
@@ -249,7 +253,12 @@ FLASHMEM __attribute__((noinline)) bool HandleEvent(const UI::Event &event) {
   }
 
   if (event.control == CONTROL_ENCODER_L) {
-    cursor = constrain(cursor + (event.value > 0 ? 1 : -1), 0, last_cursor());
+    const int d = event.value > 0 ? 1 : -1;
+    int c = cursor + d;
+#ifdef LOOM_ONLY
+    if (c == 4) c += d;  // (no BANKS page)
+#endif
+    cursor = constrain(c, 0, last_cursor());
     return true;
   }
   if (event.control == CONTROL_ENCODER_R) {
@@ -357,17 +366,154 @@ FLASHMEM static void draw_jack(int cx, int cy, bool active) {
   if (active) graphics.drawRect(cx - 1, cy - 1, 3, 3);
 }
 
-FLASHMEM void Draw() {
+#ifdef LOOM_ONLY
+// the banner over everything (STORED 7 ...)
+FLASHMEM __attribute__((noinline)) static void draw_banner() {
+  if (banner_until_ms && millis() < banner_until_ms) {
+    const bool two = banner2[0];
+    const int len1 = (int)strlen(banner), len2 = (int)strlen(banner2);
+    const int w = 6 * max(len1, len2) + (two ? 10 : 16);
+    const int x = 64 - w / 2;
+    const int y = two ? 16 : 20, h = two ? 30 : 20;
+    graphics.clearRect(x, y, w, h);
+    graphics.drawFrame(x, y, w, h);
+    graphics.drawFrame(x + 1, y + 1, w - 2, h - 2);
+    graphics.setPrintPos(64 - 3 * len1, two ? 21 : 26);
+    graphics.print(banner);
+    if (two) {
+      graphics.setPrintPos(64 - 3 * len2, 32);
+      graphics.print(banner2);
+    }
+  } else {
+    banner_until_ms = 0;
+  }
+}
+
+// a side of the number: STORE / RECALL and how (the second line gives way to the bar)
+FLASHMEM static void loom_column(int cx, const char *top, const char *hint, bool holding) {
+  graphics.setPrintPos(cx - 3 * (int)strlen(top), 14);
+  graphics.print(top);
+  if (!holding) {
+    graphics.setPrintPos(cx - 3 * (int)strlen(hint), 25);
+    graphics.print(hint);
+  }
+}
+
+// Loom's PRESETS page: the slot's name (or PRESETS) on top, STORE / number /
+// RECALL, then what the slot holds - track A's and track B's nodes as the
+// weave view names them - and NEXT / LAST at the bottom
+FLASHMEM __attribute__((noinline)) static void draw_loom_presets() {
+  graphics.drawFrame(0, 0, 128, 64);
+  const char *nm = PresetEngine::SlotName(edit_mode ? edit_slot : sel);
+  const char *title = edit_mode ? "NAME" : (cursor == 1 && sel_stored == 1 && !nm[0]) ? "unnamed"
+                    : nm[0] ? nm : "P R E S E T S";
+  const int tx = 64 - 3 * (int)strlen(title);
+  graphics.setPrintPos(tx, 2);
+  graphics.print(title);
+  if (cursor == 1 && !edit_mode) graphics.invertRect(tx - 2, 1, 6 * (int)strlen(title) + 3, 9);
+  if (manager_unlocked) {  // the pages: PRESETS, MANAGER
+    for (int i = 0; i < 2; ++i) graphics.drawCircle(116 + 6 * i, 5, 2);
+    graphics.drawRect(115, 4, 3, 3);
+  }
+  graphics.drawHLine(1, 10, 126);
+
+  if (sel_stored < 0) sel_stored = PresetEngine::SlotUsed(sel) ? 1 : 0;
+  graphics.drawFrame(43, 12, 42, 26);
+  const uint8_t shown = (edit_mode ? edit_slot : sel) + 1;
+  const bool modified = !edit_mode && app_switcher.current_app()->PresetModified();
+  if (!modified || (millis() / 700) % 2 == 0) {  // unsaved changes: the number blinks
+    draw_7seg(50, 14, shown / 10);
+    draw_7seg(66, 14, shown % 10);
+  }
+  const char *l_top = "STORE", *l_hint = "hold";
+  const char *r_top = "RECALL", *r_hint = "hold";
+  if (edit_mode) { l_top = "DONE"; l_hint = "click"; r_top = "CHAR"; r_hint = "turn"; }
+  else if (cursor == 1 && sel_stored == 1) { l_top = "EDIT"; l_hint = "click"; }
+  const bool l_holding = hold_start_ms && !edit_mode;
+  const bool r_holding = recall_hold_ms && !edit_mode;
+  loom_column(22, l_top, l_hint, l_holding);
+  loom_column(106, r_top, r_hint, r_holding);
+  if (l_holding) {
+    const uint32_t held = millis() - hold_start_ms;
+    const uint32_t w = held >= kStoreHoldMs ? 32 : held * 32 / kStoreHoldMs;
+    graphics.drawFrame(5, 26, 34, 5);
+    if (w) graphics.drawRect(6, 27, w, 3);
+  }
+  if (r_holding) {
+    const uint32_t held = millis() - recall_hold_ms;
+    const uint32_t w = held >= kRecallHoldMs ? 32 : held * 32 / kRecallHoldMs;
+    graphics.drawFrame(89, 26, 34, 5);
+    if (w) graphics.drawRect(90, 27, w, 3);
+  }
+
+  if (edit_mode) {  // the name being typed, where the nodes were
+    for (int i = 0; i < (int)PresetEngine::kNameLen; ++i) {
+      graphics.setPrintPos(16 + 6 * i, 43);
+      graphics.print(edit_buf[i] == ' ' ? '_' : edit_buf[i]);
+    }
+    graphics.invertRect(15 + 6 * edit_pos, 42, 8, 10);
+  } else if (!sel_stored) {
+    graphics.setPrintPos(64 - 3 * 5, 43);
+    graphics.print("EMPTY");
+  } else {
+    const char *a = PresetEngine::SlotSummary(sel, 0), *b = PresetEngine::SlotSummary(sel, 1);
+    if (!a[0] && !b[0]) {  // stored before slots had summaries: shown after a recall
+      graphics.setPrintPos(64 - 3 * 18, 43);
+      graphics.print("recall to see it");
+    } else {
+      for (int t = 0; t < 2; ++t) {
+        const int y = 39 + 8 * t;
+        graphics.setPrintPos(3, y);
+        graphics.print(t ? "B" : "A");
+        graphics.setPrintPos(11, y);
+        graphics.print(t ? b : a);
+      }
+    }
+  }
+
+  draw_jack(8, 58, next_trig != 0);
+  graphics.setPrintPos(14, 55);
+  graphics.print("NEXT");
+  graphics.setPrintPos(40, 55);
+  if (next_trig) graphics.printf("TR%d", next_trig);
+  else graphics.print("off");
+  draw_jack(72, 58, last_trig != 0);
+  graphics.setPrintPos(78, 55);
+  graphics.print("LAST");
+  graphics.setPrintPos(104, 55);
+  if (last_trig) graphics.printf("TR%d", last_trig);
+  else graphics.print("off");
+
+  if (!edit_mode) switch (cursor) {
+    case 0: graphics.invertRect(48, 13, 32, 24); break;
+    case 2: graphics.invertRect(39, 54, 20, 9); break;
+    case 3: graphics.invertRect(103, 54, 20, 9); break;
+  }
+  draw_banner();
+}
+#endif
+
+FLASHMEM __attribute__((noinline)) void Draw() {
   const Page page = edit_mode ? PAGE_PRESETS : page_of(cursor);
+#ifdef LOOM_ONLY
+  if (page == PAGE_PRESETS) { draw_loom_presets(); return; }
+#endif
 
   graphics.drawFrame(0, 0, 128, 64);
   graphics.setPrintPos(4, 2);
   static const char *const kTitles[] = { "P R E S E T S", "B A N K S", "M A N A G E R" };
   graphics.print(kTitles[page]);
+#ifdef LOOM_ONLY
+  for (int i = 0; i < 2; ++i) {  // PRESETS, MANAGER (no BANKS)
+    graphics.drawCircle(116 + 6 * i, 5, 2);
+    if (i == (page == PAGE_MANAGER)) graphics.drawRect(115 + 6 * i, 4, 3, 3);
+  }
+#else
   for (int i = 0; i < (manager_unlocked ? 3 : 2); ++i) {
     graphics.drawCircle(110 + 6 * i, 5, 2);
     if (i == page) graphics.drawRect(109 + 6 * i, 4, 3, 3);
   }
+#endif
   graphics.drawHLine(1, 11, 126);
 
   if (sel_stored < 0) sel_stored = PresetEngine::SlotUsed(sel) ? 1 : 0;

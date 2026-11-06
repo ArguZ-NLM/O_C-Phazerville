@@ -149,6 +149,7 @@ static FS &quad_fs() { return SDcard_Ready ? (FS &)SD : (FS &)PhzConfig::myfs; }
 
 static FS *card_fs() { return SDcard_Ready ? (FS *)&SD : nullptr; }
 static void load_names();
+static void load_summaries();
 static void pack_name(uint8_t slot, uint64_t out[2]);
 
 FLASHMEM static void slot_name(char *buf, uint8_t slot, char kind, const char *ext) {
@@ -578,6 +579,7 @@ FLASHMEM static void clear_slot(uint8_t slot) {
     remove_legacy_slot(slot);
   }
   if (SlotName(slot)[0]) SetSlotName(slot, "");
+  if (SlotSummary(slot, 0)[0] || SlotSummary(slot, 1)[0]) SetSlotSummary(slot, "", "");
 }
 
 FLASHMEM static bool build_slot_from_bank_preset(uint8_t bank, uint8_t slot) {
@@ -871,6 +873,11 @@ FLASHMEM bool SaveSlot(uint8_t slot) {
   last_slot = slot;
   last_was_save = true;
   last_save_ok = ok && ok2;
+  if (last_save_ok) {  // what it holds, for the preset page
+    char sa[kSummaryLen + 1] = "", sb[kSummaryLen + 1] = "";
+    AppSlotSummary(sa, sb, sizeof(sa));
+    SetSlotSummary(slot, sa, sb);
+  }
   cur_slot_dirty_ms = StampMs();
   op_count++;
   busy = false;
@@ -1173,6 +1180,7 @@ FLASHMEM void Init() {
   req_q.clear();
   quad_recall_hint = -1;
   load_names();
+  load_summaries();
   {
     uint64_t v = 0;
     if (PhzConfig::getValue(kQuadLinkBankKey, v) && v < kQuadBankCount) quad_link_bank = (uint8_t)v;
@@ -1384,6 +1392,41 @@ FLASHMEM static void name_from_container(uint8_t slot) {
   unpack_name(nm, name);
   if (strcmp(name, name_cache[slot]) != 0) name_set_cached(slot, name);
 }
+
+// the slots' summaries (two lines each), in their own file next to the names
+DMAMEM static char sum_cache[kNumSlots][2][kSummaryLen + 1];
+
+FLASHMEM static void load_summaries() {
+  memset(sum_cache, 0, sizeof(sum_cache));
+  File f = preset_fs().open(PSTR("PBSUMS.BIN"), FILE_READ);
+  if (!f) return;
+  for (int i = 0; i < kNumSlots; ++i)
+    for (int l = 0; l < 2; ++l) {
+      if (f.read((uint8_t *)sum_cache[i][l], kSummaryLen) != kSummaryLen) { f.close(); return; }
+      sum_cache[i][l][kSummaryLen] = 0;
+    }
+  f.close();
+}
+
+FLASHMEM const char *SlotSummary(uint8_t slot, int line) {
+  return (slot < kNumSlots && line >= 0 && line < 2) ? sum_cache[slot][line] : "";
+}
+
+FLASHMEM void SetSlotSummary(uint8_t slot, const char *a, const char *b) {
+  if (slot >= kNumSlots) return;
+  if (!strncmp(sum_cache[slot][0], a, kSummaryLen) && !strncmp(sum_cache[slot][1], b, kSummaryLen)) return;
+  memset(sum_cache[slot], 0, sizeof(sum_cache[slot]));
+  strncpy(sum_cache[slot][0], a, kSummaryLen);
+  strncpy(sum_cache[slot][1], b, kSummaryLen);
+  File f = preset_fs().open(PSTR("PBSUMS.BIN"), FILE_WRITE_BEGIN);
+  if (!f) return;
+  for (int i = 0; i < kNumSlots; ++i)
+    for (int l = 0; l < 2; ++l) f.write((const uint8_t *)sum_cache[i][l], kSummaryLen);
+  f.close();
+}
+
+// (an app with something to say defines its own)
+FLASHMEM __attribute__((weak)) bool AppSlotSummary(char *, char *, size_t) { return false; }
 
 FLASHMEM void FlushSlotNames() {
   if (names_dirty) names_flush();

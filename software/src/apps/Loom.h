@@ -1650,6 +1650,13 @@ FLASHMEM void AppLoom::Resume() {
     reload_on_resume = false;
     LoadFile();
     dirty = false;
+    // a slot stored before slots had summaries: noted now that it plays
+    const int ls = OC::PresetEngine::LastSlot();
+    if (ls >= 0 && !OC::PresetEngine::SlotSummary(ls, 0)[0]) {
+      char sa[OC::PresetEngine::kSummaryLen + 1], sb[OC::PresetEngine::kSummaryLen + 1];
+      OC::PresetEngine::AppSlotSummary(sa, sb, sizeof(sa));
+      OC::PresetEngine::SetSlotSummary(ls, sa, sb);
+    }
   }
   if (!patch) patch = new Patch;
   active = true;
@@ -3451,6 +3458,51 @@ FLASHMEM void AppLoom::TogglePart() {
     if ((t == track || linked) && Repeat(t)) Repeat(t)->SetOff(o);
 }
 
+namespace loom {
+// a weave node's short name, as its box shows it
+// SOURCE is named after what it does: IN (input), SPL (SPOOL), SHU (SHUTTLE) or WRP
+FLASHMEM const char* WeaveTag(const Track& tr, int c) {
+  return c == MIX_COL ? PSTR("CLO")
+       : c == SOURCE ? (tr.choice[SOURCE] == 1 ? PSTR("SPL")
+                        : tr.choice[SOURCE] == 2 ? PSTR("SHU")
+                        : tr.choice[SOURCE] == 3 ? PSTR("WRP")
+                        : tr.choice[SOURCE] == 4 ? PSTR("SID")
+                        : tr.choice[SOURCE] == 5 ? PSTR("DRM") : PSTR("IN"))
+       : c == RESONATOR && tr.choice[c] == 2 ? PSTR("BTR")  // BEATER
+       : c == RESONATOR && tr.choice[c] == 3 ? PSTR("TWL")  // TWILL
+       : c == SPRAY && tr.choice[c] == 2 ? PSTR("DFT")      // DRAFT
+       : c == SPRAY && tr.choice[c] == 3 ? PSTR("FLK")      // FLOCK
+       : c == TEXTURE && tr.choice[c] == 2 ? PSTR("HDL")    // HEDDLE
+       : SLOT_DEFS[c].tag;
+}
+}  // namespace loom
+
+// a preset slot's two lines: each track's nodes in chain order (the ones
+// playing, not bypassed or empty; CLOTH, always last, left out for room)
+namespace OC { namespace PresetEngine {
+FLASHMEM bool AppSlotSummary(char* a, char* b, size_t n) {
+  using namespace loom;
+  for (int t = 0; t < NUM_TRACKS && t < 2; t++) {
+    char* out = t ? b : a;
+    size_t len = 0;
+    out[0] = 0;
+    const Track& tr = tracks[t];
+    for (int pos = 0; pos < MIX_COL; pos++) {
+      const int c = tr.SlotAt(pos);
+      if (tr.shown_bypassed(c) || !tr.at(c)) continue;
+      const char* tag = WeaveTag(tr, c);
+      const size_t tl = strlen(tag);
+      if (len + (len ? 1 : 0) + tl > n - 1) break;
+      if (len) out[len++] = ' ';
+      memcpy(out + len, tag, tl);
+      len += tl;
+      out[len] = 0;
+    }
+  }
+  return true;
+}
+} }
+
 FLASHMEM void AppLoom::DrawChain() const {
   using namespace loom;
   // boxes are drawn one pixel wider than the spacing so neighbours share a
@@ -3479,18 +3531,7 @@ FLASHMEM void AppLoom::DrawChain() const {
       // the slot's name at the top, always; underneath its device's little
       // picture, or BP when bypassed
       // SOURCE is named after what it does: IN (input), SPL (SPOOL), SHU (SHUTTLE) or WRP
-      const char* tag = c == MIX_COL ? PSTR("CLO")
-                      : c == SOURCE ? (tr.choice[SOURCE] == 1 ? PSTR("SPL")
-                                       : tr.choice[SOURCE] == 2 ? PSTR("SHU")
-                                       : tr.choice[SOURCE] == 3 ? PSTR("WRP")
-                                       : tr.choice[SOURCE] == 4 ? PSTR("SID")
-                                       : tr.choice[SOURCE] == 5 ? PSTR("DRM") : PSTR("IN"))
-                      : c == RESONATOR && tr.choice[c] == 2 ? PSTR("BTR")  // BEATER
-                      : c == RESONATOR && tr.choice[c] == 3 ? PSTR("TWL")  // TWILL
-                      : c == SPRAY && tr.choice[c] == 2 ? PSTR("DFT")      // DRAFT
-                      : c == SPRAY && tr.choice[c] == 3 ? PSTR("FLK")      // FLOCK
-                      : c == TEXTURE && tr.choice[c] == 2 ? PSTR("HDL")    // HEDDLE
-                      : SLOT_DEFS[c].tag;
+      const char* tag = WeaveTag(tr, c);
       if (strlen(tag) <= 3) {
         gfxPrint(x + 1 + (bw - 1 - 6 * int(strlen(tag))) / 2, y + 3, tag);
       } else {  // 4 letters: 5 px apart so they fit the box
@@ -4129,7 +4170,7 @@ FLASHMEM void AppLoom::DrawTestPage() const {
     if (o == lit) gfxInvert(o * 16 + 1, 47, 14, 9);
   }
   // (all as NAME A-H VOLTS; R turns to the next)
-  static const char* const names[2][5] = {
+  PROGMEM static const char names[2][5][22] = {  // (in flash: RAM1 is tight)
     {"CHASE A-H 5V", "OCTAVES A-H -3V..+4V", "RAMP A-H -5V..+5V", "SET A-H -5V/+5V", "ZERO A-H 0V"},
     {"CHASE A-H 10V", "OCTAVES A-H 1.2..9.6V", "RAMP A-H 0V..10V", "SET A-H 10V", "ZERO A-H 0V"}};
   gfxPrint(1, 57, names[buchla][test_mode]);
