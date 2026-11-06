@@ -2482,9 +2482,8 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
   }
   ask_at = 0;
   if (fw_row && !OnClockPage()) fw_row = fw_confirm = test_page = false;
-  if (test_page) {  // TEST: L or Z back to the clock page, nothing else meanwhile
-    if (event.type == UI::EVENT_BUTTON_PRESS
-        && (event.control == OC::CONTROL_BUTTON_L || event.control == OC::CONTROL_BUTTON_Z))
+  if (test_page) {  // TEST: Y back to the clock page (as everywhere), nothing else meanwhile
+    if (event.type == UI::EVENT_BUTTON_PRESS && event.control == OC::CONTROL_BUTTON_Y)
       test_page = false;
     return;
   }
@@ -4095,7 +4094,7 @@ FLASHMEM void AppLoom::WriteTestOutputs() {
 FLASHMEM void AppLoom::DrawTestPage() const {
   const bool buchla = NorthernLightModular;
   gfxPrint(1, 1, PSTR("TEST"));
-  gfxPrint(128 - 6 * 6, 1, PSTR("L back"));
+  gfxPrint(128 - 6 * 6, 1, PSTR("Y back"));
   gfxInvert(0, 0, 128, 9);
   // the CV inputs in two columns as the jacks sit on the panel (Buchla:
   // 1 3 / 2 4 / 5 7 / 6 8; Serge: 1-4 left, 5-8 right), TR1-4 between them
