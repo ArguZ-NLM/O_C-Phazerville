@@ -4060,7 +4060,8 @@ FLASHMEM void AppLoom::DrawClockPage() const {
 // TEST: the outputs play a pattern for checking the jacks (R picks it):
 // CHASE one output high after the other A..H (its LED shows which jack),
 // STEPS an octave each (A 1.2 V .. H 9.6 V; on the Serge A -3 V .. H +4 V),
-// RAMP all of them up and down the whole range in 4 s, ZERO all at 0 V
+// RAMP up and down the whole range in 4 s, each output 1/8 behind the one
+// before (evenly spread), ZERO all at 0 V
 FLASHMEM void AppLoom::WriteTestOutputs() {
   const bool buchla = NorthernLightModular;
   const uint32_t ms = millis();
@@ -4072,7 +4073,8 @@ FLASHMEM void AppLoom::WriteTestOutputs() {
       // Serge A -3 V .. H +4 V
       case 1: v = buchla ? 1.2f * (o + 1) : float(o - 3); break;
       case 2: {
-        const float ph = (ms % 4000) / 4000.0f;
+        // each output an eighth of the cycle on from the one before (A first)
+        const float ph = ((ms + 4000 - o * 500) % 4000) / 4000.0f;
         const float tri = ph < 0.5f ? ph * 2.0f : 2.0f - ph * 2.0f;
         v = buchla ? tri * 10.0f : tri * 10.0f - 5.0f;
         break;
