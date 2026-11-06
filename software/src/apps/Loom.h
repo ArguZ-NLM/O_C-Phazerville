@@ -478,14 +478,14 @@ private:
   // the clock page's last line, the version: R turned past BOOT puts the
   // cursor on it as a REFLASH button; R held there 2 s saves and hands over
   // to the Teensy Loader (firmware update without the program button)
-  bool fw_row = false, fw_held = false;
-  bool fw_left = false;     // the held one is L (CALIBRATE), else R (FLASH)
+  bool fw_row = false;      // the cursor on the bottom row (past BOOT)
+  int fw_sel = 0;           // its option R points at: CALIBRATE, TEST, FLASH
+  bool cal_pending = false; // CALIBRATE clicked: runs from the main loop
   bool test_page = false;   // TEST (Z on that row): the inputs live, the outputs a test pattern
   int test_mode = 0;        // the outputs: CHASE, STEPS, RAMP, ZERO (R turns)
   void DrawTestPage() const;
   void WriteTestOutputs();
   bool fw_confirm = false;  // held to the end: R flash mode, L cancel (Loom still runs)
-  uint32_t fw_hold = 0;
   bool OnClockPage() const { return view == DEVICE && focus_mod && mod_cursor == loom::CLK_CURSOR && !mod_mode && !trig_mode; }
   void FirmwareUpdate();
   void Calibrate();
@@ -2244,12 +2244,9 @@ FLASHMEM void AppLoom::MainLoop() {
     reset_held = false;
     ResetFocused();
   }
-  if (fw_held && millis() - fw_hold >= HOLD_MS) {
-    fw_held = false;
-    if (OnClockPage()) {
-      if (fw_left) Calibrate();  // (its first page asks, L leaves)
-      else fw_confirm = true;    // R: flash mode, L: cancel
-    }
+  if (cal_pending) {
+    cal_pending = false;
+    if (OnClockPage()) Calibrate();  // (its first page asks, L leaves)
   }
   if (tape_held && millis() - tape_hold >= TAPE_HOLD_MS) {
     tape_held = false;
@@ -2480,7 +2477,7 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
     return;
   }
   ask_at = 0;
-  if (fw_row && !OnClockPage()) fw_row = fw_held = fw_confirm = test_page = false;
+  if (fw_row && !OnClockPage()) fw_row = fw_confirm = test_page = false;
   if (test_page) {  // TEST: L or Z back to the clock page, nothing else meanwhile
     if (event.type == UI::EVENT_BUTTON_PRESS
         && (event.control == OC::CONTROL_BUTTON_L || event.control == OC::CONTROL_BUTTON_Z))
@@ -2495,19 +2492,13 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
     }
     return;
   }
-  if (fw_row && event.control == OC::CONTROL_BUTTON_Z && event.type == UI::EVENT_BUTTON_PRESS) {
-    test_page = true;  // the middle button: TEST (not the clock's start / stop here)
-    test_mode = 0;
-    fw_held = false;
-    return;
-  }
   if (fw_row && (event.control == OC::CONTROL_BUTTON_R || event.control == OC::CONTROL_BUTTON_L)) {
-    // on the bottom row: L held calibrates, R held is the update (not the clock's defaults)
-    if (event.type == UI::EVENT_BUTTON_DOWN) {
-      fw_held = true; fw_hold = millis();
-      fw_left = event.control == OC::CONTROL_BUTTON_L;
-    } else if (event.type == UI::EVENT_BUTTON_PRESS || event.type == UI::EVENT_BUTTON_LONG_RELEASE) {
-      fw_held = false;  // let go early: nothing
+    // on the bottom row: an R click opens the option picked (FLASH asks first);
+    // L, and R held, do nothing here (not the clock's defaults)
+    if (event.control == OC::CONTROL_BUTTON_R && event.type == UI::EVENT_BUTTON_PRESS) {
+      if (fw_sel == 0) cal_pending = true;
+      else if (fw_sel == 1) { test_page = true; test_mode = 0; }
+      else fw_confirm = true;  // R: flash mode, L: cancel
     }
     return;
   }
@@ -2549,7 +2540,7 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
       focus_mod = true;
       mod_cursor = CLK_CURSOR;
       cursor = 0;
-      fw_row = fw_held = fw_confirm = false;
+      fw_row = fw_confirm = false;
       editing = mod_mode = trig_mode = out_editing = false;
     }
     return;
@@ -2909,19 +2900,24 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
     g_browser->Move(dir);  // either knob scrolls the file list
     return;
   }
-  if (fw_row && !OnClockPage()) fw_row = fw_held = fw_confirm = test_page = false;
+  if (fw_row && !OnClockPage()) fw_row = fw_confirm = test_page = false;
   if (test_page) {  // R: the next output pattern
     if (!left) test_mode = (test_mode + (dir > 0 ? 1 : 3)) % 4;
     return;
   }
   if (fw_confirm) return;  // (the question waits for R or L)
   if (OnClockPage() && !editing) {
-    // R past BOOT: the REFLASH button; back up: BOOT again
+    // R past BOOT: the row CALIBRATE TEST FLASH, R picks one; back past
+    // CALIBRATE: BOOT again
     if (fw_row) {
-      if (!left && dir < 0) fw_row = fw_held = false;
+      if (!left) {
+        const int n = fw_sel + (dir > 0 ? 1 : -1);
+        if (n < 0) fw_row = false;
+        else fw_sel = std::min(n, 2);
+      }
       return;
     }
-    if (!left && dir > 0 && cursor == tempo_clock->num_params() - 1) { fw_row = true; return; }
+    if (!left && dir > 0 && cursor == tempo_clock->num_params() - 1) { fw_row = true; fw_sel = 0; return; }
   }
   // a modulator's own page, or its type on the MODULATORS page: the one to offer next
   if (mod_cursor < CLK_CURSOR && ((view == DEVICE && focus_mod) || (view == MODS && left))) last_mod = mod_cursor;
@@ -4035,27 +4031,13 @@ FLASHMEM void AppLoom::DrawClockPage() const {
     }
   }
   if (fw_row) {
-    // the cursor past BOOT: three buttons as the controls lie, CALIBRATE (hold L),
-    // TEST (Z) and FLASH (hold R); while L or R is held a bar fills where the others were
-    if (!fw_held || fw_left) {
-      gfxPrint(2, 56, PSTR("CALIBRATE"));
-      gfxInvert(1, 55, 56, 9);
-    }
-    if (!fw_held) {
-      gfxPrint(62, 56, PSTR("TEST"));
-      gfxInvert(60, 55, 28, 9);
-    }
-    if (!fw_held || !fw_left) {
-      gfxPrint(97, 56, PSTR("FLASH"));
-      gfxInvert(95, 55, 33, 9);
-    }
-    if (fw_held) {
-      const int bw = fw_left ? 67 : 90;  // the room beside the button held
-      const int w = std::min<int>(bw - 2, (millis() - fw_hold) * (bw - 2) / HOLD_MS);
-      const int bx = fw_left ? 60 : 1;
-      gfxFrame(bx, 56, bw, 7);
-      if (w > 0) gfxRect(fw_left ? bx + 1 : bx + bw - 1 - w, 57, w, 5);  // (grows out of the button held)
-    }
+    // the cursor past BOOT: CALIBRATE TEST FLASH, evenly spaced (5 px apart
+    // and from the edges), the one R points at lit; an R click opens it
+    static constexpr int X[3] = {5, 64, 93}, N[3] = {9, 4, 5};
+    gfxPrint(X[0], 56, PSTR("CALIBRATE"));
+    gfxPrint(X[1], 56, PSTR("TEST"));
+    gfxPrint(X[2], 56, PSTR("FLASH"));
+    gfxInvert(X[fw_sel] - 2, 55, N[fw_sel] * 6 + 3, 9);
   } else {
     // "Loom Beta 3 40720f32": 20 characters, the screen's width
     gfxPrint(2, 56, OC::Strings::VERSION);
