@@ -483,7 +483,7 @@ private:
   // cursor on it as a REFLASH button; R held there 2 s saves and hands over
   // to the Teensy Loader (firmware update without the program button)
   bool fw_row = false;      // the cursor on the bottom row (past BOOT)
-  int fw_sel = 0;           // its option R points at: CALIBRATE, TEST, FLASH
+  int fw_sel = 0;           // its option R points at: TEST, CALIBRATE, FLASH
   bool cal_pending = false; // CALIBRATE clicked: runs from the main loop
   bool test_page = false;   // TEST (Z on that row): the inputs live, the outputs a test pattern
   int test_mode = 0;        // the outputs: CHASE, STEPS, RAMP, SET, ZERO (R turns)
@@ -2500,8 +2500,8 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
     // on the bottom row: an R click opens the option picked (FLASH asks first);
     // L, and R held, do nothing here (not the clock's defaults)
     if (event.control == OC::CONTROL_BUTTON_R && event.type == UI::EVENT_BUTTON_PRESS) {
-      if (fw_sel == 0) cal_pending = true;
-      else if (fw_sel == 1) { test_page = true; test_mode = 0; }
+      if (fw_sel == 0) { test_page = true; test_mode = 0; }
+      else if (fw_sel == 1) cal_pending = true;
       else fw_confirm = true;  // R: flash mode, L: cancel
     }
     return;
@@ -2911,8 +2911,8 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
   }
   if (fw_confirm) return;  // (the question waits for R or L)
   if (OnClockPage() && !editing) {
-    // R past BOOT: the row CALIBRATE TEST FLASH, R picks one; back past
-    // CALIBRATE: BOOT again
+    // R past BOOT: the row TEST CALIBRATE FLASH, R picks one; back past
+    // TEST: BOOT again
     if (fw_row) {
       if (!left) {
         const int n = fw_sel + (dir > 0 ? 1 : -1);
@@ -4035,12 +4035,12 @@ FLASHMEM void AppLoom::DrawClockPage() const {
     }
   }
   if (fw_row) {
-    // the cursor past BOOT: CALIBRATE at the left edge, FLASH at the right,
-    // TEST centred between them (9 px either side); the one R points at lit,
-    // an R click opens it
-    static constexpr int X[3] = {2, 65, 97}, N[3] = {9, 4, 5};
-    gfxPrint(X[0], 56, PSTR("CALIBRATE"));
-    gfxPrint(X[1], 56, PSTR("TEST"));
+    // the cursor past BOOT: TEST at the left edge, FLASH at the right,
+    // CALIBRATE centred between them; the one R points at lit, an R click
+    // opens it
+    static constexpr int X[3] = {2, 34, 97}, N[3] = {4, 9, 5};
+    gfxPrint(X[0], 56, PSTR("TEST"));
+    gfxPrint(X[1], 56, PSTR("CALIBRATE"));
     gfxPrint(X[2], 56, PSTR("FLASH"));
     gfxInvert(X[fw_sel] - 2, 55, N[fw_sel] * 6 + 3, 9);
   } else {
