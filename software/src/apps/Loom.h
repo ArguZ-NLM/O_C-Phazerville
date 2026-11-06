@@ -486,7 +486,7 @@ private:
   int fw_sel = 0;           // its option R points at: CALIBRATE, TEST, FLASH
   bool cal_pending = false; // CALIBRATE clicked: runs from the main loop
   bool test_page = false;   // TEST (Z on that row): the inputs live, the outputs a test pattern
-  int test_mode = 0;        // the outputs: CHASE, STEPS, RAMP, ZERO (R turns)
+  int test_mode = 0;        // the outputs: CHASE, STEPS, RAMP, SET, ZERO (R turns)
   void DrawTestPage() const;
   void WriteTestOutputs();
   bool fw_confirm = false;  // held to the end: R flash mode, L cancel (Loom still runs)
@@ -2906,7 +2906,7 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
   }
   if (fw_row && !OnClockPage()) fw_row = fw_confirm = test_page = false;
   if (test_page) {  // R: the next output pattern
-    if (!left) test_mode = (test_mode + (dir > 0 ? 1 : 3)) % 4;
+    if (!left) test_mode = (test_mode + (dir > 0 ? 1 : 4)) % 5;
     return;
   }
   if (fw_confirm) return;  // (the question waits for R or L)
@@ -4080,6 +4080,8 @@ FLASHMEM void AppLoom::WriteTestOutputs() {
         v = buchla ? tri * 10.0f : tri * 10.0f - 5.0f;
         break;
       }
+      // SET: Buchla all at 10 V; Serge alternating -5 V / +5 V (A -5, B +5 ...)
+      case 3: v = buchla ? 10.0f : (o & 1 ? 5.0f : -5.0f); break;
       default: break;
     }
     // (an octave is 1.2 V on the Buchla, 1 V on the Serge)
@@ -4127,9 +4129,9 @@ FLASHMEM void AppLoom::DrawTestPage() const {
     gfxPrint(o * 16 + 5, 48, l);
     if (o == lit) gfxInvert(o * 16 + 1, 47, 14, 9);
   }
-  static const char* const names[2][4] = {
-    {"R: CHASE A-H 5V", "R: STEPS -3V..+4V", "R: RAMP -5..+5V", "R: ZERO all 0V"},
-    {"R: CHASE A-H 10V", "R: STEPS 1.2-9.6V", "R: RAMP 0..10V", "R: ZERO all 0V"}};
+  static const char* const names[2][5] = {
+    {"R: CHASE A-H 5V", "R: STEPS -3V..+4V", "R: RAMP -5..+5V", "R: SET A-H -5/+5V", "R: ZERO all 0V"},
+    {"R: CHASE A-H 10V", "R: STEPS 1.2-9.6V", "R: RAMP 0..10V", "R: SET A-H 10V", "R: ZERO all 0V"}};
   gfxPrint(1, 57, names[buchla][test_mode]);
 }
 
