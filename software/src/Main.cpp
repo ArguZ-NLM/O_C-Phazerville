@@ -801,7 +801,7 @@ void FASTRUN loop() {
         int cmd = Serial.read();
         // the remote panel (keys sent from the computer): Loom shows a
         // sticky note meanwhile, so nobody turns a knob at the same time
-        if (cmd > 0 && strchr("+-uy*[],.<>&!%~=:jw", cmd)) g_remote_at = millis() | 1;
+        if (cmd > 0 && strchr("+-uy*[],.<>&!%~=:jw?", cmd)) g_remote_at = millis() | 1;
         switch (cmd) {
 #if defined(__IMXRT1062__)
 #ifdef CARD_APP
@@ -884,6 +884,13 @@ void FASTRUN loop() {
             break;
           case 'q':  // ... the same with white noise (for filters, phasers)
             g_notes_request = 5;
+            break;
+#endif
+#if defined(ARDUINO_TEENSY41) && defined(PRESET_BUS)
+          case '?':  // the preset page open / closed (for the manual's pictures)
+            if (OC::PresetBusUI::Active()) OC::PresetBusUI::Exit();
+            else OC::PresetBusUI::Enter();
+            Serial.printf("presets %s\n", OC::PresetBusUI::Active() ? "open" : "closed");
             break;
 #endif
           case 'K':  // the crash log the firmware keeps after a crash
