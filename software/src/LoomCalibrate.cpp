@@ -34,6 +34,8 @@
 
 #ifdef LOOM_ONLY
 
+void watchdog_feed();  // (Main.cpp)
+
 namespace loom {
 
 namespace menu = OC::menu;
@@ -351,6 +353,7 @@ FLASHMEM void RunCalibration() {
   OC::ui.FlushEvents();
   OC::ui.encoder_enable_acceleration(OC::CONTROL_ENCODER_R, true);
   while (!c.done) {
+    watchdog_feed();  // (Loom's main loop, which feeds it, waits meanwhile: 128 s and the module restarted)
     UI::Event e;
     while (!c.done && OC::ui.NextEvent(e)) Handle(c, e);
     if (c.done) break;
