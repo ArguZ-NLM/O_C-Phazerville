@@ -4059,7 +4059,7 @@ FLASHMEM void AppLoom::DrawClockPage() const {
 
 // TEST: the outputs play a pattern for checking the jacks (R picks it):
 // CHASE one output high after the other A..H (its LED shows which jack),
-// STEPS a voltage each (A 1 V .. H 8 V; on the Serge A 0.5 V .. H 4 V),
+// STEPS an octave each (A 1.2 V .. H 9.6 V; on the Serge A -3 V .. H +4 V),
 // RAMP all of them up and down the whole range in 4 s, ZERO all at 0 V
 FLASHMEM void AppLoom::WriteTestOutputs() {
   const bool buchla = NorthernLightModular;
@@ -4068,7 +4068,9 @@ FLASHMEM void AppLoom::WriteTestOutputs() {
     float v = 0.0f;
     switch (test_mode) {
       case 0: v = int((ms / 500) % 8) == o ? (buchla ? 8.0f : 5.0f) : 0.0f; break;
-      case 1: v = buchla ? float(o + 1) : 0.5f * (o + 1); break;
+      // whole octaves, exactly the calibrated points: Buchla A 1.2 V .. H 9.6 V,
+      // Serge A -3 V .. H +4 V
+      case 1: v = buchla ? 1.2f * (o + 1) : float(o - 3); break;
       case 2: {
         const float ph = (ms % 4000) / 4000.0f;
         const float tri = ph < 0.5f ? ph * 2.0f : 2.0f - ph * 2.0f;
@@ -4123,8 +4125,8 @@ FLASHMEM void AppLoom::DrawTestPage() const {
     if (o == lit) gfxInvert(o * 16 + 1, 47, 14, 9);
   }
   static const char* const names[2][4] = {
-    {"R: CHASE A-H 5V", "R: STEPS .5V-4V", "R: RAMP -5..+5V", "R: ZERO all 0V"},
-    {"R: CHASE A-H 8V", "R: STEPS 1V-8V", "R: RAMP 0..10V", "R: ZERO all 0V"}};
+    {"R: CHASE A-H 5V", "R: STEPS -3V..+4V", "R: RAMP -5..+5V", "R: ZERO all 0V"},
+    {"R: CHASE A-H 8V", "R: STEPS 1.2-9.6V", "R: RAMP 0..10V", "R: ZERO all 0V"}};
   gfxPrint(1, 57, names[buchla][test_mode]);
 }
 
