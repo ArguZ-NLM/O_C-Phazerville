@@ -479,7 +479,11 @@ private:
   // cursor on it as a REFLASH button; R held there 2 s saves and hands over
   // to the Teensy Loader (firmware update without the program button)
   bool fw_row = false, fw_held = false;
-  bool fw_left = false;     // the held one is L (CALIBRATE), else R (REFLASH)
+  bool fw_left = false;     // the held one is L (CALIBRATE), else R (FLASH)
+  bool test_page = false;   // TEST (Z on that row): the inputs live, the outputs a test pattern
+  int test_mode = 0;        // the outputs: CHASE, STEPS, RAMP, ZERO (R turns)
+  void DrawTestPage() const;
+  void WriteTestOutputs();
   bool fw_confirm = false;  // held to the end: R flash mode, L cancel (Loom still runs)
   uint32_t fw_hold = 0;
   bool OnClockPage() const { return view == DEVICE && focus_mod && mod_cursor == loom::CLK_CURSOR && !mod_mode && !trig_mode; }
@@ -1864,6 +1868,7 @@ FLASHMEM const loom::Modulator* AppLoom::OutMod(int o) const {
 }
 
 FLASHMEM void AppLoom::WriteOutputs() {
+  if (test_page) { WriteTestOutputs(); return; }
   loom::CvSource* cs = CvSrc();
   if (cs) cs->CvTick();
   for (int o = 0; o < loom::NUM_CV_OUTS && o < DAC_CHANNEL_COUNT; o++) {
@@ -2475,13 +2480,25 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
     return;
   }
   ask_at = 0;
-  if (fw_row && !OnClockPage()) fw_row = fw_held = fw_confirm = false;
+  if (fw_row && !OnClockPage()) fw_row = fw_held = fw_confirm = test_page = false;
+  if (test_page) {  // TEST: L or Z back to the clock page, nothing else meanwhile
+    if (event.type == UI::EVENT_BUTTON_PRESS
+        && (event.control == OC::CONTROL_BUTTON_L || event.control == OC::CONTROL_BUTTON_Z))
+      test_page = false;
+    return;
+  }
   if (fw_confirm) {
     // the question over the clock page: R flash mode, L back; nothing else meanwhile
     if (event.type == UI::EVENT_BUTTON_PRESS) {
       if (event.control == OC::CONTROL_BUTTON_R) FirmwareUpdate();
       else if (event.control == OC::CONTROL_BUTTON_L) fw_confirm = false;
     }
+    return;
+  }
+  if (fw_row && event.control == OC::CONTROL_BUTTON_Z && event.type == UI::EVENT_BUTTON_PRESS) {
+    test_page = true;  // the middle button: TEST (not the clock's start / stop here)
+    test_mode = 0;
+    fw_held = false;
     return;
   }
   if (fw_row && (event.control == OC::CONTROL_BUTTON_R || event.control == OC::CONTROL_BUTTON_L)) {
@@ -2892,7 +2909,11 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
     g_browser->Move(dir);  // either knob scrolls the file list
     return;
   }
-  if (fw_row && !OnClockPage()) fw_row = fw_held = fw_confirm = false;
+  if (fw_row && !OnClockPage()) fw_row = fw_held = fw_confirm = test_page = false;
+  if (test_page) {  // R: the next output pattern
+    if (!left) test_mode = (test_mode + (dir > 0 ? 1 : 3)) % 4;
+    return;
+  }
   if (fw_confirm) return;  // (the question waits for R or L)
   if (OnClockPage() && !editing) {
     // R past BOOT: the REFLASH button; back up: BOOT again
@@ -4014,21 +4035,26 @@ FLASHMEM void AppLoom::DrawClockPage() const {
     }
   }
   if (fw_row) {
-    // the cursor past BOOT: two buttons, CALIBRATE (hold L) and REFLASH (hold R);
-    // while one is held a bar fills where the other was
-    const int w = fw_held ? std::min<int>(64, (millis() - fw_hold) * 64 / HOLD_MS) : 0;
+    // the cursor past BOOT: three buttons as the controls lie, CALIBRATE (hold L),
+    // TEST (Z) and FLASH (hold R); while L or R is held a bar fills where the others were
     if (!fw_held || fw_left) {
       gfxPrint(2, 56, PSTR("CALIBRATE"));
       gfxInvert(1, 55, 56, 9);
     }
+    if (!fw_held) {
+      gfxPrint(62, 56, PSTR("TEST"));
+      gfxInvert(60, 55, 28, 9);
+    }
     if (!fw_held || !fw_left) {
-      gfxPrint(86, 56, PSTR("REFLASH"));
-      gfxInvert(85, 55, 43, 9);
+      gfxPrint(97, 56, PSTR("FLASH"));
+      gfxInvert(95, 55, 33, 9);
     }
     if (fw_held) {
-      const int bx = fw_left ? 61 : 1;
-      gfxFrame(bx, 56, 66, 7);
-      if (w > 0) gfxRect(fw_left ? bx + 1 : bx + 65 - w, 57, w, 5);  // (grows out of the button held)
+      const int bw = fw_left ? 67 : 90;  // the room beside the button held
+      const int w = std::min<int>(bw - 2, (millis() - fw_hold) * (bw - 2) / HOLD_MS);
+      const int bx = fw_left ? 60 : 1;
+      gfxFrame(bx, 56, bw, 7);
+      if (w > 0) gfxRect(fw_left ? bx + 1 : bx + bw - 1 - w, 57, w, 5);  // (grows out of the button held)
     }
   } else {
     // "Loom Beta 3 40720f32": 20 characters, the screen's width
@@ -4043,6 +4069,61 @@ FLASHMEM void AppLoom::DrawClockPage() const {
     gfxPrint(16, 27, PSTR("R: flash mode"));
     gfxPrint(16, 36, PSTR("L: cancel"));
   }
+}
+
+// TEST: the outputs play a pattern for checking the jacks (R picks it):
+// CHASE one output high after the other A..H (its LED shows which jack),
+// STEPS a voltage each (A 1 V .. H 8 V; on the Serge A 0.5 V .. H 4 V),
+// RAMP all of them up and down the whole range in 4 s, ZERO all at 0 V
+FLASHMEM void AppLoom::WriteTestOutputs() {
+  const bool buchla = NorthernLightModular;
+  const uint32_t ms = millis();
+  for (int o = 0; o < DAC_CHANNEL_COUNT; o++) {
+    float v = 0.0f;
+    switch (test_mode) {
+      case 0: v = int((ms / 500) % 8) == o ? (buchla ? 8.0f : 5.0f) : 0.0f; break;
+      case 1: v = buchla ? float(o + 1) : 0.5f * (o + 1); break;
+      case 2: {
+        const float ph = (ms % 4000) / 4000.0f;
+        const float tri = ph < 0.5f ? ph * 2.0f : 2.0f - ph * 2.0f;
+        v = buchla ? tri * 10.0f : tri * 10.0f - 5.0f;
+        break;
+      }
+      default: break;
+    }
+    // (an octave is 1.2 V on the Buchla, 1 V on the Serge)
+    HS::frame.Out(DAC_CHANNEL(o), int(v / (buchla ? 1.2f : 1.0f) * ONE_OCTAVE));
+  }
+}
+
+// TEST's page: the 8 CV inputs in volts (the number lit while it is above
+// the gate threshold), the outputs A..H (in CHASE the one high lit) and the
+// pattern playing
+FLASHMEM void AppLoom::DrawTestPage() const {
+  const bool buchla = NorthernLightModular;
+  gfxPrint(1, 1, PSTR("TEST"));
+  gfxPrint(128 - 6 * 6, 1, PSTR("L back"));
+  gfxInvert(0, 0, 128, 9);
+  char b[16];
+  for (int i = 0; i < 8; i++) {
+    const int x = (i / 4) * 66, y = 12 + (i % 4) * 9;
+    const int in = HS::frame.In(i);
+    const int mv = int(in * (buchla ? 1200 : 1000) / ONE_OCTAVE);
+    const int a = std::abs(mv);
+    snprintf(b, sizeof(b), "%d %c%d.%02dV", i + 1, mv < 0 ? '-' : '+', a / 1000, (a % 1000) / 10);
+    gfxPrint(x + 1, y, b);
+    if (in > HS::GATE_THRESHOLD) gfxInvert(x, y - 1, 7, 9);
+  }
+  const int lit = test_mode == 0 ? int((millis() / 500) % 8) : -1;
+  for (int o = 0; o < 8; o++) {
+    const char l[2] = {char('A' + o), 0};
+    gfxPrint(o * 16 + 5, 48, l);
+    if (o == lit) gfxInvert(o * 16 + 1, 47, 14, 9);
+  }
+  static const char* const names[2][4] = {
+    {"R: CHASE A-H 5V", "R: STEPS .5V-4V", "R: RAMP -5..+5V", "R: ZERO all 0V"},
+    {"R: CHASE A-H 8V", "R: STEPS 1V-8V", "R: RAMP 0..10V", "R: ZERO all 0V"}};
+  gfxPrint(1, 57, names[buchla][test_mode]);
 }
 
 // CALIBRATE held: Phazerville's calibration steps over Loom (sound goes on);
@@ -4930,6 +5011,7 @@ FLASHMEM void AppLoom::LoadFile() {
 FLASHMEM void AppLoom::View() const {
   loom::view_frames++;
   UpdateMixLevels();
+  if (test_page) { DrawTestPage(); return; }
   if (view == DEVICE && Focused()) DrawDevice();
   else if (view == MODS) DrawMods();
   else DrawChain();
