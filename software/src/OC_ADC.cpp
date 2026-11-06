@@ -4,6 +4,7 @@
 #include "DMAChannel.h"
 #include <algorithm>
 
+volatile uint32_t adc_overruns = 0;  // (status V)
 ADC_CHANNEL ADC_CHANNEL_1=0, ADC_CHANNEL_2=1, ADC_CHANNEL_3=2, ADC_CHANNEL_4=3;
 #if defined(__IMXRT1062__) && defined(ARDUINO_TEENSY41)
 ADC_CHANNEL ADC_CHANNEL_5=4, ADC_CHANNEL_6=5, ADC_CHANNEL_7=6, ADC_CHANNEL_8=7;
@@ -569,6 +570,10 @@ void ADC::Read(IOFrame *ioframe)
     // FlexIO DMA separately deposits each 16 bit reading into memory, so we
     // first need to figure out how many full 8 reading frames we have (if any).
     static uint32_t old_poffset = 0;
+    {  // a reading the DMA came too late for (lost: the inputs would slip a jack)
+      IMXRT_FLEXIO_t *flexio = (IMXRT_FLEXIO_t *)IMXRT_FLEXIO2_ADDRESS;
+      if (flexio->SHIFTERR & 1) { flexio->SHIFTERR = 1; ++adc_overruns; }
+    }
     uint32_t poffset = ((uint32_t)p - (uint32_t)adc_buffer) & 0xFFF0;
     size_t count = ((poffset - old_poffset) % sizeof(adc_buffer)) / sizeof(adc33131_frame_t);
     if (count > 0) {

@@ -2405,6 +2405,7 @@ FLASHMEM void AppLoom::MainLoop() {
     Serial.printf("  hw: ID %d mV -> %s\n", int(id_voltage * 1000.0f),
                   NorthernLightModular ? "NLM Buchla" : NLMSerge ? "NLM Serge" : "other");
   }
+  { extern volatile uint32_t adc_overruns; Serial.printf("  adc lost readings %lu\n", (unsigned long)adc_overruns); }
   Serial.printf("  cv ins");
   for (int i = 0; i < ADC_CHANNEL_COUNT; i++)
     Serial.printf(" %d:%dmV(%d)", i + 1, int(HS::frame.In(i) * (NorthernLightModular ? 1200 : 1000) / 1536), int(OC::ADC::value(ADC_CHANNEL(i))));
