@@ -248,7 +248,11 @@ public:
     uint16_t e = 0;
     for (int i = 0; i < 12; i++) e |= HS::frame.clocked[i] << i;
     loom::trig_latch |= e;
+    // TEST's TR circles: when each trigger input last fired (a trigger is
+    // shorter than a screen frame)
+    for (int i = 0; i < 4; i++) if (HS::frame.clocked[i]) tr_seen[i] = millis();
   }
+  volatile uint32_t tr_seen[4] = {0, 0, 0, 0};
   void MainLoop();
   void ModulateAll();
   void ReadMIDI();
@@ -4086,15 +4090,31 @@ FLASHMEM void AppLoom::DrawTestPage() const {
   gfxPrint(1, 1, PSTR("TEST"));
   gfxPrint(128 - 6 * 6, 1, PSTR("L back"));
   gfxInvert(0, 0, 128, 9);
+  // the CV inputs in two columns as the jacks sit on the panel (Buchla:
+  // 1 3 / 2 4 / 5 7 / 6 8; Serge: 1-4 left, 5-8 right), TR1-4 between them
+  static constexpr uint8_t BUCHLA[2][4] = {{0, 1, 4, 5}, {2, 3, 6, 7}};
   char b[16];
-  for (int i = 0; i < 8; i++) {
-    const int x = (i / 4) * 66, y = 12 + (i % 4) * 9;
-    const int in = HS::frame.In(i);
-    const int mv = int(in * (buchla ? 1200 : 1000) / ONE_OCTAVE);
-    const int a = std::abs(mv);
-    snprintf(b, sizeof(b), "%d %c%d.%02dV", i + 1, mv < 0 ? '-' : '+', a / 1000, (a % 1000) / 10);
-    gfxPrint(x + 1, y, b);
-    if (in > HS::GATE_THRESHOLD) gfxInvert(x, y - 1, 7, 9);
+  for (int col = 0; col < 2; col++) {
+    for (int row = 0; row < 4; row++) {
+      const int i = buchla ? BUCHLA[col][row] : col * 4 + row;
+      const int x = col ? 79 : 1, y = 12 + row * 9;
+      const int in = HS::frame.In(i);
+      const int mv = int(in * (buchla ? 1200 : 1000) / ONE_OCTAVE);
+      const int a = std::abs(mv);
+      snprintf(b, sizeof(b), "%d %c%d.%02dV", i + 1, mv < 0 ? '-' : '+', a / 1000, (a % 1000) / 10);
+      gfxPrint(x, y, b);
+      if (in > HS::GATE_THRESHOLD) gfxInvert(x - 1, y - 1, 7, 9);
+    }
+  }
+  // TR1-4: a circle each, filled while high or just after a trigger
+  for (int t = 0; t < 4; t++) {
+    const int cx = 64, cy = 15 + t * 9;
+    if (HS::frame.gate_high[t] || millis() - tr_seen[t] < 100) {
+      static constexpr int8_t HW[7] = {1, 2, 3, 3, 3, 2, 1};  // (a disc of radius 3)
+      for (int d = 0; d < 7; d++) gfxLine(cx - HW[d], cy - 3 + d, cx + HW[d], cy - 3 + d);
+    } else {
+      gfxCircle(cx, cy, 3);
+    }
   }
   const int lit = test_mode == 0 ? int((millis() / 500) % 8) : -1;
   for (int o = 0; o < 8; o++) {
