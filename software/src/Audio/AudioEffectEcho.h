@@ -230,7 +230,10 @@ public:
                      fl & 1 ? " delay" : "", fl & 2 ? " reverb" : "", fl & 4 ? " GLINT" : "", fl & 8 ? " LONG" : "", fl & 16 ? " lite" : "",
                      IsRam2(mem) ? "RAM2" : "PSRAM", IsRam2(pre) ? "RAM2" : "PSRAM", IsRam2(sh) ? "RAM2" : "PSRAM");
     for (int i = 0; i < PROF_N && k < int(n); i++)
-      k += snprintf(b + k, n - k, " %s %.1f/%.1f", names[i], nb ? sum[i] / float(nb) / blk * 100.0f : 0.0f, mx[i] / blk * 100.0f);
+    {
+      const int av = nb ? int(sum[i] / float(nb) / blk * 1000.0f + 0.5f) : 0, pk = int(mx[i] / blk * 1000.0f + 0.5f);  // (tenths of a %)
+      k += snprintf(b + k, n - k, " %s %d.%d/%d.%d", names[i], av / 10, av % 10, pk / 10, pk % 10);
+    }
   }
   static bool IsRam2(const void* p) { return p && uint32_t(p) >= 0x20200000u && uint32_t(p) < 0x20280000u; }
 
