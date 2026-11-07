@@ -378,7 +378,11 @@ FLASHMEM void AudioEffectClouds::UpdateEco(audio_block_t** in, audio_block_t** o
     for (auto& g : e.g) if (g.active) eg++;
     // the grains: each one's stretch copied from PSRAM, read with Hermite,
     // coloured, windowed (every 8 samples, glided between), panned
-    memset(accum_, 0, MAX_CHANNELS * AUDIO_BLOCK_SAMPLES * sizeof(float));
+    // the sum and each grain's stretch on the stack (fast memory; the
+    // object's accum_ and the work block's span_ can sit in RAM2 / PSRAM)
+    float acc[MAX_CHANNELS][AUDIO_BLOCK_SAMPLES];
+    memset(acc, 0, sizeof(acc));
+    int16_t spl[SPAN_MAX];
     const bool stereo = nch_ > 1;
     for (auto& g : e.g) {
         if (!g.active) continue;
@@ -387,7 +391,7 @@ FLASHMEM void AudioEffectClouds::UpdateEco(audio_block_t** in, audio_block_t** o
         const int steps = std::min<int>(AUDIO_BLOCK_SAMPLES - first, (int)(g.len - g.phase));
         const float inc = (float)g.inc_int + g.inc_frac;
         const int16_t* src = stereo ? buf[g.source] : buf[0];
-        int16_t* sp = span_;
+        int16_t* sp = spl;
         size_t start;
         int count, li;
         if (!g.rev) {
@@ -429,10 +433,10 @@ FLASHMEM void AudioEffectClouds::UpdateEco(audio_block_t** in, audio_block_t** o
                 }
                 m *= w;
                 if (stereo) {
-                    accum_[0][i] += m * gl;
-                    accum_[1][i] += m * gr;
+                    acc[0][i] += m * gl;
+                    acc[1][i] += m * gr;
                 } else {
-                    accum_[0][i] += m * (gl + gr) * 0.5f;
+                    acc[0][i] += m * (gl + gr) * 0.5f;
                 }
                 w += dw;
                 if (!rev) {
@@ -459,7 +463,7 @@ FLASHMEM void AudioEffectClouds::UpdateEco(audio_block_t** in, audio_block_t** o
     // grains' levels took the overlap into account); the feedback taken
     for (int i = 0; i < AUDIO_BLOCK_SAMPLES; i++) {
         for (int c = 0; c < nch_; c++) {
-            float x = accum_[c][i] * (1.0f / 32768.0f);
+            float x = acc[c][i] * (1.0f / 32768.0f);
             if (x > 3.0f) x = 3.0f;
             if (x < -3.0f) x = -3.0f;
             x = x * (27.0f + x * x) / (27.0f + 9.0f * x * x);
