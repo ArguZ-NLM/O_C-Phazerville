@@ -2491,7 +2491,9 @@ FLASHMEM void AppLoom::MainLoop() {
       Serial.printf("  DREAM heaviest block:");
       for (int i = 0; i < 13; i++) Serial.printf(" %s %lu", nm[i], (unsigned long)(q[20 + i] / blk));
       Serial.println();
-      for (int i = 0; i < 48; i++) q[i] = 0;
+      Serial.printf("  DREAM control: mods %lu fx %lu heads %lu fo %lu\n", (unsigned long)(q[48] / nb / blk), (unsigned long)(q[49] / nb / blk),
+                    (unsigned long)(q[50] / nb / blk), (unsigned long)(q[51] / nb / blk));
+      for (int i = 0; i < 56; i++) q[i] = 0;
     }
   }
   // BEATER's engine: where it sits

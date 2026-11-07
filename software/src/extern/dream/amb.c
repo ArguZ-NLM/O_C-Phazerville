@@ -611,7 +611,7 @@ DREAM_RAM2 volatile float en_echo_pk;
 volatile float en_echo_lvl;
 DREAM_RAM2 volatile uint8_t en_load;
 /* PROFILE (temporary): cycles per stage, summed; [15] chunks, [14] blocks, [13] the heaviest block */
-DREAM_RAM2 volatile uint32_t en_prof[48];   /* [20..32] the heaviest block's stages, [33..45] this block's */
+DREAM_RAM2 volatile uint32_t en_prof[56];   /* [20..32] the heaviest block's stages, [33..45] this block's */
 #define EN_CYC (*(volatile uint32_t *)0xE0001004)
 #define EN_P(i, x) do { uint32_t q_ = EN_CYC; x; q_ = EN_CYC - q_; en_prof[i] += q_; en_prof[33 + (i)] += q_; } while (0)
 DREAM_RAM2 static int32_t shed_left;   /* samples the shedding lasts (a heavy block: half a second) */
@@ -6086,10 +6086,10 @@ DREAM_FLASH static void render_chunk(int32_t *out, uint32_t n, float gain)
 DREAM_FLASH static void control(uint32_t n)                 /* once a chunk: the slow things */
 {
     int i;
-    mods_step(n);
-    fx_ctl(n);
-    heads_step();
-    fo_step(n);
+    { uint32_t q_ = EN_CYC; mods_step(n); en_prof[48] += EN_CYC - q_; }
+    { uint32_t q_ = EN_CYC; fx_ctl(n); en_prof[49] += EN_CYC - q_; }
+    { uint32_t q_ = EN_CYC; heads_step(); en_prof[50] += EN_CYC - q_; }
+    { uint32_t q_ = EN_CYC; fo_step(n); en_prof[51] += EN_CYC - q_; }
     pl_decay += ((en_frozen ? 0.9995f : pl_decay_t) - pl_decay) * 0.002f;
     pl_dd2 = fm_clampf(pl_decay + 0.15f, 0.25f, 0.5f);
     rev_in_gain += ((en_frozen ? 0.0f : 1.0f) - rev_in_gain) * 0.01f;
