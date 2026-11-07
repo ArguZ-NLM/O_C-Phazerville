@@ -61,14 +61,11 @@ public:
   // stopped, a CVOUT ON elsewhere has them)
   bool CvOnly() const override { return cur[CV] == CV_ON && cur[LEVEL] == 0 && ok() && Playing(); }
   virtual bool Playing() const = 0;
-  // the engine it plays: the fast one (amb.c, its code in RAM1) or the second
-  // (amb_b.c, from flash). Whichever track's DREAM comes first gets the fast
-  // one (Loom.h PickDreams, 2026-11-07); before, B always had the second
-  bool fast = false;
-  // the CPU guard (measured 2026-11-07, alone on the track): the fast engine
-  // 37-46 % peak; the second from flash with its state in PSRAM, 90-100 %
+  // the CPU it takes (the guard, Loom.h): next to none for the CV alone
+  // the CPU guard (measured 2026-11-07, alone on the track): A's engine runs
+  // from RAM1, 37-46 % peak; B's from flash with its state in PSRAM, 90-100 %
   // peak (15 % silent, LEVEL 0: the CV only)
-  float Cost() const { return cur[LEVEL] == 0 ? (fast ? 4.0f : 16.0f) : (fast ? 46.0f : 92.0f); }
+  float Cost() const { return cur[LEVEL] == 0 ? (track ? 16.0f : 4.0f) : (track ? 92.0f : 46.0f); }
 };
 
 // LINK: track A's DREAM as it plays (A writes it, B's follows it)
@@ -158,17 +155,17 @@ inline DreamUser g_dream_user;
 
 // track A's engine (amb.c)
 #define DREAM_NS dream_a
-#define DREAM_ENGINE_B 0
+#define DREAM_TRACK_B 0
 #include "LoomDreamCore.h"
-#undef DREAM_ENGINE_B
+#undef DREAM_TRACK_B
 #undef DREAM_NS
 
 // track B's: the same again, every engine name renamed (amb_b.c)
 #include "dream/dream_b_names.h"
 #undef DREAM_AMB_H
 #define DREAM_NS dream_b
-#define DREAM_ENGINE_B 1
+#define DREAM_TRACK_B 1
 #include "LoomDreamCore.h"
-#undef DREAM_ENGINE_B
+#undef DREAM_TRACK_B
 #undef DREAM_NS
 #include "dream/dream_b_unnames.h"
