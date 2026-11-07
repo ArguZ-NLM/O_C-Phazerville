@@ -997,8 +997,8 @@ FLASHMEM static float WorstCost(const Device* d) {
   // only plays the chips: 13.6 % peak for one (was 37 %), ~10 % each more
   if (!strcmp(t, "SID")) return 15.0f + 11.0f * float(static_cast<const SidDevice*>(d)->Chips() - 1);
   if (!strcmp(t, "DRM")) return static_cast<const DreamBase*>(d)->Cost();
-  if (!strcmp(t, "SPR")) return 6.0f;   // FIBRE
-  if (!strcmp(t, "FLK")) return 22.0f;  // FLOCK (up to 20 grains, from flash; 16-22 % peak measured with 9-11 grains)
+  if (!strcmp(t, "SPR"))  // FIBRE; CLOUD (was FLOCK): up to 20 grains, from flash, 16-22 % peak measured with 9-11 grains
+    return static_cast<const SprayDevice*>(d)->Cloud() ? 22.0f : 6.0f;
   if (!strcmp(t, "RES")) return 8.5f;   // REED (7.8 % measured 2026-11-07; 3 was too low)
   return 3.0f;
 }
@@ -3504,7 +3504,7 @@ FLASHMEM const char* WeaveTag(const Track& tr, int c) {
        : c == RESONATOR && tr.choice[c] == 2 ? PSTR("BTR")  // BEATER
        : c == RESONATOR && tr.choice[c] == 3 ? PSTR("TWL")  // TWILL
        : c == SPRAY && tr.choice[c] == 2 ? PSTR("DFT")      // DRAFT
-       : c == SPRAY && tr.choice[c] == 3 ? PSTR("FLK")      // FLOCK
+       : c == SPRAY && tr.choice[c] == 1 && static_cast<const SprayDevice*>(tr.inst[c][1])->Cloud() ? PSTR("CLD")  // FIBRE CLOUD
        : c == TEXTURE && tr.choice[c] == 2 ? PSTR("HDL")    // HEDDLE
        : SLOT_DEFS[c].tag;
 }
@@ -4389,7 +4389,7 @@ namespace loom {
   // 14: DRAFT in FIBRE's order SPEED SIZE PITCH POS (was PITCH POS SIZE SPEED)
   // 15: DRAFT page 2 DIFF TONE SPRD MIX (was TONE FDBK SPRD MIX, TONE's mode
   //     the diffusion)
-  constexpr uint8_t SAVE_VERSION = 36;  // 36: CLOCK's BPM in tenths (0.1 steps); 35: REPEAT's TIME 16 s (its clock values in 20 .. 16000); 34: REPEAT's TIME 3 s (was 6); 33: TABBY's page 2 ROLL GATE RESET START; 32: TABBY's DENS (4th setting) became CHANC; 31: SPOOL IN MON LEVEL first, CLOTH PLUSH / SPLIT; 21: TREADLE, a 6th modulator type; 22: PICK, a 7th; 23: TREADLE's LEN per part; 24: TREADLE's CHAOS -32..32; 25: TREADLE's pages; 26: STYLE / BEAT for X / Y; 27: TWILL's HITS; 28: TWILL's TONE gone, HITS in its place; 29: TWILL's VARI; 30: TWILL sound / strike pages
+  constexpr uint8_t SAVE_VERSION = 37;  // 37: FLOCK folded into FIBRE (CLOUD on its page 3; option 3 freed); 36: CLOCK's BPM in tenths (0.1 steps); 35: REPEAT's TIME 16 s (its clock values in 20 .. 16000); 34: REPEAT's TIME 3 s (was 6); 33: TABBY's page 2 ROLL GATE RESET START; 32: TABBY's DENS (4th setting) became CHANC; 31: SPOOL IN MON LEVEL first, CLOTH PLUSH / SPLIT; 21: TREADLE, a 6th modulator type; 22: PICK, a 7th; 23: TREADLE's LEN per part; 24: TREADLE's CHAOS -32..32; 25: TREADLE's pages; 26: STYLE / BEAT for X / Y; 27: TWILL's HITS; 28: TWILL's TONE gone, HITS in its place; 29: TWILL's VARI; 30: TWILL sound / strike pages
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -4452,6 +4452,10 @@ namespace loom {
     const bool trd10 = d && !memcmp(tag, "TRD", 4) && n == 10 && load_version < 25;
     // until 2026-11-07 B's DREAM had 16 settings (its sound's FX page, gone)
     const bool drm16 = d && !memcmp(tag, "DRM", 4) && !memcmp(d->def.tag, "DRM", 4) && n == 16;
+    // until v37 FLOCK was its own device (FLK): its record into FIBRE, CLOUD on
+    // (its REVRS HARM TONE one on, its DRIFT TONE's mode)
+    const bool flk = d && !memcmp(tag, "FLK", 4) && !memcmp(d->def.tag, "SPR", 4) && n == 12;
+    if (flk) memcpy(tag, "SPR", 4);
     const bool use = d && !memcmp(tag, d->def.tag, 4) && (n <= d->num_params() || tex_heddle || trd10 || drm16);
     // where its record is, for SaveDevice: only a record it can be written
     // over in place (its own tag, as many settings as it has now)
@@ -4551,8 +4555,10 @@ namespace loom {
       if (load_version >= 3 && (f.read(&amt2, 1) != 1 || f.read(&bus2, 1) != 1)) return false;
       if (!use) continue;
       if ((tex_heddle || drm16) && p >= d->num_params()) continue;
+      if (flk && p == 11) { d->mode[SprayDevice::TONE] = uint8_t(constrain((v + 2) / 5, 0, 20)); continue; }
       // SPRAY gained SPRD before MIX: an older file's MIX (its 7th) goes to 8th
       const int q = p;
+      if (flk && p >= 8) p = q + 1;  // REVRS HARM TONE
       if (remap_spr && p == 6) p = 7;
       if (remap_mix) p = q + 1;
       // before v5 OUTPUT's page 2 was BANDZ LOW MID HIGH: now LOW MID HIGH OTT
@@ -4912,6 +4918,10 @@ FLASHMEM void AppLoom::LoadFile() {
     ok = f.read(choice, SLOT_COUNT) == SLOT_COUNT && f.read(last, SLOT_COUNT) == SLOT_COUNT;
     if (!ok) break;
     tr.choice[SOURCE] = choice[SOURCE] < SLOT_DEFS[SOURCE].noptions ? choice[SOURCE] : 0;
+    // before v37 FIBRE's option 3 was FLOCK: now FIBRE with CLOUD on
+    const bool flock = version < 37 && choice[SPRAY] == 3;
+    if (version < 37 && choice[SPRAY] == 3) choice[SPRAY] = 1;
+    if (version < 37 && last[SPRAY] == 3) last[SPRAY] = 1;
     for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
       tr.choice[s] = choice[s] < SLOT_DEFS[s].noptions ? choice[s] : 0;
       // (none remembered: the slot's first device, so R push / B on an empty slot always bring one)
@@ -4920,7 +4930,12 @@ FLASHMEM void AppLoom::LoadFile() {
     ok = ReadDevice(f, tr.input) && ReadDevice(f, tr.mix);
     const int opts = version >= 12 ? MAX_OPTIONS : version >= 4 ? 3 : 2;  // older files: three / two per slot
     for (int s = SOURCE + 1; s < SLOT_COUNT && ok; s++)
-      for (int o = 0; o < opts && ok; o++) ok = ReadDevice(f, tr.inst[s][o]);
+      for (int o = 0; o < opts && ok; o++) {
+        Device* into = tr.inst[s][o];
+        if (version < 37 && s == SPRAY && o == 3) into = flock ? tr.inst[SPRAY][1] : nullptr;  // (FLOCK's record)
+        ok = ReadDevice(f, into);
+      }
+    if (flock && tr.inst[SPRAY][1]) tr.inst[SPRAY][1]->val[SprayDevice::CLOUD] = tr.inst[SPRAY][1]->cur[SprayDevice::CLOUD] = 1;
     stage = 10 * t + 1;
     if (!ok || f.read(types, NUM_MODS) != NUM_MODS) { ok = false; break; }
     stage = 10 * t + 2;
