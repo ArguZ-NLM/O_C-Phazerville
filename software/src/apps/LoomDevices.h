@@ -6948,8 +6948,8 @@ public:
   void Status(char side) const {  // (USB V)
     size_t ws = 0, wl = 0;
     if (src) src->Window(ws, wl);
-    Serial.printf("  %c SHEAR %s grid %d slices %d step %.3f beats rate %.3f, slice %d, steps %lu keys %lu, loop %u+%u\n", side,
-                  src ? "cuts" : "no source", int(fx.grid), int(fx.nslices), double(fx.step_beats), double(src_rate),
+    Serial.printf("  %c SHEAR %s grid %d slices %d step %d/1000 beats rate %d/1000, slice %d, steps %lu keys %lu, loop %u+%u\n", side,
+                  src ? "cuts" : "no source", int(fx.grid), int(fx.nslices), int(fx.step_beats * 1000.0f), int(src_rate * 1000.0f),
                   int(fx.playing_slice), (unsigned long)fx.n_steps, (unsigned long)fx.n_pads, unsigned(ws), unsigned(wl));
   }
 private:
