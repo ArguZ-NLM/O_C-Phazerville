@@ -2794,7 +2794,8 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
         focus_mod = false;
         // a slot set to no device: its last one comes back, bypassed (not
         // heard yet), and opens, to be set up first; DOWN then brings it in
-        if (col > SOURCE && col < MIX_COL && !Focused() && tracks[track].last_choice[col]) {
+        if (col > SOURCE && col < MIX_COL && !Focused()) {
+          if (!tracks[track].last_choice[col]) tracks[track].last_choice[col] = 1;  // (none remembered: the first device)
           for (int t = 0; t < NUM_TRACKS; t++)
             if (t == track || linked) tracks[t].bypass |= uint8_t(1 << col);
           SetChoiceLinked(col, tracks[track].last_choice[col]);
@@ -2874,7 +2875,7 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
         // a slot set to no device gets its last one back
         Track& tr = tracks[track];
         if (col == MIX_COL || (col > SOURCE && tr.choice[col])) ToggleBypass(col);
-        else if (col > SOURCE) SetChoiceLinked(col, tr.last_choice[col]);
+        else if (col > SOURCE) SetChoiceLinked(col, tr.last_choice[col] ? tr.last_choice[col] : 1);
       } else if (view == CHAIN && !(col == SOURCE && tracks[track].choice[SOURCE] == 2)) {
         // A in the chain view presses no device action (FRZ, HIT, REC...):
         // the chain view only arranges and bypasses, so a set never stops
@@ -4879,7 +4880,8 @@ FLASHMEM void AppLoom::LoadFile() {
     tr.choice[SOURCE] = choice[SOURCE] < SLOT_DEFS[SOURCE].noptions ? choice[SOURCE] : 0;
     for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
       tr.choice[s] = choice[s] < SLOT_DEFS[s].noptions ? choice[s] : 0;
-      tr.last_choice[s] = last[s] < SLOT_DEFS[s].noptions ? last[s] : 0;
+      // (none remembered: the slot's first device, so R push / B on an empty slot always bring one)
+      tr.last_choice[s] = last[s] >= 1 && last[s] < SLOT_DEFS[s].noptions ? last[s] : 1;
     }
     ok = ReadDevice(f, tr.input) && ReadDevice(f, tr.mix);
     const int opts = version >= 12 ? MAX_OPTIONS : version >= 4 ? 3 : 2;  // older files: three / two per slot
