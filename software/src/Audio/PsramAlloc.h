@@ -89,6 +89,13 @@ inline void* FastAlloc(size_t n) {
   void* p = calloc(n, 1);
   return p ? p : PsramAlloc(n);
 }
+// a buffer only used now and then (SD reads and writes in the main loop):
+// PSRAM, so RAM2 stays free for what the audio touches every block; RAM2
+// only on a module without PSRAM. Taken once, kept (not zeroed)
+inline void* IoBuffer(size_t n) {
+  void* p = external_psram_size ? PsramAlloc(n) : nullptr;
+  return p ? p : malloc(n);
+}
 inline void FastFree(void* p);
 
 inline void PsramFree(void* p) {

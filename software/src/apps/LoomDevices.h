@@ -2715,8 +2715,9 @@ FLASHMEM static void StampName(const char* dir, const char* prefix, char* name, 
   }
 }
 
-// WavWriter's interleaving buffer (RAM2: RAM1 is short, the stack needs it)
-DMAMEM static int16_t wav_tmp[IO_CHUNK * 2];
+// WavWriter's interleaving buffer (PSRAM, taken at its first use: RAM2 is
+// kept for what the audio touches every block)
+static int16_t* WavTmp() { static int16_t* const b = static_cast<int16_t*>(IoBuffer(IO_CHUNK * 2 * sizeof(int16_t))); return b; }
 struct WavWriter {
   File f;
   const int16_t* src[2] = {};
@@ -2750,7 +2751,8 @@ struct WavWriter {
   // returns true when finished
   FLASHMEM bool Step() {
     if (!busy) return true;
-    int16_t* const tmp = wav_tmp;
+    int16_t* const tmp = WavTmp();
+    if (!tmp) return true;  // (no memory at all: nothing written)
     const size_t k = std::min(IO_CHUNK, n - done);
     for (size_t i = 0; i < k; i++) {
       tmp[2 * i] = src[0][done + i];
@@ -2820,7 +2822,8 @@ FLASHMEM void TapeRecorder::Header() {
 // the ring to the card in 16 KB writes (all of it: also the last bit)
 FLASHMEM size_t TapeRecorder::Drain(size_t most) {
   constexpr uint32_t CHUNK = 4096;  // frames
-  DMAMEM static uint32_t buf[CHUNK];  // (RAM2: RAM1 is short)
+  static uint32_t* const buf = static_cast<uint32_t*>(IoBuffer(CHUNK * sizeof(uint32_t)));  // (PSRAM: RAM2 kept for the audio)
+  if (!buf) return 0;
   const uint32_t* src = reinterpret_cast<const uint32_t*>(ring);
   size_t done = 0;
   while (done < most) {
@@ -3469,9 +3472,11 @@ FLASHMEM void LoomPreview::LoopSection(const char* wav_path, size_t& a, size_t& 
 }
 
 FLASHMEM size_t LoomPreview::ReadFrames(int16_t* l, int16_t* r, size_t n) {
-  DMAMEM static uint8_t raw[IO_CHUNK * 8];  // (RAM2: RAM1 is short)
+  constexpr size_t RAW = IO_CHUNK * 8;
+  static uint8_t* const raw = static_cast<uint8_t*>(IoBuffer(RAW));  // (PSRAM: RAM2 kept for the audio)
+  if (!raw) return 0;
   const size_t frame = size_t(bytes) * chans;
-  const size_t k = std::min(n, sizeof(raw) / frame);
+  const size_t k = std::min(n, RAW / frame);
   // (a failed read gives -1: as a size that ran the loop off the end of
   // memory and crashed the module)
   const int got = f.read(raw, k * frame);
@@ -4307,9 +4312,11 @@ FLASHMEM int16_t PlayerDevice::Sample(const uint8_t* p) const { return WavSample
 // up to n frames from the file's current position; the first two channels
 // (mono: both)
 FLASHMEM size_t PlayerDevice::ReadFrames(int16_t* l, int16_t* r, size_t n) {
-  DMAMEM static uint8_t raw[IO_CHUNK * 8];  // (RAM2: RAM1 is short, the stack needs it)
+  constexpr size_t RAW = IO_CHUNK * 8;
+  static uint8_t* const raw = static_cast<uint8_t*>(IoBuffer(RAW));  // (PSRAM: RAM2 kept for the audio)
+  if (!raw) return 0;
   const size_t frame = size_t(bytes) * chans;
-  const size_t k = std::min(n, sizeof(raw) / frame);
+  const size_t k = std::min(n, RAW / frame);
   const int got = lf.read(raw, k * frame);  // -1 on an error: nothing
   if (got <= 0) return 0;
   const size_t rd = size_t(got) / frame;
@@ -8238,10 +8245,10 @@ FLASHMEM void WarpDevice::BeginRead(const char* path, uint32_t from, uint32_t co
   lf.close();
 }
 
-DMAMEM static uint8_t warp_raw[IO_CHUNK * 8];  // (RAM2: RAM1 is tight)
 FLASHMEM void WarpDevice::LoadStep() {
-  uint8_t* const raw = warp_raw;
-  constexpr size_t RAW = sizeof(warp_raw);
+  constexpr size_t RAW = IO_CHUNK * 8;
+  static uint8_t* const raw = static_cast<uint8_t*>(IoBuffer(RAW));  // (PSRAM: RAM2 kept for the audio)
+  if (!raw) return;
   const size_t frame = size_t(bytes) * chans;
   const uint32_t t0 = millis();
   while (got < frames && millis() - t0 < 3) {
