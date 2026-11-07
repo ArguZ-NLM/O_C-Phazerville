@@ -663,6 +663,15 @@ FLASHMEM void AppLoom::Repatch(int t) {
   DropNote(DROP_PATCH, uint8_t(t), 1);  // (the cords change with the audio held)
   Track& tr = tracks[t];
   auto& link = patch->link[t];
+  // each device rests or wakes first, with the audio running: REPEAT waking
+  // takes its memory back and clears it, which held the audio ~25 ms when it
+  // was done inside the AudioNoInterrupts below (9 blocks lost, a click,
+  // every time a REPEAT came back from bypass)
+  for (int k = 0; k < SLOT_COUNT - 1; k++) {
+    const int s = tr.order[k];
+    Device* d = tr.current(s);
+    if (d && d->in()) d->Rest(tr.parked >> s & 1);
+  }
   AudioNoInterrupts();
   for (auto& slot : link) for (auto& c : slot) c.Drop();
   AudioStream* prev = tr.input;
@@ -692,7 +701,7 @@ FLASHMEM void AppLoom::Repatch(int t) {
     AudioStream* const before = prev;
     prev = tr.fade[s];
     if (!d || !d->in()) continue;  // empty slot: only the dry signal
-    d->Rest(tr.parked >> s & 1);
+    // (d->Rest: done above, before the audio was held)
     // bypassed slots stay patched while their fade (or tail) runs; parked
     // ones only pass the dry signal through the fade (and a device with a
     // recording keeps its input)
