@@ -1966,6 +1966,7 @@ FLASHMEM void AppLoom::MainLoop() {
       }
       if (tr.reel && tr.choice[SOURCE] == 1) tr.reel->Idle();
       if (tr.dream && tr.choice[SOURCE] == 5) tr.dream->Idle();
+      if (tr.sid && tr.choice[SOURCE] == 4) tr.sid->Idle();  // (its 6510 runs ahead here)
       // DREAM's SPACE drives the track's REPEAT (its reverb's LEVEL fully,
       // the delay's by half) when REPEAT is in; else the engine's own space
       {
@@ -2471,7 +2472,7 @@ FLASHMEM void AppLoom::MainLoop() {
     Serial.printf("  SID prof: 6510 %lu  chips %lu  all %lu (tenths %%) over %lu blocks\n",
                   (unsigned long)(sid_prof[0] / n / blk), (unsigned long)(sid_prof[1] / n / blk),
                   (unsigned long)(sid_prof[2] / n / blk), (unsigned long)n);
-    Serial.printf("  SID peak: 6510 %lu  chips %lu  all %lu\n", (unsigned long)(sid_pmax[0] / blk),
+    Serial.printf("  SID peak: dry %lu (starved x1000)  chips %lu  all %lu\n", (unsigned long)sid_pmax[0],
                   (unsigned long)(sid_pmax[1] / blk), (unsigned long)(sid_pmax[2] / blk));
     for (auto& x : sid_prof) x = 0;
     for (auto& x : sid_pmax) x = 0;

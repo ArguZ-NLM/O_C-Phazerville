@@ -130,6 +130,7 @@ public:
     processorUsageMaxReset();
   }
   void update() override;
+  void Idle() override;
   // R held: back to the defaults, the file and its song kept
   void Reset() override {
     const int16_t f = val[FILE_], s = val[SONG];
@@ -193,6 +194,18 @@ private:
   void SetMulti(bool m);
   uint32_t chunk_len = 0, pos = 0;
   int log_i = 0, nlog = 0;
+  // the 6510 runs ahead in the main loop (Idle), a chunk of 2048 cycles at a
+  // time, into a ring the audio update plays from: its work (~7 % of the
+  // CPU, up to 21 % in the block a frame's play routine landed in) is out
+  // of the audio interrupt. A ring that runs dry (the main loop held up)
+  // gets its chunk made in the audio update, as before.
+  struct Chunk { uint16_t len, n; c64_write_t w[C64_LOG_MAX]; };
+  static constexpr int RING = 4;  // (three ahead: ~6 ms)
+  Chunk* ring = nullptr;
+  volatile uint8_t head = 0, tail = 0;
+  volatile bool busy = false;   // the main loop is inside the C64
+  bool have = false;            // the audio side is playing ring[tail]
+  bool Produce();
   volatile uint32_t played = 0;   // samples since the song started
   volatile int16_t peak = 0;
   volatile uint32_t gate_seq[C64_NSID][3] = {};  // each chip's voices' gates turned on (audio side)
@@ -266,6 +279,8 @@ FLASHMEM bool SidDevice::Activate() {
   if (Device::active) return ok();
   if (!mem) mem = static_cast<uint8_t*>(malloc(65536));
   if (!mem) mem = static_cast<uint8_t*>(PsramAlloc(65536));
+  if (!ring) ring = static_cast<Chunk*>(PsramAlloc(RING * sizeof(Chunk)));
+  if (!ring && mem) { if (IsPsram(mem)) PsramFree(mem); else free(mem); mem = nullptr; }
   Device::active = true;
   Scan();
   loaded = -1;
@@ -278,6 +293,7 @@ FLASHMEM void SidDevice::Deactivate() {
   ready = false;
   if (mem) { if (IsPsram(mem)) PsramFree(mem); else free(mem); mem = nullptr; }
   if (file) { PsramFree(file); file = nullptr; }
+  if (ring) { if (IsPsram(ring)) PsramFree(ring); else free(ring); ring = nullptr; }
   file_len = 0;
   loaded = -1;
   Device::active = false;
@@ -343,6 +359,8 @@ FLASHMEM void SidDevice::Load() {
   VoiceGains();  // (the chips' places: as many as the tune has)
   chunk_len = pos = 0;
   log_i = nlog = 0;
+  head = tail = 0;
+  have = false;
   played = 0;
   loaded_song = song;
   loaded_chip = cur[CHIP];
@@ -569,25 +587,68 @@ inline volatile uint32_t sid_prof[4], sid_pmax[3], sid_pblk[2];
 // the C64 runs the tune in chunks of 2048 cycles; every SID write it makes
 // lands on the chip at its own cycle, and the chips make the samples
 // between them (bufs: each chip's own mix; the stems go to sid_stems)
+// one chunk of the tune into the ring (false: the ring is full, or the 6510
+// jammed: a chunk of no length, which the audio side stops at)
+FLASHMEM bool SidDevice::Produce() {
+  const uint8_t h = head, nh = uint8_t((h + 1) % RING);
+  if (nh == tail) return false;
+  Chunk& c = ring[h];
+  const uint32_t q0 = ARM_DWT_CYCCNT;
+  const uint32_t len = c64_run(&c64, 2048);
+  sid_prof[0] += ARM_DWT_CYCCNT - q0;
+  c.len = uint16_t(len);
+  c.n = uint16_t(c64.nlog);
+  memcpy(c.w, c64.log, c.n * sizeof(c64_write_t));
+  asm volatile("" ::: "memory");  // (the chunk is written before it is handed over)
+  head = nh;
+  return len != 0;
+}
+
+// the main loop: the ring kept full
+FLASHMEM void SidDevice::Idle() {
+  if (!ready || !playing || !ring) return;
+  busy = true;
+  asm volatile("" ::: "memory");
+  while (ready && Produce()) {}
+  asm volatile("" ::: "memory");
+  busy = false;
+}
+
+// the chunks from the ring; every SID write the 6510 made lands on the chip
+// at its own cycle, and the chips make the samples between them (bufs: each
+// chip's own mix; the stems go to sid_stems)
 FASTRUN void SidDevice::Render(int16_t* const bufs[C64_NSID], int n) {
   int done = 0;
   while (done < n) {
     if (pos >= chunk_len) {
-      const uint32_t q0 = ARM_DWT_CYCCNT;
-      chunk_len = c64_run(&c64, 2048);
-      sid_prof[0] += ARM_DWT_CYCCNT - q0; sid_pblk[0] += ARM_DWT_CYCCNT - q0;
-      if (!chunk_len) {  // the 6510 jammed: silence from here
+      if (have) { tail = uint8_t((tail + 1) % RING); have = false; }
+      if (head == tail && !busy) { Produce(); sid_pmax[0]++; }  // (dry: made here, as before)
+      if (head == tail) {  // the main loop is inside the C64 right now: the
+        // chips play on without new writes, the tune a few ms later
+        sid_pmax[0] += 1000;
+        for (int i = 0; i < nsid; i++) {
+          int d = 0x3fffffff;
+          sids[i].stem = sid_stems[i] + 3 * done;
+          sid_clock_render(&sids[i], &d, bufs[i] + done, n - done, 1);
+        }
+        return;
+      }
+      const Chunk& c = ring[tail];
+      have = true;
+      if (!c.len) {  // the 6510 jammed: silence from here
         for (int i = 0; i < nsid; i++) memset(sid_stems[i] + 3 * done, 0, 3 * (n - done) * sizeof(int16_t));
         ready = false;
         fault = "the tune crashed";
         return;
       }
-      nlog = c64.nlog;
+      chunk_len = c.len;
+      nlog = c.n;
       log_i = 0;
       pos = 0;
     }
-    while (log_i < nlog && c64.log[log_i].cycle <= pos) {
-      const c64_write_t& x = c64.log[log_i++];
+    const c64_write_t* const log = ring[tail].w;
+    while (log_i < nlog && log[log_i].cycle <= pos) {
+      const c64_write_t& x = log[log_i++];
       if (x.chip >= nsid) continue;
       const int v = x.reg / 7;  // a voice's control register: its gate, for the CV outputs
       const bool ctrl = x.reg < 21 && x.reg % 7 == 4;
@@ -596,7 +657,7 @@ FASTRUN void SidDevice::Render(int16_t* const bufs[C64_NSID], int n) {
       sid_write(&sids[x.chip], x.reg, x.val);
       if (ctrl && !was && vo.envelope.gate) gate_seq[x.chip][v] = gate_seq[x.chip][v] + 1;
     }
-    const uint32_t target = log_i < nlog ? c64.log[log_i].cycle : chunk_len;
+    const uint32_t target = log_i < nlog ? log[log_i].cycle : chunk_len;
     int got = 0;
     const uint32_t q1 = ARM_DWT_CYCCNT;
     for (int i = 0; i < nsid; i++) {
@@ -644,7 +705,6 @@ FASTRUN void SidDevice::update() {
       }
       peak = int16_t(std::min<int32_t>(pk, 32767));
       sid_prof[2] += ARM_DWT_CYCCNT - q2;
-      if (sid_pblk[0] > sid_pmax[0]) sid_pmax[0] = sid_pblk[0];
       if (sid_pblk[1] > sid_pmax[1]) sid_pmax[1] = sid_pblk[1];
       if (ARM_DWT_CYCCNT - q2 > sid_pmax[2]) sid_pmax[2] = ARM_DWT_CYCCNT - q2;
       sid_pblk[0] = sid_pblk[1] = 0;
