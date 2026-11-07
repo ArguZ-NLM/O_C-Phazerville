@@ -2468,6 +2468,13 @@ FLASHMEM void AppLoom::MainLoop() {
     }
     Serial.println();
   }
+  if (dirt_prof[3]) {  // PROFILE (temporary): TEXTURE's FOLD
+    const uint32_t blk = 600000000u / 44100u * 128u / 1000u;
+    Serial.printf("  TEX prof: fold %lu cycles a run (%lu runs), update %lu tenths %% a block (%lu)\n",
+                  (unsigned long)(dirt_prof[1] ? dirt_prof[0] / dirt_prof[1] : 0), (unsigned long)dirt_prof[1],
+                  (unsigned long)(dirt_prof[2] / dirt_prof[3] / blk), (unsigned long)dirt_prof[3]);
+    for (auto& x : dirt_prof) x = 0;
+  }
   // BEATER's engine: where it sits
   for (int t = 0; t < NUM_TRACKS; t++)
     if (Device* d = tracks[t].inst[RESONATOR][2]) if (d->active && d->ok())

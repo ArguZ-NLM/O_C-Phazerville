@@ -319,6 +319,7 @@ FASTRUN static void RunChain(int n, const float* in, float* acc, float a, float 
 }
 
 // Runs from RAM1 (ITCM) like the other Loom engines.
+inline volatile uint32_t dirt_prof[4];  // PROFILE (temporary): FOLD's cycles, its runs, the whole update's, blocks
 FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2: the build is -Os)
 
   // FOLD's state into fast memory for the block (the object sits in RAM2:
@@ -331,6 +332,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
   float Llp[2] = {fold_lp[0], fold_lp[1]};
   float Lfin[2] = {fold_in[0], fold_in[1]}, Lfout[2] = {fold_out[0], fold_out[1]};
   float Lfref = fold_ref;
+  const uint32_t qu = ARM_DWT_CYCCNT;  // PROFILE
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   audio_block_t* out[2] = {allocate(), allocate()};
   if (!out[0] || !out[1]) {
@@ -513,6 +515,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
         // The folder runs at 2 x the rate (half-band up, the curve, half-band
         // down), so its harmonics past the top don't mirror back as low,
         // unrelated tones. Under -54 dB the drive drops (hiss)
+        const uint32_t qf = ARM_DWT_CYCCNT;  // PROFILE
         const float fA = fA0 + dfA * n, fm = fm0 + dfm * n;
         Lfref = std::max(fabsf(v), Lfref * 0.999962f);
         const float lvl = std::max(Lfref, 0.002f);
@@ -552,6 +555,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
             fn = (d0 + d1) + (d2 + d3);
           }
         }
+        dirt_prof[0] += ARM_DWT_CYCCNT - qf; dirt_prof[1]++;  // PROFILE
         Llp[c] += FOLD_LP * (fn - Llp[c]);  // the tone filter (one pole, 3 kHz; the 259's 1.33 kHz was too dull here)
         Lfout[c] += 0.00151f * (fabsf(Llp[c]) - Lfout[c]);
         // (the folded sound's level counted from 0.3 at least: at a note's
@@ -708,6 +712,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
   transmit(out[1], 1);
   for (auto b : out) release(b);
   for (auto b : in) if (b) release(b);
+  dirt_prof[2] += ARM_DWT_CYCCNT - qu; dirt_prof[3]++;  // PROFILE
 
   viz.in = std::max(viz.in, peak_in);
   viz.out = std::max(viz.out, peak_out);
