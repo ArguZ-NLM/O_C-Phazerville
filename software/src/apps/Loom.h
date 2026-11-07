@@ -2457,6 +2457,7 @@ FLASHMEM void AppLoom::MainLoop() {
       if (!d || memcmp(d->def.tag, "ECO", 3)) continue;
       char h[8]; static_cast<EchoDevice*>(d)->Holds(h);
       Serial.printf("  %c REPEAT holds %s%s\n", t ? 'R' : 'L', h, d->active ? " (active)" : "");
+      if (d->active) { char pr[420]; static_cast<EchoDevice*>(d)->Prof(pr, sizeof(pr)); Serial.printf("  %c REPEAT time %% (avg/peak): %s\n", t ? 'R' : 'L', pr); }
     }
   {
     char* top = __brkval;

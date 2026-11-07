@@ -212,6 +212,28 @@ public:
 
   void update() override;
 
+  // profiling (USB status): each part's time a block, average and peak, in
+  // % of a block's time; read and cleared by the status
+  static constexpr int PROF_N = 9;
+  uint32_t prof_sum[PROF_N] = {}, prof_max[PROF_N] = {}, prof_blocks = 0;
+  uint8_t prof_flags = 0;  // what ran: 1 delay, 2 reverb, 4 GLINT, 8 LONG, 16 lite
+  void ProfReport(char* b, size_t n) {
+    static const char* const names[PROF_N] = {"setup", "heads", "rvread", "delay", "glint", "pre+diff", "fdn+out", "write", "TOTAL"};
+    uint32_t sum[PROF_N], mx[PROF_N], nb; uint8_t fl;
+    __disable_irq();
+    memcpy(sum, prof_sum, sizeof(sum)); memcpy(mx, prof_max, sizeof(mx)); nb = prof_blocks; fl = prof_flags;
+    memset(prof_sum, 0, sizeof(prof_sum)); memset(prof_max, 0, sizeof(prof_max)); prof_blocks = 0; prof_flags = 0;
+    __enable_irq();
+    // a block: AUDIO_BLOCK_SAMPLES / rate seconds at F_CPU_ACTUAL cycles a second
+    const float blk = float(F_CPU_ACTUAL) * AUDIO_BLOCK_SAMPLES / AUDIO_SAMPLE_RATE_EXACT;
+    int k = snprintf(b, n, "blocks %lu ran:%s%s%s%s%s mem:%s pre:%s sh:%s |", (unsigned long)nb,
+                     fl & 1 ? " delay" : "", fl & 2 ? " reverb" : "", fl & 4 ? " GLINT" : "", fl & 8 ? " LONG" : "", fl & 16 ? " lite" : "",
+                     IsRam2(mem) ? "RAM2" : "PSRAM", IsRam2(pre) ? "RAM2" : "PSRAM", IsRam2(sh) ? "RAM2" : "PSRAM");
+    for (int i = 0; i < PROF_N && k < int(n); i++)
+      k += snprintf(b + k, n - k, " %s %.1f/%.1f", names[i], nb ? sum[i] / float(nb) / blk * 100.0f : 0.0f, mx[i] / blk * 100.0f);
+  }
+  static bool IsRam2(const void* p) { return p && uint32_t(p) >= 0x20200000u && uint32_t(p) < 0x20280000u; }
+
 private:
   // each head's level: what the UI asks for (tap_gain) and where it is now,
   // gliding there over ~45 ms so a head coming in or going out never clicks.
@@ -466,6 +488,9 @@ FLASHMEM void AudioEffectEcho::ReadTap(int ch, int t, int16_t* out) {
 // Runs from RAM1 (ITCM) like the other Loom engines.
 // (O2: the build is -Os, which left the per-sample helpers as calls)
 FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
+  uint32_t pt_last = ARM_DWT_CYCCNT, pt[PROF_N] = {};
+  const uint32_t pt_start = pt_last;
+  auto mark = [&](int i) __attribute__((always_inline)) { const uint32_t c = ARM_DWT_CYCCNT; pt[i] += c - pt_last; pt_last = c; };
   audio_block_t* in[2] = {receiveReadOnly(0), receiveReadOnly(1)};
   audio_block_t* out[2] = {allocate(), allocate()};
   if (!out[0] || !out[1] || !ready()) {
@@ -558,6 +583,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
     dls[i] = wk >= 0 ? wob_step[wk] : 0.0f;
   }
 
+  mark(0);
   // --- read the taps a block at a time ---
   float tsum[2][AUDIO_BLOCK_SAMPLES];
   int16_t last[2][AUDIO_BLOCK_SAMPLES];
@@ -591,6 +617,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
     }
   }
 
+  mark(1);
   static const int16_t silence[AUDIO_BLOCK_SAMPLES] = {};
   const int16_t* dry_in[2] = {
     in[0] ? in[0]->data : silence, in[1] ? in[1]->data : silence
@@ -667,6 +694,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
     }
   }
 
+  mark(2);
   // --- the delay: the write signal (input + processed feedback) and
   // DELAY's crossfade dry -> echoes (x1, what the reverb is fed)
   float x1b[2][AUDIO_BLOCK_SAMPLES];
@@ -740,6 +768,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
     for (int j = 0; j < 4; j++) ix[AP_FB_BASE + j] = p[j];
   }
 
+  mark(3);
   if (!rv_on) {
     for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
       const int16_t o0 = ToQ15(x1b[0][n]), o1 = ToQ15(x1b[1][n]);
@@ -845,6 +874,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
       }
       sh_env = pk > sh_env ? pk : sh_env * 0.995f;
     }
+    mark(4);
     {
       float* pb0 = pre;
       float* pb1 = pre + PRE_H;
@@ -902,6 +932,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
       for (int j = 0; j < 8; j++) ix[AP_IN_BASE + j] = p[j];
     }
 
+    mark(5);
     // Householder: every line into every other, lossless; what goes back
     // into the lines (kept in yb) and the tail out
     float tb[2][HALF];
@@ -969,11 +1000,17 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
     if (pre_xf <= 0) { pre_xf = 0; pre_cur = pre_next; }
   }
 
+  mark(6);
   // write this block into the delay lines (from flash: RAM1 is full)
   {
     const int16_t* const w2[2] = {wr[0], wr[1]};
     WriteBlock(w2);
   }
+  mark(7);
+  pt[8] = ARM_DWT_CYCCNT - pt_start;
+  for (int i = 0; i < PROF_N; i++) { prof_sum[i] += pt[i]; if (pt[i] > prof_max[i]) prof_max[i] = pt[i]; }
+  prof_blocks++;
+  prof_flags |= (dly_on ? 1 : 0) | (rv_on ? 2 : 0) | (sh && sh_amt > 0.0f ? 4 : 0) | (half ? 8 : 0) | (lite ? 16 : 0);
 
   transmit(out[0], 0);
   transmit(out[1], 1);

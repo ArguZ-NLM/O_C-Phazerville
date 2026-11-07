@@ -5352,6 +5352,7 @@ public:
   void Deactivate() override;
   bool ok() const override { return mem_ok; }
   void Holds(char* b) const { echo.Holds(b); }
+  void Prof(char* b, size_t n) { echo.ProfReport(b, n); }
   void Apply(int p) override;
   void Shimmer();  // GLINT to the engine
   const char* AltName(int p) const override { return p == ROOM ? "GLINT" : p == WALL ? "PRSET" : nullptr; }
