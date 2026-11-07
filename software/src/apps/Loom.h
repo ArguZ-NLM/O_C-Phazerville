@@ -3213,6 +3213,12 @@ FLASHMEM void AppLoom::GoTo(const char* text) {
     const int s = atoi(part[2]), o = atoi(part[3]);
     if (s < 0 || s >= SLOT_COUNT) { Serial.println("GOTO: no such slot"); return; }
     SetChoice(t, s, o);
+    if (o && s > SOURCE && (tracks[t].bypass >> s & 1)) {  // (a device asked for is heard: out of bypass)
+      tracks[t].bypass &= uint8_t(~(1 << s));
+      tracks[t].parked &= uint8_t(~(1 << s));
+      Repatch(t);
+      ApplyBypass(t);
+    }
     Serial.printf("USE %c slot %d option %d\n", 'A' + t, s, int(tracks[t].choice[s]));
     return;
   }
