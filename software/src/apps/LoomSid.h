@@ -563,6 +563,8 @@ FLASHMEM void SidDevice::FormatMode(int p, char* buf, size_t n) const {
 
 // the voices, each on its own (stems: 3 a sample, per chip)
 DMAMEM static int16_t sid_stems[C64_NSID][3 * AUDIO_BLOCK_SAMPLES];
+// PROFILE (temporary): cycles in the 6510, the chips, the mix; blocks counted
+inline volatile uint32_t sid_prof[4];
 
 // the C64 runs the tune in chunks of 2048 cycles; every SID write it makes
 // lands on the chip at its own cycle, and the chips make the samples
@@ -571,7 +573,9 @@ FASTRUN void SidDevice::Render(int16_t* const bufs[C64_NSID], int n) {
   int done = 0;
   while (done < n) {
     if (pos >= chunk_len) {
+      const uint32_t q0 = ARM_DWT_CYCCNT;
       chunk_len = c64_run(&c64, 2048);
+      sid_prof[0] += ARM_DWT_CYCCNT - q0;
       if (!chunk_len) {  // the 6510 jammed: silence from here
         for (int i = 0; i < nsid; i++) memset(sid_stems[i] + 3 * done, 0, 3 * (n - done) * sizeof(int16_t));
         ready = false;
@@ -594,12 +598,14 @@ FASTRUN void SidDevice::Render(int16_t* const bufs[C64_NSID], int n) {
     }
     const uint32_t target = log_i < nlog ? c64.log[log_i].cycle : chunk_len;
     int got = 0;
+    const uint32_t q1 = ARM_DWT_CYCCNT;
     for (int i = 0; i < nsid; i++) {
       int d = int(target - pos);
       sids[i].stem = sid_stems[i] + 3 * done;
       got = sid_clock_render(&sids[i], &d, bufs[i] + done, n - done, 1);
       if (i == nsid - 1) pos = target - uint32_t(d);
     }
+    sid_prof[1] += ARM_DWT_CYCCNT - q1;
     done += got;
   }
 }
@@ -610,6 +616,7 @@ FASTRUN void SidDevice::update() {
     int16_t* l = o[0]->data;
     int16_t* r = o[1]->data;
     if (ready && playing) {
+      const uint32_t q2 = ARM_DWT_CYCCNT;
       static int16_t b3[AUDIO_BLOCK_SAMPLES];
       int16_t* const bufs[C64_NSID] = {l, r, b3};  // (the chips' own mixes: not used, the stems are)
       Render(bufs, AUDIO_BLOCK_SAMPLES);
@@ -636,6 +643,8 @@ FASTRUN void SidDevice::update() {
         pk = std::max(pk, std::max(abs(a), abs(b)));
       }
       peak = int16_t(std::min<int32_t>(pk, 32767));
+      sid_prof[2] += ARM_DWT_CYCCNT - q2;
+      sid_prof[3]++;
     } else {
       memset(l, 0, sizeof(o[0]->data));
       memset(r, 0, sizeof(o[1]->data));
