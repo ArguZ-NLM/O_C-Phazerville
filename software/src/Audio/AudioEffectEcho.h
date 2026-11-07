@@ -437,9 +437,9 @@ private:
   float ShPlace(int c, int lo, int hi, float other) const {
     const int16_t* b = sh + c * SH_LEN;
     const int ro = sh_w - int(other);
-    int best = (lo + hi) / 2;
-    float bs = -1e30f;
-    for (int dd = lo; dd <= hi; dd++) {
+    // (in two passes: every 4th place first, then each place around the
+    // best of those; a full search, 321 places, was GLINT's peak cost)
+    auto score = [&](int dd) __attribute__((always_inline)) {
       const int rn = sh_w - dd;
       float sc = 0.0f;
       for (int i = 0; i < 64; i += 2) {
@@ -447,6 +447,18 @@ private:
         int o = ro - i; if (o < 0) o += SH_LEN;
         sc += float(b[a]) * float(b[o]);
       }
+      return sc;
+    };
+    int best = (lo + hi) / 2;
+    float bs = -1e30f;
+    for (int dd = lo; dd <= hi; dd += 4) {
+      const float sc = score(dd);
+      if (sc > bs) { bs = sc; best = dd; }
+    }
+    const int c0 = best;
+    for (int dd = std::max(lo, c0 - 3); dd <= std::min(hi, c0 + 3); dd++) {
+      if (dd == c0) continue;
+      const float sc = score(dd);
       if (sc > bs) { bs = sc; best = dd; }
     }
     return float(best) + (other - floorf(other));
@@ -849,7 +861,10 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
               hs[h] = hd[h];
               t = 0.0f;
             }
-            const float sw = sinf(float(M_PI) * std::max(0.0f, t));
+            // sin(pi t) by Bhaskara's formula (within 0.2 %; sinf here was half of GLINT's cost)
+            const float tc = std::min(1.0f, std::max(0.0f, t));
+            const float u = tc * (1.0f - tc);
+            const float sw = 16.0f * u / (5.0f - 4.0f * u);
             const float wgt = sw * sw;
             float rp = float(sh_w) - hd[h];
             if (rp < 0.0f) rp += SH_LEN;
