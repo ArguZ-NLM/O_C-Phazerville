@@ -67,8 +67,8 @@ public:
   bool fast = false;
   // the CPU guard (measured 2026-11-07, alone on the track): the fast engine
   // 37-46 % peak; the second from flash with its state in PSRAM, 90-100 %
-  // peak; silent (LEVEL 0: the CV only, or LINK) 22-31 % next to the fast one
-  float Cost() const { return cur[LEVEL] == 0 ? (fast ? 4.0f : 28.0f) : (fast ? 46.0f : 92.0f); }
+  // peak (15 % silent, LEVEL 0: the CV only)
+  float Cost() const { return cur[LEVEL] == 0 ? (fast ? 4.0f : 16.0f) : (fast ? 46.0f : 92.0f); }
 };
 
 // LINK: track A's DREAM as it plays (A writes it, B's follows it)
