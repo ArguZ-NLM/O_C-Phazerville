@@ -55,8 +55,10 @@ public:
     // the pre-delay in RAM2 (it was in PSRAM: a read and a write per sample
     // there made it the reverb's most costly part)
     if (!pre) {
-      pre = static_cast<float*>(Ram2OrPsram(2 * PRE_H * sizeof(float), false));
-      if (pre) std::fill(pre, pre + 2 * PRE_H, 0.0f);
+      // (16 bit at the reverb lines' scale: half the size, so it fits RAM2
+      // beside the other REPEAT's)
+      pre = static_cast<int16_t*>(Ram2OrPsram(2 * PRE_H * sizeof(int16_t), false));
+      if (pre) std::fill(pre, pre + 2 * PRE_H, int16_t(0));
     }
     if (!rv) rv = TakeLines();
     if (!sh) sh = static_cast<int16_t*>(Ram2OrPsram(2 * SH_LEN * sizeof(int16_t), false));
@@ -91,7 +93,7 @@ public:
   // the main loop: update() runs in the audio interrupt, never halfway
   // while this runs, and finds the pointers either all there or gone)
   void Shrink() {
-    float* m = mem; float* p = pre; int16_t* s = sh;
+    float* m = mem; int16_t* p = pre; int16_t* s = sh;
     __disable_irq();
     mem = nullptr; pre = nullptr; sh = nullptr;
     __enable_irq();
@@ -110,7 +112,7 @@ public:
     if (mem) std::fill(mem, mem + MEM_TOTAL, 0.0f);
     if (rv) memset(rv, 0, RV_TOTAL * sizeof(int16_t));
     for (auto& w : rv_wi) w = 0;
-    if (pre) std::fill(pre, pre + 2 * PRE_H, 0.0f);
+    if (pre) std::fill(pre, pre + 2 * PRE_H, int16_t(0));
     pre_w = 0;
     for (auto& z : rv_lp) z = 0.0f;
     rv_hp_z[0] = rv_hp_z[1] = 0.0f;
@@ -296,7 +298,7 @@ private:
   int ix[NUM_AP] = {};
   int16_t* rv = nullptr;
   int rv_wi[RL] = {};               // each line's write position
-  float* pre = nullptr;             // pre-delay at half the rate, 2 x PRE_H
+  int16_t* pre = nullptr;           // pre-delay at half the rate, 2 x PRE_H (x RV_Q)
   int pre_w = 0, pre_cur = 0, pre_next = 0, pre_xf = 0;
   volatile int pre_target = 0;
   volatile float rv_diff = 1.0f;
@@ -539,7 +541,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
   } else if (rv_cold) {
     rv_cold = false;
     memset(rv, 0, RV_TOTAL * sizeof(int16_t));
-    std::fill(pre, pre + 2 * PRE_H, 0.0f);
+    std::fill(pre, pre + 2 * PRE_H, int16_t(0));
     for (auto& z : rv_lp) z = 0.0f;
     rv_hp_z[0] = rv_hp_z[1] = 0.0f;
     rv_t[0] = rv_t[1] = 0.0f;
@@ -910,8 +912,9 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
     }
     mark(4);
     {
-      float* pb0 = pre;
-      float* pb1 = pre + PRE_H;
+      int16_t* pb0 = pre;
+      int16_t* pb1 = pre + PRE_H;
+      constexpr float iq = 1.0f / RV_Q;
       int pw = pre_w;
       const int bc = pre_cur >> 1, bn = pre_next >> 1;
       float h0 = rv_hp_z[0], h1 = rv_hp_z[1];
@@ -937,18 +940,18 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
         float x0 = rin_g * (x1b[0][n - 1] + x1b[0][n]);  // (0.5 x their average)
         float x1 = rin_g * (x1b[1][n - 1] + x1b[1][n]);
         // pre-delay (a ring a side)
-        pb0[pw] = x0;
-        pb1[pw] = x1;
+        pb0[pw] = int16_t(constrain(x0 * RV_Q, -32767.0f, 32767.0f));
+        pb1[pw] = int16_t(constrain(x1 * RV_Q, -32767.0f, 32767.0f));
         int r = pw - bc;
         if (r < 0) r += PRE_H;
-        x0 = pb0[r];
-        x1 = pb1[r];
+        x0 = pb0[r] * iq;
+        x1 = pb1[r] * iq;
         if (pxf) {  // a new time crossfades in
           const float wgt = std::min(1.0f, float(PRE_XF - pxf + n) * (1.0f / PRE_XF));
           int rn = pw - bn;
           if (rn < 0) rn += PRE_H;
-          x0 += wgt * (pb0[rn] - x0);
-          x1 += wgt * (pb1[rn] - x1);
+          x0 += wgt * (pb0[rn] * iq - x0);
+          x1 += wgt * (pb1[rn] * iq - x1);
         }
         if (++pw >= PRE_H) pw = 0;
         if (shim_on) { x0 += shim[0][k]; x1 += shim[1][k]; }  // (before the low cut: no DC builds up)
