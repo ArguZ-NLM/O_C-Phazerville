@@ -406,6 +406,30 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
     for (auto& v : ph_w) v /= wsum;
   }
 
+  // FOLD off: its state cleared once a block (it was cleared every sample,
+  // 80 writes a sample for nothing)
+  if (fld <= 0.0f) {
+    memset(Lx, 0, sizeof(Lx));
+    Lxi[0] = Lxi[1] = 0;
+    Llp[0] = Llp[1] = 0.0f;
+  }
+  // the per-sample state into locals for the block (the object sits in
+  // RAM2; kept there, every sample read and wrote it), back after the loop
+  float det = this->det, env_in = this->env_in, burst = this->burst, crush_env = this->crush_env;
+  bool burst_up = this->burst_up;
+  int hold_count = this->hold_count;
+  uint32_t lrng = rng;
+  float tilt_z[2] = {this->tilt_z[0], this->tilt_z[1]}, dust_z[2] = {this->dust_z[0], this->dust_z[1]};
+  float svf_lo[2] = {this->svf_lo[0], this->svf_lo[1]}, svf_bp[2] = {this->svf_bp[0], this->svf_bp[1]};
+  float hold_val[2] = {this->hold_val[0], this->hold_val[1]};
+  float pink[2][3];
+  memcpy(pink, this->pink, sizeof(pink));
+  auto LRand = [&]() __attribute__((always_inline)) {  // (Rand() on the local state)
+    lrng ^= lrng << 13;
+    lrng ^= lrng >> 17;
+    lrng ^= lrng << 5;
+    return int32_t(lrng) * (1.0f / 2147483648.0f);
+  };
   float pre[2][AUDIO_BLOCK_SAMPLES];  // PHASE: the sound before the phasers
   float e_in[2] = {}, e_out[2] = {};   // HEDDLE's energy in / out this block, per side (the level match)
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
@@ -433,7 +457,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
     bool take = true;
     if (do_redux) {
       if (--hold_count > 0) take = false;
-      else hold_count = hold + int((Rand() + 1.0f) * 0.25f * hold); // jitter
+      else hold_count = hold + int((LRand() + 1.0f) * 0.25f * hold); // jitter
     }
 
     for (int c = 0; c < 2; c++) {
@@ -443,7 +467,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
         v = (tilt_z[c] * tl + (v - tilt_z[c]) * th) * tg;
       }
       if (nlev > 1e-5f) {
-        float nz = Rand();
+        float nz = LRand();
         if (nmode == NOISE_PINK) {
           float* b = pink[c];
           b[0] = 0.99765f * b[0] + nz * 0.0990460f;
@@ -454,9 +478,9 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
           // about 30 clicks a second on each side, at random; most quiet,
           // now and then a loud one (cubed), either sign; each dies away
           // in ~0.3 ms
-          if (Rand() > DUST_THRESH) {
-            const float u = 0.5f * (Rand() + 1.0f);
-            dust_z[c] += (Rand() > 0.0f ? 1.0f : -1.0f) * u * u * u * DUST_GAIN;
+          if (LRand() > DUST_THRESH) {
+            const float u = 0.5f * (LRand() + 1.0f);
+            dust_z[c] += (LRand() > 0.0f ? 1.0f : -1.0f) * u * u * u * DUST_GAIN;
           }
           nz = dust_z[c];
           dust_z[c] *= 0.93f;
@@ -536,10 +560,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
         const float f = Llp[c] * std::min(4.0f, Lfin[c] / std::max(Lfout[c], 0.3f));
         v = held + fm * (f - held);
       } else {
-        Llp[c] = 0.0f;
-        for (auto& xx : Lx[c]) xx = 0.0f;
-        Lxi[c] = 0;
-        v = held;
+        v = held;  // (its state cleared before the loop)
       }
       v = Shape(v, drv) * dg;
       if (do_bits) {
@@ -602,6 +623,14 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
       out[c]->data[n] = ToSample16(o2[c]);
     }
   }
+  // the state back into the object
+  this->det = det; this->env_in = env_in; this->burst = burst; this->crush_env = crush_env;
+  this->burst_up = burst_up; this->hold_count = hold_count; rng = lrng;
+  for (int c = 0; c < 2; c++) {
+    this->tilt_z[c] = tilt_z[c]; this->dust_z[c] = dust_z[c];
+    this->svf_lo[c] = svf_lo[c]; this->svf_bp[c] = svf_bp[c]; this->hold_val[c] = hold_val[c];
+  }
+  memcpy(this->pink, pink, sizeof(pink));
   if (shifting && ph) {
     // PHASE: a phaser at a time over the block; its stage count fixed at
     // build time (even, 4 .. 20) so the whole chain stays in registers.
