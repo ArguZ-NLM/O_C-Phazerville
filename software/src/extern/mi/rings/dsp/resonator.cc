@@ -104,20 +104,37 @@ void Resonator::Process(const float* in, float* out, float* aux, size_t size) {
   int32_t num_modes = ComputeFilters();
   
   ParameterInterpolator position(&previous_position_, position_, size);
-  while (size--) {
+  // (Loom) the modes outside, the samples inside: each filter runs through
+  // the whole block with its state in registers (it was loaded and stored
+  // again for every sample of every mode). The same numbers: each sample's
+  // amplitude oscillator steps through the modes in the same order, and the
+  // sums are added up mode by mode as before
+  if (size > kMaxBlockSize) size = kMaxBlockSize;
+  float y0[kMaxBlockSize], y1[kMaxBlockSize], c[kMaxBlockSize];
+  float input[kMaxBlockSize], amp[kMaxBlockSize];
+  float odd[kMaxBlockSize], even[kMaxBlockSize];
+  for (size_t n = 0; n < size; ++n) {
     CosineOscillator amplitudes;
     amplitudes.Init<COSINE_OSCILLATOR_APPROXIMATE>(position.Next());
-    
-    float input = *in++ * 0.125f;
-    float odd = 0.0f;
-    float even = 0.0f;
-    amplitudes.Start();
-    for (int32_t i = 0; i < num_modes;) {
-      odd += amplitudes.Next() * f_[i++].Process<FILTER_MODE_BAND_PASS>(input);
-      even += amplitudes.Next() * f_[i++].Process<FILTER_MODE_BAND_PASS>(input);
+    // (its state copied out: Start() set y1 = initial, y0 = 0.5)
+    c[n] = amplitudes.coefficient();
+    y1[n] = amplitudes.initial();
+    y0[n] = 0.5f;
+    input[n] = in[n] * 0.125f;
+    odd[n] = even[n] = 0.0f;
+  }
+  for (int32_t i = 0; i < num_modes; ++i) {
+    for (size_t n = 0; n < size; ++n) {  // each sample's oscillator, a step (Next())
+      const float t = y0[n];
+      y0[n] = c[n] * y0[n] - y1[n];
+      y1[n] = t;
+      amp[n] = t + 0.5f;
     }
-    *out++ = odd;
-    *aux++ = even;
+    f_[i].ProcessBandPassAdd(input, amp, (i & 1) ? even : odd, size);
+  }
+  for (size_t n = 0; n < size; ++n) {
+    out[n] = odd[n];
+    aux[n] = even[n];
   }
 }
 

@@ -5275,7 +5275,7 @@ FLASHMEM void loom::DrawWave() {
 
   // a point of the sheet (across u -1..1, depth z 0..L) on the screen;
   // false when it is behind the camera
-  auto at = [&](float u, float z, float& sx, float& sy) {
+  auto at = [&](float u, float z, float& sx, float& sy) FLASHMEM {  // (from flash: it had landed in RAM1)
     const float down = 0.5f - 0.5f * cosf(2.0f * float(M_PI) * (u + 1.0f) + 0.5f * float(M_PI) + phase);
     const float k = std::max(0.0f, 1.0f - z / L);
     const float x = u - cam[0], y = -AMP * powf(k, 1.6f) * down - cam[1], zz = z - cam[2];

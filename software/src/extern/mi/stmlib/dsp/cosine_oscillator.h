@@ -81,6 +81,10 @@ class CosineOscillator {
   inline float value() const {
     return y1_ + 0.5f;
   }
+  // (Loom: the recurrence's coefficient and starting amplitude, for code
+  // that steps many of them side by side)
+  inline float coefficient() const { return iir_coefficient_; }
+  inline float initial() const { return initial_amplitude_; }
 
   inline float Next() {
     float temp = y0_;
