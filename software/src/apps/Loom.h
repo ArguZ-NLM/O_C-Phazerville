@@ -2468,34 +2468,6 @@ FLASHMEM void AppLoom::MainLoop() {
     }
     Serial.println();
   }
-  if (sid_prof[3]) {  // PROFILE (temporary): SID's share of the CPU, % (tenths)
-    const uint32_t n = sid_prof[3], blk = 600000000u / 44100u * 128u / 1000u;  // (cycles a block / 1000)
-    Serial.printf("  SID prof: 6510 %lu  chips %lu  all %lu (tenths %%) over %lu blocks\n",
-                  (unsigned long)(sid_prof[0] / n / blk), (unsigned long)(sid_prof[1] / n / blk),
-                  (unsigned long)(sid_prof[2] / n / blk), (unsigned long)n);
-    Serial.printf("  SID peak: dry %lu (starved x1000)  chips %lu  all %lu\n", (unsigned long)sid_pmax[0],
-                  (unsigned long)(sid_pmax[1] / blk), (unsigned long)(sid_pmax[2] / blk));
-    for (auto& x : sid_prof) x = 0;
-    for (auto& x : sid_pmax) x = 0;
-  }
-  {  // PROFILE (temporary): DREAM A's stages, tenths of % of the CPU
-    volatile uint32_t* q = dream_a::en_prof;
-    if (const uint32_t nb = q[14]) {
-      const uint32_t blk = 600000000u / 44100u * 128u / 1000u;
-      static const char* const nm[13] = {"drain", "ctl+tick", "pluck", "drone", "lead", "crash", "widen", "atmos", "fx", "out", "echo", "cloud", "plate"};
-      Serial.printf("  DREAM prof (%lu blocks, %lu chunks):", (unsigned long)nb, (unsigned long)q[15]);
-      for (int i = 0; i < 13; i++) Serial.printf(" %s %lu", nm[i], (unsigned long)(q[i] / nb / blk));
-      Serial.printf("  peak %lu plate %s\n", (unsigned long)(q[13] / blk), tracks[0].dream && static_cast<dream_a::DreamDevice*>(tracks[0].dream)->PlateInRam2() ? "RAM2" : "PSRAM");
-      Serial.printf("  DREAM pulse avg %lu max %lu, tick avg %lu max %lu (tenths %% of a block)\n", (unsigned long)(q[16] / nb / blk),
-                    (unsigned long)(q[17] / blk), (unsigned long)(q[18] / nb / blk), (unsigned long)(q[19] / blk));
-      Serial.printf("  DREAM heaviest block:");
-      for (int i = 0; i < 13; i++) Serial.printf(" %s %lu", nm[i], (unsigned long)(q[20 + i] / blk));
-      Serial.println();
-      Serial.printf("  DREAM control: mods %lu fx %lu heads %lu fo %lu\n", (unsigned long)(q[48] / nb / blk), (unsigned long)(q[49] / nb / blk),
-                    (unsigned long)(q[50] / nb / blk), (unsigned long)(q[51] / nb / blk));
-      for (int i = 0; i < 56; i++) q[i] = 0;
-    }
-  }
   // BEATER's engine: where it sits
   for (int t = 0; t < NUM_TRACKS; t++)
     if (Device* d = tracks[t].inst[RESONATOR][2]) if (d->active && d->ok())

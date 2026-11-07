@@ -610,10 +610,6 @@ DREAM_RAM2 volatile float en_atm_gain;
 DREAM_RAM2 volatile float en_echo_pk;
 volatile float en_echo_lvl;
 DREAM_RAM2 volatile uint8_t en_load;
-/* PROFILE (temporary): cycles per stage, summed; [15] chunks, [14] blocks, [13] the heaviest block */
-DREAM_RAM2 volatile uint32_t en_prof[56];   /* [20..32] the heaviest block's stages, [33..45] this block's */
-#define EN_CYC (*(volatile uint32_t *)0xE0001004)
-#define EN_P(i, x) do { uint32_t q_ = EN_CYC; x; q_ = EN_CYC - q_; en_prof[i] += q_; en_prof[33 + (i)] += q_; } while (0)
 DREAM_RAM2 static int32_t shed_left;   /* samples the shedding lasts (a heavy block: half a second) */
 #define SHED (shed_left > 0)
 DREAM_RAM2 volatile uint8_t en_nev_k[EN_NEV_N];
@@ -3389,8 +3385,8 @@ DREAM_FLASH static void plate_init(void)
 }
 
 /* (Loom) the plate's lines somewhere else: in RAM2 while DREAM plays (the pool is PSRAM, and the plate's ~38 taps a
- * sample missing its cache cost ~10 % of the CPU); NULL: back in the pool. m holds DL_TOTAL floats, zeroed; only
- * while the engine doesn't render */
+ * sample missing its cache cost ~10 % of the CPU; 3.9 % in RAM2, measured 2026-11-07); NULL: back in the pool. m holds
+ * DL_TOTAL floats, zeroed; only while the engine doesn't render */
 DREAM_FLASH void en_plate_mem(float *m)
 {
     float *p = m ? m : pl_buf;
@@ -5968,19 +5964,18 @@ DREAM_FLASH static void render_chunk(int32_t *out, uint32_t n, float gain)
     for (j = 0; j < n; j++)
         mixl[j] = mixr[j] = rsend[j] = esend[j] = 0.0f;
     lfo_step();
-    EN_P(2, render_plucks(n));
-    EN_P(3, render_drone(n));
-    EN_P(4, render_lead(n));
-    EN_P(5, render_crash(n));
-    EN_P(6, widen(n));                                    /* (the chord's and the pings' dry, wider) */
+    render_plucks(n);
+    render_drone(n);
+    render_lead(n);
+    render_crash(n);
+    widen(n);                                    /* (the chord's and the pings' dry, wider) */
     if (atm_char == ATM_TAPE)
-        EN_P(7, render_crackle(n));
+        render_crackle(n);
     else
-        EN_P(7, render_atmos(n));
+        render_atmos(n);
     layer_act();
     if (fxm || tw_env > 1e-4f || fx_ph > 0.005f)
-        EN_P(8, render_fx(n));
-    uint32_t q9 = EN_CYC;
+        render_fx(n);
     eg += (1.0f - eg) * fx_wash;                 /* Wash: everything into the echo */
     {   /* (Loom, Sascha 2026-10-31: Repeat and Supernova were silent with the echo turned down) while held, the
          * echo's send opened to half at least, so their repeats are heard whatever ECHO is */
@@ -5993,18 +5988,14 @@ DREAM_FLASH static void render_chunk(int32_t *out, uint32_t n, float gain)
                                                   * quiet: while held the whole music thrown into the echo, a dub throw) */
     for (j = 0; j < n; j++) {
         float wl, wr, l, r, el, er, rin, cl, cr, sd, dry = 1.0f - 0.75f * fx_wash;
-        uint32_t qe = EN_CYC;
         echoes(esend[j] * eg + rep_all * (mixl[j] + mixr[j]), &el, &er);   /* (Loom: Repeat throws all of it in) */
-        en_prof[10] += EN_CYC - qe; en_prof[43] += EN_CYC - qe;
         epk = fm_maxf(epk, fm_fabsf(el + er));   /* (the screen's ripples: the echo as it comes out) */
         epc = fm_maxf(epc, fm_fabsf(el + er));
         rin = (rsend[j] * rg + (el + er) * 0.12f * rev_send) * 0.8f;   /* (the classics pass: less of the echo into
                                                   * the plate, 0.25 before: the repeats stay distinct) */
         if (dry_pl > 0.0f)                       /* Reverb, Wash, Shimmer: the dry into the plate */
             rin += (mixl[j] + mixr[j]) * dry_pl;
-        qe = EN_CYC;
-        cloud(rin * ca * 2.5f * cl_in + pl_back * cloud_amt * 0.22f, &cl, &cr);
-        en_prof[11] += EN_CYC - qe; en_prof[44] += EN_CYC - qe;   /* the grains, into the plate: they bloom;
+        cloud(rin * ca * 2.5f * cl_in + pl_back * cloud_amt * 0.22f, &cl, &cr);   /* the grains, into the plate: they bloom;
                                                  * the plate's tail back into the line: the wash grows on itself */
         {   /* the plate, every other sample (its input the pair's mean, its output a line between) */
             const float pin = rin * (1.0f - 0.5f * cloud_amt) + (cl + cr) * 0.8f;
@@ -6020,9 +6011,7 @@ DREAM_FLASH static void render_chunk(int32_t *out, uint32_t n, float gain)
                 float nl, nr, x = 0.5f * (pl_acc + pin);
                 if (shm_on)                      /* (Shimmer: the plate's last out, an octave up, back in) */
                     x += shimmer(0.5f * (pl_ol + pl_or), shm_g);
-                qe = EN_CYC;
                 reverb(x, &nl, &nr);
-                en_prof[12] += EN_CYC - qe; en_prof[45] += EN_CYC - qe;
                 wl = 0.5f * (pl_ol + nl), wr = 0.5f * (pl_or + nr);
                 pl_ol = nl, pl_or = nr;
             }
@@ -6075,7 +6064,6 @@ DREAM_FLASH static void render_chunk(int32_t *out, uint32_t n, float gain)
             en_scope_w++;
         }
     }
-    en_prof[9] += EN_CYC - q9; en_prof[42] += EN_CYC - q9;
     en_echo_pk = epk;
     en_echo_lvl = fm_maxf(en_echo_lvl * fm_exp2f(-(float)n / (0.15f * EN_SR)), epc);   /* (Loom: the USB status' echo
                                                   * level, its own peak, falling) */
@@ -6086,10 +6074,10 @@ DREAM_FLASH static void render_chunk(int32_t *out, uint32_t n, float gain)
 DREAM_FLASH static void control(uint32_t n)                 /* once a chunk: the slow things */
 {
     int i;
-    { uint32_t q_ = EN_CYC; mods_step(n); en_prof[48] += EN_CYC - q_; }
-    { uint32_t q_ = EN_CYC; fx_ctl(n); en_prof[49] += EN_CYC - q_; }
-    { uint32_t q_ = EN_CYC; heads_step(); en_prof[50] += EN_CYC - q_; }
-    { uint32_t q_ = EN_CYC; fo_step(n); en_prof[51] += EN_CYC - q_; }
+    mods_step(n);
+    fx_ctl(n);
+    heads_step();
+    fo_step(n);
     pl_decay += ((en_frozen ? 0.9995f : pl_decay_t) - pl_decay) * 0.002f;
     pl_dd2 = fm_clampf(pl_decay + 0.15f, 0.25f, 0.5f);
     rev_in_gain += ((en_frozen ? 0.0f : 1.0f) - rev_in_gain) * 0.01f;
@@ -6122,8 +6110,7 @@ DREAM_FLASH void en_render(int32_t *out, uint32_t n, uint32_t gain_q12)
         shed_left = (int32_t)(0.5f * EN_SR);
     else if (shed_left > 0)
         shed_left -= (int32_t)n;
-    const uint32_t q0 = EN_CYC;
-    EN_P(0, drain());
+    drain();
     if (en_ext && ++ext_age > 100u)
         en_ext = 0;
     while (n) {
@@ -6131,7 +6118,7 @@ DREAM_FLASH void en_render(int32_t *out, uint32_t n, uint32_t gain_q12)
         int timed = en_playing && !en_ext;
         if (timed) {
             if (pulse_left <= 0.0f) {
-                { uint32_t qt = EN_CYC; clock_pulse(); qt = EN_CYC - qt; en_prof[16] += qt; if (qt > en_prof[17]) en_prof[17] = qt; }
+                clock_pulse();
                 pulse_left += step_len * (1.0f / 6.0f);
             }
             if ((float)k > pulse_left)
@@ -6143,23 +6130,16 @@ DREAM_FLASH void en_render(int32_t *out, uint32_t n, uint32_t gain_q12)
             k = (uint32_t)tick_wait;
         if (timed)
             pulse_left -= (float)k;
-        EN_P(1, control(k));
+        control(k);
         render_chunk(out, k, gain);
-        en_prof[15]++;
         if (tick_wait > 0 && (tick_wait -= (int32_t)k) <= 0) {
             tick_wait = 0;
             if (en_playing)
-                { uint32_t qt = EN_CYC; tick(); qt = EN_CYC - qt; en_prof[18] += qt; if (qt > en_prof[19]) en_prof[19] = qt; }
+                tick();
         }
         out += 2 * k;
         n -= k;
     }
-    en_prof[14]++;
-    if (EN_CYC - q0 > en_prof[13]) {
-        en_prof[13] = EN_CYC - q0;
-        for (int i_ = 0; i_ < 13; i_++) en_prof[20 + i_] = en_prof[33 + i_];
-    }
-    for (int i_ = 0; i_ < 13; i_++) en_prof[33 + i_] = 0;
 }
 
 #include <string.h>
