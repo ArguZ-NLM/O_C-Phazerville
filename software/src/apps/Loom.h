@@ -2466,7 +2466,6 @@ FLASHMEM void AppLoom::MainLoop() {
     }
     Serial.println();
   }
-  { extern void EcoProfReport(); EcoProfReport(); }
   // BEATER's engine: where it sits
   for (int t = 0; t < NUM_TRACKS; t++)
     if (Device* d = tracks[t].inst[RESONATOR][2]) if (d->active && d->ok())
@@ -2479,7 +2478,6 @@ FLASHMEM void AppLoom::MainLoop() {
       if (!d || memcmp(d->def.tag, "ECO", 3)) continue;
       char h[8]; static_cast<EchoDevice*>(d)->Holds(h);
       Serial.printf("  %c REPEAT holds %s%s\n", t ? 'R' : 'L', h, d->active ? " (active)" : "");
-      if (d->active) { char pr[420]; static_cast<EchoDevice*>(d)->Prof(pr, sizeof(pr)); Serial.printf("  %c REPEAT time %% (avg/peak): %s\n", t ? 'R' : 'L', pr); }
     }
   {
     char* top = __brkval;
