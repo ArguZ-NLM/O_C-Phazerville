@@ -246,24 +246,6 @@ class Svf {
     }
   }
   
-  // (Loom) a block through the band-pass, each output times its amplitude
-  // added into acc: the same steps as Process<FILTER_MODE_BAND_PASS> sample
-  // by sample, with the state and coefficients kept in registers
-  inline void ProcessBandPassAdd(const float* in, const float* amp, float* acc, size_t size) {
-    float s1 = state_1_, s2 = state_2_;
-    const float g = g_, r = r_, h = h_;
-    for (size_t k = 0; k < size; ++k) {
-      const float hp = (in[k] - r * s1 - g * s1 - s2) * h;
-      const float bp = g * hp + s1;
-      s1 = g * hp + bp;
-      const float lp = g * bp + s2;
-      s2 = g * bp + lp;
-      acc[k] += amp[k] * bp;
-    }
-    state_1_ = s1;
-    state_2_ = s2;
-  }
-
   template<FilterMode mode_1, FilterMode mode_2>
   inline void Process(float in, float* out_1, float* out_2) {
     float hp, bp, lp;
