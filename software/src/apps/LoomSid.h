@@ -564,7 +564,7 @@ FLASHMEM void SidDevice::FormatMode(int p, char* buf, size_t n) const {
 // the voices, each on its own (stems: 3 a sample, per chip)
 DMAMEM static int16_t sid_stems[C64_NSID][3 * AUDIO_BLOCK_SAMPLES];
 // PROFILE (temporary): cycles in the 6510, the chips, the mix; blocks counted
-inline volatile uint32_t sid_prof[4];
+inline volatile uint32_t sid_prof[4], sid_pmax[3], sid_pblk[2];
 
 // the C64 runs the tune in chunks of 2048 cycles; every SID write it makes
 // lands on the chip at its own cycle, and the chips make the samples
@@ -575,7 +575,7 @@ FASTRUN void SidDevice::Render(int16_t* const bufs[C64_NSID], int n) {
     if (pos >= chunk_len) {
       const uint32_t q0 = ARM_DWT_CYCCNT;
       chunk_len = c64_run(&c64, 2048);
-      sid_prof[0] += ARM_DWT_CYCCNT - q0;
+      sid_prof[0] += ARM_DWT_CYCCNT - q0; sid_pblk[0] += ARM_DWT_CYCCNT - q0;
       if (!chunk_len) {  // the 6510 jammed: silence from here
         for (int i = 0; i < nsid; i++) memset(sid_stems[i] + 3 * done, 0, 3 * (n - done) * sizeof(int16_t));
         ready = false;
@@ -605,7 +605,7 @@ FASTRUN void SidDevice::Render(int16_t* const bufs[C64_NSID], int n) {
       got = sid_clock_render(&sids[i], &d, bufs[i] + done, n - done, 1);
       if (i == nsid - 1) pos = target - uint32_t(d);
     }
-    sid_prof[1] += ARM_DWT_CYCCNT - q1;
+    sid_prof[1] += ARM_DWT_CYCCNT - q1; sid_pblk[1] += ARM_DWT_CYCCNT - q1;
     done += got;
   }
 }
@@ -644,6 +644,10 @@ FASTRUN void SidDevice::update() {
       }
       peak = int16_t(std::min<int32_t>(pk, 32767));
       sid_prof[2] += ARM_DWT_CYCCNT - q2;
+      if (sid_pblk[0] > sid_pmax[0]) sid_pmax[0] = sid_pblk[0];
+      if (sid_pblk[1] > sid_pmax[1]) sid_pmax[1] = sid_pblk[1];
+      if (ARM_DWT_CYCCNT - q2 > sid_pmax[2]) sid_pmax[2] = ARM_DWT_CYCCNT - q2;
+      sid_pblk[0] = sid_pblk[1] = 0;
       sid_prof[3]++;
     } else {
       memset(l, 0, sizeof(o[0]->data));

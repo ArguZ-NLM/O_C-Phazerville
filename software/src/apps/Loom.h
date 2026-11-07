@@ -2471,7 +2471,10 @@ FLASHMEM void AppLoom::MainLoop() {
     Serial.printf("  SID prof: 6510 %lu  chips %lu  all %lu (tenths %%) over %lu blocks\n",
                   (unsigned long)(sid_prof[0] / n / blk), (unsigned long)(sid_prof[1] / n / blk),
                   (unsigned long)(sid_prof[2] / n / blk), (unsigned long)n);
+    Serial.printf("  SID peak: 6510 %lu  chips %lu  all %lu\n", (unsigned long)(sid_pmax[0] / blk),
+                  (unsigned long)(sid_pmax[1] / blk), (unsigned long)(sid_pmax[2] / blk));
     for (auto& x : sid_prof) x = 0;
+    for (auto& x : sid_pmax) x = 0;
   }
   // BEATER's engine: where it sits
   for (int t = 0; t < NUM_TRACKS; t++)
