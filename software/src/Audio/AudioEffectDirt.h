@@ -122,7 +122,10 @@ public:
   static inline float B259(float v) {  // the circuit's curve, volts in and out (no branches: fast)
     const float a = fabsf(v);
     float y = 5.0f * a;
-    for (int k = 0; k < 5; k++) y += B259_C[k] * std::max(0.0f, a - B259_T[k]);
+    // (unrolled, fmaxf: one VMAXNM each; std::max compiled to a compare, a
+    // wait for the flags and a select, 2026-11-07)
+#pragma GCC unroll 5
+    for (int k = 0; k < 5; k++) y += B259_C[k] * __builtin_fmaxf(0.0f, a - B259_T[k]);
     return copysignf(y, v);
   }
   // The volts are the circuit's own, nothing in Loom's audio: they only
@@ -137,7 +140,7 @@ public:
   // off (a soft clip, full scale kept: 1.5 u - 0.5 u^3, flat at the top;
   // no division, it runs twice a sample on both sides)
   static inline float Diodes(float u) {
-    u = constrain(u, -1.0f, 1.0f);
+    u = __builtin_fminf(1.0f, __builtin_fmaxf(-1.0f, u));
     return u * (1.5f - 0.5f * u * u);
   }
   // fold curve on a sound whose peak is 1 (the picture's sine; the engine
@@ -529,6 +532,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
         // the input itself, from the middle (each x 2: zeros stuffed in)
         // (four sums side by side: one chain of 20 waited on itself)
         float u0 = 0.0f, u1 = 0.0f, u2 = 0.0f, u3 = 0.0f;
+#pragma GCC unroll 5
         for (int j = 0; j < OS_HALF; j += 4) {
           u0 += OS_E[j] * xr[j]; u1 += OS_E[j + 1] * xr[j + 1];
           u2 += OS_E[j + 2] * xr[j + 2]; u3 += OS_E[j + 3] * xr[j + 3];
@@ -536,6 +540,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
         const float ups[2] = {2.0f * ((u0 + u1) + (u2 + u3)), xr[10]};
         float* w = Lw[c];
         float fn = 0.0f;
+#pragma GCC unroll 2
         for (int k = 0; k < 2; k++) {
           // (no first-order anti-aliasing on top any more: at 2 x its steps
           // got so small near the wave's tops that its division turned
@@ -548,6 +553,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
             // samples, as the dry side): the even taps and the middle one
             const float* r = w + Lwi[c];  // the last 39, oldest first
             float d0 = 0.5f * r[19], d1 = 0.0f, d2 = 0.0f, d3 = 0.0f;
+#pragma GCC unroll 5
             for (int j = 0; j < OS_HALF; j += 4) {
               d0 += OS_E[j] * r[2 * j]; d1 += OS_E[j + 1] * r[2 * j + 2];
               d2 += OS_E[j + 2] * r[2 * j + 4]; d3 += OS_E[j + 3] * r[2 * j + 6];
