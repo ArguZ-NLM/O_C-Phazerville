@@ -206,6 +206,7 @@ private:
   volatile bool busy = false;   // the main loop is inside the C64
   bool have = false;            // the audio side is playing ring[tail]
   bool Produce();
+  static inline int sids_on = 0;  // SIDs active (they share the combined waveforms' sums)
   volatile uint32_t played = 0;   // samples since the song started
   volatile int16_t peak = 0;
   volatile uint32_t gate_seq[C64_NSID][3] = {};  // each chip's voices' gates turned on (audio side)
@@ -280,6 +281,7 @@ FLASHMEM bool SidDevice::Activate() {
   if (!mem) mem = static_cast<uint8_t*>(malloc(65536));
   if (!mem) mem = static_cast<uint8_t*>(PsramAlloc(65536));
   if (!ring) ring = static_cast<Chunk*>(PsramAlloc(RING * sizeof(Chunk)));
+  sids_on++;
   if (!ring && mem) { if (IsPsram(mem)) PsramFree(mem); else free(mem); mem = nullptr; }
   Device::active = true;
   Scan();
@@ -294,6 +296,7 @@ FLASHMEM void SidDevice::Deactivate() {
   if (mem) { if (IsPsram(mem)) PsramFree(mem); else free(mem); mem = nullptr; }
   if (file) { PsramFree(file); file = nullptr; }
   if (ring) { if (IsPsram(ring)) PsramFree(ring); else free(ring); ring = nullptr; }
+  if (--sids_on == 0) sid_comb_free();  // (32 KB of RAM2 back, once no SID plays)
   file_len = 0;
   loaded = -1;
   Device::active = false;

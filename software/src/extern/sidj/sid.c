@@ -14,6 +14,7 @@
  * host test tests/sid_ref_test.cc checks that the two produce identical
  * samples. Only the delta-cycle ("SAMPLE_FAST") paths are ported.
  */
+#include <stdlib.h>
 #include "sidj_port.h"
 #include "sid.h"
 #include "sid_tables.h"
@@ -25,7 +26,8 @@
 /* ------------------------------------------------------------------------ */
 
 SIDJ_RAM2 static uint32_t comb_rec[257];              /* 65536 / n, for the average's divide */
-SIDJ_RAM2 static uint16_t comb_pre[4][4097];          /* running sums of _ST, P_T, PS_, PST of comb_model, mod 2^16:
+static uint16_t (*comb_pre)[4097];  /* (Loom: taken from the heap, RAM2, while a SID plays: sid_comb_free) */
+/* the table:     running sums of _ST, P_T, PS_, PST of comb_model, mod 2^16:
                                              * pre[t][i] is table t's entries 0 .. i-1 added up */
 static int comb_model = -1;
 
@@ -34,6 +36,8 @@ SIDJ_FLASH static void comb_load(sid_model_t m)
     const uint8_t *t[4];
     int i, j;
     if (comb_model == (int)m) return;
+    if (!comb_pre) comb_pre = (uint16_t (*)[4097])malloc(4 * 4097 * sizeof(uint16_t));
+    if (!comb_pre) return;                  /* (no room: the waveforms as tabled, not averaged) */
     if (m == SID_MOS6581) { t[0] = sid_wave6581__ST; t[1] = sid_wave6581_P_T; t[2] = sid_wave6581_PS_; t[3] = sid_wave6581_PST; }
     else { t[0] = sid_wave8580__ST; t[1] = sid_wave8580_P_T; t[2] = sid_wave8580_PS_; t[3] = sid_wave8580_PST; }
     for (i = 0; i < 4; i++) {
@@ -43,6 +47,14 @@ SIDJ_FLASH static void comb_load(sid_model_t m)
     }
     comb_model = (int)m;
     for (i = 1; i <= 256; i++) comb_rec[i] = (65536u + (uint32_t)i / 2) / (uint32_t)i;
+}
+
+/* (Loom) the running sums given back (no chip may play from here until a model is set again) */
+SIDJ_FLASH void sid_comb_free(void)
+{
+    comb_model = -1;
+    free(comb_pre);
+    comb_pre = 0;
 }
 
 SIDJ_FLASH static void wave_set_model(sid_wave_t *w, sid_model_t model)

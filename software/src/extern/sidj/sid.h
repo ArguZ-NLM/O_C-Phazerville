@@ -120,6 +120,7 @@ typedef struct sid {
 
 /* Set up a chip: reset, MOS6581, PAL clock (985248 Hz), 44100 Hz output. */
 void sid_init(sid_t *s);
+void sid_comb_free(void);   /* (Loom) the combined waveforms' running sums back to the heap */
 void sid_reset(sid_t *s);
 void sid_set_model(sid_t *s, sid_model_t model);
 void sid_set_sampling(sid_t *s, uint32_t clock_hz, uint32_t sample_hz);
