@@ -4021,7 +4021,7 @@ FLASHMEM void AppLoom::DrawMods() const {
 FLASHMEM void AppLoom::DrawClockPage() const {
   using namespace loom;
   const ClockDevice* c = tempo_clock;
-  static const char* const names[4] = {"SOURCE", "BPM", "PPQN", "BOOT"};
+  static const char* const names[4] = {"Source", "BPM", "PPQN", "BootScreen"};
   for (int p = 0; p < 4; p++) {
     const int y = p == ClockDevice::P_BOOT ? 47 : 12 + p * 9;  // (BOOT under the beat graph)
     gfxPrint(2, y, names[p]);
@@ -4041,10 +4041,10 @@ FLASHMEM void AppLoom::DrawClockPage() const {
     else if (p == ClockDevice::P_SOURCE && c->val[p] >= CLK_SHU) snprintf(buf, sizeof(buf), "SHUTTLE %c", 'A' + (c->val[p] - CLK_SHU));
     else if (p == ClockDevice::P_PPQN && (!c->external() || c->Shuttle() >= 0)) snprintf(buf, sizeof(buf), "-");
     else c->Format(p, buf, sizeof(buf));
-    gfxPrint(48, y, buf);
+    gfxPrint(66, y, buf);  // (after the longest name, BootScreen)
     if (p == cursor && !fw_row) {  // (on REFLASH: only that one lit)
-      gfxInvert(1, y - 1, 41, 9);
-      if (editing) gfxInvert(47, y - 1, 6 * int(strlen(buf)) + 1, 9);
+      gfxInvert(1, y - 1, 61, 9);
+      if (editing) gfxInvert(65, y - 1, 6 * int(strlen(buf)) + 1, 9);
     }
   }
   // the divider: one bar of the clock as a graph. A tick on each beat (the

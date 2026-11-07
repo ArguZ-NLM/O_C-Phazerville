@@ -6,7 +6,7 @@ namespace OC {
 
   const char * const VERSION =
 #ifdef LOOM_ONLY
-    "Loom Beta 3 "  // Loom's own version, not Phazerville's
+    "LOOM Beta 3 "  // Loom's own version, not Phazerville's
 #else
 #include "OC_version.h"
 #ifdef OC_VERSION_EXTRA
