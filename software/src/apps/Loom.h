@@ -978,7 +978,12 @@ FLASHMEM static float WorstCost(const Device* d) {
     return 12.0f + (m[EchoDevice::ROOM] ? 4.0f : 0.0f);  // (the costlier two-voice recipes, to be safe)
   }
   if (!strcmp(t, "STR")) return 11.5f;  // DRAFT (with its diffuser)
-  if (!strcmp(t, "TEX")) return 14.0f;  // TEXTURE (FOLD on: its 2 x folder, measured 13.4 %; 8 before 2026-10-28)
+  if (!strcmp(t, "TEX")) {  // TEXTURE: FOLD on (or modulated): its 2 x folder, measured 13.4 %; FOLD at 0
+    // skips the folder (8.9 % measured 2026-11-07), so it counts less, and
+    // turning FOLD up asks the guard like any costlier setting
+    const bool folds = d->val[DirtDevice::FOLD] > 0 || d->Modded(DirtDevice::FOLD);
+    return folds ? 14.0f : 9.5f;
+  }
   if (!strcmp(t, "HDL")) {  // HEDDLE: TEXTURE's engine left clean, the shifter ~1 %, PHASE ~0.6 % a stage (measured)
     const HeddleDevice* x = static_cast<const HeddleDevice*>(d);
     return 4.0f + (x->Phasing() ? 1.0f + 0.6f * x->MaxStages() : 1.0f);  // (STAGE's variation up)
