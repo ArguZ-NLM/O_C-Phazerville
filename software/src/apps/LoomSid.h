@@ -200,7 +200,7 @@ private:
   // of the audio interrupt. A ring that runs dry (the main loop held up)
   // gets its chunk made in the audio update, as before.
   struct Chunk { uint16_t len, n; c64_write_t w[C64_LOG_MAX]; };
-  static constexpr int RING = 4;  // (three ahead: ~6 ms)
+  static constexpr int RING = 8;  // (seven ahead: ~14 ms, past the main loop's longer gaps)
   Chunk* ring = nullptr;
   volatile uint8_t head = 0, tail = 0;
   volatile bool busy = false;   // the main loop is inside the C64
