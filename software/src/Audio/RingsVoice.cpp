@@ -51,6 +51,8 @@ FLASHMEM bool RingsVoice::Init() {
 }
 
 // the audio lets go first, then the memory is given back with it going
+FLASHMEM size_t RingsVoice::PartBytes() { return sizeof(rings::Part) + sizeof(rings::Strummer); }
+
 FLASHMEM void RingsVoice::Free() {
   if (!part_) return;
   AudioNoInterrupts();

@@ -20,6 +20,8 @@ public:
   bool Init();   // takes its memory (RAM2 heap); false if there is none
   void Free();
   bool ok() const { return part_ != nullptr; }
+  bool InPsram() const { return part_ext_; }
+  static size_t PartBytes();  // (for the status)
 
   // n frames of mono input into out / aux (n any size: done in Rings' blocks)
   void Process(const float* in, float* out, float* aux, size_t n);
