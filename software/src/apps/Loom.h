@@ -971,18 +971,20 @@ FLASHMEM static float WorstCost(const Device* d) {
   const char* t = d->def.tag;
   if (!strcmp(t, "MDL")) {  // BEATER: the sympathetic strings cost most
     const int m = d->val[ModalDevice::MODEL];
-    return m == RingsVoice::SYMPATHETIC || m == RingsVoice::SYMPATHETIC_QUANTIZED ? 16.0f : 9.0f;
+    return m == RingsVoice::SYMPATHETIC || m == RingsVoice::SYMPATHETIC_QUANTIZED ? 16.0f : 12.0f;  // (11.7 % measured 2026-11-07; 9 was too low)
   }
   if (!strcmp(t, "ECO")) {  // REPEAT; GLINT on: its pitch shifter (two voices for 12+7)
     const uint8_t* m = d->mode;
-    return 12.0f + (m[EchoDevice::ROOM] ? 4.0f : 0.0f);  // (the costlier two-voice recipes, to be safe)
+    // (measured 2026-11-07, all in RAM2: 9.3 % peak; GLINT +9.6 % peak, its
+    // landing searches; was 12 + 4, GLINT counted too low)
+    return 10.0f + (m[EchoDevice::ROOM] ? 9.0f : 0.0f);
   }
   if (!strcmp(t, "STR")) return 11.5f;  // DRAFT (with its diffuser)
   if (!strcmp(t, "TEX")) {  // TEXTURE: FOLD on (or modulated): its 2 x folder, measured 13.4 %; FOLD at 0
-    // skips the folder (8.9 % measured 2026-11-07), so it counts less, and
+    // skips the folder (3.2 % measured 2026-11-07), so it counts less, and
     // turning FOLD up asks the guard like any costlier setting
     const bool folds = d->val[DirtDevice::FOLD] > 0 || d->Modded(DirtDevice::FOLD);
-    return folds ? 14.0f : 9.5f;
+    return folds ? 14.0f : 4.0f;  // (13.5 % / 3.2 % measured 2026-11-07, after the clean-up)
   }
   if (!strcmp(t, "HDL")) {  // HEDDLE: TEXTURE's engine left clean, the shifter ~1 %, PHASE ~0.6 % a stage (measured)
     const HeddleDevice* x = static_cast<const HeddleDevice*>(d);
@@ -995,7 +997,7 @@ FLASHMEM static float WorstCost(const Device* d) {
   if (!strcmp(t, "SID")) return 34.0f + 23.0f * float(static_cast<const SidDevice*>(d)->Chips() - 1);
   if (!strcmp(t, "DRM")) return static_cast<const DreamBase*>(d)->Cost();
   if (!strcmp(t, "SPR")) return 6.0f;   // FIBRE
-  if (!strcmp(t, "FLK")) return 20.0f;  // FLOCK (up to 20 grains, from flash; 18 % measured at its defaults)
+  if (!strcmp(t, "FLK")) return 22.0f;  // FLOCK (up to 20 grains, from flash; 16-22 % peak measured with 9-11 grains)
   if (!strcmp(t, "RES")) return 3.0f;   // REED
   return 3.0f;
 }
