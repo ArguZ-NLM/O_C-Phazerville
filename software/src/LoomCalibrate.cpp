@@ -46,6 +46,7 @@ struct Cal {
   OC::CalibrationState st;
   int octave = 0;          // the octave being set (CALIBRATE_OCTAVE)
   bool done = false;
+  bool leave = false;  // left with L: nothing saved
 };
 
 // the step, as Phazerville's calibration_steps has it, but built here with
@@ -202,7 +203,7 @@ FLASHMEM void SwitchToStep(Cal& c, int dir) {
       break;
     default:
       if (next->step != OC::CALIBRATION_EXIT) c.st.encoder_value = 0;
-      else c.st.encoder_value = (c.st.used_defaults && OC::calibration_data_loaded) ? 0 : 1;  // save? (fresh over saved data: no)
+      else c.st.encoder_value = 0;  // save? starts on no: pushing R straight through stores nothing
       break;
   }
   c.st.current_step = next;
@@ -308,9 +309,12 @@ FLASHMEM void Handle(Cal& c, const UI::Event& e) {
   }
   switch (e.control) {
     case CONTROL_BUTTON_L:
+      // L held, on any page: leave, nothing saved (the stored calibration back)
+      if (e.type == UI::EVENT_BUTTON_LONG_PRESS) { c.leave = true; c.done = true; break; }
       if (e.type != UI::EVENT_BUTTON_PRESS) break;
-      if (c.st.step == HELLO) { c.st.encoder_value = 0; c.done = true; }  // leave, nothing saved
-      else if (c.st.step > CENTER_DISPLAY) SwitchToStep(c, -1);
+      // L push: a step back; from the first two pages (nothing before them) it leaves
+      if (c.st.step <= CENTER_DISPLAY) { c.leave = true; c.done = true; }
+      else SwitchToStep(c, -1);
       break;
     case CONTROL_ENCODER_L:
       if (c.st.step > HELLO) SwitchToStep(c, e.value);
@@ -406,9 +410,9 @@ FLASHMEM void RunCalibration() {
     Draw(c);
     delay(2);
   }
-  const bool save = c.st.current_step->step == OC::CALIBRATION_EXIT && c.st.encoder_value;
+  const bool save = !c.leave && c.st.current_step->step == OC::CALIBRATION_EXIT && c.st.encoder_value;
   if (save) OC::calibration_save();
-  else if (c.st.used_defaults) OC::calibration_load();  // (left without saving: back to what was stored)
+  else OC::calibration_load();  // (left without saving: back to what was stored, fine-tuning too)
   OC::ui.set_screensaver_timeout(OC::calibration_data.screensaver_timeout);
   display::AdjustOffset(OC::calibration_data.display_offset);
   OC::ui.encoder_enable_acceleration(OC::CONTROL_ENCODER_R, false);
