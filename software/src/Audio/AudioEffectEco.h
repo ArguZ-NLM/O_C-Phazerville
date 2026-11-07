@@ -99,9 +99,10 @@ FLASHMEM static float EcoWindowShape(int w, float x) {
 
 FLASHMEM bool AudioEffectClouds::EcoAcquire() {
     if (eco_) return true;
-    // in PSRAM (zeroed): RAM2's heap has next to nothing left with every
-    // device in use; each grain's span is read into FIBRE's span_ (unused here)
-    EcoState* e = static_cast<EcoState*>(PsramAlloc(sizeof(EcoState)));
+    // RAM2 when there is room (~7 KB, every grain's state and the windows,
+    // read every sample: in PSRAM it cost), else PSRAM; zeroed. Each
+    // grain's span is read into FIBRE's span_ (unused here)
+    EcoState* e = static_cast<EcoState*>(FastAlloc(sizeof(EcoState)));
     if (!e) return false;
     for (int w = 0; w < 5; w++) {
         for (int i = 0; i <= EcoState::WIN_N; i++) e->win[w][i] = EcoWindowShape(w, (float)i / EcoState::WIN_N);
@@ -120,7 +121,7 @@ FLASHMEM void AudioEffectClouds::EcoRelease() {
     eco_ = nullptr;
     for (auto& g : grains) g.active = false;
     AudioInterrupts();
-    if (e) PsramFree(e);
+    if (e) FastFree(e);
 }
 
 // one window value: table a and the next blended by mix, at t 0..1
