@@ -434,7 +434,8 @@ private:
   // a shifter head on side c starting a new grain: the delay in [lo, hi]
   // whose sound (the 64 samples before it) lines up best with the 64 before
   // the other head's, plus the other head's fraction, so both read in step
-  float ShPlace(int c, int lo, int hi, float other) const {
+  // (from flash, not inlined: only when a grain starts, and RAM1's code space is full)
+  FLASHMEM __attribute__((noinline)) float ShPlace(int c, int lo, int hi, float other) const {
     const int16_t* b = sh + c * SH_LEN;
     const int ro = sh_w - int(other);
     // (in two passes: every 4th place first, then each place around the

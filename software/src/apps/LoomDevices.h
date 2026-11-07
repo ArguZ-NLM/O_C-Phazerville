@@ -6171,7 +6171,7 @@ public:
   }
 private:
   AudioEffectDirt fx;  // (TEXTURE's engine with its own part left clean)
-  void DrawPole(int x, int y, int w, int h);
+  __attribute__((noinline)) void DrawPole(int x, int y, int w, int h);  // (not inlined into DrawViz / DrawMini, which landed in RAM1)
   void Send();
   // the variations: drawn on each beat; FDBK and MIX glide there
   int8_t v_stage = 0, v_side = -1;  // (-1: SIDE as set)
