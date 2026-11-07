@@ -115,16 +115,16 @@ static constexpr uint32_t kDeferCapMs = 45000;
 static bool boot_recall = false;
 static uint8_t recall_replacing = 0;
 
-static DMAMEM AppData capture;
+static EXTMEM AppData capture;  // (Loom: these four in PSRAM, RAM2 is the effects' room)
 
 static constexpr uint32_t kSecBufBytes = 16384;
-static DMAMEM uint8_t sec_buf[kSecBufBytes];
+static EXTMEM uint8_t sec_buf[kSecBufBytes];
 
 static constexpr uint32_t kStageArenaBytes = 24576;
-static DMAMEM uint8_t stage_arena[kStageArenaBytes];
+static EXTMEM uint8_t stage_arena[kStageArenaBytes];
 static PresetStage recall_stage(stage_arena, kStageArenaBytes);
 static constexpr uint32_t kStageTmpBytes = 12288;
-static DMAMEM uint8_t stage_tmp[kStageTmpBytes];
+static EXTMEM uint8_t stage_tmp[kStageTmpBytes];
 static uint32_t last_recall_ms = 0;
 
 static uint8_t extract_preset;
