@@ -106,7 +106,7 @@ static uint8_t SH1106_display_on_seq[] = {
 };
 
 /*static*/
-void SH1106_128x64_Driver::Init() {
+FLASHMEM void SH1106_128x64_Driver::Init() {  // (once at power-up: from flash, RAM1 is full)
   pinMode(OLED_CS, OUTPUT);
   pinMode(OLED_RST, OUTPUT);
   pinMode(OLED_DC, OUTPUT);
