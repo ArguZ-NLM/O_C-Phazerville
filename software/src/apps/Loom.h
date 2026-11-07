@@ -86,7 +86,8 @@ namespace loom {
     PlayerDevice* player = nullptr;  // SOURCE option 2: a WAV from the SD card
     WarpDevice* warp = nullptr;      // SOURCE option 3: a WAV played by MIDI notes
     SidDevice* sid = nullptr;        // SOURCE option 4: a C64 tune (.sid) from the SD card
-    DreamBase* dream = nullptr;      // SOURCE option 5: a generative piece (each track its own engine)
+    DreamBase* dream = nullptr;      // SOURCE option 5: a generative piece (one of the two below)
+    DreamBase* dreams[2] = {};       // its device on the fast engine (0) and on the second (1): PickDreams
     WavWriter writer;              // saving SPOOL's loop to the SD card
     MixDevice* mix = nullptr;
     uint8_t choice[SLOT_COUNT] = {};
@@ -442,6 +443,7 @@ private:
   const loom::Modulator* OutMod(int o) const;
   void WriteOutputs();
   void SetChoice(int t, int s, int option);
+  void PickDreams(bool a, bool b);  // which track's DREAM gets the fast engine
   void SetChoiceLinked(int s, int option);
   void ChoiceFaded(int t, int s, int option);
   void SwitchChoices(int t);
@@ -604,10 +606,10 @@ FLASHMEM void AppLoom::Start() {
     tr.sid = new SidDevice;
     tr.sid->mod_bus = tr.mod_out;
     tr.sid->Defaults();
-    tr.dream = t ? static_cast<DreamBase*>(new dream_b::DreamDevice) : new dream_a::DreamDevice;
-    tr.dream->track = int8_t(t);
-    tr.dream->mod_bus = tr.mod_out;
-    tr.dream->Defaults();
+    tr.dreams[0] = new dream_a::DreamDevice(t);
+    tr.dreams[1] = new dream_b::DreamDevice(t);
+    for (DreamBase* d : tr.dreams) { d->mod_bus = tr.mod_out; d->Defaults(); }
+    tr.dream = tr.dreams[t];  // (PickDreams moves them)
     for (int s = SOURCE + 1; s < SLOT_COUNT; s++) {
       if (s == ECHO) tr.gate = new LoomGate;
       for (int o = 0; o < SLOT_DEFS[s].noptions; o++) {
@@ -781,6 +783,7 @@ FLASHMEM void AppLoom::SetChoice(int t, int s, int option) {
   tr.parked &= ~(1 << s);  // a new device starts patched; parks again if bypassed
   tr.park_at[s] = millis() + 40;
   if (!active) return;
+  if (s == SOURCE && option == 5) PickDreams(tracks[0].choice[SOURCE] == 5, tracks[1].choice[SOURCE] == 5);
   Device* now = tr.current(s);
   if (now) now->Activate();
   if (now && old && old != now && !now->ok()) {
@@ -798,12 +801,39 @@ FLASHMEM void AppLoom::SetChoice(int t, int s, int option) {
   if (old) old->Deactivate();
 }
 
+// DREAM's two engines (2026-11-07): the fast one (its code in RAM1, ~46 %)
+// and the second (from flash, ~92 %). a, b: whether track A's, B's DREAM is
+// (or is about to be) chosen. A DREAM already playing keeps its engine;
+// otherwise A's DREAM gets the fast one, else B's. A track that changes
+// engine takes its settings along (its device on the other one)
+FLASHMEM void AppLoom::PickDreams(bool a, bool b) {
+  using namespace loom;
+  auto on = [](const Track& tr) { return tr.dream->Device::active; };
+  auto put = [](Track& tr, int e) {
+    DreamBase* to = tr.dreams[e];
+    if (tr.dream == to || tr.dream->Device::active) return;
+    to->CopyFrom(*tr.dream);
+    tr.dream = to;
+  };
+  Track& ta = tracks[0];
+  Track& tb = tracks[1];
+  int fast_to;  // 0 A, 1 B
+  if (on(ta) && ta.dream == ta.dreams[0]) fast_to = 0;
+  else if (on(tb) && tb.dream == tb.dreams[0]) fast_to = 1;
+  else if (on(ta)) fast_to = 1;  // (A plays on the second: B may have the fast one)
+  else if (on(tb)) fast_to = 0;
+  else fast_to = a || !b ? 0 : 1;
+  put(ta, fast_to == 0 ? 0 : 1);
+  put(tb, fast_to == 1 ? 0 : 1);
+}
+
 FLASHMEM void AppLoom::ConnectTrack(int t) {
   using namespace loom;
   AudioNoInterrupts();
   for (int c = 0; c < 2; c++)
     patch->in[t][c].connect(OC::AudioIO::InputStream(), c, *tracks[t].input, c);
   AudioInterrupts();
+  PickDreams(tracks[0].choice[SOURCE] == 5, tracks[1].choice[SOURCE] == 5);
   for (int s = SOURCE; s < SLOT_COUNT; s++) {
     if (Device* d = tracks[t].current(s)) d->Activate();
   }
@@ -1026,12 +1056,17 @@ FLASHMEM void AppLoom::SetChoiceLinked(int s, int option) {
   if (s == SOURCE) {
     // room for SID / DREAM (instead of what the track had)?
     option = constrain(option, 0, SLOT_DEFS[s].noptions - 1);
+    // (the engines as they would go: DREAM's cost is its engine's)
+    bool want[NUM_TRACKS];
+    for (int t = 0; t < NUM_TRACKS; t++) want[t] = (t == track || linked) ? option == 5 : tracks[t].choice[s] == 5;
+    PickDreams(want[0], want[1]);
     float extra = 0.0f;
     for (int t = 0; t < NUM_TRACKS; t++)
       if (t == track || linked) extra += SourceCost(tracks[t], option) - SourceCost(tracks[t], tracks[t].choice[s]);
     if (!Admit(extra)) return;
-    SetChoice(track, s, option);
-    if (linked) SetChoice(1 - track, s, tracks[track].choice[s]);
+    // (A first: its DREAM takes the fast engine as the guard counted it)
+    for (int t = 0; t < NUM_TRACKS; t++)
+      if (t == track || linked) SetChoice(t, s, option);
     return;
   }
   option = constrain(option, 0, SLOT_DEFS[s].noptions - 1);

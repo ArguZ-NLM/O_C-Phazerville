@@ -36,47 +36,49 @@ static const char* const DREAM_STYLE_SHORT[EN_NPIECES] = {
 static const char* const DREAM_MODE_SHORT[EN_NMODES] = {"MAJ", "DOR", "PHR", "LYD", "MIX", "MIN", "PNTMJ", "PNTMN"};
 static const char* const DREAM_SEQ_VOICE[EN_NSV] = {"2600", "Moog", "Synthi", "Pulse", "Glass", "Pluck"};
 
-PROGMEM static const DeviceDef DREAM_DEF = {
-  "DREAM", "DRM", 16, {"PLAY", "NEXT"},
-  {
-    {"STYLE", 0, EN_NPIECES + DREAM_USER_N - 1, 0, UNI},   // the piece (then U1..U8, the user's)
-    {"TEMPO", 60, 160, 96, UNI, 0, 2, 0, {}, {"OFF", "ON"}},   // mode: SYNC to Loom's clock
-    {"ROOT", 0, 11, 2, UNI, 0, EN_NMODES, 5},                 // mode: the MODE (scale)
-    {"LEVEL", 0, 100, DREAM_TRACK_B ? 0 : 100, UNI},  // (0: silent, the piece going on for the CV; B's own start)
-    // each layer's level; the mode (L knob) its voice (as piece 1 has them)
-    // (and its octave: five each)
-    {"DRONE", 0, 100, 60, UNI, 0, 5 * EN_NCV, 0},
-    {"SEQ", 0, 100, 70, UNI, 0, 5 * EN_NSV, 0},
-    {"LEAD", 0, 100, 40, UNI, 0, 5 * EN_NBV, 0},
-    {"SEQ2", 0, 100, 60, UNI, 0, 5 * EN_NS2V, 1},
-    // the modes (L knob): LENGTH the sequences' notes held, a share of their
-    // step (0: plucked, the style's); REPEAT the Sequence's echoed notes, a
-    // share of the style's (10: its own)
-    {"MOTN", 0, 100, 50, UNI, 0, 11, 0},
-    {"ENRGY", -50, 50, 0, BI, 0, 11, 10},
-    {"SPACE", -50, 50, 0, BI},
-    // CVOUT: the notes on the CV outputs; its L knob CVIN: a pair of CV
-    // inputs, the first playing the Lead like the white keys, the second
-    // holding the black keys' effects (see CvKeys): OFF, 1+3, 2+4, 5+7, 6+8
-    // (Sascha, 2026-10-31: inputs 1 and 2 are wanted elsewhere). B's L knob
-    // also LINK, A's DREAM followed: its mode the pair x 2 + LINK (so the old
-    // saves' OFF / LINK / ON / L+IN read OFF / LINK / 1+3 / L1+3). Shown by
-    // FormatMode. No ONLY (Sascha: it cut the music at once): LEVEL 0 is
-    // silent
-#if DREAM_TRACK_B
-    {"CVOUT", 0, 1, 1, LIST, 2, 10, 1, {"OFF", "ON"}, {}},
-#else
-    {"CVOUT", 0, 1, 1, LIST, 2, 5, 0, {"OFF", "ON"}, {}},
-#endif
-    // page 4, FX: the engine's own echo and plate, from the style's own (0);
-    // the modes: the echo's TIME, the plate's SIZE (0: the style's)
-    {"ECHO", -50, 50, 0, BI, 0, 7, 0},
-    {"FDBK", -50, 50, 0, BI},
-    {"PLATE", -50, 50, 0, BI, 0, 11, 0},
-    {"TONE", -50, 50, 0, BI},
-  },
-  {"", "", "", "FX"},
+// the settings: track A's and track B's (B's silent at first, its L knob on
+// CVOUT also LINK); which table a device gets goes by its track, not by the
+// engine it plays (B can play on A's engine, 2026-11-07)
+#define DREAM_DEF_OF(B_) {\
+  "DREAM", "DRM", 16, {"PLAY", "NEXT"},\
+  {\
+    {"STYLE", 0, EN_NPIECES + DREAM_USER_N - 1, 0, UNI},   /* the piece (then U1..U8, the user's) */\
+    {"TEMPO", 60, 160, 96, UNI, 0, 2, 0, {}, {"OFF", "ON"}},   /* mode: SYNC to Loom's clock */\
+    {"ROOT", 0, 11, 2, UNI, 0, EN_NMODES, 5},                 /* mode: the MODE (scale) */\
+    {"LEVEL", 0, 100, B_ ? 0 : 100, UNI},  /* (0: silent, the piece going on for the CV; B's own start) */\
+    /* each layer's level; the mode (L knob) its voice (as piece 1 has them) */\
+    /* (and its octave: five each) */\
+    {"DRONE", 0, 100, 60, UNI, 0, 5 * EN_NCV, 0},\
+    {"SEQ", 0, 100, 70, UNI, 0, 5 * EN_NSV, 0},\
+    {"LEAD", 0, 100, 40, UNI, 0, 5 * EN_NBV, 0},\
+    {"SEQ2", 0, 100, 60, UNI, 0, 5 * EN_NS2V, 1},\
+    /* the modes (L knob): LENGTH the sequences' notes held, a share of their */\
+    /* step (0: plucked, the style's); REPEAT the Sequence's echoed notes, a */\
+    /* share of the style's (10: its own) */\
+    {"MOTN", 0, 100, 50, UNI, 0, 11, 0},\
+    {"ENRGY", -50, 50, 0, BI, 0, 11, 10},\
+    {"SPACE", -50, 50, 0, BI},\
+    /* CVOUT: the notes on the CV outputs; its L knob CVIN: a pair of CV */\
+    /* inputs, the first playing the Lead like the white keys, the second */\
+    /* holding the black keys' effects (see CvKeys): OFF, 1+3, 2+4, 5+7, 6+8 */\
+    /* (Sascha, 2026-10-31: inputs 1 and 2 are wanted elsewhere). B's L knob */\
+    /* also LINK, A's DREAM followed: its mode the pair x 2 + LINK (so the old */\
+    /* saves' OFF / LINK / ON / L+IN read OFF / LINK / 1+3 / L1+3). Shown by */\
+    /* FormatMode. No ONLY (Sascha: it cut the music at once): LEVEL 0 is */\
+    /* silent */\
+    {"CVOUT", 0, 1, 1, LIST, 2, B_ ? 10 : 5, B_ ? 1 : 0, {"OFF", "ON"}, {}},\
+    /* page 4, FX: the engine's own echo and plate, from the style's own (0); */\
+    /* the modes: the echo's TIME, the plate's SIZE (0: the style's) */\
+    {"ECHO", -50, 50, 0, BI, 0, 7, 0},\
+    {"FDBK", -50, 50, 0, BI},\
+    {"PLATE", -50, 50, 0, BI, 0, 11, 0},\
+    {"TONE", -50, 50, 0, BI},\
+  },\
+  {"", "", "", "FX"},\
 };
+PROGMEM static const DeviceDef DREAM_DEF_A = DREAM_DEF_OF(0);
+PROGMEM static const DeviceDef DREAM_DEF_B = DREAM_DEF_OF(1);
+#undef DREAM_DEF_OF
 
 class DreamDevice;
 inline DreamDevice* g_dream_owner = nullptr;  // the one playing the engine
@@ -93,7 +95,9 @@ inline DreamNotes g_dream_notes;
 
 class DreamDevice final : public DreamBase {
 public:
-  DreamDevice() : DreamBase(DREAM_DEF) {}
+  // t: the track (its role: B's LINK, its defaults); the engine is this
+  // namespace's (A's the fast one, its code in RAM1)
+  explicit DreamDevice(int t) : DreamBase(t ? DREAM_DEF_B : DREAM_DEF_A) { track = int8_t(t); fast = !DREAM_ENGINE_B; }
   AudioStream* in() override { return nullptr; }
   AudioStream* out() override { return this; }
   bool Activate() override;
@@ -179,7 +183,7 @@ private:
   int KeyDeg(int note);
   // CVIN (CVOUT's L knob: A's ON, B's ON / L+IN): the FM-1's
   // keyboard on two CV inputs, 1 V an octave, 0 V C0
-  int KeysPair() const { return DREAM_TRACK_B ? mode[CV] >> 1 : mode[CV]; }  // (0: off, 1..4: 1+3 2+4 5+7 6+8)
+  int KeysPair() const { return track ? mode[CV] >> 1 : mode[CV]; }  // (0: off, 1..4: 1+3 2+4 5+7 6+8)
   bool KeysOn() const { return KeysPair() > 0; }
   int8_t keys_pair_was = 0;  // (the pair changed: both read afresh)
   void CvKeys();
@@ -290,7 +294,7 @@ private:
 extern "C" FASTRUN void en_midi_out(uint32_t st, uint32_t d1, uint32_t d2) {
   if (st >= 0xF8) {  // its clock (A's: B's LINK follows it)
     DreamLink& L = g_dream_link;
-    if (DREAM_TRACK_B) return;
+    if (!g_dream_owner || g_dream_owner->track) return;  // (track A's DREAM, whichever engine)
     if (st == 0xF8) L.pulses = L.pulses + 1;
     else if (st == 0xFA || st == 0xFB) { L.start_pulse = L.pulses; L.starts = L.starts + 1; }
     else if (st == 0xFC) L.stops = L.stops + 1;
@@ -518,7 +522,7 @@ FLASHMEM void DreamDevice::FormatMode(int p, char* buf, size_t n) const {
   else if (p == CV) {  // CVIN: the pair (B: L before it, linked)
     static const char* const PAIR[5] = {"OFF", "1+3", "2+4", "5+7", "6+8"};
     const int k = KeysPair();
-    if (DREAM_TRACK_B && (m & 1)) snprintf(buf, n, k ? "L%s" : "LINK", PAIR[std::min(k, 4)]);
+    if (track && (m & 1)) snprintf(buf, n, k ? "L%s" : "LINK", PAIR[std::min(k, 4)]);
     else snprintf(buf, n, "%s", PAIR[std::min(k, 4)]);
   }
   else if (p >= DRONE && p <= SEQ2) {  // the voice; moved an octave or two: "MOG-1"
@@ -711,7 +715,7 @@ FLASHMEM int DreamDevice::BlackFx(int note) {
 // (its LINK on, A's DREAM there), A's tempo, key, mode and chord sent
 FLASHMEM void DreamDevice::Link() {
   DreamLink& L = g_dream_link;
-  if (!DREAM_TRACK_B) {
+  if (!track) {
     L.playing = en_playing;
     L.deg = en_deg;
     L.tempo = sent_ok ? sent[P_TEMPO] : cur[TEMPO];
