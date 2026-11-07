@@ -6935,6 +6935,11 @@ public:
   // the track's source, as Loom.h finds it each main loop: SHUTTLE's loop
   // in memory or SPOOL's (nullptr: none, and what it says why)
   void Source(const AudioEffectReel* r, float rate, const char* why) { src = r; src_rate = rate; src_why = why; }
+  void CpuMax(float parts[2]) override {
+    parts[0] = fx.processorUsageMax();
+    parts[1] = 0.0f;
+    fx.processorUsageMaxReset();
+  }
 private:
   AudioEffectShear fx;
   const AudioEffectReel* src = nullptr;
