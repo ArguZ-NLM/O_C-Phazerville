@@ -242,57 +242,6 @@ __attribute__((noinline)) FLASHMEM void AudioEffectClouds::EcoSpawn(float cur_po
     g->active  = true;
 }
 
-// one grain through this block: read with Hermite from its stretch,
-// coloured, windowed (every 8 samples, glided between), panned into the sum
-FASTRUN __attribute__((optimize("O2"), noinline)) static void EcoGrainRun(AudioEffectClouds::EcoState::G& g, const float* wa, const float* wb,
-                                                               const int16_t* sp, int& li_io, int first, bool stereo,
-                                                               float* acc0, float* acc1) {
-    const float wmix = g.wmix, inv_len = 1.0f / (float)g.len;
-    const float fi = g.inc_frac, gl = g.gl, gr = g.gr, ta = g.ta, gm = (gl + gr) * 0.5f;
-    const int ii = (int)g.inc_int;
-    const size_t len = g.len;
-    const uint8_t tone = g.tone;
-    const bool rev = g.rev;
-    float frac = g.frac, z = g.z;
-    size_t phase = g.phase;
-    int li = li_io;
-    int i = first;
-    while (i < AUDIO_BLOCK_SAMPLES && phase < len) {
-        const int n = std::min<int>(std::min(8, AUDIO_BLOCK_SAMPLES - i), (int)(len - phase));
-        float w = EcoWin(wa, wb, wmix, (float)phase * inv_len);
-        const float dw = (EcoWin(wa, wb, wmix, (float)(phase + n) * inv_len) - w) / n;
-        for (int k = 0; k < n; k++, i++) {
-            float m = CloudsHermite(sp[li - 1], sp[li], sp[li + 1], sp[li + 2], frac);
-            if (tone) {
-                z += (m - z) * ta;
-                m = tone == 1 ? z : m - z;
-            }
-            m *= w;
-            if (stereo) {
-                acc0[i] += m * gl;
-                acc1[i] += m * gr;
-            } else {
-                acc0[i] += m * gm;
-            }
-            w += dw;
-            if (!rev) {
-                frac += fi;
-                if (frac >= 1.0f) { frac -= 1.0f; li++; }
-                li += ii;
-            } else {
-                frac -= fi;
-                if (frac < 0.0f) { frac += 1.0f; li--; }
-                li -= ii;
-            }
-        }
-        phase += n;
-    }
-    g.frac = frac;
-    g.z = z;
-    g.phase = phase;
-    li_io = li;
-}
-
 // profiling (USB status, temporary): setup / spawn / grains / out, cycles
 // summed and peak, and the grains playing
 static uint32_t eco_prof_sum[6], eco_prof_max[6], eco_prof_blocks, eco_prof_grains;
@@ -464,10 +413,51 @@ FLASHMEM void AudioEffectClouds::UpdateEco(audio_block_t** in, audio_block_t** o
                 memcpy(sp + first_part, src, (count - first_part) * sizeof(int16_t));
             ep[5] += ARM_DWT_CYCCNT - c0;
         }
-        // (the loop in RAM1: from flash it cost ~150 cycles a sample and grain)
-        EcoGrainRun(g, e.win[g.wa], e.win[g.wa + 1], sp, li, first, stereo, acc[0], acc[1]);
+        const float* wa = e.win[g.wa];
+        const float* wb = e.win[g.wa + 1];
+        const float wmix = g.wmix, inv_len = 1.0f / (float)g.len;
+        const float fi = g.inc_frac, gl = g.gl, gr = g.gr, ta = g.ta;
+        const size_t ii = g.inc_int, len = g.len;
+        const uint8_t tone = g.tone;
+        const bool rev = g.rev;
+        float frac = g.frac, z = g.z;
+        size_t phase = g.phase;
+        int i = first;
+        while (i < AUDIO_BLOCK_SAMPLES && phase < len) {
+            const int n = std::min<int>(std::min(8, AUDIO_BLOCK_SAMPLES - i), (int)(len - phase));
+            float w = EcoWin(wa, wb, wmix, (float)phase * inv_len);
+            const float dw = (EcoWin(wa, wb, wmix, (float)(phase + n) * inv_len) - w) / n;
+            for (int k = 0; k < n; k++, i++) {
+                float m = CloudsHermite(sp[li - 1], sp[li], sp[li + 1], sp[li + 2], frac);
+                if (tone) {
+                    z += (m - z) * ta;
+                    m = tone == 1 ? z : m - z;
+                }
+                m *= w;
+                if (stereo) {
+                    acc[0][i] += m * gl;
+                    acc[1][i] += m * gr;
+                } else {
+                    acc[0][i] += m * (gl + gr) * 0.5f;
+                }
+                w += dw;
+                if (!rev) {
+                    frac += fi;
+                    if (frac >= 1.0f) { frac -= 1.0f; li++; }
+                    li += (int)ii;
+                } else {
+                    frac -= fi;
+                    if (frac < 0.0f) { frac += 1.0f; li--; }
+                    li -= (int)ii;
+                }
+            }
+            phase += n;
+        }
+        g.frac = frac;
+        g.z = z;
+        g.phase = phase;
         g.idx = (start + (size_t)li) % buf_size;
-        if (g.phase >= g.len) g.active = false;
+        if (phase >= len) g.active = false;
     }
 
     emark(2);

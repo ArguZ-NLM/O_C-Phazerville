@@ -140,8 +140,8 @@ public:
     void setTone(float t)            { eco_tone_ = t; }
     void setDrift(float d)           { eco_drift_ = d; }
 
-    struct EcoState;  // (public: its grain loop runs in a function of its own, from RAM1)
 private:
+    struct EcoState;
     EcoState* eco_ = nullptr;
     volatile float eco_rev_ = 0.1f, eco_harm_ = 0.3f, eco_tone_ = -0.1f, eco_drift_ = 0.35f;
     void UpdateEco(audio_block_t** in, audio_block_t** out);
