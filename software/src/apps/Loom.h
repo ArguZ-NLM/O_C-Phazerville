@@ -2464,6 +2464,11 @@ FLASHMEM void AppLoom::MainLoop() {
     }
     Serial.println();
   }
+  // BEATER's engine: where it sits
+  for (int t = 0; t < NUM_TRACKS; t++)
+    if (Device* d = tracks[t].inst[RESONATOR][2]) if (d->active && d->ok())
+      Serial.printf("  %c BEATER engine %u bytes in %s\n", t ? 'R' : 'L', unsigned(RingsVoice::PartBytes()),
+                    static_cast<ModalDevice*>(d)->PartInPsram() ? "PSRAM" : "RAM2");
   // REPEAT's memory (m r p s d d, a dash: missing) and RAM2's room
   for (int t = 0; t < NUM_TRACKS; t++)
     for (int o = 0; o < MAX_OPTIONS; o++) {

@@ -6979,6 +6979,7 @@ public:
   AudioStream* in() override { return &in_mix; }   // L + R summed
   AudioStream* out() override { return &fx; }
   bool ok() const override { return fx.voice.ok(); }
+  bool PartInPsram() const { return fx.voice.InPsram(); }
   bool Activate() override {
     if (!fx.voice.Init()) return false;
     ApplyAll();
