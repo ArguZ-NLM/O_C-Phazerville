@@ -991,8 +991,8 @@ FLASHMEM static float WorstCost(const Device* d) {
     return 4.0f + (x->Phasing() ? 1.0f + 0.6f * x->MaxStages() : 1.0f);  // (STAGE's variation up)
   }
   if (!strcmp(t, "CHM")) return 7.0f;   // TWILL
-  // the sources that are heavy (measured on the module: DREAM 37 %, whatever
-  // the piece); only the track whose DREAM plays the engine pays for it
+  // the sources that are heavy: DREAM (its Cost, by track and LEVEL); only
+  // the track whose DREAM plays the engine pays for it
   // SID: its 6510 runs in the main loop now (2026-11-07), the audio update
   // only plays the chips: 13.6 % peak for one (was 37 %), ~10 % each more
   if (!strcmp(t, "SID")) return 15.0f + 11.0f * float(static_cast<const SidDevice*>(d)->Chips() - 1);
