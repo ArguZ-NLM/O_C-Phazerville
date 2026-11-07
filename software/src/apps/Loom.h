@@ -999,6 +999,7 @@ FLASHMEM static float WorstCost(const Device* d) {
   if (!strcmp(t, "DRM")) return static_cast<const DreamBase*>(d)->Cost();
   if (!strcmp(t, "SPR"))  // FIBRE; CLOUD (was FLOCK): up to 20 grains, from flash, 16-22 % peak measured with 9-11 grains
     return static_cast<const SprayDevice*>(d)->Cloud() ? 22.0f : 12.0f;  // (FINE 9-12 % with big, dense grains, 2026-11-07)
+  if (!strcmp(t, "SHR")) return 4.0f;   // SHEAR (two voices from memory)
   if (!strcmp(t, "RES")) return 8.5f;   // REED (7.8 % measured 2026-11-07; 3 was too low)
   return 3.0f;
 }
@@ -1968,6 +1969,15 @@ FLASHMEM void AppLoom::MainLoop() {
       if (tr.reel && tr.choice[SOURCE] == 1) tr.reel->Idle();
       if (tr.dream && tr.choice[SOURCE] == 5) tr.dream->Idle();
       if (tr.sid && tr.choice[SOURCE] == 4) tr.sid->Idle();  // (its 6510 runs ahead here)
+      // SHEAR cuts the track's SHUTTLE (its file in memory) or SPOOL
+      if (tr.choice[SPRAY] == 3) if (auto* sh = static_cast<ShearDevice*>(tr.inst[SPRAY][3])) {
+        if (tr.choice[SOURCE] == 2 && tr.player) {
+          const AudioEffectReel* r = tr.player->MemReel();
+          sh->Source(r, tr.player->ShearRate(), r ? "" : "(SHUTTLE: not MEM)");
+        } else if (tr.choice[SOURCE] == 1 && tr.reel) {
+          sh->Source(tr.reel->LoopReel(), 1.0f, "");
+        } else sh->Source(nullptr, 1.0f, "");
+      }
       // DREAM's SPACE drives the track's REPEAT (its reverb's LEVEL fully,
       // the delay's by half) when REPEAT is in; else the engine's own space
       {
@@ -3504,6 +3514,7 @@ FLASHMEM const char* WeaveTag(const Track& tr, int c) {
        : c == RESONATOR && tr.choice[c] == 2 ? PSTR("BTR")  // BEATER
        : c == RESONATOR && tr.choice[c] == 3 ? PSTR("TWL")  // TWILL
        : c == SPRAY && tr.choice[c] == 2 ? PSTR("DFT")      // DRAFT
+       : c == SPRAY && tr.choice[c] == 3 ? PSTR("SHR")      // SHEAR
        : c == SPRAY && tr.choice[c] == 1 && static_cast<const SprayDevice*>(tr.inst[c][1])->Cloud() ? PSTR("CLD")  // FIBRE CLOUD
        : c == TEXTURE && tr.choice[c] == 2 ? PSTR("HDL")    // HEDDLE
        : SLOT_DEFS[c].tag;

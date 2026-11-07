@@ -42,6 +42,7 @@
 #include "LoomThrums.h"
 #include "../Audio/AudioEffectClouds.h"
 #include "../Audio/AudioEffectReel.h"
+#include "../Audio/AudioEffectShear.h"
 #include "../Audio/AudioPlayStream.h"
 #include <SD.h>
 #include "../src/extern/gfx_font_6x8.h"  // (Crawl draws its glyphs itself)
@@ -2139,6 +2140,7 @@ public:
   Meter in_m[2];            // the input level, as on INPUT
   // saving the loop to the SD card (the app writes it, A held for 2 s)
   const int16_t* LoopData(int c) const { return fx.Data(c); }
+  const AudioEffectReel* LoopReel() const { return &fx; }  // SHEAR cuts it
   AudioEffectReel::State LoopState() const { return fx.state(); }
   void WriteMeta(const char* wav_name) const;  // the loop's settings for PLAYER
   size_t LoopLength() const {
@@ -3675,6 +3677,10 @@ public:
   // the tempo heard: the file's at this SPEED, either way (0: none found, or
   // not playing)
   float HeardBpm() const { return bpm > 0.0f && Playing() ? bpm * cur[SPEED] * 0.01f : 0.0f; }
+  // SHEAR: its loop in memory (MEM; nullptr streaming or loading), and how
+  // fast it plays (the file's rate, SYNC, SPEED)
+  const AudioEffectReel* MemReel() const { return streaming || Busy() || loaded < 0 ? nullptr : &fx; }
+  float ShearRate() const { return rate * SyncRatio() * std::max(1, int(cur[SPEED])) * 0.01f; }
   // where the head is in the file's beat, 0..1 as heard (backwards too: a
   // beat falls where the head crosses one, the hit's frame); -1: no tempo
   float HeardBeatPhase() const {
@@ -6876,6 +6882,219 @@ FLASHMEM void SprayDevice::DrawMini(int x, int y, int w, int h) {
 }
 
 /////////////////////////////////////////////////////////////////
+// SHEAR (2026-11-07, Sascha's idea: an MPC / Reason REX slicer): cuts the
+// track's loop, SHUTTLE's file (in memory, MEM) or SPOOL's recording,
+// between their START and END, into slices and plays them on the clock, a
+// slice a step (AudioEffectShear.h). It reads the loop where it is: nothing
+// recorded, nothing copied.
+// Page 1: SLICE how many (its L knob: EVEN, equal ones, or HITS, cut at
+// the loudest onsets), ORDER (STRT as they lie, BACK, RAND, SHUF a shuffled
+// order kept; B a new one), RATE a step's note value, MIX.
+// Page 2: PITCH (its L knob: a random spread each step), GATE how much of
+// its step a slice sounds, REVRS the odds a step plays backwards, ROLL the
+// odds it rolls (its L knob: 2, 3 or 4 hits).
+// A: run / stop. B: a new shuffle (and new chances).
+/////////////////////////////////////////////////////////////////
+PROGMEM static const DeviceDef SHEAR_DEF = {
+  "SHEAR", "SHR", 8, {"RUN", "NEW"},
+  {
+    {"SLICE", 2, AudioEffectShear::MAX_SLICES, 16, UNI, 0, 2, 0, {}, {"EVEN", "HITS"}},
+    {"ORDER", 0, 3, 0, LIST, 4, 0, 0, {"STRT", "BACK", "RAND", "SHUF"}},
+    {"RATE", 0, NUM_DIVS - 1, 29, UNI},  // (29: a 1/16)
+    {"MIX", 0, 100, 100, UNI},
+    {"PITCH", -24, 24, 0, BI, 0, 13, 0},  // mode: spread, 0..12 semitones
+    {"GATE", 5, 100, 100, UNI},
+    {"REVRS", 0, 100, 0, UNI},
+    {"ROLL", 0, 100, 0, UNI, 0, 3, 0},    // mode: 2, 3, 4 hits
+  },
+  {"", ""},
+};
+
+class ShearDevice : public Device {
+public:
+  enum { SLICE, ORDER, RATE, LEVEL, PITCH, GATE, REVRS, ROLL };
+  ShearDevice() : Device(SHEAR_DEF) {}
+  AudioStream* in() override { return &fx; }
+  AudioStream* out() override { return &fx; }
+  void Rest(bool on) override { fx.rest = on; }
+  bool Activate() override { active = true; Shuffle(); ApplyAll(); return true; }
+  void Deactivate() override { fx.reel = nullptr; active = false; }
+  bool ok() const override { return true; }
+  void Apply(int p) override;
+  void Format(int p, char* buf, size_t n) const override;
+  void FormatMode(int p, char* buf, size_t n) const override;
+  const char* AltName(int p) const override { return p == SLICE ? "CUT" : p == PITCH ? "SPRD" : p == ROLL ? "HITS" : nullptr; }
+  void Action(int a) override {
+    if (a == 0) fx.running = !fx.running;
+    else Shuffle();
+  }
+  bool ActionLit(int a) const override { return a == 0 && fx.running; }
+  void Idle() override;
+  void DrawViz(int x, int y, int w, int h) override;
+  void DrawMini(int x, int y, int w, int h) override;
+  // the track's source, as Loom.h finds it each main loop: SHUTTLE's loop
+  // in memory or SPOOL's (nullptr: none, and what it says why)
+  void Source(const AudioEffectReel* r, float rate, const char* why) { src = r; src_rate = rate; src_why = why; }
+private:
+  AudioEffectShear fx;
+  const AudioEffectReel* src = nullptr;
+  float src_rate = 1.0f;
+  const char* src_why = "";
+  // what the slices were cut for (HITS: found again when it changes)
+  const AudioEffectReel* cut_src = nullptr;
+  size_t cut_ws = 0, cut_wl = 0;
+  const int16_t* cut_buf = nullptr;
+  int cut_n = 0, cut_mode = -1;
+  void Cut();
+  void Shuffle();
+  int Slices() const { return constrain(int(cur[SLICE]), 2, AudioEffectShear::MAX_SLICES); }
+};
+
+FLASHMEM void ShearDevice::Apply(int p) {
+  switch (p) {
+    case SLICE: fx.nslices = uint8_t(Slices()); cut_mode = -1; break;  // (cut again in Idle)
+    case ORDER: fx.order = uint8_t(cur[ORDER]); break;
+    case RATE: fx.step_beats = DivBeats(cur[RATE]); break;
+    case LEVEL: wet = cur[LEVEL] * 0.01f; break;
+    case PITCH: fx.pitch = exp2f(cur[PITCH] / 12.0f); fx.spread = float(mode[PITCH]); break;
+    case GATE: fx.gate = cur[GATE] * 0.01f; break;
+    case REVRS: fx.p_rev = cur[REVRS] * 0.01f; break;
+    case ROLL: fx.p_roll = cur[ROLL] * 0.01f; fx.roll_hits = uint8_t(2 + mode[ROLL]); break;
+  }
+}
+
+FLASHMEM void ShearDevice::Format(int p, char* buf, size_t n) const {
+  if (p == RATE) FormatDiv(cur[RATE], buf, n);
+  else if (p == GATE || p == REVRS || p == ROLL || p == LEVEL) snprintf(buf, n, "%d%%", int(cur[p]));
+  else Device::Format(p, buf, n);
+}
+
+FLASHMEM void ShearDevice::FormatMode(int p, char* buf, size_t n) const {
+  if (p == PITCH && !mode[p]) snprintf(buf, n, "OFF");
+  else if (p == PITCH) snprintf(buf, n, LOOM_PM "%d", mode[p]);
+  else if (p == ROLL) snprintf(buf, n, "x%d", 2 + mode[p]);
+  else Device::FormatMode(p, buf, n);
+}
+
+FLASHMEM void ShearDevice::Shuffle() {
+  const int n = Slices();
+  uint8_t pm[AudioEffectShear::MAX_SLICES];
+  for (int i = 0; i < n; i++) pm[i] = uint8_t(i);
+  for (int i = n - 1; i > 0; i--) { const int j = int(random(i + 1)); std::swap(pm[i], pm[j]); }
+  for (int i = 0; i < n; i++) fx.perm[i] = pm[i];
+}
+
+// the slices: EVEN, equal; HITS, at the loudest onsets in the loop (each
+// pulled a little early, so its attack is in), found once for each loop
+FLASHMEM void ShearDevice::Cut() {
+  const int n = Slices();
+  float c[AudioEffectShear::MAX_SLICES + 1];
+  for (int i = 0; i <= n; i++) c[i] = float(i) / n;
+  if (mode[SLICE] == 1 && src && src->Data(0) && cut_wl > 4096) {
+    constexpr int H = 1024;  // the loop in H steps; the level of each
+    DMAMEM static float lv[H], od[H];  // (RAM2: RAM1 is short)
+    const int16_t* l = src->Data(0);
+    const int16_t* r = src->Data(1);
+    const size_t hop = cut_wl / H, len = src->Length();
+    const size_t stride = std::max<size_t>(1, hop / 48);  // (48 samples a step at most: quick)
+    for (int h = 0; h < H; h++) {
+      float e = 0.0f;
+      const size_t a = cut_ws + size_t(h) * hop;
+      for (size_t k = 0; k < hop && a + k < len; k += stride) e += fabsf(float(l[a + k])) + fabsf(float(r[a + k]));
+      lv[h] = e;
+    }
+    for (int h = 0; h < H; h++) {  // how much louder than just before
+      const float before = (h ? lv[h - 1] : lv[0]) * 0.5f + (h > 1 ? lv[h - 2] : lv[0]) * 0.5f;
+      od[h] = std::max(0.0f, lv[h] - 1.2f * before);
+    }
+    const int gap = std::max(1, H / (3 * n));  // (no two cuts closer than a third of an even slice)
+    int at[AudioEffectShear::MAX_SLICES];
+    int got = 0;
+    for (int k = 0; k < n - 1; k++) {
+      int best = -1;
+      float bv = 0.0f;
+      for (int h = gap; h < H - gap; h++) {
+        if (od[h] <= bv) continue;
+        bool near = false;
+        for (int j = 0; j < got && !near; j++) near = abs(at[j] - h) < gap;
+        if (!near) { bv = od[h]; best = h; }
+      }
+      if (best < 0) break;
+      at[got++] = best;
+    }
+    if (got == n - 1) {
+      std::sort(at, at + got);
+      c[0] = 0.0f;
+      for (int k = 0; k < got; k++) c[k + 1] = std::max(0.0f, (float(at[k]) - 0.5f) / H);
+      c[n] = 1.0f;
+    }
+  }
+  AudioNoInterrupts();
+  for (int i = 0; i <= n; i++) fx.cut[i] = c[i];
+  AudioInterrupts();
+}
+
+FLASHMEM void ShearDevice::Idle() {
+  fx.SetClock(double(clock_beat_n) + double(clock_beat_ph), clock_beat_us, tempo_bpm, clock_running);
+  fx.rate = src_rate;
+  if (fx.reel != src) fx.reel = src;
+  // cut again when the loop or the cuts changed
+  size_t ws = 0, wl = 0;
+  if (src) src->Window(ws, wl);
+  const int16_t* b = src ? src->Data(0) : nullptr;
+  if (src != cut_src || ws != cut_ws || wl != cut_wl || b != cut_buf || cut_n != Slices() || cut_mode != mode[SLICE]) {
+    cut_src = src; cut_ws = ws; cut_wl = wl; cut_buf = b; cut_n = Slices(); cut_mode = mode[SLICE];
+    if (fx.order == AudioEffectShear::SHUFFLE) Shuffle();
+    Cut();
+  }
+}
+
+// the loop, its slices (lines), the one playing (inverted) and the head
+FLASHMEM void ShearDevice::DrawViz(int x, int y, int w, int h) {
+  size_t ws = 0, wl = 0;
+  if (src) src->Window(ws, wl);
+  if (!src || !src->Data(0) || wl < 2) {
+    gfxPrint(x + 4, y + h / 2 - 8, PSTR("cuts SHUTTLE (MEM)"));
+    gfxPrint(x + 4, y + h / 2 + 2, PSTR("or SPOOL's loop"));
+    if (src_why && *src_why) gfxPrint(x + 4, y + h / 2 + 12, src_why);
+    return;
+  }
+  const int16_t* l = src->Data(0);
+  const size_t len = src->Length();
+  const int cy = y + h / 2;
+  for (int i = 0; i < w; i++) {  // the loop's level, column by column
+    const size_t a = ws + size_t(uint64_t(wl) * i / w), e = ws + size_t(uint64_t(wl) * (i + 1) / w);
+    const size_t step = std::max<size_t>(1, (e - a) / 24);
+    int pk = 0;
+    for (size_t k = a; k < e && k < len; k += step) pk = std::max(pk, abs(int(l[k])));
+    const int a2 = int(sqrtf(pk / 32768.0f) * (h / 2 - 2));
+    if (a2) gfxLine(x + i, cy - a2, x + i, cy + a2);
+    else gfxPixel(x + i, cy);
+  }
+  const int n = Slices();
+  for (int k = 1; k < n; k++) {  // the cuts
+    const int cx = x + int(fx.cut[k] * w);
+    for (int py = y; py < y + h; py += 2) gfxPixel(cx, py);
+  }
+  const int s = fx.playing_slice;
+  if (s >= 0 && s < n) {
+    const int a = x + int(fx.cut[s] * w), e = x + int(fx.cut[s + 1] * w);
+    gfxInvert(a, y, std::max(1, e - a), h);
+    const int hx = constrain(x + int(fx.play_frac * w), x, x + w - 1);
+    gfxLine(hx, y, hx, y + h - 1);
+  }
+}
+
+FLASHMEM void ShearDevice::DrawMini(int x, int y, int w, int h) {
+  const int n = Slices(), s = fx.playing_slice;
+  for (int k = 0; k < n; k++) {
+    const int a = x + k * w / n, e = x + (k + 1) * w / n - 1;
+    if (k == s) gfxRect(a, y, std::max(1, e - a), h);
+    else gfxPixel(a, y + h - 1);
+  }
+}
+
+/////////////////////////////////////////////////////////////////
 // A SOURCE that also plays the CV outputs (SID, DREAM): while it is a
 // track's source with its CV on, the outputs it claims carry its pitches
 // or levels, over what they were set to (Loom.h, WriteOutputs)
@@ -8823,7 +9042,7 @@ struct SlotDef {
 
 PROGMEM static const SlotDef SLOT_DEFS[SLOT_COUNT] = {
   {"SOURCE",   "SRC", 6, 6},  // INPUT, SPOOL, PLAYER, WARP, SID, DREAM (owned by the track, not made here)
-  {"FIBRE",    "FIB", 3, 1},  // BYPASS, FIBRE (grains; CLOUD: FLOCK's, since 2026-11-07), DRAFT (pitch / time)
+  {"FIBRE",    "FIB", 4, 1},  // BYPASS, FIBRE (grains; CLOUD: FLOCK's, since 2026-11-07), DRAFT (pitch / time), SHEAR (slices)
   {"REED",     "RD",  4, 1},  // BYPASS, REED (filter bank), BEATER (struck object), TWILL (tuned resonators)
   {"TEXTURE",  "TEX", 3, 1},  // BYPASS, TEXTURE, HEDDLE (shifter / phaser)
   {"REPEAT",   "RPT", 2, 1},  // BYPASS, REPEAT (delay, reverb)
@@ -8843,6 +9062,7 @@ static const char* ShownTag(const char* tag) {
 FLASHMEM static Device* MakeDevice(int slot, int option) {
   if (slot == SPRAY && option == 1) return new SprayDevice;
   if (slot == SPRAY && option == 2) return new StretchDevice;
+  if (slot == SPRAY && option == 3) return new ShearDevice;
   if (slot == RESONATOR && option == 1) return new ResonatorDevice;
   if (slot == RESONATOR && option == 2) return new ModalDevice;
   if (slot == RESONATOR && option == 3) return new ChimeDevice;

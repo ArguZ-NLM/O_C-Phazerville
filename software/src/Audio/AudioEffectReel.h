@@ -179,6 +179,9 @@ public:
 
   State state() const { return st; }
   size_t Length() const { return len; }
+  // the window it plays (its loop), for SHEAR (read in the audio update: it
+  // moves with the buffer when that is swapped, the audio stopped)
+  void Window(size_t& s, size_t& l) const { s = ws; l = wl; }
   size_t Capacity() const { return cap; }
   // --- the player loads into, and SPOOL saves from, the buffer directly
   // (main loop; while loading the engine stays silent)
