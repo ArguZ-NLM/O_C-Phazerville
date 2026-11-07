@@ -991,10 +991,11 @@ FLASHMEM static float WorstCost(const Device* d) {
     return 4.0f + (x->Phasing() ? 1.0f + 0.6f * x->MaxStages() : 1.0f);  // (STAGE's variation up)
   }
   if (!strcmp(t, "CHM")) return 7.0f;   // TWILL
-  // the sources that are heavy (measured on the module: SID 33 % for one
-  // chip, about 2.4 x for three; DREAM 37 %, whatever the piece); only the
-  // track whose DREAM plays the engine pays for it
-  if (!strcmp(t, "SID")) return 34.0f + 23.0f * float(static_cast<const SidDevice*>(d)->Chips() - 1);
+  // the sources that are heavy (measured on the module: DREAM 37 %, whatever
+  // the piece); only the track whose DREAM plays the engine pays for it
+  // SID: its 6510 runs in the main loop now (2026-11-07), the audio update
+  // only plays the chips: 13.6 % peak for one (was 37 %), ~10 % each more
+  if (!strcmp(t, "SID")) return 15.0f + 11.0f * float(static_cast<const SidDevice*>(d)->Chips() - 1);
   if (!strcmp(t, "DRM")) return static_cast<const DreamBase*>(d)->Cost();
   if (!strcmp(t, "SPR")) return 6.0f;   // FIBRE
   if (!strcmp(t, "FLK")) return 22.0f;  // FLOCK (up to 20 grains, from flash; 16-22 % peak measured with 9-11 grains)
@@ -2476,6 +2477,17 @@ FLASHMEM void AppLoom::MainLoop() {
                   (unsigned long)(sid_pmax[1] / blk), (unsigned long)(sid_pmax[2] / blk));
     for (auto& x : sid_prof) x = 0;
     for (auto& x : sid_pmax) x = 0;
+  }
+  {  // PROFILE (temporary): DREAM A's stages, tenths of % of the CPU
+    volatile uint32_t* q = dream_a::en_prof;
+    if (const uint32_t nb = q[14]) {
+      const uint32_t blk = 600000000u / 44100u * 128u / 1000u;
+      static const char* const nm[13] = {"drain", "ctl+tick", "pluck", "drone", "lead", "crash", "widen", "atmos", "fx", "out", "echo", "cloud", "plate"};
+      Serial.printf("  DREAM prof (%lu blocks, %lu chunks):", (unsigned long)nb, (unsigned long)q[15]);
+      for (int i = 0; i < 13; i++) Serial.printf(" %s %lu", nm[i], (unsigned long)(q[i] / nb / blk));
+      Serial.printf("  peak %lu\n", (unsigned long)(q[13] / blk));
+      for (int i = 0; i < 16; i++) q[i] = 0;
+    }
   }
   // BEATER's engine: where it sits
   for (int t = 0; t < NUM_TRACKS; t++)

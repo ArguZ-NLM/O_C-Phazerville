@@ -137,3 +137,4 @@
 #undef en_clock_now
 #undef en_drone_oct
 #undef en_gate
+#undef en_prof

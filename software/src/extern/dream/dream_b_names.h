@@ -138,3 +138,4 @@
 #define en_clock_now dreamb_en_clock_now
 #define en_drone_oct dreamb_en_drone_oct
 #define en_gate dreamb_en_gate
+#define en_prof dreamb_en_prof
