@@ -2488,7 +2488,10 @@ FLASHMEM void AppLoom::MainLoop() {
       Serial.printf("  peak %lu plate %s\n", (unsigned long)(q[13] / blk), tracks[0].dream && static_cast<dream_a::DreamDevice*>(tracks[0].dream)->PlateInRam2() ? "RAM2" : "PSRAM");
       Serial.printf("  DREAM pulse avg %lu max %lu, tick avg %lu max %lu (tenths %% of a block)\n", (unsigned long)(q[16] / nb / blk),
                     (unsigned long)(q[17] / blk), (unsigned long)(q[18] / nb / blk), (unsigned long)(q[19] / blk));
-      for (int i = 0; i < 20; i++) q[i] = 0;
+      Serial.printf("  DREAM heaviest block:");
+      for (int i = 0; i < 13; i++) Serial.printf(" %s %lu", nm[i], (unsigned long)(q[20 + i] / blk));
+      Serial.println();
+      for (int i = 0; i < 48; i++) q[i] = 0;
     }
   }
   // BEATER's engine: where it sits
