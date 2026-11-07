@@ -437,10 +437,18 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
   };
   float pre[2][AUDIO_BLOCK_SAMPLES];  // PHASE: the sound before the phasers
   float e_in[2] = {}, e_out[2] = {};   // HEDDLE's energy in / out this block, per side (the level match)
+  // three passes over the block (2026-11-07): the input, tilt and noise;
+  // FOLD on its own (in the one loop it had no registers left, and read
+  // its state back from the stack every sample: 570 cycles a side, now
+  // fewer); drive, crush, MIX and HEDDLE. Each in the order it was
+  // (sample by sample, both sides), so the sound is the same
+  float vb[2][AUDIO_BLOCK_SAMPLES], heldb[2][AUDIO_BLOCK_SAMPLES], dryb[2][AUDIO_BLOCK_SAMPLES];
+  bool takeb[AUDIO_BLOCK_SAMPLES];
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
     float x[2] = {in[0] ? in[0]->data[n] * q : 0.0f, in[1] ? in[1]->data[n] * q : 0.0f};
     // the dry side of MIX, held back as long as FOLD's oversampling
-    const float dry[2] = {Lmix[0][Ldi], Lmix[1][Ldi]};
+    dryb[0][n] = Lmix[0][Ldi];
+    dryb[1][n] = Lmix[1][Ldi];
     Lmix[0][Ldi] = x[0];
     Lmix[1][Ldi] = x[1];
     const float lvl = std::max(fabsf(x[0]), fabsf(x[1]));
@@ -464,6 +472,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
       if (--hold_count > 0) take = false;
       else hold_count = hold + int((LRand() + 1.0f) * 0.25f * hold); // jitter
     }
+    takeb[n] = take;
 
     for (int c = 0; c < 2; c++) {
       float v = x[c];
@@ -498,9 +507,17 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
       }
       // the dry sound held back as long as the 2 x folder takes (19
       // samples, 0.43 ms), always, so FOLD turning on or off doesn't jump
-      const float held = Ldry[c][Ldi];
+      vb[c][n] = v;
+      heldb[c][n] = Ldry[c][Ldi];
       Ldry[c][Ldi] = v;
-      if (fld > 0.0f) {
+    }
+    Ldi = (Ldi + 1) % OS_DELAY;
+  }
+  if (fld > 0.0f) {
+    for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++)
+      for (int c = 0; c < 2; c++) {
+        float v = vb[c][n];
+        const float held = heldb[c][n];
         // As in a Buchla patch: the timbre follows the note, the level
         // follows the sound.
         // - The drive is set by how loud the note was (its peak, ~0.6 s
@@ -569,9 +586,17 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
         // the match jumped up to 4 x: a click)
         const float f = Llp[c] * std::min(4.0f, Lfin[c] / std::max(Lfout[c], 0.3f));
         v = held + fm * (f - held);
-      } else {
-        v = held;  // (its state cleared before the loop)
+        vb[c][n] = v;
       }
+  } else {
+    memcpy(vb, heldb, sizeof(vb));  // (its state cleared before the loop)
+  }
+  for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
+    const bool take = takeb[n];
+    const float dry[2] = {dryb[0][n], dryb[1][n]};
+    float x[2];
+    for (int c = 0; c < 2; c++) {
+      float v = vb[c][n];
       v = Shape(v, drv) * dg;
       if (do_bits) {
         // mid-rise steps (no step at zero): quiet tails buzz on as the
@@ -589,7 +614,6 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectDirt::update() {  // (O2
       }
       x[c] = v;
     }
-    Ldi = (Ldi + 1) % OS_DELAY;
 
     float o2[2];
     for (int c = 0; c < 2; c++) o2[c] = dry[c] + w * (x[c] - dry[c]);
