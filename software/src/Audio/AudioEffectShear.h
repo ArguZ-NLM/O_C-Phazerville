@@ -70,6 +70,7 @@ public:
   }
   // --- read by the main loop (the picture)
   volatile int8_t playing_slice = -1;
+  volatile uint32_t n_steps = 0, n_pads = 0;  // (USB status)
   volatile float play_frac = 0.0f;    // where in the window the head is (0..1)
 
   void update() override {
@@ -112,7 +113,7 @@ public:
       }
     } else last_step = INT64_MIN;
     const uint8_t pd = pad;
-    if (pd != 0xFF) { pad = 0xFF; Start(pd, -1, pad_lvl); }
+    if (pd != 0xFF) { pad = 0xFF; n_pads = n_pads + 1; Start(pd, -1, pad_lvl); }
 
     for (int i = 0; i < AUDIO_BLOCK_SAMPLES; i++) {
       if (i == trig_at) GridStep(trig_k);
@@ -193,6 +194,7 @@ private:
     }
     const int u = Units(s);
     next_at = k + u;
+    n_steps = n_steps + 1;
     Start(s, u, 1.0f);
     roll_left = 0;
     if (p_roll > 0.0f && Rand01() < p_roll && step_samples > 0.0f) {  // its time in hits
