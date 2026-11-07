@@ -444,20 +444,14 @@ private:
   }
 };
 
-static int16_t rv_pool[2][22868];  // RAM1 (= AudioEffectEcho::RV_TOTAL)
-static bool rv_pool_used[2] = {false, false};
-
+// the reverb's lines (45 KB): RAM2 while a REPEAT has them (else PSRAM).
+// They were in RAM1 (DTCM) for good; given up there (2026-11-07) so RAM1's
+// code half can grow and DREAM's engine run from it
 FLASHMEM int16_t* AudioEffectEcho::TakeLines() {
-  for (int k = 0; k < 2; k++)
-    if (!rv_pool_used[k]) { rv_pool_used[k] = true; memset(rv_pool[k], 0, sizeof(rv_pool[k])); return rv_pool[k]; }
-  return static_cast<int16_t*>(calloc(RV_TOTAL, sizeof(int16_t)));
+  return static_cast<int16_t*>(FastAlloc(RV_TOTAL * sizeof(int16_t)));
 }
 
-FLASHMEM void AudioEffectEcho::GiveLines(int16_t* p) {
-  for (int k = 0; k < 2; k++)
-    if (p == rv_pool[k]) { rv_pool_used[k] = false; return; }
-  free(p);
-}
+FLASHMEM void AudioEffectEcho::GiveLines(int16_t* p) { FastFree(p); }
 
 // Reads one tap's block; crossfades when its time has changed.
 FLASHMEM void AudioEffectEcho::ReadTap(int ch, int t, int16_t* out) {
