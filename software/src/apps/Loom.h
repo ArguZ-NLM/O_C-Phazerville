@@ -998,7 +998,7 @@ FLASHMEM static float WorstCost(const Device* d) {
   if (!strcmp(t, "SID")) return 15.0f + 11.0f * float(static_cast<const SidDevice*>(d)->Chips() - 1);
   if (!strcmp(t, "DRM")) return static_cast<const DreamBase*>(d)->Cost();
   if (!strcmp(t, "SPR"))  // FIBRE; CLOUD (was FLOCK): up to 20 grains, from flash, 16-22 % peak measured with 9-11 grains
-    return static_cast<const SprayDevice*>(d)->Cloud() ? 22.0f : 6.0f;
+    return static_cast<const SprayDevice*>(d)->Cloud() ? 22.0f : 12.0f;  // (FINE 9-12 % with big, dense grains, 2026-11-07)
   if (!strcmp(t, "RES")) return 8.5f;   // REED (7.8 % measured 2026-11-07; 3 was too low)
   return 3.0f;
 }
