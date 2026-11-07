@@ -611,7 +611,7 @@ DREAM_RAM2 volatile float en_echo_pk;
 volatile float en_echo_lvl;
 DREAM_RAM2 volatile uint8_t en_load;
 /* PROFILE (temporary): cycles per stage, summed; [15] chunks, [14] blocks, [13] the heaviest block */
-DREAM_RAM2 volatile uint32_t en_prof[16];
+DREAM_RAM2 volatile uint32_t en_prof[20];
 #define EN_CYC (*(volatile uint32_t *)0xE0001004)
 #define EN_P(i, x) do { uint32_t q_ = EN_CYC; x; en_prof[i] += EN_CYC - q_; } while (0)
 DREAM_RAM2 static int32_t shed_left;   /* samples the shedding lasts (a heavy block: half a second) */
@@ -6131,7 +6131,7 @@ DREAM_FLASH void en_render(int32_t *out, uint32_t n, uint32_t gain_q12)
         int timed = en_playing && !en_ext;
         if (timed) {
             if (pulse_left <= 0.0f) {
-                EN_P(1, clock_pulse());
+                { uint32_t qt = EN_CYC; clock_pulse(); qt = EN_CYC - qt; en_prof[16] += qt; if (qt > en_prof[17]) en_prof[17] = qt; }
                 pulse_left += step_len * (1.0f / 6.0f);
             }
             if ((float)k > pulse_left)
@@ -6149,7 +6149,7 @@ DREAM_FLASH void en_render(int32_t *out, uint32_t n, uint32_t gain_q12)
         if (tick_wait > 0 && (tick_wait -= (int32_t)k) <= 0) {
             tick_wait = 0;
             if (en_playing)
-                EN_P(1, tick());
+                { uint32_t qt = EN_CYC; tick(); qt = EN_CYC - qt; en_prof[18] += qt; if (qt > en_prof[19]) en_prof[19] = qt; }
         }
         out += 2 * k;
         n -= k;
