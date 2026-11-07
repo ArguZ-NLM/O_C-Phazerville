@@ -6969,8 +6969,8 @@ FLASHMEM void ShearDevice::Apply(int p) {
 }
 
 FLASHMEM void ShearDevice::Format(int p, char* buf, size_t n) const {
-  if (p == RATE) FormatDiv(cur[RATE], buf, n);
-  else if (p == GATE || p == REVRS || p == ROLL || p == LEVEL) snprintf(buf, n, "%d%%", int(cur[p]));
+  if (p == RATE) FormatDiv(val[RATE], buf, n);  // (the setting, as FIBRE's: what moves it shows in its bar)
+  else if (p == GATE || p == REVRS || p == ROLL || p == LEVEL) snprintf(buf, n, "%d%%", int(val[p]));
   else Device::Format(p, buf, n);
 }
 
