@@ -138,3 +138,5 @@
 #undef en_drone_oct
 #undef en_gate
 #undef en_prof
+#undef en_plate_mem
+#undef en_plate_bytes

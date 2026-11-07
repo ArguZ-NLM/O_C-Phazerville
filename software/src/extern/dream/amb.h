@@ -314,6 +314,8 @@ extern volatile float en_echo_lvl;              /* (Loom, USB status) the echo's
  * over 80, the engine sheds for a moment what is least heard (the quietest tails, the cloud's new grains), so a crowded moment doesn't overrun */
 extern volatile uint8_t en_load;
 extern volatile uint32_t en_prof[16];   /* PROFILE (temporary) */
+void en_plate_mem(float *m);                    /* (Loom) the plate's lines in m (RAM2), NULL: the pool; not rendering */
+uint32_t en_plate_bytes(void);
 #define EN_NEV_N 16
 extern volatile uint8_t en_nev_k[EN_NEV_N], en_nev_s[EN_NEV_N], en_nev_p[EN_NEV_N];
 extern volatile uint32_t en_nev_w;

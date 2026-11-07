@@ -98,6 +98,8 @@ public:
   AudioStream* out() override { return this; }
   bool Activate() override;
   void Deactivate() override;
+  float* plate = nullptr;  // the plate reverb's lines while it plays (RAM2)
+  bool PlateInRam2() const { return plate && !IsPsram(plate); }
   bool ok() const override { return Owns(); }
   bool Owns() const { return g_dream_owner == this; }
   void Apply(int p) override;
@@ -388,13 +390,15 @@ FLASHMEM bool DreamDevice::Activate() {
   if (Device::active) return ok();
   Device::active = true;
   if (g_dream_owner && g_dream_owner != this) return false;  // the other track has it
-  g_dream_owner = this;
   static bool inited = false;
   if (!inited) {  // (its state in RAM2 / PSRAM: cleared first, once)
     dream_zero();
     en_init();
     inited = true;
   }
+  // the plate's lines: RAM2 if there is room (else a PSRAM block, as the pool)
+  if (!plate) { plate = static_cast<float*>(FastAlloc(en_plate_bytes())); en_plate_mem(plate); }
+  g_dream_owner = this;  // (from here the audio update renders)
   en_panic();
   fade = fade_to = 1.0f;
   piece_due = false;
@@ -418,8 +422,9 @@ FLASHMEM void DreamDevice::Deactivate() {
     en_play(0);
     en_panic();
     if (linked) { en_follow(0); linked = joining = false; }
-    g_dream_owner = nullptr;
+    g_dream_owner = nullptr;  // (the audio update renders no more)
   }
+  if (plate) { en_plate_mem(nullptr); FastFree(plate); plate = nullptr; }
   Device::active = false;
 }
 

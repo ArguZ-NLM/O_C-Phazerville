@@ -3388,6 +3388,21 @@ DREAM_FLASH static void plate_init(void)
     lfo_c = 1.0f;
 }
 
+/* (Loom) the plate's lines somewhere else: in RAM2 while DREAM plays (the pool is PSRAM, and the plate's ~38 taps a
+ * sample missing its cache cost ~10 % of the CPU); NULL: back in the pool. m holds DL_TOTAL floats, zeroed; only
+ * while the engine doesn't render */
+DREAM_FLASH void en_plate_mem(float *m)
+{
+    float *p = m ? m : pl_buf;
+    int k;
+    for (k = 0; k < L_N; k++) {
+        dl[k].b = p;
+        dl[k].i = 0;
+        p += DL_LEN[k];
+    }
+}
+DREAM_FLASH uint32_t en_plate_bytes(void) { return (uint32_t)(DL_TOTAL * sizeof(float)); }
+
 /* ------------------------------------------------ Shimmer: the plate climbing --- */
 /* (the voices batch, item 0) Shimmer, the grid's fourth and the fifth black key (where Swell was): while held, the
  * plate's tail pitched an octave up and fed back into the plate, so each time round it climbs another octave: a

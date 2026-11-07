@@ -2485,7 +2485,7 @@ FLASHMEM void AppLoom::MainLoop() {
       static const char* const nm[13] = {"drain", "ctl+tick", "pluck", "drone", "lead", "crash", "widen", "atmos", "fx", "out", "echo", "cloud", "plate"};
       Serial.printf("  DREAM prof (%lu blocks, %lu chunks):", (unsigned long)nb, (unsigned long)q[15]);
       for (int i = 0; i < 13; i++) Serial.printf(" %s %lu", nm[i], (unsigned long)(q[i] / nb / blk));
-      Serial.printf("  peak %lu\n", (unsigned long)(q[13] / blk));
+      Serial.printf("  peak %lu plate %s\n", (unsigned long)(q[13] / blk), tracks[0].dream && static_cast<dream_a::DreamDevice*>(tracks[0].dream)->PlateInRam2() ? "RAM2" : "PSRAM");
       for (int i = 0; i < 16; i++) q[i] = 0;
     }
   }
