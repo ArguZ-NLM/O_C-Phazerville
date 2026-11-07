@@ -984,11 +984,11 @@ FLASHMEM static float WorstCost(const Device* d) {
     // skips the folder (3.2 % measured 2026-11-07), so it counts less, and
     // turning FOLD up asks the guard like any costlier setting
     const bool folds = d->val[DirtDevice::FOLD] > 0 || d->Modded(DirtDevice::FOLD);
-    return folds ? 14.0f : 4.0f;  // (13.5 % / 3.2 % measured 2026-11-07, after the clean-up)
+    return folds ? 12.0f : 4.0f;  // (11.0 % / 3.3 % measured 2026-11-07, FOLD in its own pass)
   }
   if (!strcmp(t, "HDL")) {  // HEDDLE: TEXTURE's engine left clean, the shifter ~1 %, PHASE ~0.6 % a stage (measured)
     const HeddleDevice* x = static_cast<const HeddleDevice*>(d);
-    return 4.0f + (x->Phasing() ? 1.0f + 0.6f * x->MaxStages() : 1.0f);  // (STAGE's variation up)
+    return 6.0f + (x->Phasing() ? 1.0f + 0.6f * x->MaxStages() : 1.0f);  // (STAGE's variation up; 6.6 % measured shifting, 2026-11-07)
   }
   if (!strcmp(t, "CHM")) return 7.0f;   // TWILL
   // the sources that are heavy: DREAM (its Cost, by track and LEVEL); only
@@ -999,7 +999,7 @@ FLASHMEM static float WorstCost(const Device* d) {
   if (!strcmp(t, "DRM")) return static_cast<const DreamBase*>(d)->Cost();
   if (!strcmp(t, "SPR")) return 6.0f;   // FIBRE
   if (!strcmp(t, "FLK")) return 22.0f;  // FLOCK (up to 20 grains, from flash; 16-22 % peak measured with 9-11 grains)
-  if (!strcmp(t, "RES")) return 3.0f;   // REED
+  if (!strcmp(t, "RES")) return 8.5f;   // REED (7.8 % measured 2026-11-07; 3 was too low)
   return 3.0f;
 }
 // a track's SOURCE option, as the CPU guard counts it: SID and DREAM (the
@@ -2467,13 +2467,6 @@ FLASHMEM void AppLoom::MainLoop() {
         int(parts[0]), int(parts[0] * 10) % 10, int(parts[1]), int(parts[1] * 10) % 10);
     }
     Serial.println();
-  }
-  if (dirt_prof[3]) {  // PROFILE (temporary): TEXTURE's FOLD
-    const uint32_t blk = 600000000u / 44100u * 128u / 1000u;
-    Serial.printf("  TEX prof: fold %lu cycles a run (%lu runs), update %lu tenths %% a block (%lu)\n",
-                  (unsigned long)(dirt_prof[1] ? dirt_prof[0] / dirt_prof[1] : 0), (unsigned long)dirt_prof[1],
-                  (unsigned long)(dirt_prof[2] / dirt_prof[3] / blk), (unsigned long)dirt_prof[3]);
-    for (auto& x : dirt_prof) x = 0;
   }
   // BEATER's engine: where it sits
   for (int t = 0; t < NUM_TRACKS; t++)
