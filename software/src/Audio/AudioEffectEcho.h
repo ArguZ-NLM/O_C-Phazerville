@@ -746,6 +746,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
       x = fminf(fmaxf(x, -1.5f), 1.5f);
       return x - (4.0f / 27.0f) * x * x * x;
     };
+    const float fbk = fb;  // (a local: the member was read every sample)
     auto run = [&](auto diffuse) __attribute__((always_inline)) {
       for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
         const float dry0 = dry_in[0][n] * q, dry1 = dry_in[1][n] * q;
@@ -756,7 +757,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
         const float inj1 = dlive * (dry1 * (1.0f - s));
         const float f0 = l0 + s * (l1 - l0);
         const float f1 = l1 + s * (l0 - l1);
-        float x0 = f0 * fb, y0 = f1 * fb;
+        float x0 = f0 * fbk, y0 = f1 * fbk;
         lz0 += la * (x0 - lz0);
         lz1 += la * (y0 - lz1);
         hz0 += ha * (lz0 - hz0);
@@ -826,22 +827,30 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
       const float guard = sh_env > 0.25f ? 0.25f / sh_env : 1.0f;
       const float g = sh_amt * sh_fb * 1.5f * guard * sh_xf;
       float pk = 0.0f;
+      // the shifters' state as locals for the block (members: read and
+      // written every step), back after it
+      int16_t* const shb = sh;
+      int16_t* const shdb = shd;
+      int shw = sh_w, shdw = shd_w;
+      float sdc[2] = {sh_dc[0], sh_dc[1]}, slp[2] = {sh_lp[0], sh_lp[1]};
+      float hdl[2][2] = {{sh_hd[0][0], sh_hd[0][1]}, {sh_hd[1][0], sh_hd[1][1]}};
+      float hsl[2][2] = {{sh_hs[0][0], sh_hs[0][1]}, {sh_hs[1][0], sh_hs[1][1]}};
       for (int k = 0; k < HALF; k++) {
         for (int c = 0; c < 2; c++) {
           // three bands (~300 Hz / ~3 kHz at the half rate), each at its level
           const float x = sh_tail[c][k];
-          sh_dc[c] += 0.0819f * (x - sh_dc[c]);  // below ~300 Hz
-          sh_lp[c] += 0.575f * (x - sh_lp[c]);   // below ~3 kHz
-          const float y = lv0 * sh_dc[c] + lv1 * (sh_lp[c] - sh_dc[c]) + lv2 * (x - sh_lp[c]);
-          sh[c * SH_LEN + sh_w] = int16_t(constrain(y * RV_Q, -32767.0f, 32767.0f));
+          sdc[c] += 0.0819f * (x - sdc[c]);  // below ~300 Hz
+          slp[c] += 0.575f * (x - slp[c]);   // below ~3 kHz
+          const float y = lv0 * sdc[c] + lv1 * (slp[c] - sdc[c]) + lv2 * (x - slp[c]);
+          shb[c * SH_LEN + shw] = int16_t(constrain(y * RV_Q, -32767.0f, 32767.0f));
           pk = std::max(pk, fabsf(x));
         }
         float o[2] = {0.0f, 0.0f};
         for (int c = 0; c < 2; c++) {  // side c through its own shifter
           const float r = ra[c];
           const int8_t up = r >= 1.0f ? 1 : 0;
-          float* hd = sh_hd[c];
-          float* hs = sh_hs[c];
+          float* hd = hdl[c];
+          float* hs = hsl[c];
           if (sh_up[c] != up) {  // the heads placed afresh: at the start, or the shift turned round
             sh_up[c] = up;
             for (int h = 0; h < 2; h++) {
@@ -849,7 +858,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
               hd[h] = up ? hs[h] - h * (SH_WIN * 0.5f) : hs[h] + h * (SH_WIN * 0.5f);
             }
           }
-          const int16_t* b = sh + c * SH_LEN;
+          const int16_t* b = shb + c * SH_LEN;
           float acc = 0.0f, wsum = 0.0f;
           for (int h = 0; h < 2; h++) {
             hd[h] += 1.0f - r;  // up: the head catches up with the writing; down: falls behind
@@ -857,6 +866,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
             // writing; down: a grain's length on from where it started)
             float t = up ? 1.0f - (hd[h] - 2.0f) / (hs[h] - 2.0f) : (hd[h] - hs[h]) * (1.0f / SH_WIN);
             if (t >= 1.0f) {  // a new grain, in step with the other head
+              sh_w = shw;  // (ShPlace reads the write position)
               hd[h] = up ? ShPlace(c, 2 + SH_WIN - 2 * SH_ALIGN, 2 + SH_WIN, hd[1 - h])
                          : ShPlace(c, 2, 2 + 2 * SH_ALIGN, hd[1 - h]);
               hs[h] = hd[h];
@@ -867,7 +877,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
             const float u = tc * (1.0f - tc);
             const float sw = 16.0f * u / (5.0f - 4.0f * u);
             const float wgt = sw * sw;
-            float rp = float(sh_w) - hd[h];
+            float rp = float(shw) - hd[h];
             if (rp < 0.0f) rp += SH_LEN;
             const int i0 = int(rp), i1 = i0 + 1 < SH_LEN ? i0 + 1 : 0;
             const float fr = rp - i0;
@@ -878,18 +888,23 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
           // has moved: divided by their sum, the level stays even
           o[c] = acc / std::max(wsum, 0.3f) * (1.0f / RV_Q);
         }
-        if (++sh_w >= SH_LEN) sh_w = 0;
-        if (shd) {  // held back: out what went in dn steps ago
-          int r = shd_w - dn;
+        if (++shw >= SH_LEN) shw = 0;
+        if (shdb) {  // held back: out what went in dn steps ago
+          int r = shdw - dn;
           if (r < 0) r += SHD_LEN;
           for (int c = 0; c < 2; c++) {
-            shd[c * SHD_LEN + shd_w] = int16_t(constrain(o[c] * RV_Q, -32767.0f, 32767.0f));
-            o[c] = shd[c * SHD_LEN + r] * (1.0f / RV_Q);
+            shdb[c * SHD_LEN + shdw] = int16_t(constrain(o[c] * RV_Q, -32767.0f, 32767.0f));
+            o[c] = shdb[c * SHD_LEN + r] * (1.0f / RV_Q);
           }
-          if (++shd_w >= SHD_LEN) shd_w = 0;
+          if (++shdw >= SHD_LEN) shdw = 0;
         }
         shim[0][k] = g * o[0];
         shim[1][k] = g * o[1];
+      }
+      sh_w = shw; shd_w = shdw;
+      for (int c = 0; c < 2; c++) {
+        sh_dc[c] = sdc[c]; sh_lp[c] = slp[c];
+        for (int h = 0; h < 2; h++) { sh_hd[c][h] = hdl[c][h]; sh_hs[c][h] = hsl[c][h]; }
       }
       sh_env = pk > sh_env ? pk : sh_env * 0.995f;
     }
@@ -905,6 +920,9 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
       float gj[4];
       for (int j = 0; j < 4; j++) gj[j] = AP_IN_G[j] * dg;
       float* const ab = mem + AP_OFS[AP_IN_BASE];
+      // (members the loop reads, as locals)
+      const float rin_g = live * ropen * 0.25f, hpa = rv_hp_a;
+      const int pxf = pre_xf;
       // (half the length is the same time at half the rate)
       auto ap = [&](float x, int j, float gg) __attribute__((always_inline)) {
         float* b = ab + (AP_OFS[AP_IN_BASE + j] - AP_OFS[AP_IN_BASE]);
@@ -916,8 +934,8 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
       };
       for (int k = 0; k < HALF; k++) {
         const int n = 2 * k + 1;
-        float x0 = live * ropen * 0.25f * (x1b[0][n - 1] + x1b[0][n]);  // (0.5 x their average)
-        float x1 = live * ropen * 0.25f * (x1b[1][n - 1] + x1b[1][n]);
+        float x0 = rin_g * (x1b[0][n - 1] + x1b[0][n]);  // (0.5 x their average)
+        float x1 = rin_g * (x1b[1][n - 1] + x1b[1][n]);
         // pre-delay (a ring a side)
         pb0[pw] = x0;
         pb1[pw] = x1;
@@ -925,8 +943,8 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
         if (r < 0) r += PRE_H;
         x0 = pb0[r];
         x1 = pb1[r];
-        if (pre_xf) {  // a new time crossfades in
-          const float wgt = std::min(1.0f, float(PRE_XF - pre_xf + n) * (1.0f / PRE_XF));
+        if (pxf) {  // a new time crossfades in
+          const float wgt = std::min(1.0f, float(PRE_XF - pxf + n) * (1.0f / PRE_XF));
           int rn = pw - bn;
           if (rn < 0) rn += PRE_H;
           x0 += wgt * (pb0[rn] - x0);
@@ -934,8 +952,8 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectEcho::update() {
         }
         if (++pw >= PRE_H) pw = 0;
         if (shim_on) { x0 += shim[0][k]; x1 += shim[1][k]; }  // (before the low cut: no DC builds up)
-        h0 += rv_hp_a * (x0 - h0);  // low cut (no mud)
-        h1 += rv_hp_a * (x1 - h1);
+        h0 += hpa * (x0 - h0);  // low cut (no mud)
+        h1 += hpa * (x1 - h1);
         x0 -= h0;
         x1 -= h1;
         for (int j = 0; j < 4; j++) {
