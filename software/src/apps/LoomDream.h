@@ -51,7 +51,7 @@ namespace loom {
 class DreamBase : public Device, public AudioStream, public CvSource {
 public:
   enum { PIECE, TEMPO, ROOT, LEVEL, DRONE, SEQ, LEAD, SEQ2, MOTION, ENERGY, SPACE, CV, ECHO, FDBK, PLATE, TONE };
-  enum { CV_OFF, CV_ON };
+  enum { CV_OFF, CV_ON, CV_MIDI, CV_BOTH };  // OUT: bit 0 the CV outputs, bit 1 MIDI
   explicit DreamBase(const DeviceDef& d) : Device(d), AudioStream(0, nullptr) {}
   int8_t track = 0;
   virtual void Stop() = 0;    // A held (Loom.h)
@@ -59,13 +59,14 @@ public:
   virtual void SpaceOut(bool on) = 0;  // REPEAT on the track: SPACE moves it
   // (CVOUT ON at LEVEL 0, silent: it claims the outputs while it plays;
   // stopped, a CVOUT ON elsewhere has them)
-  bool CvOnly() const override { return cur[CV] == CV_ON && cur[LEVEL] == 0 && ok() && Playing(); }
+  bool CvOnly() const override { return (cur[CV] & 1) && cur[LEVEL] == 0 && ok() && Playing(); }
   virtual bool Playing() const = 0;
   // the CPU it takes (the guard, Loom.h): next to none for the CV alone
   // the CPU guard (measured 2026-11-07, alone on the track): A's engine runs
   // from RAM1, 37-46 % peak; B's from flash with its state in PSRAM, 90-100 %
   // peak (15 % silent, LEVEL 0: the CV only)
-  float Cost() const { return cur[LEVEL] == 0 ? (track ? 16.0f : 4.0f) : (track ? 92.0f : 46.0f); }
+  // B's (2026-11-07): no sound, its engine in the main loop: none here
+  float Cost() const { return track ? 1.0f : cur[LEVEL] == 0 ? 4.0f : 46.0f; }
 };
 
 // LINK: track A's DREAM as it plays (A writes it, B's follows it)

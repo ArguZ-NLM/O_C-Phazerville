@@ -4450,7 +4450,9 @@ namespace loom {
     const bool tex_heddle = d && !memcmp(tag, "TEX", 4) && !memcmp(d->def.tag, "TEX", 4) && n == 12;
     // until v25 TREADLE had 10 settings (ACCNT, RESET since gone)
     const bool trd10 = d && !memcmp(tag, "TRD", 4) && n == 10 && load_version < 25;
-    const bool use = d && !memcmp(tag, d->def.tag, 4) && (n <= d->num_params() || tex_heddle || trd10);
+    // until 2026-11-07 B's DREAM had 16 settings (its sound's FX page, gone)
+    const bool drm16 = d && !memcmp(tag, "DRM", 4) && !memcmp(d->def.tag, "DRM", 4) && n == 16;
+    const bool use = d && !memcmp(tag, d->def.tag, 4) && (n <= d->num_params() || tex_heddle || trd10 || drm16);
     // where its record is, for SaveDevice: only a record it can be written
     // over in place (its own tag, as many settings as it has now)
     if (d) d->file_at = use && n == d->num_params() ? at : -1;
@@ -4548,7 +4550,7 @@ namespace loom {
       int8_t amt2 = 0; uint8_t bus2 = 0;
       if (load_version >= 3 && (f.read(&amt2, 1) != 1 || f.read(&bus2, 1) != 1)) return false;
       if (!use) continue;
-      if (tex_heddle && p >= d->num_params()) continue;
+      if ((tex_heddle || drm16) && p >= d->num_params()) continue;
       // SPRAY gained SPRD before MIX: an older file's MIX (its 7th) goes to 8th
       const int q = p;
       if (remap_spr && p == 6) p = 7;

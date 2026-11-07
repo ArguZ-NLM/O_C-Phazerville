@@ -37,12 +37,18 @@ static const char* const DREAM_MODE_SHORT[EN_NMODES] = {"MAJ", "DOR", "PHR", "LY
 static const char* const DREAM_SEQ_VOICE[EN_NSV] = {"2600", "Moog", "Synthi", "Pulse", "Glass", "Pluck"};
 
 PROGMEM static const DeviceDef DREAM_DEF = {
-  "DREAM", "DRM", 16, {"PLAY", "NEXT"},
+  "DREAM", "DRM", DREAM_TRACK_B ? 12 : 16, {"PLAY", "NEXT"},
   {
     {"STYLE", 0, EN_NPIECES + DREAM_USER_N - 1, 0, UNI},   // the piece (then U1..U8, the user's)
     {"TEMPO", 60, 160, 96, UNI, 0, 2, 0, {}, {"OFF", "ON"}},   // mode: SYNC to Loom's clock
     {"ROOT", 0, 11, 2, UNI, 0, EN_NMODES, 5},                 // mode: the MODE (scale)
-    {"LEVEL", 0, 100, DREAM_TRACK_B ? 0 : 100, UNI},  // (0: silent, the piece going on for the CV; B's own start)
+    // (0: silent, the piece going on for the CV. B's has no sound at all,
+    // Sascha 2026-11-07: its notes are for the CV and MIDI outputs only)
+#if DREAM_TRACK_B
+    {"SOUND", 0, 0, 0, UNI},
+#else
+    {"LEVEL", 0, 100, 100, UNI},
+#endif
     // each layer's level; the mode (L knob) its voice (as piece 1 has them)
     // (and its octave: five each)
     {"DRONE", 0, 100, 60, UNI, 0, 5 * EN_NCV, 0},
@@ -63,10 +69,14 @@ PROGMEM static const DeviceDef DREAM_DEF = {
     // saves' OFF / LINK / ON / L+IN read OFF / LINK / 1+3 / L1+3). Shown by
     // FormatMode. No ONLY (Sascha: it cut the music at once): LEVEL 0 is
     // silent
+    // OUT (was CVOUT OFF / ON, 2026-11-07): where the notes go, the CV
+    // outputs, MIDI (USB, both ways: to a computer and to a synth on the
+    // module's USB host; A on channels 1-4, B on 5-8: Drone, Sequence, Lead,
+    // Sequence 2) or both
 #if DREAM_TRACK_B
-    {"CVOUT", 0, 1, 1, LIST, 2, 10, 1, {"OFF", "ON"}, {}},
+    {"OUT", 0, 3, 1, LIST, 4, 10, 1, {"OFF", "CV", "MIDI", "CV+MI"}, {}},
 #else
-    {"CVOUT", 0, 1, 1, LIST, 2, 5, 0, {"OFF", "ON"}, {}},
+    {"OUT", 0, 3, 1, LIST, 4, 5, 0, {"OFF", "CV", "MIDI", "CV+MI"}, {}},
 #endif
     // page 4, FX: the engine's own echo and plate, from the style's own (0);
     // the modes: the echo's TIME, the plate's SIZE (0: the style's)
@@ -75,7 +85,11 @@ PROGMEM static const DeviceDef DREAM_DEF = {
     {"PLATE", -50, 50, 0, BI, 0, 11, 0},
     {"TONE", -50, 50, 0, BI},
   },
+#if DREAM_TRACK_B
+  {"", "", ""},
+#else
   {"", "", "", "FX"},
+#endif
 };
 
 class DreamDevice;
@@ -90,6 +104,15 @@ struct DreamNotes {
   volatile uint32_t drone[4] = {};    // the Drone's notes held, a bit each (0-127)
 };
 inline DreamNotes g_dream_notes;
+
+// the engine's notes on their way to MIDI out: written by its render, read by
+// the main loop (one writer, one reader)
+struct DreamMidiQ {
+  static constexpr uint8_t N = 64;
+  volatile uint8_t head = 0, tail = 0;
+  uint8_t m[N][3];
+};
+inline DreamMidiQ g_dream_midi;
 
 class DreamDevice final : public DreamBase {
 public:
@@ -144,7 +167,16 @@ public:
     ApplyAll();
   }
   // the CV outputs
-  bool CvOn() const override { return cur[CV] != 0 && Owns(); }
+  bool CvOn() const override { return (cur[CV] & 1) && Owns(); }  // (CV, CV+MI)
+  bool MidiOn() const { return cur[CV] >= 2 && Owns(); }          // (MIDI, CV+MI)
+  bool midi_was = false;  // (MIDI turned off: its notes let go)
+  void SendMidi();        // (Idle) the notes the engine played, out
+  void MidiAllOff();
+  // B's engine runs in the main loop (no sound: its notes only), a block
+  // for each the audio played: due counted by the audio update, done by Run
+  volatile uint32_t due = 0;
+  uint32_t done = 0;
+  void Run();
   void CvTick() override;
   int CvOut(int o, float& v) const override;
   void CvName(int o, char* buf, size_t n, bool long_name) const override;
@@ -298,6 +330,17 @@ extern "C" FASTRUN void en_midi_out(uint32_t st, uint32_t d1, uint32_t d2) {
   }
   const uint32_t ch = st & 15, kind = st & 0xF0;
   if (ch > 3 || d1 > 127) return;
+  {  // for MIDI out (SendMidi, the main loop): full, it is dropped
+    DreamMidiQ& q = g_dream_midi;
+    const uint8_t h = q.head;
+    if (uint8_t(h + 1 - q.tail) < DreamMidiQ::N) {
+      q.m[h % DreamMidiQ::N][0] = uint8_t(st);
+      q.m[h % DreamMidiQ::N][1] = uint8_t(d1);
+      q.m[h % DreamMidiQ::N][2] = uint8_t(d2);
+      asm volatile("" ::: "memory");
+      q.head = uint8_t(h + 1);
+    }
+  }
   DreamNotes& n = g_dream_notes;
   if (kind == 0x90 && d2) {
     n.note[ch] = uint8_t(d1);
@@ -397,7 +440,8 @@ FLASHMEM bool DreamDevice::Activate() {
     inited = true;
   }
   // the plate's lines: RAM2 if there is room (else a PSRAM block, as the pool)
-  if (!plate) { plate = static_cast<float*>(FastAlloc(en_plate_bytes())); en_plate_mem(plate); }
+  if (!plate && !DREAM_TRACK_B) { plate = static_cast<float*>(FastAlloc(en_plate_bytes())); en_plate_mem(plate); }  // (B: no sound)
+  done = due;
   g_dream_owner = this;  // (from here the audio update renders)
   en_panic();
   fade = fade_to = 1.0f;
@@ -419,6 +463,8 @@ FLASHMEM bool DreamDevice::Activate() {
 FLASHMEM void DreamDevice::Deactivate() {
   if (!Device::active) return;
   if (Owns()) {
+    if (midi_was) MidiAllOff();
+    midi_was = false;
     en_play(0);
     en_panic();
     if (linked) { en_follow(0); linked = joining = false; }
@@ -450,6 +496,7 @@ FLASHMEM void DreamDevice::Apply(int p) {
       }
       break;
     case LEVEL:
+      if (DREAM_TRACK_B) val[LEVEL] = cur[LEVEL] = 0;  // (an older save's level)
       gain = cur[LEVEL] * 0.01f;
       if (Owns()) en_silent = cur[LEVEL] == 0;  // (0: the piece goes on, unheard, next to no CPU)
       break;
@@ -466,11 +513,6 @@ FLASHMEM void DreamDevice::Apply(int p) {
       if (Owns() && sent_gate != mode[MOTION]) { sent_gate = int8_t(mode[MOTION]); en_gate(10 * mode[MOTION]); }
       break;
     case CV:
-      if (val[CV] > CV_ON) {  // (an old save's ONLY: ON, silent)
-        val[CV] = cur[CV] = CV_ON;
-        val[LEVEL] = cur[LEVEL] = 0;
-        Apply(LEVEL);
-      }
       break;
     case ENERGY:
       if (sent_ok) {  // REPEAT: the style's repeats, scaled
@@ -501,6 +543,7 @@ FLASHMEM void DreamDevice::Format(int p, char* buf, size_t n) const {
   else if (p == ROOT) snprintf(buf, n, "%s", EN_NOTE_NAME[constrain(RootNow(), 0, 11)]);
   else if (p == TEMPO && linked) snprintf(buf, n, "%d", TempoNow());
   else if (p == TEMPO && mode[TEMPO]) snprintf(buf, n, "%d", int(constrain(tempo_bpm, 60.0f, 160.0f) + 0.5f));
+  else if (p == LEVEL && DREAM_TRACK_B) snprintf(buf, n, "NONE");
   else Device::Format(p, buf, n);
 }
 
@@ -548,6 +591,8 @@ FLASHMEM void DreamDevice::Action(int a) {
 // black keys: the effects, as the FM-1's)
 FLASHMEM void DreamDevice::Idle() {
   if (!Owns()) return;
+  Run();
+  SendMidi();
   if (browsed && !Browsing()) { browsed = false; Apply(PIECE); }  // STYLE let go: the one shown plays
   if (piece_due && (fade <= 0.0f || !en_playing)) {  // faded out: the new piece, fading in
     piece_due = false;
@@ -934,12 +979,66 @@ FLASHMEM void DreamDevice::CvName(int o, char* buf, size_t n, bool long_name) co
   snprintf(buf, n, "%s", (long_name ? LONG : SHORT)[o & 7]);
 }
 
+// B's engine, in the main loop (2026-11-07): it has no sound, so it need not
+// run in the audio update, where it cost 15-30 % (its code in flash, its state
+// in PSRAM). A block for each the audio played: the piece keeps the audio's
+// time; its notes reach the outputs as late as the main loop's next turn (the
+// CV outputs are written there anyway)
+FLASHMEM void DreamDevice::Run() {
+  if (!DREAM_TRACK_B) return;
+  DMAMEM static int32_t lr[2 * AUDIO_BLOCK_SAMPLES];
+  uint32_t lag = due - done;
+  if (lag > 128) { done = due - 8; lag = 8; resync = true; }  // (held up for a long while: on from now)
+  for (int i = 0; i < 8 && lag; i++, lag--) {
+    en_load = 0;
+    if (linked) Follow();
+    en_render(lr, AUDIO_BLOCK_SAMPLES, 0);
+    done++;
+  }
+}
+
+// MIDI out (OUT's MIDI): the engine's notes, its four layers on channels 1-4
+// (A) or 5-8 (B), to USB both ways
+static void DreamMidiSend(uint8_t st, uint8_t d1, uint8_t d2) {
+  const uint8_t kind = st & 0xF0, ch = (st & 15) + 1;
+  if (kind == 0x90) {
+    usbMIDI.sendNoteOn(d1, d2, ch);
+    for (auto& h : usbHostMIDI) h.sendNoteOn(d1, d2, ch);
+  } else if (kind == 0x80) {
+    usbMIDI.sendNoteOff(d1, d2, ch);
+    for (auto& h : usbHostMIDI) h.sendNoteOff(d1, d2, ch);
+  } else if (kind == 0xB0) {
+    usbMIDI.sendControlChange(d1, d2, ch);
+    for (auto& h : usbHostMIDI) h.sendControlChange(d1, d2, ch);
+  }
+}
+
+FLASHMEM void DreamDevice::SendMidi() {
+  DreamMidiQ& q = g_dream_midi;
+  const bool on = MidiOn();
+  if (midi_was && !on) MidiAllOff();
+  midi_was = on;
+  bool sent = false;
+  while (q.tail != q.head) {
+    const uint8_t* m = q.m[q.tail % DreamMidiQ::N];
+    if (on) { DreamMidiSend(uint8_t(m[0] + (track ? 4 : 0)), m[1], m[2]); sent = true; }
+    q.tail = uint8_t(q.tail + 1);
+  }
+  if (sent) usbMIDI.send_now();
+}
+
+FLASHMEM void DreamDevice::MidiAllOff() {
+  for (int c = 0; c < 4; c++) DreamMidiSend(uint8_t(0xB0 + c + (track ? 4 : 0)), 123, 0);
+  usbMIDI.send_now();
+}
+
 // the engine renders a block (24-bit stereo in int32) at LEVEL; it sheds
 // what is least heard when the audio is near its limit (en_load, %)
 FASTRUN void DreamDevice::update() {
   audio_block_t* o[2] = {allocate(), allocate()};
   if (o[0] && o[1]) {
-    if (Owns() && Device::active) {
+    if (DREAM_TRACK_B && Owns() && Device::active) due = due + 1;  // (B: Run plays it, in the main loop)
+    if (!DREAM_TRACK_B && Owns() && Device::active) {
       DMAMEM static int32_t lr[2 * AUDIO_BLOCK_SAMPLES];  // (RAM2: RAM1 is short)
       en_load = uint8_t(std::min(255.0f, AudioProcessorUsage()));
       if (linked) Follow();
