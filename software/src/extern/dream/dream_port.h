@@ -7,7 +7,7 @@
 #ifndef DREAM_PORT_H
 #define DREAM_PORT_H
 #if defined(__IMXRT1062__)
-#define DREAM_FLASH __attribute__((section(".flashmem"), optimize("O2")))
+#define DREAM_FLASH __attribute__((section(".flashmem"), optimize("Os")))
 #define DREAM_CONST __attribute__((section(".progmem")))
 #ifndef DREAM_RAM2  /* (amb_b.c: track B's engine keeps its state in PSRAM: RAM2 is the heap) */
 #define DREAM_RAM2 __attribute__((section(".dmabuffers"), aligned(4)))
