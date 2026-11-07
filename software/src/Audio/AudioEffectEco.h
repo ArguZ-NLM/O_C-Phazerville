@@ -244,13 +244,13 @@ __attribute__((noinline)) FLASHMEM void AudioEffectClouds::EcoSpawn(float cur_po
 
 // profiling (USB status, temporary): setup / spawn / grains / out, cycles
 // summed and peak, and the grains playing
-static uint32_t eco_prof_sum[5], eco_prof_max[5], eco_prof_blocks, eco_prof_grains;
+static uint32_t eco_prof_sum[6], eco_prof_max[6], eco_prof_blocks, eco_prof_grains;
 FLASHMEM void EcoProfReport() {
     const float blk = float(F_CPU_ACTUAL) * AUDIO_BLOCK_SAMPLES / AUDIO_SAMPLE_RATE_EXACT;
-    static const char* const nm[5] = {"rec", "spawn", "grains", "out", "TOTAL"};
+    static const char* const nm[6] = {"rec", "spawn", "grains", "out", "TOTAL", "of it copy"};
     if (!eco_prof_blocks) return;
     Serial.printf("  FLOCK time %% (avg/peak), %lu grains on average:", (unsigned long)(eco_prof_grains / eco_prof_blocks));
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 6; i++) {
         const int a = int(eco_prof_sum[i] / float(eco_prof_blocks) / blk * 1000.0f), m = int(eco_prof_max[i] / blk * 1000.0f);
         Serial.printf(" %s %d.%d/%d.%d", nm[i], a / 10, a % 10, m / 10, m % 10);
     }
@@ -262,7 +262,7 @@ FLASHMEM void EcoProfReport() {
 __attribute__((optimize("O2"), noinline))
 FLASHMEM void AudioEffectClouds::UpdateEco(audio_block_t** in, audio_block_t** out) {
     const uint32_t ep0 = ARM_DWT_CYCCNT;
-    uint32_t ep[5], eplast = ep0;
+    uint32_t ep[6] = {}, eplast = ep0;
     auto emark = [&](int k) { const uint32_t c = ARM_DWT_CYCCNT; ep[k] = c - eplast; eplast = c; };
     EcoState& e = *eco_;
     const float  cur_pos      = pos_;
@@ -406,10 +406,12 @@ FLASHMEM void AudioEffectClouds::UpdateEco(audio_block_t** in, audio_block_t** o
         }
         if (count > SPAN_MAX) count = SPAN_MAX;
         {
+            const uint32_t c0 = ARM_DWT_CYCCNT;
             const size_t first_part = std::min<size_t>((size_t)count, buf_size - start);
             memcpy(sp, src + start, first_part * sizeof(int16_t));
             if (first_part < (size_t)count)
                 memcpy(sp + first_part, src, (count - first_part) * sizeof(int16_t));
+            ep[5] += ARM_DWT_CYCCNT - c0;
         }
         const float* wa = e.win[g.wa];
         const float* wb = e.win[g.wa + 1];
@@ -490,7 +492,7 @@ FLASHMEM void AudioEffectClouds::UpdateEco(audio_block_t** in, audio_block_t** o
 
     emark(3);
     ep[4] = ARM_DWT_CYCCNT - ep0;
-    for (int k = 0; k < 5; k++) { eco_prof_sum[k] += ep[k]; if (ep[k] > eco_prof_max[k]) eco_prof_max[k] = ep[k]; }
+    for (int k = 0; k < 6; k++) { eco_prof_sum[k] += ep[k]; if (ep[k] > eco_prof_max[k]) eco_prof_max[k] = ep[k]; }
     eco_prof_blocks++; eco_prof_grains += eg;
     for (int c = 0; c < nch_; c++) transmit(out[c], c);
     release_blocks(in, out);
