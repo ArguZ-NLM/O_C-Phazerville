@@ -6891,7 +6891,7 @@ FLASHMEM void SprayDevice::DrawMini(int x, int y, int w, int h) {
 // the cuts spread over the grid as a Euclidean rhythm, or HITS, the grid's
 // loudest lines); ORDER (STRT as they lie, BACK, RAND, KEYS: MIDI keys play
 // them, C3 the first; its L knob SHUF, the share of slices moved to another
-// place); RATE a grid step (AUTO: the loop, in whole beats, over its grid);
+// place); RATE a grid step (AUTO: the loop's own length over its grid);
 // MIX.
 // Page 2: PITCH (its L knob: a random spread each slice), GATE how much of
 // its time a slice sounds, REVRS the odds a slice plays backwards, ROLL the
@@ -7051,16 +7051,16 @@ FLASHMEM void ShearDevice::Cut() {
   AudioInterrupts();
 }
 
-// AUTO: the loop in whole beats (under a beat: a half, a quarter ...) over
-// its grid; the loop as it plays (the file's rate, SYNC)
+// AUTO: the loop's own length over its grid, exactly (Sascha 2026-11-07:
+// in order it must play the loop whole): a loop not in tempo still plays
+// seamlessly, its grid starting again where it ends (with SHUTTLE on SYNC
+// the loop is in tempo anyway, its rate here following SYNC, and keeps to
+// the bars)
 FLASHMEM float ShearDevice::AutoBeats() const {
   const int G = GridOf(Slices());
-  if (!src || cut_wl < 2 || src_rate <= 0.0f) return 4.0f / G;
+  if (!src || cut_wl < 2 || src_rate <= 0.0f || tempo_bpm <= 0.0f) return 4.0f / G;
   const float secs = float(cut_wl) / (src_rate * AUDIO_SAMPLE_RATE_EXACT);
-  float beats = secs * tempo_bpm / 60.0f;
-  if (beats >= 0.75f) beats = std::max(1.0f, roundf(beats));
-  else beats = exp2f(roundf(log2f(std::max(beats, 1.0f / 64.0f))));
-  return beats / G;
+  return secs * tempo_bpm / 60.0f / G;
 }
 
 FLASHMEM void ShearDevice::Idle() {
