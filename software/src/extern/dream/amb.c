@@ -701,7 +701,7 @@ DREAM_FLASH static inline float soft(float x)                /* tanh, nearly: x 
     x2 = x * x;
     return x * (27.0f + x2) / (27.0f + 9.0f * x2);
 }
-DREAM_FLASH static inline float sat(float x)
+DREAM_HOT static inline float sat(float x)
 {
     if (x > 1.5f)
         return 1.0f;
@@ -721,7 +721,7 @@ DREAM_FLASH static inline float sine(float ph)              /* ph in turns, any 
     return sint[i] + (sint[i + 1] - sint[i]) * f;
 }
 DREAM_RAM2 static float orgt[SN + 1];   /* (BERLIN) the Drone's Organ: four drawbars, 1, 1/2, 1/3, 1/4, in one */
-DREAM_FLASH static inline float organ(float ph)
+DREAM_HOT static inline float organ(float ph)
 {
     float x = ph * (float)SN;
     int i = (int)x;
@@ -729,7 +729,7 @@ DREAM_FLASH static inline float organ(float ph)
     return orgt[i] + (orgt[i + 1] - orgt[i]) * f;
 }
 
-DREAM_FLASH static inline float blep_saw(float t, float dt)
+DREAM_HOT static inline float blep_saw(float t, float dt)
 {
     float y = 2.0f * t - 1.0f;
     if (t < dt) {
@@ -758,7 +758,7 @@ static struct {
     uint32_t left;                              /* samples until a new target */
 } mod[NMOD];
 
-DREAM_FLASH static void mods_step(uint32_t n)
+DREAM_HOT static void mods_step(uint32_t n)
 {
     int i;
     for (i = 0; i < NMOD; i++) {
@@ -1273,7 +1273,7 @@ DREAM_RAM2 static float am_rate[AM_N];   /* the glide: where it is less the moti
 DREAM_RAM2 static uint8_t am_held;
 DREAM_RAM2 static uint8_t am_stuck;   /* the knobs the hand holds; held (or locked) the chunk before */
 static void macro(int i, int v);
-DREAM_FLASH static void am_step(float d, float rise)        /* rise: the arc's long rise, 0..1 (0: no Arc) */
+DREAM_HOT static void am_step(float d, float rise)        /* rise: the arc's long rise, 0..1 (0: no Arc) */
 {
     static const float DEPTH[AM_N] = {15.0f, 25.0f, 25.0f}, ROUND[2] = {64.0f, 48.0f};
     float t[AM_N];
@@ -1304,7 +1304,7 @@ DREAM_FLASH static void am_step(float d, float rise)        /* rise: the arc's l
             macro(i, r);
     }
 }
-DREAM_FLASH static void fo_step(uint32_t n)                  /* once a chunk: the clock on, each layer's offset */
+DREAM_HOT static void fo_step(uint32_t n)                  /* once a chunk: the clock on, each layer's offset */
 {
     float d = 0.0f, rise = 0.0f, be;
     int l;
@@ -3307,24 +3307,24 @@ DREAM_RAM2 static float pl_ol;
 DREAM_RAM2 static float pl_or;   /* (the plate at half the rate: the last input, its last output) */
 DREAM_RAM2 static uint32_t pl_ph;
 
-DREAM_FLASH static inline float tap(const dl_t *d, int k)
+DREAM_HOT static inline float tap(const dl_t *d, int k)
 {
     int j = d->i - k;
     return d->b[j < 0 ? j + d->n : j];
 }
-DREAM_FLASH static inline void push(dl_t *d, float x)
+DREAM_HOT static inline void push(dl_t *d, float x)
 {
     d->b[d->i] = x;
     if (++d->i >= d->n)
         d->i = 0;
 }
-DREAM_FLASH static inline float allpass(dl_t *d, int len, float x, float g)
+DREAM_HOT static inline float allpass(dl_t *d, int len, float x, float g)
 {
     float z = tap(d, len), v = x - g * z;
     push(d, fm_flush(v));
     return z + g * v;
 }
-DREAM_FLASH static inline float allpass_mod(dl_t *d, float len, float x, float g)
+DREAM_HOT static inline float allpass_mod(dl_t *d, float len, float x, float g)
 {
     int k = (int)len;
     float f = len - (float)k, z = tap(d, k) + (tap(d, k + 1) - tap(d, k)) * f, v = x - g * z;
@@ -3332,7 +3332,7 @@ DREAM_FLASH static inline float allpass_mod(dl_t *d, float len, float x, float g
     return z + g * v;
 }
 
-DREAM_FLASH static inline void reverb(float in, float *ol, float *or_)
+DREAM_HOT static inline void reverb(float in, float *ol, float *or_)
 {
     float x, a, b, fb_l = tap(&dl[L_D2R], DS(3163)), fb_r = tap(&dl[L_D2L], DS(3720));
     push(&dl[L_PRE], in);
@@ -3467,7 +3467,7 @@ DREAM_FLASH static inline float shm_tap(float d)            /* d samples back fr
     b = shm_buf[(shm_w - i - 1u) & (SHM_N - 1u)];
     return a + (b - a) * f;
 }
-DREAM_FLASH static inline float shimmer(float x, float g)   /* one sample at the plate's rate: x its last output; out what goes
+DREAM_HOT static inline float shimmer(float x, float g)   /* one sample at the plate's rate: x its last output; out what goes
                                                  * back into it (g: the feedback now) */
 {
     float t, wa, y;
@@ -3503,7 +3503,7 @@ DREAM_FLASH static inline float shimmer(float x, float g)   /* one sample at the
     shm_out = 0.5f * sat(2.0f * g * y);         /* (no more than +-0.5 back in) */
     return shm_out;
 }
-DREAM_FLASH static void shm_level(float t)                  /* once a chunk (t: its length, s): the levels followed, the gain */
+DREAM_HOT static void shm_level(float t)                  /* once a chunk (t: its length, s): the levels followed, the gain */
 {
     float m = shm_nm ? shm_em / (float)shm_nm : 0.0f, s = shm_ns ? shm_es / (float)shm_ns : shm_envs, g;
     shm_envm += (m - shm_envm) * fm_minf(t / (m > shm_envm ? 0.05f : 1.0f), 1.0f);
@@ -3574,7 +3574,7 @@ DREAM_FLASH static inline float tape_read(float d)           /* d quarter-rate s
     c = (float)tape[i1];
     return (a + (c - a) * f) * (1.0f / 12000.0f);
 }
-DREAM_FLASH static inline int16_t s16(float x)
+DREAM_HOT static inline int16_t s16(float x)
 {
     x *= 12000.0f;
     return (int16_t)(x > 32767.0f ? 32767.0f : x < -32767.0f ? -32767.0f : x);
@@ -3596,7 +3596,7 @@ DREAM_FLASH static void echo_time(void)
 }
 
 /* once a chunk: where the head sits, the band-pass */
-DREAM_FLASH static void heads_step(void)
+DREAM_HOT static void heads_step(void)
 {
     float p, sw;
     /* (1.3.0) the loop's gain from the tail's length: whatever the echo's time, the repeats are gone (-60 dB) in
@@ -3627,7 +3627,7 @@ static int16_t eap[EAP_FB] EN_POOL;   /* (int16 at 1/8000: +-4) */
 DREAM_RAM2 static int eap_i[5];
 DREAM_RAM2 static float ec_lp;
 DREAM_RAM2 static float ec_hp;
-DREAM_FLASH static inline float eapf(int k, int off, int n, float x)
+DREAM_HOT static inline float eapf(int k, int off, int n, float x)
 {
     int16_t *b = eap + off;
     float d = (float)b[eap_i[k]] * (1.0f / 8000.0f), y = d - ec_g * x, t = (x + ec_g * y) * 8000.0f;
@@ -3636,18 +3636,18 @@ DREAM_FLASH static inline float eapf(int k, int off, int n, float x)
         eap_i[k] = 0;
     return y;
 }
-DREAM_FLASH static inline float ec_in(float x)
+DREAM_HOT static inline float ec_in(float x)
 {
     ec_lp += ec_lpc * (x - ec_lp);
     ec_hp += 0.18f * (ec_lp - ec_hp);            /* (~350 Hz: the repeats above the chord's low mids) */
     return ec_lp - ec_hp;
 }
-DREAM_FLASH static inline float ec_fb(float x)
+DREAM_HOT static inline float ec_fb(float x)
 {
     return eapf(4, 553, 441, eapf(3, 277, 276, eapf(2, 126, 151, eapf(1, 37, 89, eapf(0, 0, 37, x)))));
 }
 
-DREAM_FLASH static inline void echoes(float in, float *el, float *er)
+DREAM_HOT static inline void echoes(float in, float *el, float *er)
 {
     tape_acc += in;
     if (++tape_ph >= 4) {                        /* the tape, a quarter of the time */
@@ -3741,7 +3741,7 @@ static struct {
 } cl_g[CL_NG];
 
 static uint32_t cl_rng = 0x2545F491u;          /* its own: the Cloud knob leaves the music's choices be */
-DREAM_FLASH static float cl_frand(void)
+DREAM_HOT static float cl_frand(void)
 {
     cl_rng = cl_rng * 1664525u + 1013904223u;
     return (float)(cl_rng >> 8) * (1.0f / 16777216.0f);
@@ -3769,7 +3769,7 @@ DREAM_FLASH static void cloud_birth(void)                   /* a grain, in the f
 }
 
 /* one sample: the input (mono) in, the grains out (l, r) */
-DREAM_FLASH static inline void cloud(float in, float *ol, float *or_)
+DREAM_HOT static inline void cloud(float in, float *ol, float *or_)
 {
     cl_acc += in;
     if (++cl_ph >= 4) {                         /* the line and the grains, a quarter of the time */
@@ -3831,7 +3831,7 @@ DREAM_FLASH static inline void cloud(float in, float *ol, float *or_)
  * bar, +-1 octave at 100. (BERLIN: the stabs' filter LFO, lfo_c, is gone; its name was the plate's modulation
  * oscillator's too, and its line here damped the plate's modulation every chunk: the plate is its own again) */
 DREAM_RAM2 static float lfo_n;
-DREAM_FLASH static void lfo_step(void)
+DREAM_HOT static void lfo_step(void)
 {
     const float pos = (float)(sixteenth & 63u) + (float)pulse * (1.0f / 6.0f);   /* (four bars of sixteenths) */
     lfo_n += (0.67f * (float)par[P_NLFO] * 0.01f * fm_sinf(6.2831853f * pos * (1.0f / 16.0f)) - lfo_n) * 0.2f;
@@ -4432,7 +4432,7 @@ DREAM_RAM2 static float crr[BLK];
 static int16_t wd_buf[2 * WD_N] EN_POOL;
 DREAM_RAM2 static int wd_w;
 DREAM_RAM2 static float wd_ph;
-DREAM_FLASH static inline float wd_read(const int16_t *b, float d)
+DREAM_HOT static inline float wd_read(const int16_t *b, float d)
 {
     float r = (float)wd_w - d, a;
     int i0, i1;
@@ -4444,7 +4444,7 @@ DREAM_FLASH static inline float wd_read(const int16_t *b, float d)
     return ((float)b[i0] + a * (float)(b[i1] - b[i0])) * (1.0f / 12000.0f);
 }
 DREAM_RAM2 static float wd_c;   /* (its amount, eased: off while shedding) */
-DREAM_FLASH static void widen(uint32_t n)
+DREAM_HOT static void widen(uint32_t n)
 {
     float c, tl, tr, dl, dr;
     uint32_t j;
@@ -4578,7 +4578,7 @@ DREAM_FLASH static float nz_note(int pc) { return mtof((float)(28 + (pc + 8) % 1
 /* a sixteenth (tick): the hit struck for it told; the next step's, if the groove has one, struck ahead of its tick by
  * the combs' latency (the shortest one's period, and a little of the swell), the combs retuned as it strikes (never
  * mid-ring); a dry click on the grid now and then (the character's loose ones at random: render_crackle) */
-DREAM_FLASH static void noise_step(int s)
+DREAM_HOT static void noise_step(int s)
 {
     const unsigned c = nz_char();
     const int nx = (s + 1) & 31;
@@ -4712,7 +4712,7 @@ DREAM_FLASH static float atm_noise(void) { return (float)(int32_t)seq_rand(&atm_
 /* (the voices batch) a new drop on the quietest ring: a pitch at random over two octaves from RN_LO (Colour moves
  * them), rising onto it from 3 semitones under (a bubble's chirp), loud now and then but mostly soft, its ring Ring's
  * (0.3 .. 0.9 of it, each its own), here or there; the next one at random (a Poisson rain: rate a second) */
-DREAM_FLASH static void rain_drop(float col, float ring, float rate)
+DREAM_HOT static void rain_drop(float col, float ring, float rate)
 {
     const float u = atm_u(), p = atm_u() * (FM_PI / 2.0f), v = atm_u(), a = atm_u(), w = atm_u();
     int k = 0, i;
@@ -4727,7 +4727,7 @@ DREAM_FLASH static void rain_drop(float col, float ring, float rate)
     rn_gl[k] = fm_cosf(p), rn_gr[k] = fm_sinf(p);
     rn_wait += -fm_logf(fm_maxf(w, 1e-6f)) * EN_SR / rate;
 }
-DREAM_FLASH static void render_atmos(uint32_t n)
+DREAM_HOT static void render_atmos(uint32_t n)
 {
     const int c = atm_char;
     const float ring = 0.025f + 0.0023f * (float)par[P_NTUNE],
@@ -4924,7 +4924,7 @@ DREAM_FLASH int en_atm_ok(void)                              /* (host tests) the
 }
 #endif
 
-DREAM_FLASH static void render_crackle(uint32_t n)
+DREAM_HOT static void render_crackle(uint32_t n)
 {
     uint32_t j, thr;
     int i;
@@ -5122,7 +5122,7 @@ DREAM_RAM2 static float tw_wob;   /* (Droid) its wobble's phase */
 static uint32_t tw_rng = 0x1F83D9ABu;
 
 #define FXD(i) ((float)en_fx_depth[i] * 0.01f)   /* (Loom) an effect's depth while held */
-DREAM_FLASH static void fx_ctl(uint32_t n)                   /* once a chunk: the effects' easing, the filters' coefficients */
+DREAM_HOT static void fx_ctl(uint32_t n)                   /* once a chunk: the effects' easing, the filters' coefficients */
 {
     const float t = (float)n / EN_SR;
     uint32_t on = fxm, rise = fxm & ~fxm_was;
@@ -5205,7 +5205,7 @@ DREAM_FLASH static void fx_ctl(uint32_t n)                   /* once a chunk: th
     }
 }
 
-DREAM_FLASH static void phase6(float *bus, uint32_t n, float *z, float *lastp, float ca, float fb, float wet)
+DREAM_HOT static void phase6(float *bus, uint32_t n, float *z, float *lastp, float ca, float fb, float wet)
 {                                                /* six all-passes (ca), fed back (fb), mixed in (wet) */
     float last = *lastp;
     uint32_t j;
@@ -5222,7 +5222,7 @@ DREAM_FLASH static void phase6(float *bus, uint32_t n, float *z, float *lastp, f
     }
     *lastp = last;
 }
-DREAM_FLASH static void render_fx(uint32_t n)                /* Twitter (bleeps into the echo) and the Phaser (on the dry music) */
+DREAM_HOT static void render_fx(uint32_t n)                /* Twitter (bleeps into the echo) and the Phaser (on the dry music) */
 {
     uint32_t j;
     if (fxm >> EN_FX_TWITTER & 1u || tw_env > 1e-4f)
@@ -5301,7 +5301,7 @@ DREAM_FLASH static inline float svf_lp(const float *c, float *s, float x, float 
 }
 
 /* the master filter on one side (s: its four states): the low-pass, then the high-pass */
-DREAM_FLASH static inline float mfx(float x, float *s)
+DREAM_HOT static inline float mfx(float x, float *s)
 {
     float bp, lp;
     x = svf_lp(mf_c[0], s, x, &bp);
@@ -5319,7 +5319,7 @@ DREAM_FLASH static inline float frac1(float x) { return x - (float)(int)x; }
  * loop's gain, written in again; out at the velocity's level (att: the first ~2 ms eased in), into the mix and the
  * sends as the other voices; amp follows Decay as theirs does (the string's fundamental with it, the partials over it
  * sooner), so the quietest is taken for a new note, the meter moves and the note ends as theirs do */
-DREAM_FLASH static void render_ks(pluck_t *v, int16_t *line, uint32_t n, float g, float es, float rv)
+DREAM_HOT static void render_ks(pluck_t *v, int16_t *line, uint32_t n, float g, float es, float rv)
 {
     const float adec = v->adec, fr = v->ks_fr, fb = v->ks_fb, kg = v->ks_g * g, gl = v->gl, gr = v->gr;
     float amp = v->amp, att = v->att, a1 = v->ks_a1, x1 = v->ks_x1, y = 0.0f;
@@ -5390,12 +5390,12 @@ DREAM_FLASH static void fat_note(pluck_t *v, int fresh)   /* a note on: the phas
             v->drift[i] = 3.0f * fat_u();
     }
 }
-DREAM_FLASH static inline float fat_pulse(float ph, float dt, float w)
+DREAM_HOT static inline float fat_pulse(float ph, float dt, float w)
 {
     return blep_saw(ph, dt) - blep_saw(frac1(ph + w), dt);
 }
 
-DREAM_FLASH static void render_plucks(uint32_t n)           /* (and Pluck's strings: render_ks) */
+DREAM_HOT static void render_plucks(uint32_t n)           /* (and Pluck's strings: render_ks) */
 {
     int i;
     const float g0 = seq_vol * 1.2f, g1 = seq2_vol * 1.2f;
@@ -5592,7 +5592,7 @@ DREAM_FLASH static void ch_gt_init(void)                     /* (once) the level
     ch_gt_ok = 1;
 }
 /* the gain that holds the Choir at a saw's level under the same low-pass (c: its coefficients), rc its resonators */
-DREAM_FLASH static float ch_level(const float rc[3][3], const float *c)
+DREAM_HOT static float ch_level(const float rc[3][3], const float *c)
 {
     const float lg = c[1] / c[0], ilg = 1.0f / lg, k2 = c[3] * c[3];   /* (the low-pass's g = tan(pi fc / fs), k) */
     float ps = 0.0f, pc = 0.0f;
@@ -5710,7 +5710,7 @@ DREAM_FLASH static void choir(uint32_t n, float g, const float *c)   /* both ban
 #endif
 }
 
-DREAM_FLASH static void render_drone(uint32_t n)
+DREAM_HOT static void render_drone(uint32_t n)
 {
     const int cv = cvoice < EN_NCV ? cvoice : 0;
     const float g = mutes & EN_M_CHORD ? 0.0f : chord_vol * 0.072f, fc = 1800.0f * fm_exp2f(2.0f * rel(P_CCOL)) * fo_mul(FO_DRONE), k = fm_clampf(1.2f - 0.9f * rel(P_CRES), 0.2f, 2.0f);
@@ -5806,7 +5806,7 @@ DREAM_FLASH static void render_drone(uint32_t n)
     }
 }
 
-DREAM_FLASH static void render_lead(uint32_t n)
+DREAM_HOT static void render_lead(uint32_t n)
 {
     const int lv = (unsigned)par[P_LVOICE] < EN_NBV ? par[P_LVOICE] : 0;
     const float g = lead_vol * 0.45f, vib = (float)par[P_VIB] * 0.004f + (lv == 3 ? 0.25f : 0.0f), gl = 0.84f, gr = 1.08f,
@@ -5868,7 +5868,7 @@ DREAM_FLASH static void render_lead(uint32_t n)
  * ~4 s, mostly into the echo */
 DREAM_RAM2 static float ar_cr_s[2];
 DREAM_RAM2 static float ar_cr_s2[2];   /* (Loom: Take-off's right side, its own noise) */
-DREAM_FLASH static void render_crash(uint32_t n)
+DREAM_HOT static void render_crash(uint32_t n)
 {
     float c[4], bp;
     uint32_t j;
@@ -5913,7 +5913,7 @@ DREAM_FLASH static void render_crash(uint32_t n)
 }
 
 /* (BERLIN) the meters: each layer's activity, 0..1, at its level (a mute: 0), up at once and down over ~half a second */
-DREAM_FLASH static void layer_act(void)
+DREAM_HOT static void layer_act(void)
 {
     float a[5] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     int i;
@@ -5930,7 +5930,7 @@ DREAM_FLASH static void layer_act(void)
         en_layer_act[i] = fm_maxf(fm_clampf(a[i], 0.0f, 1.0f), en_layer_act[i] * 0.97f);
 }
 
-DREAM_FLASH static void render_chunk(int32_t *out, uint32_t n, float gain)
+DREAM_HOT static void render_chunk(int32_t *out, uint32_t n, float gain)
 {
     uint32_t j;
     float epk;
@@ -6071,7 +6071,7 @@ DREAM_FLASH static void render_chunk(int32_t *out, uint32_t n, float gain)
     ms_lp2 = fm_flush(ms_lp2);
 }
 
-DREAM_FLASH static void control(uint32_t n)                 /* once a chunk: the slow things */
+DREAM_HOT static void control(uint32_t n)                 /* once a chunk: the slow things */
 {
     int i;
     mods_step(n);
@@ -6102,7 +6102,7 @@ DREAM_FLASH static void control(uint32_t n)                 /* once a chunk: the
         en_loop_glow[i] *= 0.985f;
 }
 
-DREAM_FLASH void en_render(int32_t *out, uint32_t n, uint32_t gain_q12)
+DREAM_HOT void en_render(int32_t *out, uint32_t n, uint32_t gain_q12)
 {
     const float gain = (float)gain_q12 * (1.0f / 4096.0f) * 2.0f;
     if (en_load > 75u)                           /* (the last block ran heavy: shed for half a second; the classics
