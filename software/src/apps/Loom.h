@@ -3202,6 +3202,15 @@ FLASHMEM void AppLoom::GoTo(const char* text) {
     Serial.printf("GOTO CLOCK %s\n", tempo_clock->Name(cursor));
     return;
   }
+  // a slot's device by number (testing): "jB/USE/0/4" = track B's SOURCE
+  // slot (0) to its option 4 (SID); no CPU check, so only for measuring
+  if (!strcmp(part[1], "USE") && part[2][0] && part[3][0]) {
+    const int s = atoi(part[2]), o = atoi(part[3]);
+    if (s < 0 || s >= SLOT_COUNT) { Serial.println("GOTO: no such slot"); return; }
+    SetChoice(t, s, o);
+    Serial.printf("USE %c slot %d option %d\n", 'A' + t, s, int(tracks[t].choice[s]));
+    return;
+  }
   int found = -1;
   static const char* const tags[COLS] = {"", "", "", "", "", "CLO"};
   for (int c = 0; c < COLS && found < 0; c++) {
