@@ -242,9 +242,28 @@ __attribute__((noinline)) FLASHMEM void AudioEffectClouds::EcoSpawn(float cur_po
     g->active  = true;
 }
 
+// profiling (USB status, temporary): setup / spawn / grains / out, cycles
+// summed and peak, and the grains playing
+static uint32_t eco_prof_sum[5], eco_prof_max[5], eco_prof_blocks, eco_prof_grains;
+FLASHMEM void EcoProfReport() {
+    const float blk = float(F_CPU_ACTUAL) * AUDIO_BLOCK_SAMPLES / AUDIO_SAMPLE_RATE_EXACT;
+    static const char* const nm[5] = {"rec", "spawn", "grains", "out", "TOTAL"};
+    if (!eco_prof_blocks) return;
+    Serial.printf("  FLOCK time %% (avg/peak), %lu grains on average:", (unsigned long)(eco_prof_grains / eco_prof_blocks));
+    for (int i = 0; i < 5; i++) {
+        const int a = int(eco_prof_sum[i] / float(eco_prof_blocks) / blk * 1000.0f), m = int(eco_prof_max[i] / blk * 1000.0f);
+        Serial.printf(" %s %d.%d/%d.%d", nm[i], a / 10, a % 10, m / 10, m % 10);
+    }
+    Serial.println();
+    memset(eco_prof_sum, 0, sizeof(eco_prof_sum)); memset(eco_prof_max, 0, sizeof(eco_prof_max)); eco_prof_blocks = eco_prof_grains = 0;
+}
+
 // (noinline: inlined into update() it would run from RAM1)
 __attribute__((optimize("O2"), noinline))
 FLASHMEM void AudioEffectClouds::UpdateEco(audio_block_t** in, audio_block_t** out) {
+    const uint32_t ep0 = ARM_DWT_CYCCNT;
+    uint32_t ep[5], eplast = ep0;
+    auto emark = [&](int k) { const uint32_t c = ARM_DWT_CYCCNT; ep[k] = c - eplast; eplast = c; };
     EcoState& e = *eco_;
     const float  cur_pos      = pos_;
     const float  cur_density  = density_;
@@ -307,6 +326,7 @@ FLASHMEM void AudioEffectClouds::UpdateEco(audio_block_t** in, audio_block_t** o
         return;
     }
 
+    emark(0);
     // DRIFT: the walks and swings move on (not while frozen: nothing moves)
     const float dt = AUDIO_BLOCK_SAMPLES / AUDIO_SAMPLE_RATE_EXACT, D = e.drift;
     if (!cur_freeze) {
@@ -353,6 +373,9 @@ FLASHMEM void AudioEffectClouds::UpdateEco(audio_block_t** in, audio_block_t** o
     burst_ = 0;
     e.since += AUDIO_BLOCK_SAMPLES;
 
+    emark(1);
+    int eg = 0;
+    for (auto& g : e.g) if (g.active) eg++;
     // the grains: each one's stretch copied from PSRAM, read with Hermite,
     // coloured, windowed (every 8 samples, glided between), panned
     memset(accum_, 0, MAX_CHANNELS * AUDIO_BLOCK_SAMPLES * sizeof(float));
@@ -431,6 +454,7 @@ FLASHMEM void AudioEffectClouds::UpdateEco(audio_block_t** in, audio_block_t** o
         if (phase >= len) g.active = false;
     }
 
+    emark(2);
     // out: soft-limited (FIBRE's curve), no turning down by the count (the
     // grains' levels took the overlap into account); the feedback taken
     for (int i = 0; i < AUDIO_BLOCK_SAMPLES; i++) {
@@ -460,6 +484,10 @@ FLASHMEM void AudioEffectClouds::UpdateEco(audio_block_t** in, audio_block_t** o
         for (; k < MAX_GRAINS; k++) grains[k].active = false;
     }
 
+    emark(3);
+    ep[4] = ARM_DWT_CYCCNT - ep0;
+    for (int k = 0; k < 5; k++) { eco_prof_sum[k] += ep[k]; if (ep[k] > eco_prof_max[k]) eco_prof_max[k] = ep[k]; }
+    eco_prof_blocks++; eco_prof_grains += eg;
     for (int c = 0; c < nch_; c++) transmit(out[c], c);
     release_blocks(in, out);
 }

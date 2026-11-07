@@ -2464,6 +2464,7 @@ FLASHMEM void AppLoom::MainLoop() {
     }
     Serial.println();
   }
+  { extern void EcoProfReport(); EcoProfReport(); }
   // BEATER's engine: where it sits
   for (int t = 0; t < NUM_TRACKS; t++)
     if (Device* d = tracks[t].inst[RESONATOR][2]) if (d->active && d->ok())
