@@ -4430,7 +4430,7 @@ namespace loom {
   // 14: DRAFT in FIBRE's order SPEED SIZE PITCH POS (was PITCH POS SIZE SPEED)
   // 15: DRAFT page 2 DIFF TONE SPRD MIX (was TONE FDBK SPRD MIX, TONE's mode
   //     the diffusion)
-  constexpr uint8_t SAVE_VERSION = 38;  // 38: SHEAR's page order (PITCH 4th, MIX last; PITCH's mode TAPE / WARP, SPRD gone); 37: FLOCK folded into FIBRE (CLOUD on its page 3; option 3 freed); 36: CLOCK's BPM in tenths (0.1 steps); 35: REPEAT's TIME 16 s (its clock values in 20 .. 16000); 34: REPEAT's TIME 3 s (was 6); 33: TABBY's page 2 ROLL GATE RESET START; 32: TABBY's DENS (4th setting) became CHANC; 31: SPOOL IN MON LEVEL first, CLOTH PLUSH / SPLIT; 21: TREADLE, a 6th modulator type; 22: PICK, a 7th; 23: TREADLE's LEN per part; 24: TREADLE's CHAOS -32..32; 25: TREADLE's pages; 26: STYLE / BEAT for X / Y; 27: TWILL's HITS; 28: TWILL's TONE gone, HITS in its place; 29: TWILL's VARI; 30: TWILL sound / strike pages
+  constexpr uint8_t SAVE_VERSION = 39;  // 39: SHEAR's page 2 REVRS ROLL PICK ARP, page 3 GATE VELO OUT MIX; 38: SHEAR's page order (PITCH 4th, MIX last; PITCH's mode TAPE / WARP, SPRD gone); 37: FLOCK folded into FIBRE (CLOUD on its page 3; option 3 freed); 36: CLOCK's BPM in tenths (0.1 steps); 35: REPEAT's TIME 16 s (its clock values in 20 .. 16000); 34: REPEAT's TIME 3 s (was 6); 33: TABBY's page 2 ROLL GATE RESET START; 32: TABBY's DENS (4th setting) became CHANC; 31: SPOOL IN MON LEVEL first, CLOTH PLUSH / SPLIT; 21: TREADLE, a 6th modulator type; 22: PICK, a 7th; 23: TREADLE's LEN per part; 24: TREADLE's CHAOS -32..32; 25: TREADLE's pages; 26: STYLE / BEAT for X / Y; 27: TWILL's HITS; 28: TWILL's TONE gone, HITS in its place; 29: TWILL's VARI; 30: TWILL sound / strike pages
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -4580,6 +4580,10 @@ namespace loom {
     // SPRD, now TAPE / WARP: back to TAPE)
     const bool shr_v38 = use && !memcmp(tag, "SHR", 4) && load_version < 38;
     static constexpr int8_t SHR_V38[12] = {0, 1, 2, 11, 3, 4, 5, 6, 7, 8, 9, 10};
+    // before v39: page 2 GATE REVRS ROLL PICK, page 3 ARP VELO OUT MIX; now
+    // REVRS ROLL PICK ARP / GATE VELO OUT MIX (Sascha 2026-11-08)
+    const bool shr_v39 = use && !memcmp(tag, "SHR", 4) && load_version < 39;
+    static constexpr int8_t SHR_V39[12] = {0, 1, 2, 3, 8, 4, 5, 6, 7, 9, 10, 11};
     static constexpr int8_t TABBY_V33[8] = {0, 1, 2, 3, PickMod::P_START, PickMod::P_ROLL, PickMod::P_RESET, PickMod::P_GATE};
     int old_dub = -1;
     // before v13 CLOTH's page 2 was band gains (0.5 dB steps; LOW's mode the
@@ -4639,6 +4643,7 @@ namespace loom {
       if (spool_v31) p = SPOOL_V31[constrain(p, 0, 7)];
       if (tabby_v33) p = TABBY_V33[constrain(p, 0, 7)];
       if (shr_v38) { if (q == 4) md = 0; p = SHR_V38[constrain(q, 0, 11)]; }
+      if (shr_v39) p = SHR_V39[constrain(p, 0, 11)];
       if (dens_gone && p == 3) {  // what was DENS starts as CHANC 0 (GAPS), nothing moving it
         v = 0; md = 0;
         amt = amt2 = 0;

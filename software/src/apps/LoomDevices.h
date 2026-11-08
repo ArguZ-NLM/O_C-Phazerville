@@ -6916,14 +6916,15 @@ public:
 // knob SHUF, the share of slices moved to another place; PITCH, its L knob
 // TAPE (faster is higher) or WARP (the slice keeps its time: short grains
 // read at the pitch).
-// Page 2: GATE how much of its time a slice sounds, REVRS the odds a slice
-// plays backwards, ROLL the odds it rolls (its L knob: 2, 3 or 4 hits),
-// PICK the slice B (HIT) plays, in KEYS and CV (ORDER CV: only HIT plays,
-// nothing on the clock; CV on PICK picks, a trigger on B fires).
-// Page 3: ARP how several held keys play (UP, DOWN, PLAYD as pressed,
-// RAND); VELO how much a key's velocity counts; OUT a pair of CV outputs:
-// the slice playing as a pitch (a semitone a slice, slice 1 = 0 V) and a
-// trigger at each slice; MIX. (Order: Sascha 2026-11-08, PITCH 4th, MIX last.)
+// Page 2: REVRS the odds a slice plays backwards, ROLL the odds it rolls
+// (its L knob: 2, 3 or 4 hits), PICK the slice B (HIT) plays, in KEYS and
+// CV (ORDER CV: only HIT plays, nothing on the clock; CV on PICK picks, a
+// trigger on B fires), ARP how several held keys play (UP, DOWN, PLAYD as
+// pressed, RAND).
+// Page 3: GATE how much of its time a slice sounds; VELO how much a key's
+// velocity counts; OUT a pair of CV outputs: the slice playing as a pitch
+// (a semitone a slice, slice 1 = 0 V) and a trigger at each slice; MIX.
+// (Order: Sascha 2026-11-08.)
 // A: run / stop. B: a new shuffle (KEYS, CV: HIT).
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef SHEAR_DEF = {
@@ -6933,11 +6934,11 @@ PROGMEM static const DeviceDef SHEAR_DEF = {
     {"ORDER", 0, 4, 0, LIST, 4, 0, 0, {"FWD", "BACK", "RAND", "KEYS"}},  // (4: CV, in Format)
     {"RATE", -4, 4, 0, BI, 0, 21, 0},     // /8 /4 /3 /2 AUTO x2 x3 x4 x8; mode: SHUF, 0..100 % in 5 % steps
     {"PITCH", -24, 24, 0, BI, 0, 2, 0, {}, {"TAPE", "WARP"}},  // TAPE: faster is higher; WARP: the slice keeps its time
-    {"GATE", 5, 100, 100, UNI},
     {"REVRS", 0, 100, 0, UNI},
     {"ROLL", 0, 100, 0, UNI, 0, 3, 0},    // mode: 2, 3, 4 hits
     {"PICK", 0, AudioEffectShear::MAX_SLICES - 1, 0, UNI},
     {"ARP", 0, 3, 0, LIST, 4, 0, 0, {"UP", "DOWN", "PLAYD", "RAND"}},
+    {"GATE", 5, 100, 100, UNI},
     {"VELO", 0, 100, 40, UNI},
     {"OUT", 0, 4, 0, LIST, 4, 0, 0, {"OFF", "A+B", "C+D", "E+F"}},  // (4: G+H, in Format)
     {"MIX", 0, 100, 100, UNI},
@@ -6947,7 +6948,7 @@ PROGMEM static const DeviceDef SHEAR_DEF = {
 
 class ShearDevice : public Device, public CvSource {
 public:
-  enum { SLICE, ORDER, RATE, PITCH, GATE, REVRS, ROLL, PICK, ARP, VELO, OUT, LEVEL };
+  enum { SLICE, ORDER, RATE, PITCH, REVRS, ROLL, PICK, ARP, GATE, VELO, OUT, LEVEL };
   ShearDevice() : Device(SHEAR_DEF) {}
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
