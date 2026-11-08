@@ -775,6 +775,8 @@ volatile uint32_t midi_clocks = 0;
 volatile uint32_t midi_start_clocks = 0;  // the count at MIDI Start (the next clock is beat 0)
 volatile uint32_t midi_clock_us = 0;      // when the last clock came
 uint16_t midi_spp = 0;                    // the last Song Position (16ths): where a Continue goes on from
+volatile uint32_t midi_resume_clocks = 0; // the count at the last Start / Continue: the beat waits for the next clock
+volatile uint32_t midi_transport = 0;     // Start / Continue / Stop seen (the tempo is measured afresh after one)
 
 // how long the boot picture stays (see OC_apps.h), CLOCK's BOOT setting
 uint8_t boot_screen = 2;
@@ -845,6 +847,8 @@ private:
   float beat_ph = 0.0f;
   float measured = 120.0f;
   bool have_measure = false;
+  float far_bpm = 0.0f;       // a measure far off the tempo, waiting for a second one to agree
+  uint32_t transport_seen = 0;
   int src_was = -1;          // SOURCE (and CV on BPM) last tick: a change starts the measuring afresh
   int cv_was = -1;
   void Measured(float bpm);
@@ -852,9 +856,16 @@ private:
 
 FLASHMEM void ClockDevice::Measured(float bpm) {
   if (bpm < 20.0f || bpm > 400.0f) return;
-  // follow quickly when far off, smooth out jitter when close
-  measured = (have_measure && fabsf(bpm - measured) < measured * 0.1f)
-    ? measured + 0.3f * (bpm - measured) : bpm;
+  // smooth out jitter when close; far off (10 %), follow at once, but only
+  // when a second measure agrees: one odd beat (Ableton relocating read
+  // 133 for 120, 2026-11-08) must not throw the tempo
+  if (have_measure && fabsf(bpm - measured) >= measured * 0.1f) {
+    if (far_bpm > 0.0f && fabsf(bpm - far_bpm) < far_bpm * 0.05f) { measured = bpm; far_bpm = 0.0f; }
+    else far_bpm = bpm;
+    return;
+  }
+  far_bpm = 0.0f;
+  measured = have_measure ? measured + 0.3f * (bpm - measured) : bpm;
   have_measure = true;
 }
 
@@ -873,12 +884,15 @@ FLASHMEM void ClockDevice::Tick(const ModCtx& ctx) {
     last_edge_us = 0;
   }
   if (src == 1) {
-    // MIDI clock, 24 per beat: measure over whole beats
-    const uint32_t c = midi_clocks;
+    // MIDI clock, 24 per beat: measure over whole beats, timed by when
+    // the clocks came (not this tick); after a Start / Continue / Stop
+    // afresh (a gap or a jump inside a beat is no tempo)
+    if (midi_transport != transport_seen) { transport_seen = midi_transport; midi_mark = midi_clocks; midi_mark_us = 0; }
+    const uint32_t c = midi_clocks, at = midi_clock_us;
     if (c - midi_mark >= 24) {
-      if (midi_mark_us) Measured(60e6f * (c - midi_mark) / 24.0f / (now - midi_mark_us));
+      if (midi_mark_us) Measured(60e6f * (c - midi_mark) / 24.0f / float(at - midi_mark_us));
       midi_mark = c;
-      midi_mark_us = now;
+      midi_mark_us = at;
     }
   } else if (src >= CLK_SHU) {
     // a SHUTTLE's file: its tempo, playing or not (Sascha 2026-11-08: a
@@ -913,7 +927,10 @@ FLASHMEM void ClockDevice::Tick(const ModCtx& ctx) {
 
   // beat blink for the picture, and a 0..1 ramp per beat as output
   if (Restarted()) { beat_ph = 0.0f; beat = 0; flash = 0.08f; clock_beat_n = 0; }
-  if (clock_running) beat_ph += ctx.dt * tempo_bpm / 60.0f;
+  // (MIDI: after Start / Continue the beat waits for the first clock, the
+  // downbeat; Ableton sends it a while after Start, so the beats ran up to
+  // 36 ms early)
+  if (clock_running && !(src == 1 && midi_clocks == midi_resume_clocks)) beat_ph += ctx.dt * tempo_bpm / 60.0f;
   clock_shuttle = int8_t(Shuttle());
   if (clock_running && clock_shuttle >= 0 && shuttles[clock_shuttle]) {
     // the beats pulled onto the file's (gently: a loop's seam jumps)
