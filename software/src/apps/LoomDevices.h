@@ -4473,6 +4473,7 @@ FLASHMEM bool PlayerDevice::Activate() {
 
 FLASHMEM void PlayerDevice::Deactivate() {
   if (!active) return;
+  WriteMeta();  // the file's loop to the card first (SHUTTLE swapped out, or sent to SPOOL, Sascha 2026-11-08)
   if (loading || streaming || analysing) lf.close();
   loading = streaming = analysing = false;
   stream.Release();
