@@ -3680,6 +3680,9 @@ public:
   // the tempo heard: the file's at this SPEED, either way (0: none found, or
   // not playing)
   float HeardBpm() const { return bpm > 0.0f && Playing() ? bpm * cur[SPEED] * 0.01f : 0.0f; }
+  // the same, playing or not (the clock on a stopped SHUTTLE: its file's
+  // tempo, not the clock's own BPM)
+  float FileBpm() const { return bpm > 0.0f ? bpm * cur[SPEED] * 0.01f : 0.0f; }
   // SHEAR: its loop in memory (MEM; nullptr streaming or loading), and how
   // fast it plays (the file's rate, SYNC, SPEED)
   const AudioEffectReel* MemReel() const { return streaming || Busy() || loaded < 0 ? nullptr : &fx; }

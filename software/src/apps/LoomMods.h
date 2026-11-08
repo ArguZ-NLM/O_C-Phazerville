@@ -855,9 +855,10 @@ FLASHMEM void ClockDevice::Tick(const ModCtx& ctx) {
       midi_mark_us = now;
     }
   } else if (src >= CLK_SHU) {
-    // a SHUTTLE's file: held at the last tempo while it doesn't play
+    // a SHUTTLE's file: its tempo, playing or not (Sascha 2026-11-08: a
+    // stopped one after a restart showed the clock's own BPM)
     const PlayerDevice* p = shuttles[src - CLK_SHU];
-    const float b = p ? p->HeardBpm() : 0.0f;
+    const float b = p ? p->FileBpm() : 0.0f;
     if (b >= 10.0f && b <= 400.0f) { measured = b; have_measure = true; }
   } else if (CvTempo() >= 0) {
     // a CV input: added to BPM in a straight line, 27 BPM a volt (0-10 V
