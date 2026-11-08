@@ -59,13 +59,16 @@ public:
   volatile float step_beats = 0.25f;  // on the clock: a grid step, in beats (RATE included)
   volatile float gate = 1.0f;         // a slice sounds for this share of its steps (at most its length)
   volatile float pitch = 1.0f;        // playback ratio
-  volatile float spread = 0.0f;       // +- semitones, at random each slice
+  volatile float spread = 0.0f;       // +- semitones, at random each slice (whole semitones)
   volatile float p_rev = 0.0f, p_roll = 0.0f;  // odds a slice plays backwards / rolls
   volatile uint8_t roll_hits = 2;     // a roll: hits in the slice's time
   volatile bool running = true;       // A: play / stop
   volatile bool rest = false;         // parked
-  // KEYS: a slice by hand (MIDI), its level 0..1 (played in the next update)
+  // KEYS: a slice by hand (MIDI), its level 0..1 (played in the next update);
+  // it loops while the key is held, and on letting go plays its last time
+  // round out (a quick tap: the slice once)
   void Pad(int s, float lvl) { pad_lvl = lvl; asm volatile("" ::: "memory"); pad = uint8_t(s); }
+  void PadOff() { pad_off = true; }
   // the clock, as the main loop last saw it (two copies: the update reads
   // the one not being written)
   struct ClockSnap { double beats; uint32_t us; float bpm; bool running; };
@@ -147,11 +150,16 @@ public:
       }
     } else last_step = INT64_MIN;
     const uint8_t pd = pad;
-    if (pd != 0xFF) { pad = 0xFF; n_pads = n_pads + 1; Start(pd, -1, pad_lvl); }
+    if (pd != 0xFF) { pad = 0xFF; n_pads = n_pads + 1; Start(pd, -1, pad_lvl); voice[cur_v].hold = true; }
+    if (pad_off) { pad_off = false; voice[cur_v].hold = false; voice[cur_v ^ 1].hold = false; }
 
     for (int i = 0; i < AUDIO_BLOCK_SAMPLES; i++) {
       if (i == trig_at) GridStep(trig_k);
       if (roll_left && --roll_in <= 0) { roll_left--; roll_in = roll_gap; Retrigger(); }
+      {  // a held key: at the slice's end, round again (crossfaded like a new slice)
+        const Voice& c = voice[cur_v];
+        if (c.on && c.hold && !c.rel && c.pos >= c.span - 1.0f - c.inc) Again();
+      }
       float l = 0.0f, rr = 0.0f;
       for (auto& v : voice) {
         if (!v.on) continue;
@@ -190,7 +198,7 @@ public:
 private:
   audio_block_t* inq[2];
   struct Voice {
-    bool on = false, rev = false, rel = false;
+    bool on = false, rev = false, rel = false, hold = false;
     uint8_t slice = 0;
     float pos = 0.0f, inc = 1.0f, span = 0.0f, env = 0.0f, left = 0.0f, amp = 1.0f;
   };
@@ -199,6 +207,7 @@ private:
   ClockSnap clk[2] = {};
   volatile uint8_t clk_i = 0;
   volatile uint8_t pad = 0xFF;
+  volatile bool pad_off = false;
   volatile float pad_lvl = 1.0f;
   int64_t last_step = INT64_MIN;
   float step_samples = 0.0f;
@@ -249,7 +258,8 @@ private:
     s = constrain(s, 0, N() - 1);
     const bool rev = p_rev > 0.0f && Rand01() < p_rev;
     float ratio = pitch;
-    if (spread > 0.0f) ratio *= exp2f((Rand01() * 2.0f - 1.0f) * spread * (1.0f / 12.0f));
+    const int sp = int(spread + 0.5f);
+    if (sp > 0) ratio *= exp2f(float(int(Rand() % uint32_t(2 * sp + 1)) - sp) * (1.0f / 12.0f));  // (whole semitones, Sascha 2026-11-08)
     const float inc = head_rate * ratio;
     size_t ws, wl;
     reel->Window(ws, wl);
@@ -276,9 +286,22 @@ private:
     v.slice = uint8_t(s);
     v.pos = 0.0f;
     v.rev = rev;
+    v.hold = false;
     v.inc = inc;
     v.span = span;
     v.left = left;
+  }
+
+  void Again() {  // a held key's slice from its start again
+    const Voice keep = voice[cur_v];
+    voice[cur_v].rel = true;
+    voice[cur_v].hold = false;
+    cur_v ^= 1;
+    Voice& v = voice[cur_v];
+    v = keep;
+    v.env = 0.0f;
+    v.pos = 0.0f;
+    v.left = v.span / std::max(0.01f, v.inc);
   }
 
   void Retrigger() {  // a roll's next hit: the same slice from its start

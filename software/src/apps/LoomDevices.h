@@ -6960,6 +6960,7 @@ private:
   float src_rate = 1.0f;
   const char* src_why = "";
   uint32_t notes_seen = 0;
+  int held_note = -1;  // KEYS: the key whose slice loops
   // what the slices were cut for (found again when it changes)
   const AudioEffectReel* cut_src = nullptr;
   size_t cut_ws = 0, cut_wl = 0;
@@ -7088,13 +7089,16 @@ FLASHMEM void ShearDevice::Idle() {
   }
   fx.step_beats = AutoBeats() / Factor();  // (on the clock, when the source doesn't play)
   // KEYS: MIDI notes (any channel) play the slices, C3 (60) the first, on up
-  // (and round again)
+  // (and round again); a held key loops its slice, the last key pressed
+  // wins; the velocity counts a little (60..100 %, Sascha 2026-11-08)
   if (note_ev_n - notes_seen > NOTE_EVS) notes_seen = note_ev_n - NOTE_EVS;
   while (notes_seen != note_ev_n) {
     const NoteEv& e = note_ev[notes_seen++ % NOTE_EVS];
-    if (!e.vel || cur[ORDER] != AudioEffectShear::KEYS) continue;
+    if (cur[ORDER] != AudioEffectShear::KEYS) continue;
+    if (!e.vel) { if (e.note == held_note) { fx.PadOff(); held_note = -1; } continue; }
     const int n = Slices();
-    fx.Pad(((int(e.note) - 60) % n + n) % n, e.vel / 127.0f);
+    fx.Pad(((int(e.note) - 60) % n + n) % n, 0.6f + 0.4f * (e.vel / 127.0f));
+    held_note = e.note;
   }
 }
 
