@@ -6909,19 +6909,21 @@ public:
 // Page 1: SLICE how many, on a grid of 8, 16 or 32 (its L knob CUT: EUCL,
 // the cuts spread over the grid as a Euclidean rhythm, or HITS, the grid's
 // loudest lines); ORDER (FWD as they lie, BACK, RAND, KEYS: MIDI keys play
-// them, C3 the first); RATE how often the slices fire, AUTO in the middle
-// (the loop's own grid), /2 /3 /4 /8 less often, x2 x3 x4 x8 more often
-// (Sascha 2026-11-08); its L knob SHUF, the share of slices moved to
-// another place; MIX.
-// Page 2: PITCH (its L knob: a random spread each slice), GATE how much of
-// its time a slice sounds, REVRS the odds a slice plays backwards, ROLL the
-// odds it rolls (its L knob: 2, 3 or 4 hits).
-// Page 3 (Sascha 2026-11-08, CV): PICK the slice ORDER CV plays each step
-// (CV moves it: a CV sequence of slices on the grid) and B (HIT) plays
-// now (a trigger on B: a CV slice player); ARP how several held keys play
-// (UP, DOWN, PLAYD as pressed, RAND); VELO how much a key's velocity
-// counts; OUT a pair of CV outputs: the slice playing as a pitch (a
-// semitone a slice, slice 1 = 0 V) and a trigger at each slice.
+// them, C3 the first, several held an arpeggio; CV: PICK each step); RATE
+// how often the slices fire, AUTO in the middle (the loop's own grid),
+// /2 /3 /4 /8 less often, x2 x3 x4 x8 more often (Sascha 2026-11-08); its L
+// knob SHUF, the share of slices moved to another place; PITCH, its L knob
+// TAPE (faster is higher) or WARP (the slice keeps its time: short grains
+// read at the pitch).
+// Page 2: GATE how much of its time a slice sounds, REVRS the odds a slice
+// plays backwards, ROLL the odds it rolls (its L knob: 2, 3 or 4 hits),
+// PICK the slice ORDER CV plays each step (CV moves it: a CV sequence of
+// slices on the grid) and B (HIT) plays now (a trigger on B: a CV slice
+// player).
+// Page 3: ARP how several held keys play (UP, DOWN, PLAYD as pressed,
+// RAND); VELO how much a key's velocity counts; OUT a pair of CV outputs:
+// the slice playing as a pitch (a semitone a slice, slice 1 = 0 V) and a
+// trigger at each slice; MIX. (Order: Sascha 2026-11-08, PITCH 4th, MIX last.)
 // A: run / stop. B: a new shuffle (KEYS, CV: HIT).
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef SHEAR_DEF = {
@@ -6930,8 +6932,7 @@ PROGMEM static const DeviceDef SHEAR_DEF = {
     {"SLICE", 2, AudioEffectShear::MAX_SLICES, 16, UNI, 0, 2, 0, {}, {"EUCL", "HITS"}},
     {"ORDER", 0, 4, 0, LIST, 4, 0, 0, {"FWD", "BACK", "RAND", "KEYS"}},  // (4: CV, in Format)
     {"RATE", -4, 4, 0, BI, 0, 21, 0},     // /8 /4 /3 /2 AUTO x2 x3 x4 x8; mode: SHUF, 0..100 % in 5 % steps
-    {"MIX", 0, 100, 100, UNI},
-    {"PITCH", -24, 24, 0, BI, 0, 13, 0},  // mode: spread, 0..12 semitones
+    {"PITCH", -24, 24, 0, BI, 0, 2, 0, {}, {"TAPE", "WARP"}},  // TAPE: faster is higher; WARP: the slice keeps its time
     {"GATE", 5, 100, 100, UNI},
     {"REVRS", 0, 100, 0, UNI},
     {"ROLL", 0, 100, 0, UNI, 0, 3, 0},    // mode: 2, 3, 4 hits
@@ -6939,13 +6940,14 @@ PROGMEM static const DeviceDef SHEAR_DEF = {
     {"ARP", 0, 3, 0, LIST, 4, 0, 0, {"UP", "DOWN", "PLAYD", "RAND"}},
     {"VELO", 0, 100, 40, UNI},
     {"OUT", 0, 4, 0, LIST, 4, 0, 0, {"OFF", "A+B", "C+D", "E+F"}},  // (4: G+H, in Format)
+    {"MIX", 0, 100, 100, UNI},
   },
   {"", ""},
 };
 
 class ShearDevice : public Device, public CvSource {
 public:
-  enum { SLICE, ORDER, RATE, LEVEL, PITCH, GATE, REVRS, ROLL, PICK, ARP, VELO, OUT };
+  enum { SLICE, ORDER, RATE, PITCH, GATE, REVRS, ROLL, PICK, ARP, VELO, OUT, LEVEL };
   ShearDevice() : Device(SHEAR_DEF) {}
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
@@ -6957,7 +6959,7 @@ public:
   void Format(int p, char* buf, size_t n) const override;
   void FormatMode(int p, char* buf, size_t n) const override;
   const char* AltName(int p) const override {
-    return p == SLICE ? "CUT" : p == RATE ? "SHUF" : p == PITCH ? "SPRD" : p == ROLL ? "HITS" : nullptr;
+    return p == SLICE ? "CUT" : p == RATE ? "SHUF" : p == ROLL ? "HITS" : nullptr;
   }
   void Action(int a) override {
     if (a == 0) fx.running = !fx.running;
@@ -7031,7 +7033,7 @@ FLASHMEM void ShearDevice::Apply(int p) {
     case ORDER: fx.order = uint8_t(cur[ORDER]); break;
     case RATE: fx.factor = Factor(); if (shuf_was != mode[RATE]) Shuffle(); break;
     case LEVEL: wet = cur[LEVEL] * 0.01f; break;
-    case PITCH: fx.pitch = exp2f(cur[PITCH] / 12.0f); fx.spread = float(mode[PITCH]); break;
+    case PITCH: fx.pitch = exp2f(cur[PITCH] / 12.0f); fx.warp = mode[PITCH] == 1; break;
     case GATE: fx.gate = cur[GATE] * 0.01f; break;
     case REVRS: fx.p_rev = cur[REVRS] * 0.01f; break;
     case ROLL: fx.p_roll = cur[ROLL] * 0.01f; fx.roll_hits = uint8_t(2 + mode[ROLL]); break;
@@ -7053,9 +7055,7 @@ FLASHMEM void ShearDevice::Format(int p, char* buf, size_t n) const {
 }
 
 FLASHMEM void ShearDevice::FormatMode(int p, char* buf, size_t n) const {
-  if (p == PITCH && !mode[p]) snprintf(buf, n, "OFF");
-  else if (p == PITCH) snprintf(buf, n, LOOM_PM "%d", mode[p]);
-  else if (p == ROLL) snprintf(buf, n, "x%d", 2 + mode[p]);
+  if (p == ROLL) snprintf(buf, n, "x%d", 2 + mode[p]);
   else if (p == RATE) snprintf(buf, n, "%d%%", mode[p] * 5);
   else Device::FormatMode(p, buf, n);
 }

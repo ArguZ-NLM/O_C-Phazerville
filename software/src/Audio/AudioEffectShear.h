@@ -69,7 +69,7 @@ public:
   volatile float step_beats = 0.25f;  // on the clock: a grid step, in beats (RATE included)
   volatile float gate = 1.0f;         // a slice sounds for this share of its steps (at most its length)
   volatile float pitch = 1.0f;        // playback ratio
-  volatile float spread = 0.0f;       // +- semitones, at random each slice (whole semitones)
+  volatile bool warp = false;         // WARP: a slice keeps its time, short grains read at the pitch
   volatile float p_rev = 0.0f, p_roll = 0.0f;  // odds a slice plays backwards / rolls
   volatile uint8_t roll_hits = 2;     // a roll: hits in the slice's time
   volatile bool running = true;       // A: play / stop
@@ -191,13 +191,26 @@ public:
         // at its end it fades out (3 ms), reading on past it so it doesn't click
         // (backwards its end is its loudest: the hit)
         if (v.pos >= v.span - 1.0f) v.rel = true;
-        const float p = v.rev ? v.span - 1.0f - v.pos : v.pos;
-        const float at = std::max(0.0f, float(ws) + v.base * float(wl) + p);  // (the window as it is now)
-        const size_t i0 = std::min(size_t(at), len - 2);
-        const float f = at - float(i0);
         const float g = v.env * v.amp;
-        l += g * (src[0][i0] + (src[0][i0 + 1] - src[0][i0]) * f);
-        rr += g * (src[1][i0] + (src[1][i0 + 1] - src[1][i0]) * f);
+        const float b0 = float(ws) + v.base * float(wl);  // (the window as it is now)
+        auto read = [&](float p, float w) {
+          if (v.rev) p = v.span - 1.0f - p;
+          const float at = std::max(0.0f, b0 + p);
+          const size_t i0 = std::min(size_t(at), len - 2);
+          const float f = at - float(i0);
+          l += w * (src[0][i0] + (src[0][i0 + 1] - src[0][i0]) * f);
+          rr += w * (src[1][i0] + (src[1][i0 + 1] - src[1][i0]) * f);
+        };
+        if (v.pinc > 0.0f) {
+          // WARP: two grains, half a grain apart, each from where the slice
+          // has got to (in time) reading on at the pitch; triangles, so the
+          // two always add up to one
+          for (int k = 0; k < 2; k++) {
+            read(v.ga[k] + v.gt[k] * v.pinc, g * (1.0f - fabsf(2.0f * v.gph[k] - 1.0f)));
+            v.gt[k] += 1.0f;
+            if ((v.gph[k] += GRAIN_STEP) >= 1.0f) { v.gph[k] -= 1.0f; v.ga[k] = v.pos; v.gt[k] = 0.0f; }
+          }
+        } else read(v.pos, g);
         v.pos += v.inc;
         v.left -= 1.0f;
       }
@@ -223,6 +236,11 @@ private:
     bool on = false, rev = false, rel = false, hold = false;
     uint8_t slice = 0;
     float base = 0.0f;  // where it starts, as a share of the window (kept: new cuts don't move it)
+    // WARP: the grains' read speed (0: off, pos itself is read), and each
+    // grain's start, samples in and place in its window. The first starts
+    // at its peak: the slice's attack comes out whole
+    float pinc = 0.0f, ga[2] = {}, gt[2] = {}, gph[2] = {0.5f, 0.0f};
+    void Grains() { ga[0] = ga[1] = pos; gt[0] = gt[1] = 0.0f; gph[0] = 0.5f; gph[1] = 0.0f; }
     float pos = 0.0f, inc = 1.0f, span = 0.0f, env = 0.0f, left = 0.0f, amp = 1.0f;
   };
   Voice voice[2];
@@ -235,6 +253,7 @@ private:
   volatile float pad_lvl = 1.0f;
   int64_t last_step = INT64_MIN;
   float step_samples = 0.0f;
+  static constexpr float GRAIN_STEP = 1.0f / (0.04f * AUDIO_SAMPLE_RATE_EXACT);  // grains of 40 ms
   float head_rate = 1.0f;   // source frames a sample the voices play at (PITCH on top)
   uint32_t loops = 0;       // times round the loop, following its head
   float last_frac = 0.0f;
@@ -314,10 +333,11 @@ private:
   void Start(int s, int u, float lvl) {
     s = constrain(s, 0, N() - 1);
     const bool rev = p_rev > 0.0f && Rand01() < p_rev;
-    float ratio = pitch;
-    const int sp = int(spread + 0.5f);
-    if (sp > 0) ratio *= exp2f(float(int(Rand() % uint32_t(2 * sp + 1)) - sp) * (1.0f / 12.0f));  // (whole semitones, Sascha 2026-11-08)
-    const float inc = head_rate * ratio;
+    const float ratio = pitch;
+    // WARP: on through the slice at the head's speed, the grains at the pitch
+    const bool warped = warp && fabsf(ratio - 1.0f) > 1e-3f;
+    const float inc = warped ? head_rate : head_rate * ratio;
+    const float pinc = warped ? head_rate * ratio : 0.0f;
     size_t ws, wl;
     reel->Window(ws, wl);
     const float step = float(wl) / float(std::max<int>(1, grid));  // a grid step, in source frames
@@ -331,7 +351,7 @@ private:
     // same speed): the same voice plays on, no fade (FWD at PITCH 0 is the
     // dry itself)
     Voice& o = voice[cur_v];
-    if (u >= 0 && o.on && !o.rel && !o.rev && !rev && o.left > 0.0f && fabsf(o.inc - inc) < 1e-5f) {
+    if (u >= 0 && o.on && !o.rel && !o.rev && !rev && !warped && o.pinc == 0.0f && o.left > 0.0f && fabsf(o.inc - inc) < 1e-5f) {
       const float d = o.base * float(wl) + o.pos - float(start[s]) * step;
       if (fabsf(d) <= inc + 2.0f) { o.slice = uint8_t(s); o.base = float(start[s]) / float(std::max<int>(1, grid)); o.pos = d; o.span = span; o.left = left; o.amp = lvl; return; }
     }
@@ -348,6 +368,8 @@ private:
     v.rev = rev;
     v.hold = false;
     v.inc = inc;
+    v.pinc = pinc;
+    v.Grains();
     v.span = span;
     v.left = left;
   }
@@ -361,6 +383,7 @@ private:
     v = keep;
     v.env = 0.0f;
     v.pos = 0.0f;
+    v.Grains();
     v.left = v.span / std::max(0.01f, v.inc);
   }
 
@@ -375,6 +398,7 @@ private:
     v.rel = false;
     v.env = 0.0f;
     v.pos = 0.0f;
+    v.Grains();
     v.left = std::min(v.span / std::max(0.01f, v.inc), roll_gap * gate);
   }
 };
