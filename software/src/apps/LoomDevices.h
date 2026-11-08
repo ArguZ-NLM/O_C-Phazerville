@@ -2074,23 +2074,30 @@ PROGMEM static const DeviceDef SPOOL_DEF = {
     {"LEVEL", 0, 100, 100, UNI, 0, 21, 0},
     // mode (L): LOOP (round and round) or PING (back and forth)
     {"SPEED", -200, 200, 100, BI, 0, 2, 0, {}, {"LOOP", "PING"}},
-    // the loop's edges, as PLAYER's: 0..10000 of the recording; mode (L):
-    // the picture zooms in on the edge (SPOOL_ZOOM_MS)
-    {"START", 0, 10000, 0, UNI, 0, 8, 0},
-    {"END", 0, 10000, 10000, UNI, 0, 8, 0},
-    {"FADE", 0, 100, 20, UNI, 0, 2, 0, {}, {"CROSS", "INOUT"}},  // the loop's seam, as PLAYER's
-    // the picture only. Mode (L): ALL, LOOP (just START..END), or how much
-    // time a closer view shows (REEL_VIEW_MS); value (R): where it looks,
-    // HEAD (-1: follows the play head) or a place in the loop, 0..100 %
-    {"VIEW", -1, 100, -1, UNI, 0, 11, 0},
+    // Page 2 as SHUTTLE's (Sascha 2026-11-08: editing the same on both):
+    // START / END the loop's edges, 0..10000 of the recording (to the sample
+    // once set by hand), mode (L) the zoom, all .. 0.3 ms across (on the
+    // beats: the grid); FADE the seam; SNAP OFF / ZERO (the nearest zero
+    // crossing) / BEAT (the clock's beats while it was recorded, from its
+    // start), mode the loop moved a few ms
+    {"START", 0, 10000, 0, UNI, 0, 10, 0},
+    {"END", 0, 10000, 10000, UNI, 0, 10, 0},
+    {"FADE", 0, 100, 20, UNI, 0, 2, 0, {}, {"CROSS", "INOUT"}},
+    {"SNAP", 0, 2, 0, LIST, 3, 201, 0, {"OFF", "ZERO", "BEAT"}},
   },
   {"", ""},
 };
 
-// SPOOL's VIEW steps after ALL, in ms
-PROGMEM static const uint16_t REEL_VIEW_MS[9] = {2000, 1000, 500, 200, 100, 50, 20, 10, 5};
-// START / END zoom steps after the whole loop, in ms
-PROGMEM static const uint16_t SPOOL_ZOOM_MS[7] = {2000, 500, 100, 20, 5, 2, 1};
+// START / END's zoom steps, as SHUTTLE's (ZOOM_US there): the time across
+// the picture, 0 = the whole loop
+PROGMEM static const uint32_t SPOOL_ZOOM_US[10] = {0, 16000000, 4000000, 1000000, 250000, 60000, 15000, 4000, 1000, 300};
+static void FormatSpoolZoom(int m, char* buf, size_t n) {
+  const uint32_t us = SPOOL_ZOOM_US[constrain(m, 0, 9)];
+  if (!us) snprintf(buf, n, "all");
+  else if (us >= 1000000) snprintf(buf, n, "%lus", (unsigned long)(us / 1000000));
+  else if (us >= 1000) snprintf(buf, n, "%lums", (unsigned long)(us / 1000));
+  else snprintf(buf, n, ".%lums", (unsigned long)(us / 100));
+}
 static void FormatMs(int ms, char* buf, size_t n) {
   if (ms >= 1000) snprintf(buf, n, "%ds", ms / 1000);
   else snprintf(buf, n, "%dms", ms);
@@ -2106,7 +2113,12 @@ static void FormatSeconds(uint32_t ms, char* buf, size_t n) {
 
 class ReelDevice : public Device {
 public:
-  enum { IN, MON, LEVEL, SPEED, START, END, XFADE, VIEW };  // (until v31: SPEED START END FADE IN MON LEVEL VIEW)
+  enum { IN, MON, LEVEL, SPEED, START, END, XFADE, SNAP };  // (until v31: SPEED START END FADE IN MON LEVEL VIEW; until v40 VIEW for SNAP)
+  enum { SNAP_OFF, SNAP_ZERO, SNAP_BEAT };
+  static constexpr int SNAP_SHIFTS = 100;  // SNAP's L knob: +-100 ms, a ms a click
+  static constexpr int GRID_MODES = 6;     // on the beats START / END's L knob: all BEAT 1/2 1/4 1/8 1/16
+  static constexpr int SNAP_VIEW_MS = 64;  // SNAP's close-ups: 64 ms across each
+  static constexpr size_t MIN_SPAN = 16;   // the deepest zoom: 16 samples across
   bool Varies(int p) const override { return p == LEVEL; }
   static float MaxSecs() { return BigSecs(); }
   explicit ReelDevice(InputDevice* i) : Device(SPOOL_DEF), input(i) {}
@@ -2117,9 +2129,19 @@ public:
     ApplyAll();
   }
   int Step(int p, int v, int dir) const override;
-  bool ModeIsView(int p) const override { return p == START || p == END || p == VIEW; }
-  // START / END: a click is already a step of the picture (finer zoomed in)
-  int MaxAccel(int p) const override { return p == START || p == END ? 8 : Device::MaxAccel(p); }
+  bool ModeIsView(int p) const override { return p == START || p == END; }
+  // START / END: a click is already a step of the picture (finer zoomed in;
+  // on the beats a step of the grid)
+  int MaxAccel(int p) const override { return p == START || p == END ? (OnBeats() ? 1 : 8) : Device::MaxAccel(p); }
+  int ModeCount(int p) const override { return (p == START || p == END) && OnBeats() ? GRID_MODES : Device::ModeCount(p); }
+  int ModeAt(int p) const override { return p == SNAP ? SnapShift() + SNAP_SHIFTS : mode[p]; }
+  bool NameStop(int p) const override { return p != SNAP && Device::NameStop(p); }
+  void NudgeMode(int p, int dir) override;
+  bool EditLabel(int p, char* buf, size_t n) const override;
+  void SetFromText(int p) override {  // (USB '=': the edge to the value's frame)
+    const size_t n = Frames();
+    if ((p == START || p == END) && n) { Exact(); ex_pos[p == END] = uint32_t(uint64_t(val[p]) * n / 10000); Window(); }
+  }
   void FormatMode(int p, char* buf, size_t n) const override;
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
@@ -2160,51 +2182,231 @@ public:
 private:
   AudioEffectReel fx;
   InputDevice* input;
-  float view_range = 1024.0f;  // zoomed picture's auto range
   int rec_top = 4096;          // recording picture: the loudest so far
-  // a close view: span frames; centre -1 rides with the head
-  void DrawZoom(int x, int y, int w, int h, long span, long centre, const char* label);
+  // --- page 2, as SHUTTLE's
+  // the loop's length (0: nothing to edit: empty, recording)
+  size_t Frames() const {
+    const auto st = fx.state();
+    return st == AudioEffectReel::EMPTY || st == AudioEffectReel::REC ? 0 : fx.Length();
+  }
+  // START / END to the sample once set by hand (the settings hold 0.01 %),
+  // for the loop of this length
+  mutable uint32_t ex_pos[2] = {0, 0};
+  mutable size_t ex_len = 0;   // (0: not set: from the settings)
+  void Exact() const {
+    const size_t n = Frames();
+    if (ex_len == n && n) return;
+    ex_pos[0] = uint32_t(uint64_t(cur[START]) * n / 10000);
+    ex_pos[1] = uint32_t(uint64_t(cur[END]) * n / 10000);
+    ex_len = n;
+  }
+  size_t EdgeAt(int p) const {
+    const size_t n = Frames();
+    if (ex_len == n && n && cur[p] == val[p]) return std::min<size_t>(n, ex_pos[p == END]);
+    return size_t(uint64_t(cur[p]) * n / 10000);
+  }
+  void LoopEdges(size_t& a, size_t& b) const;  // where it loops, snapped
+  void Window();                               // ... to the engine
+  // SNAP BEAT: the clock's tempo when the loop was recorded, the beats from
+  // its start
+  float rec_bpm = 0.0f;
+  AudioEffectReel::State st_was = AudioEffectReel::EMPTY;
+  double BeatFrames() const { return 60.0 * AUDIO_SAMPLE_RATE_EXACT / std::max(1.0f, rec_bpm); }
+  bool OnBeats() const { return cur[SNAP] == SNAP_BEAT && rec_bpm > 0.0f && Frames(); }
+  int GridDiv() const { const int m = std::min<int>(mode[START], GRID_MODES - 1); return OnBeats() && m > 1 ? 1 << (m - 1) : 1; }
+  double GridFrames() const { return BeatFrames() / GridDiv(); }
+  int SnapShift() const { const int m = mode[SNAP]; return m <= SNAP_SHIFTS ? m : m - (2 * SNAP_SHIFTS + 1); }
+  size_t Shifted(size_t e, size_t n) const {
+    const long k = std::lround(SnapShift() * 0.001 * AUDIO_SAMPLE_RATE_EXACT);
+    return size_t(std::clamp<long>(long(e) + k, 0, long(n)));
+  }
+  size_t SnapQuiet(size_t at) const;
+  size_t SnapPoint(size_t at) const;
+  size_t ZeroCross(size_t at, int dir, size_t r) const;
+  size_t ZoomSpan(int m) const;
+  void FormatBeat(size_t at, char* buf, size_t n, int* sub_out = nullptr) const;
+  mutable int zoom_edge = START;  // the edge the zoomed picture centres on
+  void DrawEdit(int x, int y, int w, int h);  // page 2: around the edge being set
+  void DrawEdgeClose(int x, int w, int wy, int wh, size_t at, bool start) const;  // SNAP: one edge close up
 };
 
-// IN: OUT A only on track B. START / END: one pixel of the picture at their
-// zoom (the whole loop: 1/128 of it) a step; they never cross, the one
-// moved pushes the other
+// IN: OUT A only on track B. START / END as SHUTTLE's: one pixel of the
+// picture at their zoom a step (down to a sample); ZERO: on to the next
+// zero crossing that way; on the beats the next step of the grid. They
+// never cross: closer than GAP, the one moved pushes the other
 FLASHMEM int ReelDevice::Step(int p, int v, int dir) const {
   if (p == IN) return input ? input->Step(0, v, dir) : v + dir;
   if (p != START && p != END) return v + dir;
-  const long n = long(fx.Length());
-  int step = 10000 / 128;
-  if (n > 0 && mode[p] > 0) {
-    const long span = long(SPOOL_ZOOM_MS[mode[p] - 1] * (AUDIO_SAMPLE_RATE_EXACT / 1000.0f));
-    step = int(std::max(1L, std::min(10000L / 128, span * 10000L / (128L * n))));
-  }
-  constexpr int GAP = 50;  // 0.5 % at least between them
+  const size_t n = Frames();
+  if (!n) return constrain(v + dir * 100, 0, 10000);
+  Exact();
+  const int64_t px = std::max<int64_t>(1, int64_t(ZoomSpan(mode[p]) / 128));
+  constexpr int64_t GAP = 2 * AUDIO_BLOCK_SAMPLES;
+  const int64_t nn = int64_t(n);
   const bool end = p == END;
-  const int e = end ? constrain(v + dir * step, GAP, 10000) : constrain(v + dir * step, 0, 10000 - GAP);
-  const int q = end ? START : END;
-  const int want = end ? e - GAP : e + GAP;
-  if (end ? val[q] > want : val[q] < want) {
+  uint32_t& e = ex_pos[end];
+  uint32_t& o = ex_pos[!end];
+  int64_t to = int64_t(e) + dir * px;
+  if (OnBeats()) {
+    const double g = GridFrames();
+    to = int64_t(std::floor((std::round(double(e) / g) + dir) * g + 0.5));
+  } else if (cur[SNAP] == SNAP_ZERO && nn > 2) {
+    const int64_t from = int64_t(ZeroCross(e, 0, 220)) + dir * px;
+    to = int64_t(ZeroCross(size_t(constrain(from, int64_t(1), nn - 1)), dir, size_t(0.1 * AUDIO_SAMPLE_RATE_EXACT)));
+  }
+  e = uint32_t(end ? constrain(to, std::min(GAP, nn), nn) : constrain(to, int64_t(0), std::max<int64_t>(0, nn - GAP)));
+  const int64_t want = end ? std::max<int64_t>(0, int64_t(e) - GAP) : std::min(nn, int64_t(e) + GAP);
+  if (end ? int64_t(o) > want : int64_t(o) < want) {
+    o = uint32_t(want);
     auto* self = const_cast<ReelDevice*>(this);
-    self->val[q] = want;
+    const int q = end ? START : END;
+    self->val[q] = int(uint64_t(o) * 10000 / n);
     self->Refresh(q);
   }
-  return e;
+  return int(uint64_t(e) * 10000 / n);
 }
 
-// START / END: their zoom
+// START / END: the zoom (on the beats the grid); SNAP: the loop's fine tune
 FLASHMEM void ReelDevice::FormatMode(int p, char* buf, size_t n) const {
   if (p == START || p == END) {
-    if (mode[p] == 0) snprintf(buf, n, "all");
-    else FormatMs(SPOOL_ZOOM_MS[mode[p] - 1], buf, n);
+    if (OnBeats()) {
+      const int m = std::min<int>(mode[p], GRID_MODES - 1);
+      if (!m) snprintf(buf, n, "all");
+      else if (m == 1) snprintf(buf, n, "BEAT");
+      else snprintf(buf, n, "1/%d", GridDiv());
+    } else FormatSpoolZoom(mode[p], buf, n);
+  } else if (p == SNAP) {
+    const int k = SnapShift();
+    if (k) snprintf(buf, n, "%+dms", k); else snprintf(buf, n, "0ms");
   } else if (p == MON) {
     snprintf(buf, n, "DUB%d", mode[p] * 5);
-  } else if (p == VIEW) {  // how close the view is (it had no name: blank)
-    if (mode[p] == 0) snprintf(buf, n, "ALL");
-    else if (mode[p] == 1) snprintf(buf, n, "LOOP");
-    else FormatMs(REEL_VIEW_MS[constrain(mode[p] - 2, 0, 8)], buf, n);
   } else {
     Device::FormatMode(p, buf, n);
   }
+}
+
+// SNAP's offset: a ms a click (its own order in mode, see SnapShift); the
+// beats' grid: 6 stops
+FLASHMEM void ReelDevice::NudgeMode(int p, int dir) {
+  if ((p == START || p == END) && OnBeats()) {
+    mode[p] = uint8_t(std::clamp(std::min<int>(mode[p], GRID_MODES - 1) + dir, 0, GRID_MODES - 1));
+    Apply(p);
+    return;
+  }
+  if (p != SNAP) { Device::NudgeMode(p, dir); return; }
+  const int k = std::clamp(SnapShift() + dir, -SNAP_SHIFTS, SNAP_SHIFTS);
+  mode[SNAP] = uint8_t(k >= 0 ? k : k + 2 * SNAP_SHIFTS + 1);
+  const uint16_t bit = uint16_t(1u << SNAP);
+  mode_named = uint16_t(k ? mode_named | bit : mode_named & ~bit);
+  Apply(SNAP);
+}
+
+// START / END being set: the zoom; on the beats the grid, and off the beat
+// how far into it ("3/16")
+FLASHMEM bool ReelDevice::EditLabel(int p, char* buf, size_t n) const {
+  if (p != START && p != END) return false;
+  if (!OnBeats()) { FormatSpoolZoom(mode[p], buf, n); return true; }
+  const int div = GridDiv();
+  if (div == 1) { FormatMode(p, buf, n); return true; }
+  char tmp[12];
+  int sub = 0;
+  FormatBeat(EdgeAt(p), tmp, sizeof(tmp), &sub);
+  snprintf(buf, n, "%d/%d", sub, div);
+  return true;
+}
+
+FLASHMEM size_t ReelDevice::SnapQuiet(size_t at) const {
+  const size_t n = Frames();
+  if (!n) return at;
+  const size_t r = 220, lo = at > r ? at - r : 0, hi = std::min(n - 1, at + r);
+  const int16_t* l = fx.Data(0);
+  const int16_t* rr = fx.Data(1);
+  size_t best = at;
+  int quiet = INT32_MAX;
+  for (size_t i = lo; i <= hi; i++) {
+    const int a = abs(l[i]) + abs(rr[i]);
+    if (a < quiet) { quiet = a; best = i; }
+  }
+  return best;
+}
+
+// ZERO: the nearest zero crossing; BEAT: the nearest sixteenth of the
+// recording's beats, the fine tune on it, then the nearest crossing
+FLASHMEM size_t ReelDevice::SnapPoint(size_t at) const {
+  const size_t n = Frames();
+  if (!n) return at;
+  if (cur[SNAP] == SNAP_ZERO) return ZeroCross(at, 0, 220);
+  if (cur[SNAP] != SNAP_BEAT || rec_bpm <= 0.0f) return at;
+  const double step = BeatFrames() / 16.0;
+  const size_t gp = size_t(std::clamp(std::round(double(at) / step) * step + 0.5, 0.0, double(n - 1)));
+  return ZeroCross(Shifted(gp, n), 0, 220);
+}
+
+FLASHMEM size_t ReelDevice::ZeroCross(size_t at, int dir, size_t r) const {
+  const size_t n = Frames();
+  if (n < 2) return at;
+  const int16_t* l = fx.Data(0);
+  const int16_t* rr = fx.Data(1);
+  auto cross = [&](size_t i) {
+    if (i < 1 || i >= n) return false;
+    const int a = l[i - 1] + rr[i - 1], b = l[i] + rr[i];
+    return b == 0 || ((a < 0) != (b < 0));
+  };
+  if (!dir) {
+    for (size_t d = 0; d <= r; d++) {
+      if (cross(at + d)) return at + d;
+      if (d <= at && cross(at - d)) return at - d;
+    }
+    return SnapQuiet(at);
+  }
+  for (size_t d = 0; d <= r; d++) {
+    if (dir < 0 && d > at) break;
+    const size_t i = dir > 0 ? at + d : at - d;
+    if (i >= n) break;
+    if (cross(i)) return i;
+  }
+  return at;
+}
+
+FLASHMEM void ReelDevice::LoopEdges(size_t& a, size_t& b) const {
+  const size_t n = Frames();
+  a = EdgeAt(START);
+  b = EdgeAt(END);
+  if (cur[SNAP]) {
+    a = SnapPoint(a);
+    b = SnapPoint(b);
+    if (cur[SNAP] == SNAP_BEAT && rec_bpm > 0.0f && b <= a) b = std::min(n, SnapQuiet(std::min(n - 1, a + size_t(BeatFrames() / 16.0))));
+    if (!OnBeats()) { a = Shifted(a, n); b = Shifted(b, n); }  // (on the beats the fine tune is in SnapPoint)
+  }
+  if (b <= a + AUDIO_BLOCK_SAMPLES) b = std::min(n, a + AUDIO_BLOCK_SAMPLES * 2);
+}
+
+FLASHMEM void ReelDevice::Window() {
+  const size_t n = Frames();
+  if (!n) return;
+  size_t a, b;
+  LoopEdges(a, b);
+  fx.SetWindowSamples(a, b - a);
+}
+
+// frames across the picture at zoom m (on the beats: 4 steps of the grid)
+FLASHMEM size_t ReelDevice::ZoomSpan(int m) const {
+  const size_t n = Frames();
+  if (OnBeats() && m > 0)
+    return std::max<size_t>(MIN_SPAN, std::min<size_t>(size_t(4.0 * GridFrames()), std::max<size_t>(MIN_SPAN, n)));
+  const uint32_t us = SPOOL_ZOOM_US[constrain(m, 0, 9)];
+  if (!us) return std::max<size_t>(MIN_SPAN, n);
+  return std::max<size_t>(MIN_SPAN, std::min(size_t(double(us) * AUDIO_SAMPLE_RATE_EXACT / 1e6), std::max<size_t>(MIN_SPAN, n)));
+}
+
+// "B8": the beat a frame is on (the first beat of the loop 1); the grid's
+// steps past it in sub_out
+FLASHMEM void ReelDevice::FormatBeat(size_t at, char* buf, size_t n, int* sub_out) const {
+  const int div = GridDiv();
+  const long k = long(std::floor(double(at) / (BeatFrames() / div) + 0.5));
+  const long b = k / div, sub = k - b * div;
+  if (sub_out) *sub_out = int(sub);
+  snprintf(buf, n, "B%ld", b + 1);
 }
 
 // called while the stream is not patched in
@@ -2236,8 +2438,10 @@ FLASHMEM void ReelDevice::Apply(int p) {
       fx.SetPingPong(mode[SPEED] == 1);
       break;
     case START: case END:
-      fx.SetWindow(cur[START] * 0.0001f, std::max(0.005f, (cur[END] - cur[START]) * 0.0001f));
+      mode[p == START ? END : START] = mode[p];  // one zoom for both
+      Window();
       break;
+    case SNAP: Window(); break;
     case XFADE: {  // as PLAYER: up to 1 s (finer at the short end); CROSS or INOUT (a dip)
       const float f = cur[XFADE] * 0.01f;
       fx.SetSeam(16.0f + f * f * AUDIO_SAMPLE_RATE_EXACT);
@@ -2257,17 +2461,14 @@ FLASHMEM void ReelDevice::Apply(int p) {
 
 FLASHMEM void ReelDevice::Format(int p, char* buf, size_t n) const {
   if (p == SPEED) snprintf(buf, n, "%d%%", val[p]);
-  else if (p == START || p == END) {  // seconds into the loop
-    const size_t len = fx.Length();
+  else if (p == START || p == END) {  // seconds into the loop (on the beats: the beat)
+    const size_t len = Frames();
     if (!len) { snprintf(buf, n, "%d%%", val[p] / 100); return; }
-    const uint32_t ms = uint32_t(uint64_t(len) * val[p] / 10000 * 1000 / uint64_t(AUDIO_SAMPLE_RATE_EXACT));
-    FormatSeconds(ms, buf, n);
+    const size_t at = cur[p] == val[p] ? EdgeAt(p) : size_t(uint64_t(val[p]) * len / 10000);
+    if (OnBeats()) { FormatBeat(at, buf, n); return; }
+    FormatSeconds(uint32_t(uint64_t(at) * 1000 / uint64_t(AUDIO_SAMPLE_RATE_EXACT)), buf, n);
   }
   else if (p == IN) snprintf(buf, n, "%s", InputSourceName(val[p]));
-  else if (p == VIEW && mode[p] == 0) snprintf(buf, n, "ALL");
-  else if (p == VIEW && mode[p] == 1) snprintf(buf, n, "LOOP");
-  else if (p == VIEW && val[p] < 0) snprintf(buf, n, "HEAD");
-  else if (p == VIEW) snprintf(buf, n, "%d%%", val[p]);
   else Device::Format(p, buf, n);
 }
 
@@ -2306,6 +2507,14 @@ FLASHMEM void ReelDevice::Idle() {
   if (!active) return;
   fx.Shrink();
   fx.Park();
+  // a loop just closed: its beats are the clock's tempo now, its edges to
+  // the engine (to the sample, snapped)
+  const auto st = fx.state();
+  if (st != st_was) {
+    if (st_was == AudioEffectReel::REC && st != AudioEffectReel::EMPTY) { rec_bpm = tempo_bpm; ex_len = 0; Window(); }
+    if (st == AudioEffectReel::EMPTY) { rec_bpm = 0.0f; ex_len = 0; }
+    st_was = st;
+  }
 }
 
 FLASHMEM bool ReelDevice::ActionLit(int a) const {
@@ -2353,31 +2562,13 @@ FLASHMEM void ReelDevice::DrawViz(int x, int y, int w, int h) {
     gfxPrint(x + w / 2 - 21, cy - 12, PSTR("A: REC"));
     return;
   }
-  // the cursor on START / END with a zoom: around that edge, as PLAYER does
-  const bool edge_zoom = (view_cursor == START || view_cursor == END) && mode[view_cursor] > 0
-                         && st != AudioEffectReel::REC && fx.Length();
-  if (edge_zoom) {
-    const int ms = SPOOL_ZOOM_MS[mode[view_cursor] - 1];
-    char t[8];
-    FormatMs(ms, t, sizeof(t));
-    DrawZoom(x, y, w, h, long(ms * (AUDIO_SAMPLE_RATE_EXACT / 1000.0f)),
-             long(uint64_t(fx.Length()) * cur[view_cursor] / 10000), t);
-  } else if (mode[VIEW] == 1 && st != AudioEffectReel::REC && fx.Length()) {
-    // LOOP: just what plays, START to END across the width (2 pixels of room
-    // either side so their lines show)
-    float a, b;
-    fx.Window(a, b);
-    const long n = long(fx.Length());
-    const long ws = long(a * n), wl = std::max(1L, long((std::min(b, 1.0f) - a) * n));
-    const long span = wl * w / std::max(1, w - 4);
-    DrawZoom(x, y, w, h, span, ws - span * 2 / w + span / 2, "LOOP");
-  } else if (mode[VIEW] > 1) {
-    const int ms = REEL_VIEW_MS[constrain(mode[VIEW] - 2, 0, 8)];
-    char t[8];
-    FormatMs(ms, t, sizeof(t));
-    const long n = long(st == AudioEffectReel::REC ? fx.HeadFrame() : fx.Length());
-    DrawZoom(x, y, w, h, long(ms * (AUDIO_SAMPLE_RATE_EXACT / 1000.0f)),
-             cur[VIEW] < 0 ? -1L : n * cur[VIEW] / 100, t);
+  // page 2 (START END FADE SNAP), as SHUTTLE's: zoomed round the edge last
+  // set (START / END's L knob), or with the cursor on SNAP the two edges
+  // close up side by side
+  if (view_cursor == START || view_cursor == END) zoom_edge = view_cursor;
+  const bool page2 = view_cursor == START || view_cursor == END || view_cursor == XFADE || view_cursor == SNAP;
+  if (page2 && Frames() && ((view_cursor == SNAP && cur[SNAP]) || mode[START] > 0)) {
+    DrawEdit(x, y, w, h);
   } else {
   constexpr int HIST = AudioEffectReel::HIST;
   uint8_t hist[HIST];
@@ -2500,72 +2691,148 @@ FLASHMEM void ReelDevice::DrawViz(int x, int y, int w, int h) {
   }
 }
 
-// VIEW zoomed: the waveform round the play head (in the middle; while
-// recording, at the right edge), the loop's ends marked where they show
-FLASHMEM void ReelDevice::DrawZoom(int x, int y, int w, int h, long span, long centre, const char* label) {
-  const int cy = y + h / 2, base = y + h - 1, half = h / 2 - 1;
-  const auto st = fx.state();
-  const bool rec = st == AudioEffectReel::REC;
-  const long head = long(fx.HeadFrame());
-  // HEAD: the view rides with the play head (recording: at the right edge);
-  // a place: the view stands still, centred there, and the head passes by
-  const bool follow = centre < 0;
-  long from;
-  int hx;
-  if (follow) {
-    hx = rec ? x + w - 1 : x + w / 2;
-    from = head - span * (hx - x) / w;
+// page 2 zoomed (as SHUTTLE's): the edge being set in the middle, the wave
+// (close in, a line through the samples), the other edge where it shows,
+// the beats along the bottom on SNAP BEAT, the seam, the head; the cursor
+// on SNAP: both edges close up side by side
+FLASHMEM void ReelDevice::DrawEdit(int x, int y, int w, int h) {
+  const size_t n = Frames();
+  const int base = y + h - 1, wy = y, wh = h, wc = wy + wh / 2;
+  const int16_t* L = fx.Data(0);
+  const int16_t* R = fx.Data(1);
+  size_t ea, eb;
+  LoopEdges(ea, eb);
+  if (view_cursor == SNAP && cur[SNAP]) {
+    const int hw = w / 2;
+    DrawEdgeClose(x, hw - 1, wy, wh, ea, true);
+    DrawEdgeClose(x + hw + 1, w - hw - 1, wy, wh, eb, false);
+    for (int yy = wy; yy <= base; yy += 2) gfxPixel(x + hw, yy);
+    return;
+  }
+  const size_t span = ZoomSpan(mode[START]);
+  const int64_t v0 = int64_t(EdgeAt(zoom_edge)) - int64_t(span / 2);
+  auto sx = [&](double pos) { return x + int((pos - double(v0)) * (w - 1) / double(span)); };
+  auto mono = [&](int64_t i) { return (int(L[i]) + int(R[i])) / 2; };
+  if (span <= size_t(2 * w)) {
+    int py = -1;
+    for (int c = 0; c < w; c++) {
+      const double fpos = double(v0) + double(c) * double(span) / double(w);
+      if (fpos < 0.0 || fpos >= double(n - 1)) { if (c % 2 == 0) gfxPixel(x + c, wc); py = -1; continue; }
+      const int64_t i0 = int64_t(fpos);
+      const double fr = fpos - double(i0);
+      const double v = (mono(i0) + fr * (mono(i0 + 1) - mono(i0))) / 32768.0;
+      const int yy = wc - int(v * (wh / 2 - 1));
+      if (py >= 0) gfxLine(x + c - 1, py, x + c, yy); else gfxPixel(x + c, yy);
+      py = yy;
+    }
+    if (span < size_t(w / 2)) {  // samples wide apart: each one marked
+      for (int64_t i = std::max<int64_t>(0, v0); i < std::min<int64_t>(int64_t(n), v0 + int64_t(span) + 1); i++) {
+        const int c = int((i - v0) * (w - 1) / int64_t(span));
+        if (c >= 0 && c < w) gfxRect(x + c - 1, wc - int(mono(i) / 32768.0f * (wh / 2 - 1)) - 1, 3, 3);
+      }
+    }
   } else {
-    const long n = long(rec ? fx.HeadFrame() : fx.Length());
-    from = centre - span / 2;
-    long rel = head - from;
-    if (!rec && n > 0) rel = ((rel % n) + n) % n;  // the loop wraps
-    hx = rel >= 0 && rel < span ? x + int(rel * w / span) : -1;
+    for (int c = 0; c < w; c++) {  // lowest to highest per column (a few dozen samples looked at)
+      const int64_t a = v0 + int64_t(c) * int64_t(span) / w, b = v0 + int64_t(c + 1) * int64_t(span) / w;
+      if (b <= 0 || a >= int64_t(n)) { if (c % 2 == 0) gfxPixel(x + c, wc); continue; }
+      const int64_t a0 = std::max<int64_t>(0, a), b0 = std::min<int64_t>(int64_t(n), std::max(b, a0 + 1));
+      const int64_t stride = std::max<int64_t>(1, (b0 - a0) / 48);
+      int lo = 32767, hi = -32768;
+      for (int64_t i = a0; i < b0; i += stride) { const int v = mono(i); lo = std::min(lo, v); hi = std::max(hi, v); }
+      gfxLine(x + c, wc - int(hi / 32768.0f * (wh / 2 - 1)), x + c, wc - int(lo / 32768.0f * (wh / 2 - 1)));
+    }
   }
-  int16_t lo[128], hi[128];
-  const int cols = std::min(w, 128);
-  fx.ReadWave(from, span, cols, lo, hi);
-  int pk = 0;
-  for (int k = 0; k < cols; k++) pk = std::max({pk, abs(int(lo[k])), abs(int(hi[k]))});
-  view_range = std::max({float(pk), view_range * 0.95f, 1024.0f});
-  const int range = int(view_range) + 1;
-  gfxDottedLine(x, cy, x + w - 1, cy, 3);
-  int plo = 0, phi = 0;
-  for (int k = 0; k < cols; k++) {
-    int a = lo[k] * half / range, b = hi[k] * half / range;
-    if (k) { a = std::min(a, phi); b = std::max(b, plo); }  // joined to the last column
-    if (lo[k] || hi[k]) gfxLine(x + k, cy - b, x + k, cy - a);
-    plo = lo[k] * half / range; phi = hi[k] * half / range;
-  }
-  // the looping part's ends, where they fall in view
-  if (!rec && fx.Length()) {
-    float fa, fb;
-    fx.Window(fa, fb);
-    const long n = long(fx.Length());
-    for (long e : {long(fa * n), long(std::min(fb, 1.0f) * n)}) {
-      for (long rep = -1; rep <= 1; rep++) {  // the view may wrap round the loop
-        const long px = x + (e + rep * n - from) * w / span;
-        if (px < x || px >= x + w) continue;
-        // a solid line, as on PLAYER: the point being set stands out
-        graphics.clearRect(std::max(long(x), px - 1), y, std::min(3L, x + w - std::max(long(x), px - 1)), h);
-        gfxLine(px, y, px, base);
+  if (cur[SNAP] == SNAP_BEAT && rec_bpm > 0.0f) {  // the beats (and the grid's steps) along the bottom
+    const int div = GridDiv();
+    const double beat = BeatFrames(), step = beat / div;
+    const bool beats = beat * (w - 1) / double(span) >= 4.0, steps = div > 1 && step * (w - 1) / double(span) >= 4.0;
+    if (beats || steps) {
+      const double d = steps ? step : beat;
+      double k = std::ceil(double(v0) / d);
+      for (double pos = k * d; pos < double(v0) + double(span); pos += d, k += 1.0) {
+        if (pos < 0.0 || pos >= double(n)) continue;
+        const int bx = sx(pos);
+        if (bx < x || bx >= x + w) continue;
+        if (!steps || std::fmod(k, double(div)) == 0.0) gfxLine(bx, base - 2, bx, base);
+        else gfxPixel(bx, base);
       }
     }
   }
-  // the head: playing, a thin gap through the wave (the edges are the solid
-  // lines); recording, the solid line where it records
-  if (hx >= x) {
-    if (rec) {
-      graphics.clearRect(std::max(x, hx - 1), y + 1, std::min(3, x + w - std::max(x, hx - 1)), h - 2);
-      gfxLine(hx, y + 1, hx, base - 1);
-    } else {
-      gfxInvert(hx, y + 1, 1, h - 2);
+  for (const size_t e : {ea, eb}) {
+    const int ex = sx(double(e));
+    if (ex < x || ex >= x + w) continue;
+    graphics.clearRect(std::max(x, ex - 1), wy, std::min(3, x + w - std::max(x, ex - 1)), wh);
+    gfxLine(ex, wy, ex, base);
+  }
+  if (eb > ea) {  // the seam, as SHUTTLE's
+    const float fv = cur[XFADE] * 0.01f;
+    const float seam = 16.0f + fv * fv * AUDIO_SAMPLE_RATE_EXACT;
+    size_t hh = 0, f = 0;
+    if (mode[XFADE] == 0) AudioEffectReel::XfPlan(seam, ea, eb - ea, n, hh, f);
+    else f = std::min<size_t>(size_t(seam), (eb - ea) / 4);
+    auto ramp = [&](double f0, double f1, bool up) {
+      const int x0 = sx(f0), x1 = sx(f1);
+      if (x1 <= x0) return;
+      for (int px = std::max(x, x0); px <= std::min(x + w - 1, x1); px += 2) {
+        const float t = float(px - x0) / float(x1 - x0);
+        gfxPixel(px, wy + int((up ? 1.0f - t : t) * (wh - 1)));
+      }
+    };
+    const double A = double(ea), B = double(eb), H = double(hh), F = double(f);
+    if (hh > 1) { ramp(B - H, B + H, false); ramp(A - H, A + H, true); }
+    else if (mode[XFADE] == 0) { ramp(B - F, B, false); ramp(B - F, B, true); ramp(A, A + F, true); ramp(A, A + F, false); }
+    else if (f > 1) { ramp(B - F, B, false); ramp(A, A + F, true); }
+  }
+  const auto st = fx.state();
+  if (st == AudioEffectReel::PLAY || st == AudioEffectReel::DUB) {
+    const int hx = sx(double(fx.HeadPos()) * double(n));
+    if (hx >= x && hx < x + w) gfxInvert(hx, wy, 1, wh);
+  }
+  char zt[8];  // the zoom (or the grid), top right
+  if (OnBeats()) FormatMode(START, zt, sizeof(zt)); else FormatSpoolZoom(mode[START], zt, sizeof(zt));
+  const int tw = 6 * int(strlen(zt));
+  graphics.clearRect(x + w - tw - 2, y, tw + 2, 9);
+  gfxPrint(x + w - tw, y + 1, zt);
+}
+
+// one edge close up (SNAP): SNAP_VIEW_MS across, solid inside the loop,
+// every other column outside, the edge in the middle, the beats, the head
+FLASHMEM void ReelDevice::DrawEdgeClose(int x, int w, int wy, int wh, size_t at, bool start) const {
+  const size_t n = Frames();
+  const int64_t span = std::max<int64_t>(w, int64_t(SNAP_VIEW_MS * 0.001 * AUDIO_SAMPLE_RATE_EXACT));
+  const int64_t v0 = int64_t(at) - span / 2;
+  const int wc = wy + wh / 2, base = wy + wh - 1;
+  const int16_t* l = fx.Data(0);
+  const int16_t* r = fx.Data(1);
+  for (int c = 0; c < w; c++) {
+    const int64_t a = v0 + int64_t(c) * span / w, b = std::max(a + 1, v0 + int64_t(c + 1) * span / w);
+    const bool inside = start ? a >= int64_t(at) : a < int64_t(at);
+    if (b <= 0 || a >= int64_t(n)) { if (c % 2 == 0) gfxPixel(x + c, wc); continue; }
+    if (!inside && c % 2) continue;
+    int lo = 32767, hi = -32768;
+    for (int64_t i = std::max<int64_t>(0, a); i < std::min<int64_t>(int64_t(n), b); i++) {
+      const int v = (l[i] + r[i]) / 2;
+      lo = std::min(lo, v); hi = std::max(hi, v);
+    }
+    if (lo > hi) continue;
+    gfxLine(x + c, wc - int(hi / 32768.0f * (wh / 2 - 1)), x + c, wc - int(lo / 32768.0f * (wh / 2 - 1)));
+  }
+  auto sx = [&](double pos) { return x + int((pos - double(v0)) * (w - 1) / double(span)); };
+  if (cur[SNAP] == SNAP_BEAT && rec_bpm > 0.0f) {
+    const double beat = BeatFrames();
+    for (double pos = std::ceil(double(v0) / beat) * beat; pos < double(v0 + span); pos += beat) {
+      const int bx = sx(pos);
+      if (bx >= x && bx < x + w) gfxLine(bx, base - 2, bx, base);
     }
   }
-  // how much time the view shows, top right
-  const int tw = 6 * int(strlen(label));
-  graphics.clearRect(x + w - tw - 1, y, tw + 1, 8);
-  gfxPrint(x + w - tw, y, label);
+  const int ex = x + w / 2;
+  graphics.clearRect(ex - 1, wy, 3, wh);
+  gfxLine(ex, wy, ex, base);
+  const auto st = fx.state();
+  if (st == AudioEffectReel::PLAY || st == AudioEffectReel::DUB) {
+    const int hx = sx(double(fx.HeadPos()) * double(n));
+    if (hx >= x && hx < x + w) gfxInvert(hx, wy, 1, wh);
+  }
 }
 
 FLASHMEM void ReelDevice::DrawMini(int x, int y, int w, int h) {
@@ -2684,7 +2951,9 @@ FLASHMEM void ReelDevice::WriteMeta(const char* wav_name) const {
   f.printf("END %d 0\n", int(val[END]));
   f.printf("FADE %d %d\n", int(val[XFADE]), int(mode[XFADE]));
   f.printf("SNAP 0 0\n");
-  f.printf("EDGES %lu %lu\n", (unsigned long)(n * val[START] / 10000), (unsigned long)(n * val[END] / 10000));
+  size_t a = size_t(n * val[START] / 10000), b = size_t(n * val[END] / 10000);
+  if (Frames()) LoopEdges(a, b);  // (to the sample, snapped: as it loops)
+  f.printf("EDGES %lu %lu\n", (unsigned long)a, (unsigned long)b);
   f.close();
 }
 

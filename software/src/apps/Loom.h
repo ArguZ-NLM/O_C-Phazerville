@@ -4468,7 +4468,7 @@ namespace loom {
   // 14: DRAFT in FIBRE's order SPEED SIZE PITCH POS (was PITCH POS SIZE SPEED)
   // 15: DRAFT page 2 DIFF TONE SPRD MIX (was TONE FDBK SPRD MIX, TONE's mode
   //     the diffusion)
-  constexpr uint8_t SAVE_VERSION = 39;  // 39: SHEAR's page 2 REVRS ROLL PICK ARP, page 3 GATE VELO OUT MIX; 38: SHEAR's page order (PITCH 4th, MIX last; PITCH's mode TAPE / WARP, SPRD gone); 37: FLOCK folded into FIBRE (CLOUD on its page 3; option 3 freed); 36: CLOCK's BPM in tenths (0.1 steps); 35: REPEAT's TIME 16 s (its clock values in 20 .. 16000); 34: REPEAT's TIME 3 s (was 6); 33: TABBY's page 2 ROLL GATE RESET START; 32: TABBY's DENS (4th setting) became CHANC; 31: SPOOL IN MON LEVEL first, CLOTH PLUSH / SPLIT; 21: TREADLE, a 6th modulator type; 22: PICK, a 7th; 23: TREADLE's LEN per part; 24: TREADLE's CHAOS -32..32; 25: TREADLE's pages; 26: STYLE / BEAT for X / Y; 27: TWILL's HITS; 28: TWILL's TONE gone, HITS in its place; 29: TWILL's VARI; 30: TWILL sound / strike pages
+  constexpr uint8_t SAVE_VERSION = 40;  // 40: SPOOL's page 2 as SHUTTLE's (SNAP for VIEW, START / END's zoom in SHUTTLE's 10 steps); 39: SHEAR's page 2 REVRS ROLL PICK ARP, page 3 GATE VELO OUT MIX; 38: SHEAR's page order (PITCH 4th, MIX last; PITCH's mode TAPE / WARP, SPRD gone); 37: FLOCK folded into FIBRE (CLOUD on its page 3; option 3 freed); 36: CLOCK's BPM in tenths (0.1 steps); 35: REPEAT's TIME 16 s (its clock values in 20 .. 16000); 34: REPEAT's TIME 3 s (was 6); 33: TABBY's page 2 ROLL GATE RESET START; 32: TABBY's DENS (4th setting) became CHANC; 31: SPOOL IN MON LEVEL first, CLOTH PLUSH / SPLIT; 21: TREADLE, a 6th modulator type; 22: PICK, a 7th; 23: TREADLE's LEN per part; 24: TREADLE's CHAOS -32..32; 25: TREADLE's pages; 26: STYLE / BEAT for X / Y; 27: TWILL's HITS; 28: TWILL's TONE gone, HITS in its place; 29: TWILL's VARI; 30: TWILL sound / strike pages
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -4602,7 +4602,7 @@ namespace loom {
     const bool spool_v31 = use && !memcmp(tag, "REL", 4) && load_version < 31;
     const bool clk_tenths = use && !memcmp(tag, "CLK", 4) && load_version < 36;  // BPM was whole
     static constexpr int8_t SPOOL_V31[8] = {ReelDevice::SPEED, ReelDevice::START, ReelDevice::END, ReelDevice::XFADE,
-                                            ReelDevice::IN, ReelDevice::MON, ReelDevice::LEVEL, ReelDevice::VIEW};
+                                            ReelDevice::IN, ReelDevice::MON, ReelDevice::LEVEL, ReelDevice::SNAP};  // (SNAP: VIEW's place)
     // before v31 CLOTH's last was SPLIT (value) with PLUSH as its mode (in
     // 5 % steps): now PLUSH (value, 0..100) with SPLIT as its second value
     const bool plush_swap = use && !memcmp(tag, "MIX", 4) && load_version < 31;
@@ -4621,6 +4621,9 @@ namespace loom {
     // before v39: page 2 GATE REVRS ROLL PICK, page 3 ARP VELO OUT MIX; now
     // REVRS ROLL PICK ARP / GATE VELO OUT MIX (Sascha 2026-11-08)
     const bool shr_v39 = use && !memcmp(tag, "SHR", 4) && load_version < 39;
+    // before v40 SPOOL's 8th was VIEW (the picture; now SNAP, from OFF), its
+    // START / END zoom in 7 steps of its own (now SHUTTLE's 10: from all)
+    const bool spool_v40 = use && !memcmp(tag, "REL", 4) && load_version < 40;
     static constexpr int8_t SHR_V39[12] = {0, 1, 2, 3, 8, 4, 5, 6, 7, 9, 10, 11};
     static constexpr int8_t TABBY_V33[8] = {0, 1, 2, 3, PickMod::P_START, PickMod::P_ROLL, PickMod::P_RESET, PickMod::P_GATE};
     int old_dub = -1;
@@ -4682,6 +4685,8 @@ namespace loom {
       if (tabby_v33) p = TABBY_V33[constrain(p, 0, 7)];
       if (shr_v38) { if (q == 4) md = 0; p = SHR_V38[constrain(q, 0, 11)]; }
       if (shr_v39) p = SHR_V39[constrain(p, 0, 11)];
+      if (spool_v40 && p == ReelDevice::SNAP) { p = q; continue; }
+      if (spool_v40 && (p == ReelDevice::START || p == ReelDevice::END)) md = 0;
       if (dens_gone && p == 3) {  // what was DENS starts as CHANC 0 (GAPS), nothing moving it
         v = 0; md = 0;
         amt = amt2 = 0;
@@ -4723,7 +4728,7 @@ namespace loom {
         d->val[p] = int16_t(std::min(10000, d->val[ReelDevice::START] + constrain(int(v), 1, 100) * 100));
         d->mode[p] = 0;
       }
-      if (view_mode && p == ReelDevice::VIEW) { d->mode[p] = uint8_t(constrain(v, 0, 9)); d->val[p] = -1; }
+      if (view_mode && p == ReelDevice::SNAP) { p = q; continue; }  // (VIEW then: gone since v40)
       p = q;
     }
     if (old_x >= 0)
