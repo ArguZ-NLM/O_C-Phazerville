@@ -144,6 +144,10 @@ public:
       head_rate = hstep * float(wl);  // (frames a sample: the voices play at the head's own speed)
       timed = dps > 1e-9;
     } else {
+      // (not on the head: the source's own speed; CV and KEYS pick it up
+      // here too, else a speed learnt from an earlier source stays,
+      // Sascha 2026-11-08: SHUTTLE -> SPOOL played the loop 8 % slow)
+      head_rate = rate;
       const ClockSnap& k = clk[clk_i];
       if (k.running && running && gridded && k.bpm > 1.0f) {
         const double beats = k.beats + double(uint32_t(micros() - k.us)) * (k.bpm / 60e6);
@@ -151,7 +155,6 @@ public:
         const double spb = AUDIO_SAMPLE_RATE_EXACT * 60.0 / k.bpm;  // samples a beat
         now = beats / sb;
         dps = 1.0 / (sb * spb);
-        head_rate = rate;
         timed = sb > 1e-6;
       }
     }
