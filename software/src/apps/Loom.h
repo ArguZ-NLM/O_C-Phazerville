@@ -4108,10 +4108,16 @@ FLASHMEM void AppLoom::DrawClockPage() const {
       // grabbed, what you set
       // (held until it moves 0.05 BPM: a CV or an outside clock is never
       // quite still, and the last digit flickered)
+      // An outside clock (MIDI, a gate input; Sascha 2026-11-08: the
+      // flickering hundredths of MIDI clock didn't inspire confidence):
+      // tenths, held until it is more than 0.07 off, so 119.95 .. 120.05
+      // reads a steady 120.0
       static float shown = 0.0f;
-      if (fabsf(tempo_bpm - shown) >= 0.05f) shown = tempo_bpm;
-      const int cb = int(shown * 100.0f + 0.5f);
+      const bool outside = c->external() && c->Shuttle() < 0;
+      if (fabsf(tempo_bpm - shown) >= (outside ? 0.07f : 0.05f)) shown = tempo_bpm;
+      const int cb = int(shown * 100.0f + 0.5f), ct = int(shown * 10.0f + 0.5f);
       if (c->CvTempo() >= 0) snprintf(buf, sizeof(buf), "%d.%02d CV%d", cb / 100, cb % 100, c->CvTempo() + 1);
+      else if (outside) snprintf(buf, sizeof(buf), "%d.%d", ct / 10, ct % 10);
       else snprintf(buf, sizeof(buf), "%d.%02d", cb / 100, cb % 100);
     } else if (p == ClockDevice::P_SOURCE && c->val[p] == 0) snprintf(buf, sizeof(buf), "internal");
     else if (p == ClockDevice::P_SOURCE && c->val[p] == 1) snprintf(buf, sizeof(buf), "MIDI clock");
