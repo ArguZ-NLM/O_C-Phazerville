@@ -6983,8 +6983,17 @@ public:
     if (CvMode()) return a == 0 ? "CV" : "TRIG";
     return a == 1 && cur[ORDER] == AudioEffectShear::KEYS ? "HIT" : Device::ActionLabel(a);
   }
+  // (A's source is kept through the modes, Sascha 2026-11-08: clearing it
+  // on the way in and out of CV also cleared the saved one on loading.
+  // Outside CV a CV input there is CV's, not RUN's trigger: left alone)
   void RunTriggers(uint16_t edges) override {
-    if (!CvMode()) { Device::RunTriggers(edges); return; }
+    if (!CvMode()) {
+      const uint8_t a0 = act_trig[0];
+      if (a0 >= 5 && a0 <= 12) act_trig[0] = 0;
+      Device::RunTriggers(edges);
+      act_trig[0] = a0;
+      return;
+    }
     if (act_trig[1] && SrcEdge(act_trig[1], edges, act_prev[1])) Action(1);  // (A's source is a CV, not a trigger)
   }
   int StepTrigSource(int a, int dir) const override;
@@ -7028,7 +7037,6 @@ private:
   uint8_t held[AudioEffectShear::MAX_SLICES] = {};
   int n_held = 0;
   bool arp_on = false;  // (two held once: on until all are let go)
-  int order_seen = -1;
   float key_lvl = 1.0f;
   void Arp();
   // OUT
@@ -7056,14 +7064,7 @@ private:
 FLASHMEM void ShearDevice::Apply(int p) {
   switch (p) {
     case SLICE: cut_mode = -1; break;  // (cut again in Idle)
-    case ORDER:
-      // A's source changes meaning in and out of CV (a CV / RUN's
-      // trigger): it starts empty on the way
-      // (not on loading: the first time is the saved one)
-      if (order_seen >= 0 && (cur[ORDER] == AudioEffectShear::CV) != (order_seen == AudioEffectShear::CV)) act_trig[0] = 0;
-      order_seen = cur[ORDER];
-      fx.order = uint8_t(cur[ORDER]);
-      break;
+    case ORDER: fx.order = uint8_t(cur[ORDER]); break;
     case RATE: fx.factor = Factor(); if (shuf_was != mode[RATE]) Shuffle(); break;
     case LEVEL: wet = cur[LEVEL] * 0.01f; break;
     case PITCH: fx.pitch = exp2f(cur[PITCH] / 12.0f); fx.warp = mode[PITCH] == 1; break;
