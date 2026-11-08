@@ -208,7 +208,7 @@ public:
           for (int k = 0; k < 2; k++) {
             read(v.ga[k] + v.gt[k] * v.pinc, g * (1.0f - fabsf(2.0f * v.gph[k] - 1.0f)));
             v.gt[k] += 1.0f;
-            if ((v.gph[k] += GRAIN_STEP) >= 1.0f) { v.gph[k] -= 1.0f; v.ga[k] = v.pos; v.gt[k] = 0.0f; }
+            if ((v.gph[k] += GRAIN_STEP) >= 1.0f) { v.gph[k] -= 1.0f; v.ga[k] = Align(v, k, src[0], len, b0); v.gt[k] = 0.0f; }
           }
         } else read(v.pos, g);
         v.pos += v.inc;
@@ -253,7 +253,38 @@ private:
   volatile float pad_lvl = 1.0f;
   int64_t last_step = INT64_MIN;
   float step_samples = 0.0f;
-  static constexpr float GRAIN_STEP = 1.0f / (0.04f * AUDIO_SAMPLE_RATE_EXACT);  // grains of 40 ms
+  static constexpr float GRAIN_STEP = 1.0f / (0.06f * AUDIO_SAMPLE_RATE_EXACT);  // grains of 60 ms
+  // WARP: a new grain starts near where the slice has got to, moved (up to
+  // 10 ms, enough for a 50 Hz wave) to where it matches what the other
+  // grain is about to play, so the two cross in phase. Without it a fifth
+  // up came out smeared over neighbouring pitches (2026-11-08, simulated:
+  // 27 % of a chord's sound on its notes; aligned 98 %)
+  static constexpr int ALIGN_D = 450, ALIGN_M = 24;
+  float Align(const Voice& v, int k, const int16_t* x, size_t len, float b0) const {
+    const auto at = [&](float p) -> size_t {
+      const float b = b0 + (v.rev ? v.span - 1.0f - p : p);
+      return b <= 0.0f ? 0 : std::min(size_t(b), len - 1);
+    };
+    const int j = k ^ 1;
+    const float st = 2.0f * v.pinc, po = v.ga[j] + v.gt[j] * v.pinc;
+    int16_t y[ALIGN_M];
+    int64_t ey = 0;
+    for (int m = 0; m < ALIGN_M; m++) { y[m] = x[at(po + m * st)]; ey += int32_t(y[m]) * y[m]; }
+    if (ey < int64_t(ALIGN_M) * 64) return v.pos;  // (quiet: nothing to match)
+    auto score = [&](int d) -> float {
+      const float a = v.pos + float(d);
+      if (a < 0.0f) return -1e30f;
+      int64_t c = 0, e = 0;
+      for (int m = 0; m < ALIGN_M; m++) { const int32_t q = x[at(a + m * st)]; c += q * y[m]; e += q * q; }
+      return float(c) / sqrtf(float(e) + 1.0f);
+    };
+    int bd = 0;
+    float best = -1e30f;
+    for (int d = -ALIGN_D; d <= ALIGN_D; d += 2) { const float sc = score(d); if (sc > best) { best = sc; bd = d; } }
+    const int c0 = bd;
+    for (int d = c0 - 1; d <= c0 + 1; d += 2) { const float sc = score(d); if (sc > best) { best = sc; bd = d; } }
+    return v.pos + float(bd);
+  }
   float head_rate = 1.0f;   // source frames a sample the voices play at (PITCH on top)
   uint32_t loops = 0;       // times round the loop, following its head
   float last_frac = 0.0f;
@@ -268,6 +299,15 @@ private:
   uint8_t p_start[MAX_SLICES + 1] = {};
   uint8_t p_n = 16, p_grid = 16;
   volatile bool pend_cut = false;
+  // grid step k (line g of the round): the next slice in order is the first
+  // starting on or after it
+  void Seek(int64_t k, int g) {
+    const int n = N(), G = std::max<int>(1, grid);
+    int c = 0;
+    while (c < n && start[c] < g) c++;
+    cyc_pos = c;
+    next_at = c < n ? k - g + start[c] : k - g + G;  // (none left this round: from the top)
+  }
   void Adopt() {  // (in the update)
     for (int i = 0; i <= p_n; i++) start[i] = p_start[i];
     grid = p_grid;
@@ -286,11 +326,7 @@ private:
       // this moment on the new grid, and the first slice from here on
       const int64_t up = (k * Gn + Go - 1) / Go;  // (the next new line, or this one; k counts up from 0)
       const int gp = int(((up % Gn) + Gn) % Gn);
-      const int n = N();
-      int c = 0;
-      while (c < n && start[c] < gp) c++;
-      cyc_pos = c;
-      next_at = c < n ? up - gp + start[c] : up - gp + Gn;  // (none left this round: from the top)
+      Seek(up, gp);
       last_step = up - 1;
       if (up * Go != k * Gn) return;  // (no line here: from the next one, in the next block)
       last_step = up;
@@ -298,7 +334,8 @@ private:
     }
     const int G = std::max<int>(1, grid);
     const int g = int(((k % G) + G) % G);
-    if (g == 0 || next_at < 0) { cyc_pos = 0; next_at = k - g; }
+    if (g == 0) { cyc_pos = 0; next_at = k; }
+    else if (next_at < 0) Seek(k, g);  // (started mid-way: on from the slice due here, not from the first)
     if (k < next_at) return;
     const int n = N();
     int s;
