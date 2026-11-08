@@ -4542,7 +4542,7 @@ namespace loom {
   // 14: DRAFT in FIBRE's order SPEED SIZE PITCH POS (was PITCH POS SIZE SPEED)
   // 15: DRAFT page 2 DIFF TONE SPRD MIX (was TONE FDBK SPRD MIX, TONE's mode
   //     the diffusion)
-  constexpr uint8_t SAVE_VERSION = 40;  // 40: SPOOL's page 2 as SHUTTLE's (SNAP for VIEW, START / END's zoom in SHUTTLE's 10 steps); 39: SHEAR's page 2 REVRS ROLL PICK ARP, page 3 GATE VELO OUT MIX; 38: SHEAR's page order (PITCH 4th, MIX last; PITCH's mode TAPE / WARP, SPRD gone); 37: FLOCK folded into FIBRE (CLOUD on its page 3; option 3 freed); 36: CLOCK's BPM in tenths (0.1 steps); 35: REPEAT's TIME 16 s (its clock values in 20 .. 16000); 34: REPEAT's TIME 3 s (was 6); 33: TABBY's page 2 ROLL GATE RESET START; 32: TABBY's DENS (4th setting) became CHANC; 31: SPOOL IN MON LEVEL first, CLOTH PLUSH / SPLIT; 21: TREADLE, a 6th modulator type; 22: PICK, a 7th; 23: TREADLE's LEN per part; 24: TREADLE's CHAOS -32..32; 25: TREADLE's pages; 26: STYLE / BEAT for X / Y; 27: TWILL's HITS; 28: TWILL's TONE gone, HITS in its place; 29: TWILL's VARI; 30: TWILL sound / strike pages
+  constexpr uint8_t SAVE_VERSION = 41;  // 41: SHEAR's ORDER CV is TRIG: the CV row's source becomes a modulator on PICK; 40: SPOOL's page 2 as SHUTTLE's (SNAP for VIEW, START / END's zoom in SHUTTLE's 10 steps); 39: SHEAR's page 2 REVRS ROLL PICK ARP, page 3 GATE VELO OUT MIX; 38: SHEAR's page order (PITCH 4th, MIX last; PITCH's mode TAPE / WARP, SPRD gone); 37: FLOCK folded into FIBRE (CLOUD on its page 3; option 3 freed); 36: CLOCK's BPM in tenths (0.1 steps); 35: REPEAT's TIME 16 s (its clock values in 20 .. 16000); 34: REPEAT's TIME 3 s (was 6); 33: TABBY's page 2 ROLL GATE RESET START; 32: TABBY's DENS (4th setting) became CHANC; 31: SPOOL IN MON LEVEL first, CLOTH PLUSH / SPLIT; 21: TREADLE, a 6th modulator type; 22: PICK, a 7th; 23: TREADLE's LEN per part; 24: TREADLE's CHAOS -32..32; 25: TREADLE's pages; 26: STYLE / BEAT for X / Y; 27: TWILL's HITS; 28: TWILL's TONE gone, HITS in its place; 29: TWILL's VARI; 30: TWILL sound / strike pages
   static uint8_t load_version = SAVE_VERSION;  // of the file being read
 
   // per device: tag, count, then per setting value/mode/mod amount/
@@ -4875,6 +4875,20 @@ namespace loom {
           if (!d->val[tp]) { d->val[tp] = d->cur[tp] = d->act_trig[a]; d->Apply(tp); }
           d->act_trig[a] = 0;
         }
+      }
+      // before v41 SHEAR's ORDER CV took the slice from A's source (the CV
+      // row): now a modulator on PICK does it (+100 %, its range over the
+      // slices); A is RUN again (Sascha 2026-11-08)
+      if (!memcmp(tag, "SHR", 4) && load_version < 41) {
+        const int src = d->act_trig[0];
+        if (d->val[ShearDevice::ORDER] == AudioEffectShear::CV && ((src >= 5 && src <= 12) || src >= TRIG_MOD0)) {
+          const int p = ShearDevice::PICK;
+          if (src <= 12) { d->mod_in[p].SetInput(uint8_t(src - 5)); d->mod_in[p].attenuversion = 60; d->mod_bus_sel[p] = 0; }  // (60: 100 %)
+          else d->mod_bus_sel[p] = uint8_t(src - TRIG_MOD0 + 1);
+          d->mod_amt[p] = 100;
+          d->mod_bi &= uint16_t(~(1u << p));
+        }
+        if (src >= 5 && src <= 12) d->act_trig[0] = 0;
       }
     }
     return true;

@@ -523,6 +523,7 @@ public:
     hi = constrain(val[p] + int(b * 0.01f * (d.max - d.min)), d.min, d.max);
   }
   int Modulated(int p) const;
+  float ModSum(int p) const;
   // a variation (the L knob, OFF .. +- 100 % of the range in 5 % steps):
   // each clock beat a new random offset, glided to, added like modulation;
   // a device says which settings vary (where the L knob is free)
@@ -577,12 +578,10 @@ FLASHMEM void Device::Defaults() {
   mode_named = 0;  // every upper row back to its name
 }
 
-FLASHMEM int Device::Modulated(int p) const {
-  const ParamDef& d = param(p);
-  // a MOD slot with no modulator in it (-1) counts as no source
+// the live sources together, in percent of the range (SHEAR's PICK spreads
+// it over its slices itself)
+FLASHMEM float Device::ModSum(int p) const {
   const bool one = ModLive(p, 0), two = ModLive(p, 1);
-  if (!one && !two) return VarAdd(p, val[p]);
-  // the two sources add up, each by its own amount
   float sum = 0.0f;
   if (one) {
     const int at = Sampled(p) ? MOD_BUSES - 1 : -1;  // (the steps follow the outputs)
@@ -604,6 +603,16 @@ FLASHMEM int Device::Modulated(int p) const {
     }
     sum += mod_amt2[p] * c;
   }
+  return sum;
+}
+
+FLASHMEM int Device::Modulated(int p) const {
+  const ParamDef& d = param(p);
+  // a MOD slot with no modulator in it (-1) counts as no source
+  const bool one = ModLive(p, 0), two = ModLive(p, 1);
+  if (!one && !two) return VarAdd(p, val[p]);
+  // the two sources add up, each by its own amount
+  const float sum = ModSum(p);
   // (MIDI: exact semitones, rounded rather than cut)
   if ((one && mod_bus_sel[p] == MIDI_BUS) || (two && mod_bus2[p] == MIDI_BUS))
     return VarAdd(p, constrain(val[p] + int(lrintf(sum * 0.01f * (d.max - d.min))), int(d.min), int(d.max)));
@@ -7222,8 +7231,8 @@ public:
 // Page 1: SLICE how many, on a grid of 8, 16 or 32 (its L knob CUT: EUCL,
 // the cuts spread over the grid as a Euclidean rhythm, or HITS, the grid's
 // loudest lines); ORDER (FWD as they lie, BACK, RAND, KEYS: MIDI keys play
-// them, C3 the first, several held an arpeggio; CV: a trigger on B, HIT,
-// plays the slice PICK points at, CV moving PICK); RATE
+// them, C3 the first, several held an arpeggio; TRIG: a trigger on B, HIT,
+// plays the slice PICK points at, a modulator on PICK picking it); RATE
 // how often the slices fire, AUTO in the middle (the loop's own grid),
 // /2 /3 /4 /8 less often, x2 x3 x4 x8 more often (Sascha 2026-11-08); its L
 // knob SHUF, the share of slices moved to another place; PITCH, its L knob
@@ -7231,14 +7240,14 @@ public:
 // read at the pitch).
 // Page 2: REVRS the odds a slice plays backwards, ROLL the odds it rolls
 // (its L knob: 2, 3 or 4 hits), PICK the slice B (HIT) plays, in KEYS and
-// CV (ORDER CV: only HIT plays, nothing on the clock; CV on PICK picks, a
-// trigger on B fires), ARP how several held keys play (UP, DOWN, PLAYD as
+// TRIG (only HIT plays, nothing on the clock; a modulator on PICK picks,
+// its range spread over the slices, a trigger on B fires), ARP how several held keys play (UP, DOWN, PLAYD as
 // pressed, RAND).
 // Page 3: GATE how much of its time a slice sounds; VELO how much a key's
 // velocity counts; OUT a pair of CV outputs: the slice playing as a pitch
 // (a semitone a slice, slice 1 = 0 V) and a trigger at each slice; MIX.
 // (Order: Sascha 2026-11-08.)
-// A: run / stop. B: a new shuffle (KEYS, CV: HIT).
+// A: run / stop. B: a new shuffle (KEYS, TRIG: HIT).
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef SHEAR_DEF = {
   "SHEAR", "SHR", 12, {"RUN", "NEW"},
@@ -7276,34 +7285,27 @@ public:
     return p == SLICE ? "CUT" : p == RATE ? "SHUF" : p == ROLL ? "HITS" : nullptr;
   }
   void Action(int a) override {
-    if ((a == 1 && cur[ORDER] >= AudioEffectShear::KEYS) || (a == 0 && CvMode())) fx.Pad(Picked(), 1.0f, false);  // HIT: the picked slice, once
+    if (a == 1 && cur[ORDER] >= AudioEffectShear::KEYS) fx.Pad(Picked(), 1.0f, false);  // HIT: the picked slice, once
     else if (a == 0) fx.running = !fx.running;
     else Shuffle();
   }
-  // ORDER CV (Sascha 2026-11-08): A's trigger source is the CV that picks
-  // the slice (CV), B's the trigger that plays it (TRIG); each offers only
-  // what makes sense: CV the CV inputs and MOD A-H, TRIG the gate inputs,
-  // MIDI maps and MOD A-H
+  // ORDER TRIG (was CV; Sascha 2026-11-08): HIT's trigger plays the slice
+  // PICK points at, nothing on the clock; a modulator on PICK picks it (its
+  // range spread over the slices). HIT offers only what makes sense as a
+  // trigger: the gate inputs, MIDI maps and MOD A-H
   bool CvMode() const { return cur[ORDER] == AudioEffectShear::CV; }
   const char* ActionLabel(int a) const override {
-    if (CvMode()) return a == 0 ? "CV" : "TRIG";
-    return a == 1 && cur[ORDER] == AudioEffectShear::KEYS ? "HIT" : Device::ActionLabel(a);
+    return a == 1 && cur[ORDER] >= AudioEffectShear::KEYS ? "HIT" : Device::ActionLabel(a);
   }
-  // (A's source is kept through the modes, Sascha 2026-11-08: clearing it
-  // on the way in and out of CV also cleared the saved one on loading.
-  // Outside CV a CV input there is CV's, not RUN's trigger: left alone)
+  // (a CV input on RUN: left from the old CV row, not a trigger)
   void RunTriggers(uint16_t edges) override {
-    if (!CvMode()) {
-      const uint8_t a0 = act_trig[0];
-      if (a0 >= 5 && a0 <= 12) act_trig[0] = 0;
-      Device::RunTriggers(edges);
-      act_trig[0] = a0;
-      return;
-    }
-    if (act_trig[1] && SrcEdge(act_trig[1], edges, act_prev[1])) Action(1);  // (A's source is a CV, not a trigger)
+    const uint8_t a0 = act_trig[0];
+    if (a0 >= 5 && a0 <= 12) act_trig[0] = 0;
+    Device::RunTriggers(edges);
+    act_trig[0] = a0;
   }
   int StepTrigSource(int a, int dir) const override;
-  // the slice HIT plays: PICK, moved up by the CV source in CV mode (its
+  // the slice HIT plays: PICK, moved by its modulators (their
   // range over all the slices, stopping at the last)
   int Picked() const;
   // OUT: the slice as a pitch and a trigger, on the pair of outputs picked
@@ -7388,9 +7390,9 @@ FLASHMEM void ShearDevice::Format(int p, char* buf, size_t n) const {
     snprintf(buf, n, "%s", names[constrain(int(val[RATE]), -4, 4) + 4]);
   }
   else if (p == GATE || p == REVRS || p == ROLL || p == LEVEL || p == VELO) snprintf(buf, n, "%d%%", int(val[p]));
-  else if (p == ORDER && val[p] == AudioEffectShear::CV) snprintf(buf, n, "CV");
+  else if (p == ORDER && val[p] == AudioEffectShear::CV) snprintf(buf, n, "TRIG");
   else if (p == OUT && val[p] == 4) snprintf(buf, n, "G+H");
-  else if (p == PICK) snprintf(buf, n, "%d", int(val[p]) % std::max(1, Slices()) + 1);
+  else if (p == PICK) snprintf(buf, n, "%d", std::min(int(val[p]), Slices() - 1) + 1);  // (past the last: the last)
   else Device::Format(p, buf, n);
 }
 
@@ -7503,11 +7505,10 @@ FLASHMEM void ShearDevice::Idle() {
 }
 
 FLASHMEM int ShearDevice::StepTrigSource(int a, int dir) const {
-  if (!CvMode()) return Device::StepTrigSource(a, dir);
+  if (!CvMode() || a == 0) return Device::StepTrigSource(a, dir);
   int list[1 + 8 + MIDIMAP_MAX + MOD_BUSES], n = 0;
   list[n++] = 0;
-  if (a == 0) for (int s = 5; s <= 12; s++) list[n++] = s;  // CV1-8
-  else {
+  {
     for (int s = 1; s <= 4; s++) list[n++] = s;                // TR1-4
     for (int s = 13; s < TRIG_MOD0; s++) list[n++] = s;        // MIDI maps
   }
@@ -7521,14 +7522,11 @@ FLASHMEM int ShearDevice::StepTrigSource(int a, int dir) const {
 
 FLASHMEM int ShearDevice::Picked() const {
   const int n = std::max<int>(1, fx.nslices);
-  // (Sascha 2026-11-08: the CV's range spread over the slices, left to
-  // right, no going round: 0 V the PICK one, the input's top the last)
-  int at = cur[PICK] % n;
-  const int src = act_trig[0];
-  float f = -1.0f;
-  if (CvMode() && src >= 5 && src <= 12) f = float(HS::frame.In(src - 5)) / float(HEMISPHERE_MAX_INPUT_CV);
-  else if (CvMode() && src >= TRIG_MOD0 && mod_bus) f = mod_bus[src - TRIG_MOD0];
-  if (f >= 0.0f || (CvMode() && src)) at += int(constrain(f, 0.0f, 0.999f) * n);
+  // PICK, its modulators' range spread over the slices, left to right, no
+  // going round (Sascha 2026-11-08): +100 % from 0 V to the input's top
+  // reaches the last slice; past the ends it stays on the first / last
+  int at = val[PICK];
+  if (ModsLive(PICK)) at += int(floorf(constrain(ModSum(PICK) * 0.01f, -1.0f, 0.999f) * n));
   return constrain(at, 0, n - 1);
 }
 
