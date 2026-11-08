@@ -123,10 +123,12 @@ public:
     // far a sample goes (in steps), on the source's head or on the clock
     int trig_at = -1;
     int64_t trig_k = 0;
-    if (pend_cut && (order == KEYS || !running || !(voice[0].on || voice[1].on))) { Adopt(); last_step = INT64_MIN; }  // (nothing to wait for)
+    if (pend_cut && (order == KEYS || order == CV || !running || !(voice[0].on || voice[1].on))) { Adopt(); last_step = INT64_MIN; }  // (nothing to wait for)
     const int G = std::max<int>(1, grid);
     float h0 = 0.0f, hstep = 0.0f;
-    const bool gridded = order != KEYS || n_arp >= 2;  // (KEYS: only an arpeggio keeps time)
+    // (KEYS: only an arpeggio keeps time; CV: a trigger plays the slice
+    // PICK points at, nothing on the clock, Sascha 2026-11-08)
+    const bool gridded = (order != KEYS && order != CV) || (order == KEYS && n_arp >= 2);
     const bool fol = gridded && running && r->BlockHead(h0, hstep);
     double now = 0.0, dps = 0.0;  // (now: in steps)
     bool timed = false;
@@ -351,7 +353,6 @@ private:
     int s;
     float lvl = 1.0f;
     if (order == RANDOM) s = int(Rand() % uint32_t(n));
-    else if (order == CV) s = pick % n;
     else if (order == KEYS) {  // the arpeggio
       const int m = std::min<int>(n_arp, MAX_SLICES);
       if (m < 2) return;

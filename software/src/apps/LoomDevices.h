@@ -6909,7 +6909,8 @@ public:
 // Page 1: SLICE how many, on a grid of 8, 16 or 32 (its L knob CUT: EUCL,
 // the cuts spread over the grid as a Euclidean rhythm, or HITS, the grid's
 // loudest lines); ORDER (FWD as they lie, BACK, RAND, KEYS: MIDI keys play
-// them, C3 the first, several held an arpeggio; CV: PICK each step); RATE
+// them, C3 the first, several held an arpeggio; CV: a trigger on B, HIT,
+// plays the slice PICK points at, CV moving PICK); RATE
 // how often the slices fire, AUTO in the middle (the loop's own grid),
 // /2 /3 /4 /8 less often, x2 x3 x4 x8 more often (Sascha 2026-11-08); its L
 // knob SHUF, the share of slices moved to another place; PITCH, its L knob
@@ -6917,9 +6918,8 @@ public:
 // read at the pitch).
 // Page 2: GATE how much of its time a slice sounds, REVRS the odds a slice
 // plays backwards, ROLL the odds it rolls (its L knob: 2, 3 or 4 hits),
-// PICK the slice ORDER CV plays each step (CV moves it: a CV sequence of
-// slices on the grid) and B (HIT) plays now (a trigger on B: a CV slice
-// player).
+// PICK the slice B (HIT) plays, in KEYS and CV (ORDER CV: only HIT plays,
+// nothing on the clock; CV on PICK picks, a trigger on B fires).
 // Page 3: ARP how several held keys play (UP, DOWN, PLAYD as pressed,
 // RAND); VELO how much a key's velocity counts; OUT a pair of CV outputs:
 // the slice playing as a pitch (a semitone a slice, slice 1 = 0 V) and a

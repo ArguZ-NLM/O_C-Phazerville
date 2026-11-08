@@ -2445,7 +2445,7 @@ FLASHMEM void AppLoom::MainLoop() {
       loom::FormatTrig(d->TrigSource(0), a0, sizeof(a0));
       loom::FormatTrig(d->TrigSource(1), a1, sizeof(a1));
       Serial.printf("  %c %s strikes %s %s / %s %s\n", t ? 'R' : 'L', d->def.tag,
-        d->def.actions[0], a0, d->def.actions[1], a1);
+        d->ActionLabel(0), a0, d->ActionLabel(1), a1);
     });
   }
   {
@@ -3785,7 +3785,7 @@ FLASHMEM void AppLoom::DrawDevice() const {
     for (int a = 0; a < 2; a++) {
       char src[8], buf[24];
       FormatTrig(d->TrigSource(a), src, sizeof(src));
-      const char* act = d->def.actions[a][0] ? d->def.actions[a] : "-";
+      const char* act = d->ActionLabel(a)[0] ? d->ActionLabel(a) : "-";  // (as it is now: SHEAR's B is HIT in KEYS / CV)
       snprintf(buf, sizeof(buf), "%-5s <- %s", act, src);
       gfxPrint(4, 13 + a * 10, buf);
     }
