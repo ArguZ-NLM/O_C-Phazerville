@@ -509,7 +509,7 @@ private:
   uint32_t walk_at = 0;
   void WalkIdle();
   void GoTo(const char* text);
-  void Behind(const char* text);  // USB 'f': a device's A, or one of its values, without the screen changing
+  void Behind(const char* text);  // USB 'f': a device's A (or B: "!1" after it), or one of its values, without the screen changing
   uint8_t chord[8] = {};  // USB 'x': notes to hold while capturing
   int chord_n = 0;
   uint32_t chord_at = 0;
@@ -3293,6 +3293,9 @@ FLASHMEM void AppLoom::Behind(const char* text) {
   snprintf(path, sizeof(path), "%s", text);
   char* eq = strchr(path, '=');
   if (eq) *eq++ = 0;
+  char* bang = strchr(path, '!');  // ("A/SHR!1": its B instead)
+  const int act = bang ? constrain(atoi(bang + 1), 0, 1) : 0;
+  if (bang) *bang = 0;
   const ViewMode v0 = view; const bool fm0 = focus_mod;
   const int8_t mc0 = mod_cursor, t0 = track, c0 = col, cu0 = cursor;
   const bool e0 = editing, mm0 = mod_mode, tm0 = trig_mode, em0 = edit_mode;
@@ -3300,7 +3303,7 @@ FLASHMEM void AppLoom::Behind(const char* text) {
   Device* d = view == DEVICE ? Focused() : nullptr;
   const int8_t uc0 = d ? d->ui_cursor : 0;
   if (d && eq) SetByText(false, eq);
-  else if (d) d->Action(0);
+  else if (d) d->Action(act);
   if (d) d->ui_cursor = uc0;
   view = v0; focus_mod = fm0; mod_cursor = mc0; track = t0; col = c0; cursor = cu0;
   editing = e0; mod_mode = mm0; trig_mode = tm0; edit_mode = em0;
