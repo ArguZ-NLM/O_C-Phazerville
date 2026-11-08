@@ -855,7 +855,7 @@ private:
 };
 
 FLASHMEM void ClockDevice::Measured(float bpm) {
-  if (bpm < 20.0f || bpm > 400.0f) return;
+  if (bpm < 20.0f || bpm > 999.0f) return;  // (Ableton goes up to 999)
   // smooth out jitter when close; far off (10 %), follow at once, but only
   // when a second measure agrees: one odd beat (Ableton relocating read
   // 133 for 120, 2026-11-08) must not throw the tempo
@@ -887,10 +887,13 @@ FLASHMEM void ClockDevice::Tick(const ModCtx& ctx) {
     // MIDI clock, 24 per beat: measure over whole beats, timed by when
     // the clocks came (not this tick); after a Start / Continue / Stop
     // afresh (a gap or a jump inside a beat is no tempo)
+    // (the first clock after one sets the mark; with no tempo yet a quarter
+    // beat is enough for a first one: until then the clock ran at BPM)
     if (midi_transport != transport_seen) { transport_seen = midi_transport; midi_mark = midi_clocks; midi_mark_us = 0; }
     const uint32_t c = midi_clocks, at = midi_clock_us;
-    if (c - midi_mark >= 24) {
-      if (midi_mark_us) Measured(60e6f * (c - midi_mark) / 24.0f / float(at - midi_mark_us));
+    if (!midi_mark_us && c != midi_mark) { midi_mark = c; midi_mark_us = at; }
+    else if (midi_mark_us && c - midi_mark >= (have_measure ? 24u : 6u)) {
+      Measured(60e6f * (c - midi_mark) / 24.0f / float(at - midi_mark_us));
       midi_mark = c;
       midi_mark_us = at;
     }
@@ -950,11 +953,16 @@ FLASHMEM void ClockDevice::Tick(const ModCtx& ctx) {
     const uint32_t ticks = midi_clocks - midi_start_clocks - 1;
     const float tick_us = 60e6f / (tempo_bpm * 24.0f);
     const float into = std::min(1.0f, float(uint32_t(now - midi_clock_us)) / tick_us);
-    const float fp = (float(ticks % 24) + into) / 24.0f;
-    float err = fp - (beat_ph - floorf(beat_ph));
-    err -= floorf(err + 0.5f);  // -0.5 .. 0.5
-    beat_ph += err * std::min(1.0f, ctx.dt * 4.0f);
-    if (beat_ph < 0.0f) beat_ph += 1.0f;
+    // where the clocks say the beat is, whole beats too: more than half a
+    // beat off (a tempo far from right, 2026-11-08: Ableton at 490 BPM
+    // slipped the beats by whole ones), straight there; else pulled gently
+    const double target = (double(ticks) + into) / 24.0;
+    const double here = double(clock_beat_n) + beat_ph;
+    if (fabs(target - here) > 0.5) JumpTo(target);
+    else {
+      beat_ph += float(target - here) * std::min(1.0f, ctx.dt * 4.0f);
+      if (beat_ph < 0.0f) { beat_ph += 1.0f; if (clock_beat_n) clock_beat_n--; beat = (beat + 3) % 4; }
+    }
   }
   if (beat_ph >= 1.0f) { beat_ph -= floorf(beat_ph); beat = (beat + 1) % 4; flash = 0.08f; clock_beat_n++; }
   out = beat_ph;
