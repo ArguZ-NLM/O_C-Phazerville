@@ -15,9 +15,15 @@
 // Only the slices come out (no dry): the slot's fade mixes them with the
 // source by MIX, as FIBRE's grains.
 //
-// Timing: the main loop hands over where the clock was (in beats) and when
-// (micros); the audio update works out from that where each step falls in
-// its block, to the sample. A voice holds the slice it plays; a new slice
+// Timing (Sascha 2026-11-08: mixed with the dry it must stay in step): while
+// the source plays forwards, the grid rides on its own play head (the
+// reel's position at the start of this very block), so at PITCH 0 in FWD
+// the slices are the dry, sample for sample. Stopped (or backwards,
+// PING), the grid runs on Loom's clock instead: the main loop hands over
+// where the clock was (in beats) and when (micros). Either way the update
+// works out where each step falls in its block, to the sample. RATE
+// (factor) fires the steps that many times as often (x2: each slice cut
+// to half, the order twice round a loop; /2: once round in two loops). A voice holds the slice it plays; a new slice
 // takes the other voice and the old one fades out (3 ms): no clicks.
 //
 // The reel's buffer can move under it (SHUTTLE trims its memory to the loop
@@ -35,7 +41,7 @@
 class AudioEffectShear : public AudioStream {
 public:
   static constexpr int MAX_SLICES = 32;
-  enum Order : uint8_t { STRAIGHT, BACK, RANDOM, KEYS };
+  enum Order : uint8_t { FWD, BACK, RANDOM, KEYS };
 
   AudioEffectShear() : AudioStream(2, inq) {
     for (int i = 0; i <= MAX_SLICES; i++) start[i] = uint8_t(i);
@@ -48,8 +54,9 @@ public:
   volatile uint8_t nslices = 16, grid = 16;
   volatile uint8_t start[MAX_SLICES + 1];  // each slice's first grid step (start[n] = grid)
   volatile uint8_t perm[MAX_SLICES];       // the order the slices come in (shuffled by SHUF)
-  volatile uint8_t order = STRAIGHT;
-  volatile float step_beats = 0.25f;  // a grid step, in beats
+  volatile uint8_t order = FWD;
+  volatile float factor = 1.0f;       // RATE: steps this many times as often as the loop's grid
+  volatile float step_beats = 0.25f;  // on the clock: a grid step, in beats (RATE included)
   volatile float gate = 1.0f;         // a slice sounds for this share of its steps (at most its length)
   volatile float pitch = 1.0f;        // playback ratio
   volatile float spread = 0.0f;       // +- semitones, at random each slice
@@ -72,6 +79,7 @@ public:
   volatile int8_t playing_slice = -1;
   volatile uint32_t n_steps = 0, n_pads = 0;  // (USB status)
   volatile float play_frac = 0.0f;    // where in the window the head is (0..1)
+  volatile bool following = false;    // on the source's head (else the clock)
 
   void update() override {
     for (int c = 0; c < 2; c++) if (audio_block_t* b = receiveReadOnly(c)) release(b);  // (no dry: the slot's fade has it)
@@ -88,28 +96,54 @@ public:
     audio_block_t* out[2] = {allocate(), allocate()};
     if (!out[0] || !out[1]) { for (auto b : out) if (b) release(b); return; }
 
-    // where the grid's steps fall in this block
+    // where the grid's steps fall in this block: now (in steps) and how
+    // far a sample goes (in steps), on the source's head or on the clock
     int trig_at = -1;
     int64_t trig_k = 0;
-    const ClockSnap& k = clk[clk_i];
-    if (k.running && running && order != KEYS && k.bpm > 1.0f) {
-      const double now = k.beats + double(uint32_t(micros() - k.us)) * (k.bpm / 60e6);
-      const double sb = step_beats;
-      const int64_t s = int64_t(floor(now / sb));
-      const double spb = AUDIO_SAMPLE_RATE_EXACT * 60.0 / k.bpm;  // samples a beat
-      step_samples = float(sb * spb);
+    const int G = std::max<int>(1, grid);
+    float h0 = 0.0f, hstep = 0.0f;
+    const bool fol = order != KEYS && running && r->BlockHead(h0, hstep);
+    double now = 0.0, dps = 0.0;
+    bool timed = false;
+    if (fol) {
+      const float f = h0 - floorf(h0);  // (past 1 in the seam: the next time round already)
+      if (!following) loops = 0;
+      else if (f < last_frac - 0.5f) loops++;  // round again (or back to the start)
+      last_frac = f;
+      const double per = double(G) * factor;  // steps a time round
+      now = (double(loops) + f) * per;
+      dps = double(hstep) * per;
+      head_rate = hstep * float(wl);  // (frames a sample: the voices play at the head's own speed)
+      timed = dps > 1e-9;
+    } else {
+      const ClockSnap& k = clk[clk_i];
+      if (k.running && running && order != KEYS && k.bpm > 1.0f) {
+        const double beats = k.beats + double(uint32_t(micros() - k.us)) * (k.bpm / 60e6);
+        const double sb = step_beats;
+        const double spb = AUDIO_SAMPLE_RATE_EXACT * 60.0 / k.bpm;  // samples a beat
+        now = beats / sb;
+        dps = 1.0 / (sb * spb);
+        head_rate = rate;
+        timed = sb > 1e-6;
+      }
+    }
+    if (fol != following) last_step = INT64_MIN;  // (from the clock to the head or back: start afresh)
+    following = fol;
+    if (timed) {
+      step_samples = float(1.0 / dps);
+      const int64_t s = int64_t(floor(now));
       if (last_step == INT64_MIN || s < last_step - 1 || s > last_step + 4) {
-        // (started, or the clock jumped: this step if it has only just begun)
+        // (started, or it jumped: this step if it has only just begun)
         last_step = s;
-        if ((now - double(s) * sb) * spb < 2.0 * AUDIO_BLOCK_SAMPLES) { trig_at = 0; trig_k = s; }
+        if ((now - double(s)) / dps < 2.0 * AUDIO_BLOCK_SAMPLES) { trig_at = 0; trig_k = s; }
         cyc_pos = 0; next_at = -1;
       } else if (s > last_step) {
         last_step = s;  // (late: at once)
         trig_at = 0; trig_k = s;
       }
       if (trig_at < 0) {
-        const int off = int(((double(last_step + 1) * sb) - now) * spb);
-        if (off >= 0 && off < AUDIO_BLOCK_SAMPLES) { trig_at = off; trig_k = ++last_step; }
+        const double off = ceil((double(last_step + 1) - now) / dps);
+        if (off >= 0.0 && off < AUDIO_BLOCK_SAMPLES) { trig_at = int(off); trig_k = ++last_step; }
       }
     } else last_step = INT64_MIN;
     const uint8_t pd = pad;
@@ -124,9 +158,11 @@ public:
         // the envelope: up in 1 ms, down in 3 ms (released: its time over, or a new slice)
         if (v.rel || v.left <= 0.0f) { v.env -= 1.0f / (0.003f * AUDIO_SAMPLE_RATE_EXACT); if (v.env <= 0.0f) { v.on = false; continue; } }
         else if (v.env < 1.0f) v.env = std::min(1.0f, v.env + 1.0f / (0.001f * AUDIO_SAMPLE_RATE_EXACT));
+        // at its end it fades out (3 ms), reading on past it so it doesn't click
+        // (backwards its end is its loudest: the hit)
+        if (v.pos >= v.span - 1.0f) v.rel = true;
         const float p = v.rev ? v.span - 1.0f - v.pos : v.pos;
-        if (p < 0.0f || p >= v.span - 1.0f) { v.rel = true; v.pos += v.inc; continue; }
-        const float at = float(ws) + float(start[v.slice]) * float(wl) / float(grid) + p;  // (the window as it is now)
+        const float at = std::max(0.0f, float(ws) + float(start[v.slice]) * float(wl) / float(grid) + p);  // (the window as it is now)
         const size_t i0 = std::min(size_t(at), len - 2);
         const float f = at - float(i0);
         const float g = v.env * v.amp;
@@ -166,6 +202,9 @@ private:
   volatile float pad_lvl = 1.0f;
   int64_t last_step = INT64_MIN;
   float step_samples = 0.0f;
+  float head_rate = 1.0f;   // source frames a sample the voices play at (PITCH on top)
+  uint32_t loops = 0;       // times round the loop, following its head
+  float last_frac = 0.0f;
   int cyc_pos = 0;       // the next slice in the order, this time round
   int64_t next_at = -1;  // the grid step it starts on (-1: from the top)
   uint32_t rng = 0x9E3779B9u;
@@ -208,7 +247,26 @@ private:
   // slice s, for u grid steps (-1: by hand, all of it)
   void Start(int s, int u, float lvl) {
     s = constrain(s, 0, N() - 1);
-    voice[cur_v].rel = true;  // (the old one fades out)
+    const bool rev = p_rev > 0.0f && Rand01() < p_rev;
+    float ratio = pitch;
+    if (spread > 0.0f) ratio *= exp2f((Rand01() * 2.0f - 1.0f) * spread * (1.0f / 12.0f));
+    const float inc = head_rate * ratio;
+    size_t ws, wl;
+    reel->Window(ws, wl);
+    const float step = float(wl) / float(std::max<int>(1, grid));  // a grid step, in source frames
+    const float span = float(Units(s)) * step;  // its length in source frames
+    // it sounds for its gate share of its steps, at most its own length
+    const float own = span / std::max(0.01f, inc);
+    const float left = u < 0 || step_samples <= 0.0f ? own : std::min(own, gate * float(u) * step_samples);
+    // the slice just where the playing one has got to (in order, forwards,
+    // same speed): the same voice plays on, no fade (FWD at PITCH 0 is the
+    // dry itself)
+    Voice& o = voice[cur_v];
+    if (u >= 0 && o.on && !o.rel && !o.rev && !rev && o.left > 0.0f && fabsf(o.inc - inc) < 1e-5f) {
+      const float d = float(start[o.slice]) * step + o.pos - float(start[s]) * step;
+      if (fabsf(d) <= inc + 2.0f) { o.slice = uint8_t(s); o.pos = d; o.span = span; o.left = left; o.amp = lvl; return; }
+    }
+    o.rel = true;  // (the old one fades out)
     cur_v ^= 1;
     Voice& v = voice[cur_v];
     v.on = true;
@@ -217,16 +275,10 @@ private:
     v.amp = lvl;
     v.slice = uint8_t(s);
     v.pos = 0.0f;
-    v.rev = p_rev > 0.0f && Rand01() < p_rev;
-    float ratio = pitch;
-    if (spread > 0.0f) ratio *= exp2f((Rand01() * 2.0f - 1.0f) * spread * (1.0f / 12.0f));
-    v.inc = rate * ratio;
-    size_t ws, wl;
-    reel->Window(ws, wl);
-    v.span = float(Units(s)) * float(wl) / float(std::max<int>(1, grid));  // its length in source frames
-    // it sounds for its gate share of its steps, at most its own length
-    const float own = v.span / std::max(0.01f, v.inc);
-    v.left = u < 0 || step_samples <= 0.0f ? own : std::min(own, gate * float(u) * step_samples);
+    v.rev = rev;
+    v.inc = inc;
+    v.span = span;
+    v.left = left;
   }
 
   void Retrigger() {  // a roll's next hit: the same slice from its start

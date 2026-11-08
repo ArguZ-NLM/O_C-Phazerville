@@ -182,6 +182,22 @@ public:
   // the window it plays (its loop), for SHEAR (read in the audio update: it
   // moves with the buffer when that is swapped, the audio stopped)
   void Window(size_t& s, size_t& l) const { s = ws; l = wl; }
+  // SHEAR: where the head is at the start of the block the audio is making
+  // now, as a share of the loop (it may pass 1 in the seam's crossfade),
+  // and how far it moves a sample, as a share; false when it doesn't play
+  // straight forwards. (The reel's update may have run before or after
+  // the caller's this round: run within half a block ago, its block start
+  // is the one; else its head is where this block begins.)
+  bool BlockHead(float& at, float& step) const {
+    const float sp = speed;
+    if (!(st == PLAY || st == DUB) || ping_ || sp <= 1e-4f || !blk_wl) return false;
+    const bool ran = uint32_t(ARM_DWT_CYCCNT - blk_cyc) < uint32_t(F_CPU_ACTUAL / AUDIO_SAMPLE_RATE_EXACT * (AUDIO_BLOCK_SAMPLES / 2));
+    const size_t w = ran ? blk_wl : wl;
+    if (w < 2) return false;
+    at = (ran ? blk_off : off) / float(w);
+    step = sp / float(w);
+    return true;
+  }
   size_t Capacity() const { return cap; }
   // --- the player loads into, and SPOOL saves from, the buffer directly
   // (main loop; while loading the engine stays silent)
@@ -270,6 +286,9 @@ private:
   int16_t* buf[2] = {};
   size_t cap = 0, len = 0, wpos = 0, ws = 0, wl = 0;
   float off = 0.0f;  // play head, samples into the window
+  volatile float blk_off = 0.0f;  // ... where it was when the last block began (BlockHead)
+  volatile size_t blk_wl = 0;
+  volatile uint32_t blk_cyc = 0;
   // START / LEN changes: the old window keeps playing and fades out while
   // the new one fades in (one change per fade; the next waits for it)
   static constexpr int XFADE = 512;  // ~12 ms
@@ -444,6 +463,7 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectReel::update() {  // (O2
   const bool ping = ping_;
   if (!ping) { dir = 1.0f; b_left = 0; }
   const float sp = speed, g = level, m = mon, keep = keep_;
+  blk_off = off; blk_wl = wl; blk_cyc = ARM_DWT_CYCCNT;  // (SHEAR follows the head: BlockHead)
   constexpr float q = 1.0f / 32768.0f;
   // the crossfade seam (looping forward): over the last xl frames of the
   // window the loop's end fades out while the frames leading into START

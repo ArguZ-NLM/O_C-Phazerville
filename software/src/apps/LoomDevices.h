@@ -6885,14 +6885,16 @@ FLASHMEM void SprayDevice::DrawMini(int x, int y, int w, int h) {
 // SHEAR (2026-11-07, Sascha's idea: an MPC / Reason REX slicer): cuts the
 // track's loop, SHUTTLE's file (in memory, MEM) or SPOOL's recording,
 // between their START and END, into slices on the loop's grid and plays
-// them on the clock (AudioEffectShear.h). It reads the loop where it is:
-// nothing recorded, nothing copied.
+// them in step with it: on its play head while it plays, else on the clock
+// (AudioEffectShear.h). It reads the loop where it is: nothing recorded,
+// nothing copied.
 // Page 1: SLICE how many, on a grid of 8, 16 or 32 (its L knob CUT: EUCL,
 // the cuts spread over the grid as a Euclidean rhythm, or HITS, the grid's
-// loudest lines); ORDER (STRT as they lie, BACK, RAND, KEYS: MIDI keys play
-// them, C3 the first; its L knob SHUF, the share of slices moved to another
-// place); RATE a grid step (AUTO: the loop's own length over its grid);
-// MIX.
+// loudest lines); ORDER (FWD as they lie, BACK, RAND, KEYS: MIDI keys play
+// them, C3 the first); RATE how often the slices fire, AUTO in the middle
+// (the loop's own grid), /2 /3 /4 /8 less often, x2 x3 x4 x8 more often
+// (Sascha 2026-11-08); its L knob SHUF, the share of slices moved to
+// another place; MIX.
 // Page 2: PITCH (its L knob: a random spread each slice), GATE how much of
 // its time a slice sounds, REVRS the odds a slice plays backwards, ROLL the
 // odds it rolls (its L knob: 2, 3 or 4 hits).
@@ -6902,8 +6904,8 @@ PROGMEM static const DeviceDef SHEAR_DEF = {
   "SHEAR", "SHR", 8, {"RUN", "NEW"},
   {
     {"SLICE", 2, AudioEffectShear::MAX_SLICES, 16, UNI, 0, 2, 0, {}, {"EUCL", "HITS"}},
-    {"ORDER", 0, 3, 0, LIST, 4, 21, 0, {"STRT", "BACK", "RAND", "KEYS"}},  // mode: SHUF, 0..100 % in 5 % steps
-    {"RATE", 0, NUM_DIVS, 0, UNI},        // 0 AUTO, then the clock's note values
+    {"ORDER", 0, 3, 0, LIST, 4, 0, 0, {"FWD", "BACK", "RAND", "KEYS"}},
+    {"RATE", -4, 4, 0, BI, 0, 21, 0},     // /8 /4 /3 /2 AUTO x2 x3 x4 x8; mode: SHUF, 0..100 % in 5 % steps
     {"MIX", 0, 100, 100, UNI},
     {"PITCH", -24, 24, 0, BI, 0, 13, 0},  // mode: spread, 0..12 semitones
     {"GATE", 5, 100, 100, UNI},
@@ -6927,7 +6929,7 @@ public:
   void Format(int p, char* buf, size_t n) const override;
   void FormatMode(int p, char* buf, size_t n) const override;
   const char* AltName(int p) const override {
-    return p == SLICE ? "CUT" : p == ORDER ? "SHUF" : p == PITCH ? "SPRD" : p == ROLL ? "HITS" : nullptr;
+    return p == SLICE ? "CUT" : p == RATE ? "SHUF" : p == PITCH ? "SPRD" : p == ROLL ? "HITS" : nullptr;
   }
   void Action(int a) override {
     if (a == 0) fx.running = !fx.running;
@@ -6948,8 +6950,8 @@ public:
   void Status(char side) const {  // (USB V)
     size_t ws = 0, wl = 0;
     if (src) src->Window(ws, wl);
-    Serial.printf("  %c SHEAR %s bpm %d run %d grid %d slices %d step %d/1000 beats rate %d/1000, slice %d, steps %lu keys %lu, loop %u+%u\n", side,
-                  src ? "cuts" : "no source", int(tempo_bpm), int(clock_running), int(fx.grid), int(fx.nslices), int(fx.step_beats * 1000.0f), int(src_rate * 1000.0f),
+    Serial.printf("  %c SHEAR %s %s bpm %d run %d grid %d slices %d step %d/1000 beats rate %d/1000, slice %d, steps %lu keys %lu, loop %u+%u\n", side,
+                  src ? "cuts" : "no source", fx.following ? "on-head" : "on-clock", int(tempo_bpm), int(clock_running), int(fx.grid), int(fx.nslices), int(fx.step_beats * 1000.0f), int(src_rate * 1000.0f),
                   int(fx.playing_slice), (unsigned long)fx.n_steps, (unsigned long)fx.n_pads, unsigned(ws), unsigned(wl));
   }
 private:
@@ -6968,12 +6970,17 @@ private:
   int Slices() const { return constrain(int(cur[SLICE]), 2, AudioEffectShear::MAX_SLICES); }
   static int GridOf(int n) { int g = 2; while (g < n) g <<= 1; return g; }  // 8, 16, 32 ...
   float AutoBeats() const;  // AUTO: a grid step, in beats
+  float Factor() const {  // RATE: how many times as often as the loop's grid
+    static const float f[9] = {0.125f, 0.25f, 1.0f / 3.0f, 0.5f, 1.0f, 2.0f, 3.0f, 4.0f, 8.0f};
+    return f[constrain(int(cur[RATE]), -4, 4) + 4];
+  }
 };
 
 FLASHMEM void ShearDevice::Apply(int p) {
   switch (p) {
     case SLICE: cut_mode = -1; break;  // (cut again in Idle)
-    case ORDER: fx.order = uint8_t(cur[ORDER]); if (shuf_was != mode[ORDER]) Shuffle(); break;
+    case ORDER: fx.order = uint8_t(cur[ORDER]); break;
+    case RATE: fx.factor = Factor(); if (shuf_was != mode[RATE]) Shuffle(); break;
     case LEVEL: wet = cur[LEVEL] * 0.01f; break;
     case PITCH: fx.pitch = exp2f(cur[PITCH] / 12.0f); fx.spread = float(mode[PITCH]); break;
     case GATE: fx.gate = cur[GATE] * 0.01f; break;
@@ -6983,8 +6990,10 @@ FLASHMEM void ShearDevice::Apply(int p) {
 }
 
 FLASHMEM void ShearDevice::Format(int p, char* buf, size_t n) const {
-  if (p == RATE && val[RATE] == 0) snprintf(buf, n, "AUTO");
-  else if (p == RATE) FormatDiv(val[RATE] - 1, buf, n);  // (the setting, as FIBRE's: what moves it shows in its bar)
+  if (p == RATE) {
+    static const char* const names[9] = {"/8", "/4", "/3", "/2", "AUTO", "x2", "x3", "x4", "x8"};
+    snprintf(buf, n, "%s", names[constrain(int(val[RATE]), -4, 4) + 4]);
+  }
   else if (p == GATE || p == REVRS || p == ROLL || p == LEVEL) snprintf(buf, n, "%d%%", int(val[p]));
   else Device::Format(p, buf, n);
 }
@@ -6993,15 +7002,15 @@ FLASHMEM void ShearDevice::FormatMode(int p, char* buf, size_t n) const {
   if (p == PITCH && !mode[p]) snprintf(buf, n, "OFF");
   else if (p == PITCH) snprintf(buf, n, LOOM_PM "%d", mode[p]);
   else if (p == ROLL) snprintf(buf, n, "x%d", 2 + mode[p]);
-  else if (p == ORDER) snprintf(buf, n, "%d%%", mode[p] * 5);
+  else if (p == RATE) snprintf(buf, n, "%d%%", mode[p] * 5);
   else Device::FormatMode(p, buf, n);
 }
 
 // SHUF: that share of the slices each swapped with another, at random (B: again)
 FLASHMEM void ShearDevice::Shuffle() {
-  shuf_was = mode[ORDER];
+  shuf_was = mode[RATE];
   const int n = Slices();
-  const int pct = mode[ORDER] * 5;
+  const int pct = mode[RATE] * 5;
   uint8_t pm[AudioEffectShear::MAX_SLICES];
   for (int i = 0; i < n; i++) pm[i] = uint8_t(i);
   for (int i = 0; i < n; i++)
@@ -7077,7 +7086,7 @@ FLASHMEM void ShearDevice::Idle() {
     Cut();
     if (more) Shuffle();
   }
-  fx.step_beats = cur[RATE] == 0 ? AutoBeats() : DivBeats(cur[RATE] - 1);
+  fx.step_beats = AutoBeats() / Factor();  // (on the clock, when the source doesn't play)
   // KEYS: MIDI notes (any channel) play the slices, C3 (60) the first, on up
   // (and round again)
   if (note_ev_n - notes_seen > NOTE_EVS) notes_seen = note_ev_n - NOTE_EVS;
