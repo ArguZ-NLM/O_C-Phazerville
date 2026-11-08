@@ -914,6 +914,20 @@ FLASHMEM void ClockDevice::Tick(const ModCtx& ctx) {
       if (beat_ph < 0.0f) beat_ph += 1.0f;
     }
   }
+  if (clock_running && src == 1 && have_measure && midi_clocks != midi_start_clocks) {
+    // MIDI clock: the beats pulled onto its own, counted from its Start (24
+    // clocks a beat, the first one after Start beat 0). Run on the measured
+    // tempo alone they fell behind 0.33 ms a beat (2026-11-08: 100 ms in
+    // 3.5 minutes). Gently, as on a SHUTTLE: a late clock doesn't jolt it
+    const uint32_t ticks = midi_clocks - midi_start_clocks - 1;
+    const float tick_us = 60e6f / (tempo_bpm * 24.0f);
+    const float into = std::min(1.0f, float(uint32_t(now - midi_clock_us)) / tick_us);
+    const float fp = (float(ticks % 24) + into) / 24.0f;
+    float err = fp - (beat_ph - floorf(beat_ph));
+    err -= floorf(err + 0.5f);  // -0.5 .. 0.5
+    beat_ph += err * std::min(1.0f, ctx.dt * 4.0f);
+    if (beat_ph < 0.0f) beat_ph += 1.0f;
+  }
   if (beat_ph >= 1.0f) { beat_ph -= floorf(beat_ph); beat = (beat + 1) % 4; flash = 0.08f; clock_beat_n++; }
   out = beat_ph;
   clock_beat_ph = beat_ph;  // for a PLAYER starting on the next beat
