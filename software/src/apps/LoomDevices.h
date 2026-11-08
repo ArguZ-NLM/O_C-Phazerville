@@ -7014,9 +7014,9 @@ public:
   void Status(char side) const {  // (USB V)
     size_t ws = 0, wl = 0;
     if (src) src->Window(ws, wl);
-    Serial.printf("  %c SHEAR %s %s bpm %d run %d grid %d slices %d step %d/1000 beats rate %d/1000, slice %d, steps %lu keys %lu, loop %u+%u, arp %d starts %lu\n", side,
+    Serial.printf("  %c SHEAR %s %s bpm %d run %d grid %d slices %d step %d/1000 beats rate %d/1000, slice %d, steps %lu keys %lu, loop %u+%u, arp %d starts %lu, OUT %d cv %d st trigs %lu\n", side,
                   src ? "cuts" : "no source", fx.following ? "on-head" : "on-clock", int(tempo_bpm), int(clock_running), int(fx.grid), int(fx.nslices), int(fx.step_beats * 1000.0f), int(src_rate * 1000.0f),
-                  int(fx.playing_slice), (unsigned long)fx.n_steps, (unsigned long)fx.n_pads, unsigned(ws), unsigned(wl), int(fx.n_arp), (unsigned long)fx.n_starts);
+                  int(fx.playing_slice), (unsigned long)fx.n_steps, (unsigned long)fx.n_pads, unsigned(ws), unsigned(wl), int(fx.n_arp), (unsigned long)fx.n_starts, int(cur[OUT]), int(slice_cv), (unsigned long)trig_n);
   }
 private:
   AudioEffectShear fx;
@@ -7036,6 +7036,7 @@ private:
   uint32_t trig_until = 0;
   bool trig_hi = false;
   float slice_cv = 0.0f;
+  uint32_t trig_n = 0;  // (USB status: triggers sent)
   // what the slices were cut for (found again when it changes)
   const AudioEffectReel* cut_src = nullptr;
   size_t cut_ws = 0, cut_wl = 0;
@@ -7249,6 +7250,7 @@ FLASHMEM void ShearDevice::CvTick() {
     slice_cv = float(fx.last_slice);
     trig_hi = !trig_hi || now >= trig_until;
     trig_until = now + 10;
+    trig_n++;
   } else if (!trig_hi && now < trig_until) trig_hi = true;
   else if (trig_hi && now >= trig_until) trig_hi = false;
 }

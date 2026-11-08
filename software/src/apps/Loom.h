@@ -2494,6 +2494,12 @@ FLASHMEM void AppLoom::MainLoop() {
   for (int i = 0; i < ADC_CHANNEL_COUNT; i++)
     Serial.printf(" %d:%dmV(%d)", i + 1, int(HS::frame.In(i) * (NorthernLightModular ? 1200 : 1000) / 1536), int(OC::ADC::value(ADC_CHANNEL(i))));
   Serial.println();
+  // what goes to the output jacks now (in the module's volts: 1536 an
+  // octave, 1 V; 1.2 V on the NLM Buchla)
+  Serial.printf("  cv outs");
+  for (int o = 0; o < DAC_CHANNEL_COUNT; o++)
+    Serial.printf(" %c:%dmV", 'A' + o, int(HS::frame.ViewOut(DAC_CHANNEL(o)) * (NorthernLightModular ? 1200 : 1000) / 1536));
+  Serial.println();
   // the stored calibration: per output its octave points, then the inputs' zero offsets
   for (int c = 0; c < DAC_CHANNEL_COUNT; c++) {
     Serial.printf("  cal out %d:", c + 1);
