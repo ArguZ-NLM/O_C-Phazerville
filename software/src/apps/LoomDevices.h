@@ -7334,6 +7334,8 @@ public:
     Serial.printf("  %c SHEAR %s %s bpm %d run %d grid %d slices %d step %d/1000 beats rate %d/1000, slice %d, steps %lu keys %lu, loop %u+%u, arp %d starts %lu, OUT %d cv %d st trigs %lu, rolls %lu\n", side,
                   src ? "cuts" : "no source", fx.following ? "on-head" : "on-clock", int(tempo_bpm), int(clock_running), int(fx.grid), int(fx.nslices), int(fx.step_beats * 1000.0f), int(src_rate * 1000.0f),
                   int(fx.playing_slice), (unsigned long)fx.n_steps, (unsigned long)fx.n_pads, unsigned(ws), unsigned(wl), int(fx.n_arp), (unsigned long)fx.n_starts, int(cur[OUT]), int(slice_cv), (unsigned long)trig_n, (unsigned long)fx.n_rolls);
+    Serial.printf("  %c SHEAR PICK %d amt %d/%d in %04x bus %d/%d bi %d live %d sum %d%% -> slice %d of %d\n", side, int(val[PICK]), int(mod_amt[PICK]), int(mod_amt2[PICK]),
+                  unsigned(mod_in[PICK].Pack()), int(mod_bus_sel[PICK]), int(mod_bus2[PICK]), int(Bipolar(PICK)), int(ModsLive(PICK)), int(ModSum(PICK)), Picked() + 1, int(fx.nslices));
   }
 private:
   AudioEffectShear fx;
