@@ -551,7 +551,10 @@ public:
   }
   void Refresh(int p);   // recompute cur[p] and apply it
   void Modulate();       // follow the CV inputs
-  void RunTriggers(uint16_t edges);  // fire actions from their triggers
+  virtual void RunTriggers(uint16_t edges);  // fire actions from their triggers
+  // the trigger page's knob: the next source for action a (some devices
+  // offer only the ones that make sense there)
+  virtual int StepTrigSource(int a, int dir) const { return TrigSource(a) + dir; }
   void CopyFrom(const Device& d);
   void ChangeModSource(int p, int dir);
   void ChangeModSource2(int p, int dir);
@@ -6963,11 +6966,28 @@ public:
     return p == SLICE ? "CUT" : p == RATE ? "SHUF" : p == ROLL ? "HITS" : nullptr;
   }
   void Action(int a) override {
-    if (a == 0) fx.running = !fx.running;
-    else if (cur[ORDER] >= AudioEffectShear::KEYS) fx.Pad(cur[PICK] % fx.nslices, 1.0f, false);  // HIT: the picked slice, once
+    if ((a == 1 && cur[ORDER] >= AudioEffectShear::KEYS) || (a == 0 && CvMode())) fx.Pad(Picked(), 1.0f, false);  // HIT: the picked slice, once
+    else if (a == 0) fx.running = !fx.running;
     else Shuffle();
   }
-  const char* ActionLabel(int a) const override { return a == 1 && cur[ORDER] >= AudioEffectShear::KEYS ? "HIT" : Device::ActionLabel(a); }
+  // ORDER CV (Sascha 2026-11-08): A's trigger source is the CV that picks
+  // the slice (CV), B's the trigger that plays it (TRIG); each offers only
+  // what makes sense: CV the CV inputs and MOD A-H, TRIG the gate inputs,
+  // MIDI maps and MOD A-H
+  bool CvMode() const { return cur[ORDER] == AudioEffectShear::CV; }
+  const char* ActionLabel(int a) const override {
+    if (CvMode()) return a == 0 ? "CV" : "TRIG";
+    return a == 1 && cur[ORDER] == AudioEffectShear::KEYS ? "HIT" : Device::ActionLabel(a);
+  }
+  void RunTriggers(uint16_t edges) override {
+    if (!CvMode()) { Device::RunTriggers(edges); return; }
+    if (act_trig[1] && SrcEdge(act_trig[1], edges, act_prev[1])) Action(1);  // (A's source is a CV, not a trigger)
+  }
+  int StepTrigSource(int a, int dir) const override;
+  // the slice HIT plays: PICK, moved by the CV source in CV mode (a
+  // semitone a slice: 0 V the PICK one; MOD A-H over all the slices),
+  // round again past the last
+  int Picked() const;
   // OUT: the slice as a pitch and a trigger, on the pair of outputs picked
   bool CvOn() const override { return active && cur[OUT] > 0; }
   void CvTick() override;
@@ -7005,6 +7025,7 @@ private:
   uint8_t held[AudioEffectShear::MAX_SLICES] = {};
   int n_held = 0;
   bool arp_on = false;  // (two held once: on until all are let go)
+  int order_seen = -1;
   float key_lvl = 1.0f;
   void Arp();
   // OUT
@@ -7031,7 +7052,14 @@ private:
 FLASHMEM void ShearDevice::Apply(int p) {
   switch (p) {
     case SLICE: cut_mode = -1; break;  // (cut again in Idle)
-    case ORDER: fx.order = uint8_t(cur[ORDER]); break;
+    case ORDER:
+      // A's source changes meaning in and out of CV (a CV / RUN's
+      // trigger): it starts empty on the way
+      // (not on loading: the first time is the saved one)
+      if (order_seen >= 0 && (cur[ORDER] == AudioEffectShear::CV) != (order_seen == AudioEffectShear::CV)) act_trig[0] = 0;
+      order_seen = cur[ORDER];
+      fx.order = uint8_t(cur[ORDER]);
+      break;
     case RATE: fx.factor = Factor(); if (shuf_was != mode[RATE]) Shuffle(); break;
     case LEVEL: wet = cur[LEVEL] * 0.01f; break;
     case PITCH: fx.pitch = exp2f(cur[PITCH] / 12.0f); fx.warp = mode[PITCH] == 1; break;
@@ -7163,6 +7191,32 @@ FLASHMEM void ShearDevice::Idle() {
   }
 }
 
+FLASHMEM int ShearDevice::StepTrigSource(int a, int dir) const {
+  if (!CvMode()) return Device::StepTrigSource(a, dir);
+  int list[1 + 8 + MIDIMAP_MAX + MOD_BUSES], n = 0;
+  list[n++] = 0;
+  if (a == 0) for (int s = 5; s <= 12; s++) list[n++] = s;  // CV1-8
+  else {
+    for (int s = 1; s <= 4; s++) list[n++] = s;                // TR1-4
+    for (int s = 13; s < TRIG_MOD0; s++) list[n++] = s;        // MIDI maps
+  }
+  for (int s = TRIG_MOD0; s < TRIG_MOD0 + MOD_BUSES; s++) list[n++] = s;
+  const int now = TrigSource(a);
+  int i = 0;
+  while (i + 1 < n && list[i] < now) i++;  // (where it is, or the next one up)
+  if (list[i] != now && dir > 0) dir--;    // (not in the list: the first step lands on it)
+  return list[constrain(i + dir, 0, n - 1)];
+}
+
+FLASHMEM int ShearDevice::Picked() const {
+  const int n = std::max<int>(1, fx.nslices);
+  int at = cur[PICK];
+  const int src = act_trig[0];
+  if (CvMode() && src >= 5 && src <= 12) at += int(lrintf(HS::frame.In(src - 5) / 128.0f));  // (128 a semitone)
+  else if (CvMode() && src >= TRIG_MOD0 && mod_bus) at += int(constrain(mod_bus[src - TRIG_MOD0], 0.0f, 0.999f) * n);
+  return ((at % n) + n) % n;
+}
+
 // the arpeggio's slices, in ARP's order (0: none)
 FLASHMEM void ShearDevice::Arp() {
   const int n = Slices();
@@ -7228,6 +7282,11 @@ FLASHMEM void ShearDevice::DrawViz(int x, int y, int w, int h) {
   for (int k = 1; k < n; k++) {  // the cuts
     const int cx = x + int(fx.start[k]) * w / G;
     for (int py = y; py < y + h - 2; py += 2) gfxPixel(cx, py);
+  }
+  if (CvMode()) {  // the slice a trigger would play now: framed
+    const int pk = Picked();
+    const int a = x + int(fx.start[pk]) * w / G, e = x + int(fx.start[pk + 1]) * w / G;
+    gfxFrame(a, y, std::max(2, e - a), h - 2);
   }
   const int s = fx.playing_slice;
   if (s >= 0 && s < n) {

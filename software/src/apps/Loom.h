@@ -3083,7 +3083,7 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
   if (trig_mode) {
     // (a modulator's own trigger setting, ADSR's TRIG, changes with it)
     const int a = left ? 0 : 1;
-    d->SetTrigSource(a, d->TrigSource(a) + dir);
+    d->SetTrigSource(a, d->StepTrigSource(a, dir));
     if (Device* tw = Twin(d)) tw->SetTrigSource(a, d->TrigSource(a));
     return;
   }
