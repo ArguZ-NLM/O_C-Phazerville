@@ -6984,9 +6984,8 @@ public:
     if (act_trig[1] && SrcEdge(act_trig[1], edges, act_prev[1])) Action(1);  // (A's source is a CV, not a trigger)
   }
   int StepTrigSource(int a, int dir) const override;
-  // the slice HIT plays: PICK, moved by the CV source in CV mode (a
-  // semitone a slice: 0 V the PICK one; MOD A-H over all the slices),
-  // round again past the last
+  // the slice HIT plays: PICK, moved up by the CV source in CV mode (its
+  // range over all the slices, stopping at the last)
   int Picked() const;
   // OUT: the slice as a pitch and a trigger, on the pair of outputs picked
   bool CvOn() const override { return active && cur[OUT] > 0; }
@@ -7210,11 +7209,15 @@ FLASHMEM int ShearDevice::StepTrigSource(int a, int dir) const {
 
 FLASHMEM int ShearDevice::Picked() const {
   const int n = std::max<int>(1, fx.nslices);
-  int at = cur[PICK];
+  // (Sascha 2026-11-08: the CV's range spread over the slices, left to
+  // right, no going round: 0 V the PICK one, the input's top the last)
+  int at = cur[PICK] % n;
   const int src = act_trig[0];
-  if (CvMode() && src >= 5 && src <= 12) at += int(lrintf(HS::frame.In(src - 5) / 128.0f));  // (128 a semitone)
-  else if (CvMode() && src >= TRIG_MOD0 && mod_bus) at += int(constrain(mod_bus[src - TRIG_MOD0], 0.0f, 0.999f) * n);
-  return ((at % n) + n) % n;
+  float f = -1.0f;
+  if (CvMode() && src >= 5 && src <= 12) f = float(HS::frame.In(src - 5)) / float(HEMISPHERE_MAX_INPUT_CV);
+  else if (CvMode() && src >= TRIG_MOD0 && mod_bus) f = mod_bus[src - TRIG_MOD0];
+  if (f >= 0.0f || (CvMode() && src)) at += int(constrain(f, 0.0f, 0.999f) * n);
+  return constrain(at, 0, n - 1);
 }
 
 // the arpeggio's slices, in ARP's order (0: none)
