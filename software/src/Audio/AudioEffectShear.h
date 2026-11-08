@@ -128,7 +128,7 @@ public:
     float h0 = 0.0f, hstep = 0.0f;
     const bool gridded = order != KEYS || n_arp >= 2;  // (KEYS: only an arpeggio keeps time)
     const bool fol = gridded && running && r->BlockHead(h0, hstep);
-    double now = 0.0, dps = 0.0;
+    double now = 0.0, dps = 0.0;  // (now: in steps)
     bool timed = false;
     if (fol) {
       const float f = h0 - floorf(h0);  // (past 1 in the seam: the next time round already)
@@ -158,10 +158,9 @@ public:
       step_samples = float(1.0 / dps);
       const int64_t s = int64_t(floor(now));
       if (last_step == INT64_MIN || s < last_step - 1 || s > last_step + 4) {
-        // (started, or it jumped: this step if it has only just begun)
-        last_step = s;
-        if ((now - double(s)) / dps < 2.0 * AUDIO_BLOCK_SAMPLES) { trig_at = 0; trig_k = s; }
-        cyc_pos = 0; next_at = -1;
+        // (started, or it jumped: in at once, with the slice that lies
+        // here, part way through it)
+        Cover(now);
       } else if (s > last_step) {
         last_step = s;  // (late: at once)
         trig_at = 0; trig_k = s;
@@ -253,7 +252,7 @@ private:
   volatile float pad_lvl = 1.0f;
   int64_t last_step = INT64_MIN;
   float step_samples = 0.0f;
-  static constexpr float GRAIN_STEP = 1.0f / (0.06f * AUDIO_SAMPLE_RATE_EXACT);  // grains of 60 ms
+  static constexpr float GRAIN_STEP = 1.0f / (0.03f * AUDIO_SAMPLE_RATE_EXACT);  // grains of 30 ms (Sascha 2026-11-08: smaller)
   // WARP: a new grain starts near where the slice has got to, moved (up to
   // 10 ms, enough for a 50 Hz wave) to where it matches what the other
   // grain is about to play, so the two cross in phase. Without it a fifth
@@ -299,6 +298,22 @@ private:
   uint8_t p_start[MAX_SLICES + 1] = {};
   uint8_t p_n = 16, p_grid = 16;
   volatile bool pend_cut = false;
+  // x steps (on the grid as it is now; may fall between its lines): in
+  // order (FWD, BACK) the slice lying there plays at once from that point
+  // in it (FWD at PITCH 0: just as the dry has it); otherwise the next line
+  // starts the next one
+  void Cover(double x) {
+    const int n = N(), G = std::max<int>(1, grid);
+    const double top = floor(x / G) * G, g = x - top;
+    const int64_t up = int64_t(ceil(x));
+    if (order != FWD && order != BACK) { last_step = up - 1; cyc_pos = 0; next_at = up; return; }
+    int c = 0;
+    while (c + 1 < n && double(start[c + 1]) <= g) c++;
+    last_step = int64_t(floor(x));
+    Start(perm[order == BACK ? n - 1 - c : c] % n, float(double(start[c + 1]) - g), 1.0f, float(g - start[c]));
+    cyc_pos = c + 1;
+    next_at = int64_t(top) + start[c + 1];
+  }
   // grid step k (line g of the round): the next slice in order is the first
   // starting on or after it
   void Seek(int64_t k, int g) {
@@ -322,15 +337,10 @@ private:
     if (pend_cut && (next_at < 0 || k >= next_at)) {  // the slice over: the new cuts now
       const int Go = std::max<int>(1, grid);
       Adopt();
-      const int Gn = std::max<int>(1, grid);
-      // this moment on the new grid, and the first slice from here on
-      const int64_t up = (k * Gn + Go - 1) / Go;  // (the next new line, or this one; k counts up from 0)
-      const int gp = int(((up % Gn) + Gn) % Gn);
-      Seek(up, gp);
-      last_step = up - 1;
-      if (up * Go != k * Gn) return;  // (no line here: from the next one, in the next block)
-      last_step = up;
-      k = up;
+      // this moment on the new grid: the slice that lies here, from where
+      // in it this is (no gap waiting for the new grid's next line)
+      Cover(double(k) * std::max<int>(1, grid) / Go);
+      return;
     }
     const int G = std::max<int>(1, grid);
     const int g = int(((k % G) + G) % G);
@@ -367,7 +377,8 @@ private:
   }
 
   // slice s, for u grid steps (-1: by hand, all of it)
-  void Start(int s, int u, float lvl) {
+  // (from: grid steps into it to start at)
+  void Start(int s, float u, float lvl, float from = 0.0f) {
     s = constrain(s, 0, N() - 1);
     const bool rev = p_rev > 0.0f && Rand01() < p_rev;
     const float ratio = pitch;
@@ -380,7 +391,8 @@ private:
     const float step = float(wl) / float(std::max<int>(1, grid));  // a grid step, in source frames
     const float span = float(Units(s)) * step;  // its length in source frames
     // it sounds for its gate share of its steps, at most its own length
-    const float own = span / std::max(0.01f, inc);
+    const float from_f = std::min(from * step, std::max(0.0f, span - 1.0f));  // (source frames)
+    const float own = (span - from_f) / std::max(0.01f, inc);
     last_slice = int8_t(s);
     n_starts = n_starts + 1;
     const float left = u < 0 || step_samples <= 0.0f ? own : std::min(own, gate * float(u) * step_samples);
@@ -389,8 +401,8 @@ private:
     // dry itself)
     Voice& o = voice[cur_v];
     if (u >= 0 && o.on && !o.rel && !o.rev && !rev && !warped && o.pinc == 0.0f && o.left > 0.0f && fabsf(o.inc - inc) < 1e-5f) {
-      const float d = o.base * float(wl) + o.pos - float(start[s]) * step;
-      if (fabsf(d) <= inc + 2.0f) { o.slice = uint8_t(s); o.base = float(start[s]) / float(std::max<int>(1, grid)); o.pos = d; o.span = span; o.left = left; o.amp = lvl; return; }
+      const float d = o.base * float(wl) + o.pos - (float(start[s]) * step + from_f);
+      if (fabsf(d) <= inc + 2.0f) { o.slice = uint8_t(s); o.base = float(start[s]) / float(std::max<int>(1, grid)); o.pos = from_f + d; o.span = span; o.left = left; o.amp = lvl; return; }
     }
     o.rel = true;  // (the old one fades out)
     cur_v ^= 1;
@@ -401,7 +413,7 @@ private:
     v.amp = lvl;
     v.slice = uint8_t(s);
     v.base = float(start[s]) / float(std::max<int>(1, grid));
-    v.pos = 0.0f;
+    v.pos = from_f;
     v.rev = rev;
     v.hold = false;
     v.inc = inc;
