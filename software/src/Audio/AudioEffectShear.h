@@ -101,6 +101,7 @@ public:
   volatile uint32_t n_steps = 0, n_pads = 0;  // (USB status)
   volatile float play_frac = 0.0f;    // where in the window the head is (0..1)
   volatile bool following = false;    // on the source's head (else the clock)
+  volatile uint32_t n_rolls = 0;      // slices that rolled (USB status)
   volatile uint32_t n_starts = 0;     // slices started (the CV out's trigger) ...
   volatile int8_t last_slice = 0;     // ... and the last one (its pitch)
 
@@ -173,7 +174,14 @@ public:
       }
     } else last_step = INT64_MIN;
     const uint8_t pd = pad;
-    if (pd != 0xFF) { pad = 0xFF; n_pads = n_pads + 1; Start(pd, -1, pad_lvl); voice[cur_v].hold = pad_hold; }
+    if (pd != 0xFF) {
+      pad = 0xFF; n_pads = n_pads + 1;
+      Start(pd, -1, pad_lvl);
+      voice[cur_v].hold = pad_hold;
+      // (a slice by hand or by trigger rolls too, over its own length;
+      // Sascha 2026-11-08: ROLL did nothing in CV mode)
+      Roll(voice[cur_v].left);
+    }
     if (pad_off) { pad_off = false; voice[cur_v].hold = false; voice[cur_v ^ 1].hold = false; }
 
     for (int i = 0; i < AUDIO_BLOCK_SAMPLES; i++) {
@@ -368,12 +376,19 @@ private:
     next_at = k + u;
     n_steps = n_steps + 1;
     Start(s, u, lvl);
+    Roll(step_samples > 0.0f ? step_samples * float(u) : 0.0f);
+  }
+
+  // ROLL's odds: the slice's time (samples) in hits, the same slice again
+  // at each
+  void Roll(float time) {
     roll_left = 0;
-    if (p_roll > 0.0f && Rand01() < p_roll && step_samples > 0.0f) {  // its time in hits
+    if (p_roll > 0.0f && time > 0.0f && Rand01() < p_roll) {
       const int hits = std::max(2, int(roll_hits));
-      roll_gap = step_samples * float(u) / float(hits);
+      roll_gap = time / float(hits);
       roll_in = roll_gap;
       roll_left = hits - 1;
+      n_rolls = n_rolls + 1;
     }
   }
 
