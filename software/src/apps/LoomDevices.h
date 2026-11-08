@@ -714,6 +714,9 @@ FLASHMEM void Device::ChangeModSource(int p, int dir) {
     in.ChangeSource(dir);
     if (!in.enabled()) bus = MOD_BUSES;              // CV 1 -> MOD H
   }
+  // (off is stored as 0 with the input's level 0 %; Loom has no level of
+  // its own: a CV picked after off stayed silent, Sascha 2026-11-08)
+  if (in.enabled() && !in.attenuversion) in.attenuversion = 60;  // 100 %
   Refresh(p);
 }
 

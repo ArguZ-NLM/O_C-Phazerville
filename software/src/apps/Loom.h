@@ -4788,6 +4788,7 @@ namespace loom {
       d->mode[p] = pd.nmodes ? constrain(md, 0, pd.nmodes - 1) : 0;
       d->mod_amt[p] = constrain(amt, -100, 100);
       d->mod_in[p].Unpack(src);
+      if (d->mod_in[p].enabled() && !d->mod_in[p].attenuversion) d->mod_in[p].attenuversion = 60;  // (a CV picked after off: its level 0 %, silent; Loom has no level: 100 %)
       d->mod_bus_sel[p] = bus <= MIDI_BUS ? bus : 0;
       if (flip_pos && p == StretchDevice::POS) {
         d->val[p] = 100 - d->val[p];
