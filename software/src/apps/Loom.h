@@ -819,6 +819,8 @@ FLASHMEM void AppLoom::ToSpool(int t) {
   p->to_spool_at = millis() | 1;
   const AudioEffectReel* src = p->MemReel();
   if (!src || !src->Data(0) || src->Length() < 2) { p->to_spool_msg = "MEM only"; return; }
+  const size_t head = src->HeadFrame();  // where it plays now (SPOOL goes on from there)
+  const uint32_t head_us = micros();
   const double ratio = std::max(0.01, double(p->ShearRate()));  // file frames a module sample
   const size_t n = src->Length();
   size_t a, b;
@@ -847,7 +849,7 @@ FLASHMEM void AppLoom::ToSpool(int t) {
   p->to_spool_msg = "";
   SetChoice(t, SOURCE, 1);  // SPOOL the source; SHUTTLE's memory goes
   if (tr.choice[SOURCE] != 1) { PsramFree(l); PsramFree(r); return; }
-  rl->Adopt(l, r, m, edge(a), edge(b), fade, fade_mode, bpm, play);
+  rl->Adopt(l, r, m, edge(a), edge(b), fade, fade_mode, bpm, play, edge(head), head_us);
   Serial.printf("TO SPOOL: %u frames (ratio %d/1000), loop %u..%u, %d bpm\n", unsigned(m), int(ratio * 1000), unsigned(edge(a)), unsigned(edge(b)), int(bpm));
 }
 

@@ -2163,7 +2163,8 @@ public:
   // from SHUTTLE (its B held 2 s): buffers of n frames (filled by the
   // app) become the loop, START / END to the frames a, b, FADE as it was,
   // the beats at bpm; play: on at once
-  void Adopt(int16_t* l, int16_t* r, size_t n, size_t a, size_t b, int fade, int fade_mode, float bpm, bool play);
+  void Adopt(int16_t* l, int16_t* r, size_t n, size_t a, size_t b, int fade, int fade_mode, float bpm, bool play,
+             size_t from = 0, uint32_t from_us = 0);  // (play: from frame `from` as it was at micros from_us)
   void Idle() override;
   size_t HeldFrames() const { return fx.Capacity(); }
   uint32_t no_mem_at = 0;   // REC found no memory free (shown for a moment)
@@ -2237,7 +2238,7 @@ private:
 // IN: OUT A only on track B. START / END as SHUTTLE's: one pixel of the
 // picture at their zoom a step (down to a sample); ZERO: on to the next
 // zero crossing that way; on the beats the next step of the grid. They
-// never cross: closer than GAP, the one moved pushes the other
+// never cross: the one moved stops GAP short of the other
 FLASHMEM int ReelDevice::Step(int p, int v, int dir) const {
   if (p == IN) return input ? input->Step(0, v, dir) : v + dir;
   if (p != START && p != END) return v + dir;
@@ -2258,15 +2259,10 @@ FLASHMEM int ReelDevice::Step(int p, int v, int dir) const {
     const int64_t from = int64_t(ZeroCross(e, 0, 220)) + dir * px;
     to = int64_t(ZeroCross(size_t(constrain(from, int64_t(1), nn - 1)), dir, size_t(0.1 * AUDIO_SAMPLE_RATE_EXACT)));
   }
-  e = uint32_t(end ? constrain(to, std::min(GAP, nn), nn) : constrain(to, int64_t(0), std::max<int64_t>(0, nn - GAP)));
-  const int64_t want = end ? std::max<int64_t>(0, int64_t(e) - GAP) : std::min(nn, int64_t(e) + GAP);
-  if (end ? int64_t(o) > want : int64_t(o) < want) {
-    o = uint32_t(want);
-    auto* self = const_cast<ReelDevice*>(this);
-    const int q = end ? START : END;
-    self->val[q] = int(uint64_t(o) * 10000 / n);
-    self->Refresh(q);
-  }
+  // (hard stops, Sascha 2026-11-08: the edge moved stops GAP short of the
+  // other, which stays where it is; it used to push it along)
+  e = uint32_t(end ? constrain(to, std::min(int64_t(o) + GAP, nn), nn)
+                   : constrain(to, int64_t(0), std::max<int64_t>(0, int64_t(o) - GAP)));
   return int(uint64_t(e) * 10000 / n);
 }
 
@@ -2505,7 +2501,8 @@ FLASHMEM void ReelDevice::Action(int a) {
   }
 }
 
-FLASHMEM void ReelDevice::Adopt(int16_t* l, int16_t* r, size_t n, size_t a, size_t b, int fade, int fade_mode, float bpm, bool play) {
+FLASHMEM void ReelDevice::Adopt(int16_t* l, int16_t* r, size_t n, size_t a, size_t b, int fade, int fade_mode, float bpm, bool play,
+                                size_t from, uint32_t from_us) {
   fx.Adopt(l, r, n);
   st_was = fx.state();
   rec_bpm = bpm;
@@ -2523,7 +2520,7 @@ FLASHMEM void ReelDevice::Adopt(int16_t* l, int16_t* r, size_t n, size_t a, size
   ApplyAll();
   ex_pos[0] = uint32_t(a); ex_pos[1] = uint32_t(b); ex_len = n;  // (to the sample)
   Window();
-  if (play) fx.Press();
+  if (play) fx.PressAt(std::min(from, n - 1), from_us);
 }
 
 // main loop: a finished recording keeps just its length; cleared, the
@@ -4975,7 +4972,7 @@ FLASHMEM int PlayerDevice::Step(int p, int v, int dir) const {
     const size_t span = ZoomSpan(mode[p]);
     const int64_t px = std::max<int64_t>(1, int64_t(span / 128));
     if (!ex_valid) { ex_pos[0] = EdgeAt(START); ex_pos[1] = EdgeAt(END); ex_valid = true; }
-    // they never cross: closer than GAP, the one moved pushes the other
+    // they never cross: the one moved stops GAP short of the other
     constexpr int64_t GAP = 2 * AUDIO_BLOCK_SAMPLES;
     const int64_t nn = int64_t(n);
     const bool end = p == END;
@@ -4994,16 +4991,10 @@ FLASHMEM int PlayerDevice::Step(int p, int v, int dir) const {
       const int64_t from = int64_t(ZeroCross(e, 0, 220)) + dir * px;
       to = int64_t(ZeroCross(size_t(constrain(from, int64_t(1), nn - 1)), dir, size_t(0.1 * FileRate())));
     }
-    e = uint32_t(end ? constrain(to, std::min(GAP, nn), nn)
-                     : constrain(to, int64_t(0), std::max<int64_t>(0, nn - GAP)));
-    const int64_t want = end ? std::max<int64_t>(0, int64_t(e) - GAP) : std::min(nn, int64_t(e) + GAP);
-    if (end ? int64_t(o) > want : int64_t(o) < want) {
-      o = uint32_t(want);
-      auto* self = const_cast<PlayerDevice*>(this);
-      const int q = end ? START : END;
-      self->val[q] = int(uint64_t(o) * 10000 / n);
-      self->Refresh(q);
-    }
+    // (hard stops, Sascha 2026-11-08: the edge moved stops GAP short of the
+    // other, which stays where it is; it used to push it along)
+    e = uint32_t(end ? constrain(to, std::min(int64_t(o) + GAP, nn), nn)
+                     : constrain(to, int64_t(0), std::max<int64_t>(0, int64_t(o) - GAP)));
     return int(uint64_t(e) * 10000 / n);
   }
   return v + dir;

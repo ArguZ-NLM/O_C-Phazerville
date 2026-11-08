@@ -152,6 +152,10 @@ public:
   // a press n frames from now, counted in the audio (start on a beat);
   // -1: none waiting
   void PressIn(int32_t frames) { press_in = std::max<int32_t>(0, frames); }
+  // stopped: play from frame `at` of the buffer as it was at micros `us`
+  // (the time since added: SPOOL taking over from SHUTTLE goes on where it
+  // was)
+  void PressAt(size_t at, uint32_t us) { press_us = us; press_at = long(at); asm volatile("" ::: "memory"); press = true; }
   void CancelPress() { press_in = -1; }
   bool PressWaiting() const { return press_in >= 0; }
   void Clear() { clear = true; }
@@ -316,6 +320,8 @@ private:
   volatile bool dub = false;
   volatile bool press = false, clear = false, stop = false, retrig = false, loop_ = true;
   volatile int32_t press_in = -1;
+  volatile long press_at = -1;   // PressAt: where (-1: from the start)
+  volatile uint32_t press_us = 0;
   volatile int in_peak[2] = {};
   volatile float speed = 1.0f, start_ = 0.0f, len_ = 1.0f, keep_ = 0.8f, mon = 1.0f, level = 1.0f;
   volatile float seam = 256.0f;
@@ -432,6 +438,12 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectReel::update() {  // (O2
       case DUB:   st = PLAY; break;
       case STOPPED:  // from the start of the window (its end, backwards)
         off = speed < 0.0f ? wl - 1.0f : 0.0f;
+        if (press_at >= 0 && len && wl) {  // (PressAt: from there, as far on as the time since)
+          const double run = double(uint32_t(micros() - press_us)) * 1e-6 * AUDIO_SAMPLE_RATE_EXACT * double(speed);
+          const long at = long(std::fmod(double(press_at) + run, double(len)));
+          if (at >= long(ws) && at < long(ws + wl)) off = float(at - long(ws));
+        }
+        press_at = -1;
         xf = 0;
         st = PLAY;
         break;
