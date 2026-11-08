@@ -2404,8 +2404,14 @@ FLASHMEM void AppLoom::MainLoop() {
   loop_gap_max = 0;
   for (int t = 0; t < loom::NUM_TRACKS; t++)  // SPOOL's memory: the loop, or the small buffer
     if (loom::tracks[t].reel && loom::tracks[t].choice[loom::SOURCE] == 1)
-      Serial.printf("  SPOOL %c: %u frames held, loop %u\n", 'A' + t,
-        unsigned(loom::tracks[t].reel->HeldFrames()), unsigned(loom::tracks[t].reel->LoopLength()));
+      {
+        size_t ws = 0, wl = 0;
+        const AudioEffectReel* r = loom::tracks[t].reel->LoopReel();
+        r->Window(ws, wl);
+        Serial.printf("  SPOOL %c: %u frames held, loop %u, window %u+%u, head %u\n", 'A' + t,
+          unsigned(loom::tracks[t].reel->HeldFrames()), unsigned(loom::tracks[t].reel->LoopLength()),
+          unsigned(ws), unsigned(wl), unsigned(r->HeadFrame()));
+      }
   for (int t = 0; t < loom::NUM_TRACKS; t++) {
     if (!loom::tracks[t].player || loom::tracks[t].choice[loom::SOURCE] != 2) continue;
     char dbg[200];
