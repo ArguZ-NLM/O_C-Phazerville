@@ -772,6 +772,8 @@ FLASHMEM void FollowMod::DrawViz(int x, int y, int w, int h) {
 /////////////////////////////////////////////////////////////////
 // MIDI clock pulses seen by the app's MIDI reader
 volatile uint32_t midi_clocks = 0;
+volatile uint32_t midi_start_clocks = 0;  // the count at MIDI Start (the next clock is beat 0)
+volatile uint32_t midi_clock_us = 0;      // when the last clock came
 
 // how long the boot picture stays (see OC_apps.h), CLOCK's BOOT setting
 uint8_t boot_screen = 2;

@@ -1733,7 +1733,7 @@ FLASHMEM static void LoomReadMIDI(T& device) {
     if (msg.message == midi::SystemExclusive || msg.message == midi::ProgramChange) continue;
     if ((msg.message >> 4) != 0xF)  // USB 'J' shows them
       loom::midi_log[loom::midi_log_n++ % loom::MIDI_LOG] = {millis(), uint8_t(msg.message), uint8_t(msg.channel), msg.data1, msg.data2};
-    if (msg.message == midi::Clock) loom::midi_clocks++;
+    if (msg.message == midi::Clock) { loom::midi_clocks++; loom::midi_clock_us = micros(); }
     if (msg.message == midi::NoteOn && msg.data2 > 0) {
       loom::NoteIn(msg.channel, msg.data1);
       loom::poly_at[msg.data1 & 127] = 0;  // the key's pressure starts over
@@ -1743,7 +1743,7 @@ FLASHMEM static void LoomReadMIDI(T& device) {
     if (msg.message == midi::NoteOn || msg.message == midi::NoteOff)  // (note on at 0: off)
       loom::NoteEvent(msg.channel, msg.data1, msg.message == midi::NoteOn ? msg.data2 : 0);
     if (loom::tempo_clock && loom::tempo_clock->midi()) {
-      if (msg.message == midi::Start) loom::ClockStart();
+      if (msg.message == midi::Start) { loom::midi_start_clocks = loom::midi_clocks; loom::ClockStart(); }
       else if (msg.message == midi::Continue) loom::clock_running = true;
       else if (msg.message == midi::Stop) loom::ClockStop();
     }
@@ -2406,6 +2406,16 @@ FLASHMEM void AppLoom::MainLoop() {
   if (loom::tempo_clock && loom::tempo_clock->midi())  // the clock on MIDI: the clocks counted, the tempo found
     Serial.printf("  CLOCK on MIDI: %d.%02d bpm, %lu clocks in, %s\n", int(loom::tempo_bpm), int(loom::tempo_bpm * 100) % 100,
       (unsigned long)loom::midi_clocks, loom::tempo_clock->Waiting() ? "waiting (BPM set)" : "following");
+  if (loom::tempo_clock && loom::tempo_clock->midi() && loom::clock_running && loom::tempo_bpm > 1.0f) {
+    // how far the Loom's beat is from the MIDI clock's (since its Start), in ms
+    const uint32_t now = micros();
+    const double tick_us = 60e6 / (loom::tempo_bpm * 24.0);
+    const double midi_b = (double(loom::midi_clocks - loom::midi_start_clocks) - 1.0
+                           + std::min(1.0, double(now - loom::midi_clock_us) / tick_us)) / 24.0;
+    const double loom_b = double(loom::clock_beat_n) + loom::clock_beat_ph + double(now - loom::clock_beat_us) * loom::tempo_bpm / 60e6;
+    const int ms100 = int((loom_b - midi_b) * 60000.0 / loom::tempo_bpm * 100.0);
+    Serial.printf("  CLOCK vs MIDI: midi beat %d, Loom %s%d.%02d ms\n", int(midi_b), ms100 < 0 ? "-" : "+", abs(ms100) / 100, abs(ms100) % 100);
+  }
   for (int t = 0; t < loom::NUM_TRACKS; t++)  // HEDDLE's phaser: where it is in its octave
     for (int c = 0; c < loom::COLS; c++)
     if (loom::Device* d = loom::tracks[t].at(c)) if (!strcmp(d->def.name, "HEDDLE"))
