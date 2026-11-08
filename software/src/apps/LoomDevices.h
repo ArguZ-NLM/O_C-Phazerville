@@ -7054,11 +7054,7 @@ FLASHMEM void ShearDevice::Cut() {
     for (int g = 0; g < G; g++) if (pick[g]) st[m++] = uint8_t(g);
   }
   st[n] = uint8_t(G);
-  AudioNoInterrupts();
-  for (int i = 0; i <= n; i++) fx.start[i] = st[i];
-  fx.grid = uint8_t(G);
-  fx.nslices = uint8_t(n);
-  AudioInterrupts();
+  fx.SetCut(st, n, G);  // (taken over when the playing slice ends)
 }
 
 // AUTO: the loop's own length over its grid, exactly (Sascha 2026-11-07:
@@ -7125,7 +7121,7 @@ FLASHMEM void ShearDevice::DrawViz(int x, int y, int w, int h) {
     if (a2) gfxLine(x + i, cy - a2, x + i, cy + a2);
     else gfxPixel(x + i, cy);
   }
-  const int n = Slices(), G = std::max<int>(1, fx.grid);
+  const int n = fx.nslices, G = std::max<int>(1, fx.grid);  // (the cuts in use: new ones wait for the slice playing)
   for (int g = 0; g < G; g++) gfxPixel(x + g * w / G, y + h - 1);  // the grid
   for (int k = 1; k < n; k++) {  // the cuts
     const int cx = x + int(fx.start[k]) * w / G;
@@ -7141,7 +7137,7 @@ FLASHMEM void ShearDevice::DrawViz(int x, int y, int w, int h) {
 }
 
 FLASHMEM void ShearDevice::DrawMini(int x, int y, int w, int h) {
-  const int n = Slices(), s = fx.playing_slice, G = std::max<int>(1, fx.grid);
+  const int n = fx.nslices, s = fx.playing_slice, G = std::max<int>(1, fx.grid);
   for (int k = 0; k < n; k++) {
     const int a = x + int(fx.start[k]) * w / G, e = x + int(fx.start[k + 1]) * w / G - 1;
     if (k == s) gfxRect(a, y, std::max(1, e - a), h);

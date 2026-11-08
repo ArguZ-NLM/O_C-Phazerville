@@ -54,6 +54,16 @@ public:
   volatile uint8_t nslices = 16, grid = 16;
   volatile uint8_t start[MAX_SLICES + 1];  // each slice's first grid step (start[n] = grid)
   volatile uint8_t perm[MAX_SLICES];       // the order the slices come in (shuffled by SHUF)
+  // new cuts (SLICE / CUT turned): they wait for the playing slice to end
+  // (Sascha 2026-11-08: no jumps), then take over at once if their grid
+  // has a line there, else from the next line on
+  void SetCut(const uint8_t* st, int n, int G) {
+    AudioNoInterrupts();
+    for (int i = 0; i <= n; i++) p_start[i] = st[i];
+    p_n = uint8_t(n); p_grid = uint8_t(G);
+    pend_cut = true;
+    AudioInterrupts();
+  }
   volatile uint8_t order = FWD;
   volatile float factor = 1.0f;       // RATE: steps this many times as often as the loop's grid
   volatile float step_beats = 0.25f;  // on the clock: a grid step, in beats (RATE included)
@@ -103,6 +113,7 @@ public:
     // far a sample goes (in steps), on the source's head or on the clock
     int trig_at = -1;
     int64_t trig_k = 0;
+    if (pend_cut && (order == KEYS || !running || !(voice[0].on || voice[1].on))) { Adopt(); last_step = INT64_MIN; }  // (nothing to wait for)
     const int G = std::max<int>(1, grid);
     float h0 = 0.0f, hstep = 0.0f;
     const bool fol = order != KEYS && running && r->BlockHead(h0, hstep);
@@ -170,7 +181,7 @@ public:
         // (backwards its end is its loudest: the hit)
         if (v.pos >= v.span - 1.0f) v.rel = true;
         const float p = v.rev ? v.span - 1.0f - v.pos : v.pos;
-        const float at = std::max(0.0f, float(ws) + float(start[v.slice]) * float(wl) / float(grid) + p);  // (the window as it is now)
+        const float at = std::max(0.0f, float(ws) + v.base * float(wl) + p);  // (the window as it is now)
         const size_t i0 = std::min(size_t(at), len - 2);
         const float f = at - float(i0);
         const float g = v.env * v.amp;
@@ -187,7 +198,7 @@ public:
     if (v.on && !v.rel) {
       playing_slice = int8_t(v.slice);
       const float p = v.rev ? v.span - v.pos : v.pos;
-      play_frac = float(start[v.slice]) / float(grid) + p / float(wl);
+      play_frac = v.base + p / float(wl);
     } else playing_slice = -1;
     transmit(out[0], 0);
     transmit(out[1], 1);
@@ -200,6 +211,7 @@ private:
   struct Voice {
     bool on = false, rev = false, rel = false, hold = false;
     uint8_t slice = 0;
+    float base = 0.0f;  // where it starts, as a share of the window (kept: new cuts don't move it)
     float pos = 0.0f, inc = 1.0f, span = 0.0f, env = 0.0f, left = 0.0f, amp = 1.0f;
   };
   Voice voice[2];
@@ -222,11 +234,37 @@ private:
   uint32_t Rand() { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return rng; }
   float Rand01() { return float(Rand() >> 8) * (1.0f / 16777216.0f); }
   int N() const { return std::max(1, std::min<int>(nslices, MAX_SLICES)); }
+  uint8_t p_start[MAX_SLICES + 1] = {};
+  uint8_t p_n = 16, p_grid = 16;
+  volatile bool pend_cut = false;
+  void Adopt() {  // (in the update)
+    for (int i = 0; i <= p_n; i++) start[i] = p_start[i];
+    grid = p_grid;
+    nslices = p_n;
+    pend_cut = false;
+  }
   int Units(int s) const { return std::max(1, int(start[s + 1]) - int(start[s])); }
 
   // a grid step k (counted on the clock): the top of the grid starts the
   // order again; a slice starts when the last one's steps are over
   void GridStep(int64_t k) {
+    if (pend_cut && (next_at < 0 || k >= next_at)) {  // the slice over: the new cuts now
+      const int Go = std::max<int>(1, grid);
+      Adopt();
+      const int Gn = std::max<int>(1, grid);
+      // this moment on the new grid, and the first slice from here on
+      const int64_t up = (k * Gn + Go - 1) / Go;  // (the next new line, or this one; k counts up from 0)
+      const int gp = int(((up % Gn) + Gn) % Gn);
+      const int n = N();
+      int c = 0;
+      while (c < n && start[c] < gp) c++;
+      cyc_pos = c;
+      next_at = c < n ? up - gp + start[c] : up - gp + Gn;  // (none left this round: from the top)
+      last_step = up - 1;
+      if (up * Go != k * Gn) return;  // (no line here: from the next one, in the next block)
+      last_step = up;
+      k = up;
+    }
     const int G = std::max<int>(1, grid);
     const int g = int(((k % G) + G) % G);
     if (g == 0 || next_at < 0) { cyc_pos = 0; next_at = k - g; }
@@ -273,8 +311,8 @@ private:
     // dry itself)
     Voice& o = voice[cur_v];
     if (u >= 0 && o.on && !o.rel && !o.rev && !rev && o.left > 0.0f && fabsf(o.inc - inc) < 1e-5f) {
-      const float d = float(start[o.slice]) * step + o.pos - float(start[s]) * step;
-      if (fabsf(d) <= inc + 2.0f) { o.slice = uint8_t(s); o.pos = d; o.span = span; o.left = left; o.amp = lvl; return; }
+      const float d = o.base * float(wl) + o.pos - float(start[s]) * step;
+      if (fabsf(d) <= inc + 2.0f) { o.slice = uint8_t(s); o.base = float(start[s]) / float(std::max<int>(1, grid)); o.pos = d; o.span = span; o.left = left; o.amp = lvl; return; }
     }
     o.rel = true;  // (the old one fades out)
     cur_v ^= 1;
@@ -284,6 +322,7 @@ private:
     v.env = 0.0f;
     v.amp = lvl;
     v.slice = uint8_t(s);
+    v.base = float(start[s]) / float(std::max<int>(1, grid));
     v.pos = 0.0f;
     v.rev = rev;
     v.hold = false;
