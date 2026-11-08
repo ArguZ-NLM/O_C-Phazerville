@@ -2160,6 +2160,10 @@ public:
     fx.processorUsageMaxReset();
   }
   void ClearLoop() { fx.Clear(); cleared_at = millis() | 1; hold = 0.0f; }  // B held for 3 s
+  // from SHUTTLE (its B held 2 s): buffers of n frames (filled by the
+  // app) become the loop, START / END to the frames a, b, FADE as it was,
+  // the beats at bpm; play: on at once
+  void Adopt(int16_t* l, int16_t* r, size_t n, size_t a, size_t b, int fade, int fade_mode, float bpm, bool play);
   void Idle() override;
   size_t HeldFrames() const { return fx.Capacity(); }
   uint32_t no_mem_at = 0;   // REC found no memory free (shown for a moment)
@@ -2499,6 +2503,27 @@ FLASHMEM void ReelDevice::Action(int a) {
   } else if (st != AudioEffectReel::EMPTY) {
     fx.Press();  // REC: the loop closes and plays; STOPPED: from the start
   }
+}
+
+FLASHMEM void ReelDevice::Adopt(int16_t* l, int16_t* r, size_t n, size_t a, size_t b, int fade, int fade_mode, float bpm, bool play) {
+  fx.Adopt(l, r, n);
+  st_was = fx.state();
+  rec_bpm = bpm;
+  for (int p = 0; p < num_params(); p++) {  // a fresh loop: the settings from their defaults, IN kept
+    if (p == IN) continue;
+    val[p] = param(p).def;
+    mode[p] = param(p).defmode;
+  }
+  val[XFADE] = int16_t(constrain(fade, 0, 100));
+  mode[XFADE] = uint8_t(constrain(fade_mode, 0, 1));
+  b = std::min(b, n);
+  a = std::min(a, b);
+  val[START] = int16_t(uint64_t(a) * 10000 / std::max<size_t>(1, n));
+  val[END] = int16_t(uint64_t(b) * 10000 / std::max<size_t>(1, n));
+  ApplyAll();
+  ex_pos[0] = uint32_t(a); ex_pos[1] = uint32_t(b); ex_len = n;  // (to the sample)
+  Window();
+  if (play) fx.Press();
 }
 
 // main loop: a finished recording keeps just its length; cleared, the
@@ -3957,6 +3982,13 @@ public:
   // fast it plays (the file's rate, SYNC, SPEED)
   const AudioEffectReel* MemReel() const { return streaming || Busy() || loaded < 0 ? nullptr : &fx; }
   float ShearRate() const { return rate * SyncRatio() * std::max(1, int(cur[SPEED])) * 0.01f; }
+  // to SPOOL (B held 2 s): the loop as it plays (snapped), the tempo as
+  // heard; the bar while B is held, and how it went
+  void PlayedEdges(size_t& a, size_t& b) const { LoopEdges(a, b); }
+  float HeardTempo() const { return bpm > 0.0f && rate > 0.0f ? bpm * ShearRate() / rate : 0.0f; }
+  float to_spool_hold = 0.0f;   // 0..1 (set by the app)
+  uint32_t to_spool_at = 0;     // when it was tried ...
+  const char* to_spool_msg = "";  // ... and what came of it ("" done)
   // where the head is in the file's beat, 0..1 as heard (backwards too: a
   // beat falls where the head crosses one, the hit's frame); -1: no tempo
   float HeardBeatPhase() const {
@@ -5149,6 +5181,19 @@ FLASHMEM void PlayerDevice::Action(int a) {
 // the cursor on START or END the picture zooms in around that point
 FLASHMEM void PlayerDevice::DrawViz(int x, int y, int w, int h) {
   const int base = y + h - 1, cy = y + h / 2;
+  // B held: the bar towards TO SPOOL; after a try that failed, why
+  if (to_spool_hold > 0.0f || (to_spool_at && to_spool_msg[0] && millis() - to_spool_at < 1500)) {
+    char t[20];
+    int fill = 0;
+    if (to_spool_hold > 0.0f) { snprintf(t, sizeof(t), "TO SPOOL"); fill = int(to_spool_hold * 76); }
+    else snprintf(t, sizeof(t), "%s", to_spool_msg);
+    graphics.clearRect(x + w / 2 - 40, cy - 7, 80, 15);
+    gfxFrame(x + w / 2 - 40, cy - 7, 80, 15);
+    gfxPrint(x + w / 2 - 3 * int(strlen(t)), cy - 3, t);
+    if (fill) gfxInvert(x + w / 2 - 38, cy - 5, fill, 11);
+    else gfxInvert(x + w / 2 - 39, cy - 6, 78, 13);
+    return;
+  }
   if (!fx.ready()) { gfxPrint(x + 22, cy - 4, PSTR("out of memory")); return; }
   if (!SDcard_Ready) { gfxPrint(x + 34, cy - 4, PSTR("no SD card")); return; }
   if (!nfiles) { gfxPrint(x + 28, cy - 4, PSTR("no WAV found")); return; }

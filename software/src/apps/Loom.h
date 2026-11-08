@@ -275,6 +275,9 @@ private:
   uint32_t loop_save_hold = 0;  // ... since then
   bool save_held = false;   // Y is down (held 2 s saves, any page) ...
   uint32_t save_hold = 0, saved_at = 0;  // ... since then; when the save happened
+  bool to_spool_held = false;  // SHUTTLE: B is down on its page (held 2 s: its loop to SPOOL) ...
+  uint32_t to_spool_hold = 0;  // ... since then
+  void ToSpool(int t);         // SHUTTLE's loop into the track's SPOOL, SPOOL the source
   bool clear_held = false;  // SPOOL: B is down on the SPOOL page ...
   uint32_t clear_hold = 0;  // ... since then
   bool regrow_held = false;  // DREAM: B is down (on its page or its box): held 2 s, a fresh piece
@@ -798,6 +801,54 @@ FLASHMEM void AppLoom::SetChoice(int t, int s, int option) {
   }
   Repatch(t);
   if (old) old->Deactivate();
+}
+
+// SHUTTLE's B held 2 s (Sascha 2026-11-08): what it holds in memory
+// becomes the track's SPOOL loop, so it can be overdubbed. Converted to the
+// module's rate as it is heard (the file's rate, SYNC, SPEED), so SPOOL at
+// 100 % plays it just as SHUTTLE did; START / END (snapped) and FADE go
+// with it, its beats at the tempo heard. More than SPOOL holds (16 s): just
+// the loop. The new buffers are filled first; then the source becomes SPOOL
+// and SHUTTLE lets its memory go
+FLASHMEM void AppLoom::ToSpool(int t) {
+  using namespace loom;
+  Track& tr = tracks[t];
+  PlayerDevice* p = tr.player;
+  ReelDevice* rl = tr.reel;
+  if (!p || !rl) return;
+  p->to_spool_at = millis() | 1;
+  const AudioEffectReel* src = p->MemReel();
+  if (!src || !src->Data(0) || src->Length() < 2) { p->to_spool_msg = "MEM only"; return; }
+  const double ratio = std::max(0.01, double(p->ShearRate()));  // file frames a module sample
+  const size_t n = src->Length();
+  size_t a, b;
+  p->PlayedEdges(a, b);
+  const size_t most = size_t(ReelDevice::MaxSecs() * AUDIO_SAMPLE_RATE_EXACT);
+  size_t base = 0, span = n;
+  if (size_t(double(n - 1) / ratio) + 1 > most) { base = a; span = std::min(b, n) - std::min(a, b); }  // (too long: the loop)
+  const size_t m = std::min(most, size_t(double(span - 1) / ratio) + 1);
+  if (m < 2 * AUDIO_BLOCK_SAMPLES) { p->to_spool_msg = "too short"; return; }
+  int16_t* l = static_cast<int16_t*>(PsramAlloc(m * sizeof(int16_t)));
+  int16_t* r = l ? static_cast<int16_t*>(PsramAlloc(m * sizeof(int16_t))) : nullptr;
+  if (!l || !r) { if (l) PsramFree(l); p->to_spool_msg = "no memory"; return; }
+  const int16_t* sl = src->Data(0);
+  const int16_t* sr = src->Data(1);
+  for (size_t i = 0; i < m; i++) {  // (linear in between)
+    const double pos = double(base) + double(i) * ratio;
+    const size_t i0 = std::min(size_t(pos), n - 2);
+    const float f = float(pos - double(i0));
+    l[i] = int16_t(lrintf(sl[i0] + f * (sl[i0 + 1] - sl[i0])));
+    r[i] = int16_t(lrintf(sr[i0] + f * (sr[i0 + 1] - sr[i0])));
+  }
+  const auto edge = [&](size_t e) { return e <= base ? size_t(0) : std::min(m, size_t(double(e - base) / ratio + 0.5)); };
+  const bool play = p->ActionLit(0);
+  const int fade = p->cur[PlayerDevice::XFADE], fade_mode = p->mode[PlayerDevice::XFADE];
+  const float bpm = p->HeardTempo();
+  p->to_spool_msg = "";
+  SetChoice(t, SOURCE, 1);  // SPOOL the source; SHUTTLE's memory goes
+  if (tr.choice[SOURCE] != 1) { PsramFree(l); PsramFree(r); return; }
+  rl->Adopt(l, r, m, edge(a), edge(b), fade, fade_mode, bpm, play);
+  Serial.printf("TO SPOOL: %u frames (ratio %d/1000), loop %u..%u, %d bpm\n", unsigned(m), int(ratio * 1000), unsigned(edge(a)), unsigned(edge(b)), int(bpm));
 }
 
 FLASHMEM void AppLoom::ConnectTrack(int t) {
@@ -2309,6 +2360,16 @@ FLASHMEM void AppLoom::MainLoop() {
     }
     if (held && ms >= 3000) clear_held = false;
   }
+  {  // SHUTTLE: B held 2 s, its loop to SPOOL (a bar fills after a moment)
+    using namespace loom;
+    const uint32_t ms = to_spool_held ? millis() - to_spool_hold : 0;
+    if (PlayerDevice* p = tracks[track].player) p->to_spool_hold = to_spool_held && ms > 250 ? std::min(1.0f, ms / 2000.0f) : 0.0f;
+    if (to_spool_held && ms >= 2000) {
+      to_spool_held = false;
+      if (tracks[track].player) tracks[track].player->to_spool_hold = 0.0f;
+      ToSpool(track);
+    }
+  }
   if (reset_held && millis() - reset_hold >= HOLD_MS) {
     reset_held = false;
     ResetFocused();
@@ -2751,6 +2812,9 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
     if (event.type == UI::EVENT_BUTTON_DOWN) {
       clear_held = view == DEVICE && !focus_mod && col == SOURCE && tracks[track].choice[SOURCE] == 1;
       clear_hold = millis();
+      to_spool_held = view == DEVICE && !focus_mod && !mod_mode && !trig_mode && !Listing() && col == SOURCE
+                      && tracks[track].choice[SOURCE] == 2 && tracks[track].player && tracks[track].reel;
+      to_spool_hold = millis();
       regrow_held = col == SOURCE && tracks[track].choice[SOURCE] == 5 && tracks[track].dream && tracks[track].dream->ok()
           && (view == CHAIN || (view == DEVICE && !focus_mod && !mod_mode && !trig_mode));
       regrow_hold = millis();
@@ -2763,6 +2827,7 @@ FLASHMEM void AppLoom::OnButton(const UI::Event &event) {
       }
     } else if (event.type == UI::EVENT_BUTTON_PRESS || event.type == UI::EVENT_BUTTON_LONG_RELEASE) {
       clear_held = false;
+      to_spool_held = false;
       regrow_held = false;
       if (held_dev) {  // ... and off when let go (no action besides)
         held_dev->Release(1);
@@ -3332,7 +3397,7 @@ FLASHMEM void AppLoom::Behind(const char* text) {
   char* eq = strchr(path, '=');
   if (eq) *eq++ = 0;
   char* bang = strchr(path, '!');  // ("A/SHR!1": its B instead)
-  const int act = bang ? constrain(atoi(bang + 1), 0, 1) : 0;
+  const int act = bang ? constrain(atoi(bang + 1), 0, 2) : 0;  // (2: SHUTTLE's B held, to SPOOL)
   if (bang) *bang = 0;
   const ViewMode v0 = view; const bool fm0 = focus_mod;
   const int8_t mc0 = mod_cursor, t0 = track, c0 = col, cu0 = cursor;
@@ -3341,6 +3406,7 @@ FLASHMEM void AppLoom::Behind(const char* text) {
   Device* d = view == DEVICE ? Focused() : nullptr;
   const int8_t uc0 = d ? d->ui_cursor : 0;
   if (d && eq) SetByText(false, eq);
+  else if (d && act == 2) { if (d == tracks[track].player) ToSpool(track); }
   else if (d) d->Action(act);
   if (d) d->ui_cursor = uc0;
   view = v0; focus_mod = fm0; mod_cursor = mc0; track = t0; col = c0; cursor = cu0;

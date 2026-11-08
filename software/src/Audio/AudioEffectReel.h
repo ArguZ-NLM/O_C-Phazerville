@@ -115,6 +115,21 @@ public:
     AudioInterrupts();
     for (auto b : old) PsramFree(b);
   }
+  // SPOOL from SHUTTLE (main loop): buffers of n frames the caller filled
+  // become the loop, stopped; the old ones are freed
+  void Adopt(int16_t* l, int16_t* r, size_t n) {
+    int16_t* old[2];
+    AudioNoInterrupts();
+    old[0] = buf[0]; old[1] = buf[1];
+    buf[0] = l; buf[1] = r;
+    cap = n;
+    Reset();
+    AudioInterrupts();
+    for (auto b : old) if (b) PsramFree(b);
+    BeginLoad();
+    MarkRange(0, n);
+    FinishLoad(n);
+  }
   void Release() {
     for (auto& b : buf) { if (b) PsramFree(b); b = nullptr; }
     cap = 0;
