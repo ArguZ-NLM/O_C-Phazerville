@@ -2403,6 +2403,9 @@ FLASHMEM void AppLoom::MainLoop() {
     Serial.printf("  CLOCK on SHUTTLE %c: %d.%02d bpm, beat %d/1000, file's %d/1000\n", 'A' + loom::clock_shuttle,
       int(loom::tempo_bpm), int(loom::tempo_bpm * 100) % 100, int(loom::clock_beat_ph * 1000),
       int(loom::shuttles[loom::clock_shuttle]->HeardBeatPhase() * 1000));
+  if (loom::tempo_clock && loom::tempo_clock->midi())  // the clock on MIDI: the clocks counted, the tempo found
+    Serial.printf("  CLOCK on MIDI: %d.%02d bpm, %lu clocks in, %s\n", int(loom::tempo_bpm), int(loom::tempo_bpm * 100) % 100,
+      (unsigned long)loom::midi_clocks, loom::tempo_clock->Waiting() ? "waiting (BPM set)" : "following");
   for (int t = 0; t < loom::NUM_TRACKS; t++)  // HEDDLE's phaser: where it is in its octave
     for (int c = 0; c < loom::COLS; c++)
     if (loom::Device* d = loom::tracks[t].at(c)) if (!strcmp(d->def.name, "HEDDLE"))
