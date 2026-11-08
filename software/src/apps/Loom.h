@@ -439,6 +439,8 @@ private:
   void DrawLinkLabel(int x, int y) const;  // L, two squares (filled: SPLIT), R
   float OutLevel(int o) const;
   loom::CvSource* CvSrc() const;  // the source playing the CV outputs (SID, DREAM; else nullptr)
+  loom::CvSource* OutSrc(int o) const;  // what plays output o over its own source: a SHEAR's OUT pair, else CvSrc's
+  loom::ShearDevice* Shear(int t) const;
   const loom::Modulator* OutMod(int o) const;
   void WriteOutputs();
   void SetChoice(int t, int s, int option);
@@ -1867,12 +1869,26 @@ FLASHMEM loom::CvSource* AppLoom::CvSrc() const {
   return nullptr;
 }
 
+FLASHMEM loom::ShearDevice* AppLoom::Shear(int t) const {
+  using namespace loom;
+  return tracks[t].choice[SPRAY] == 3 ? static_cast<ShearDevice*>(tracks[t].inst[SPRAY][3]) : nullptr;
+}
+
+FLASHMEM loom::CvSource* AppLoom::OutSrc(int o) const {
+  using namespace loom;
+  float v;
+  for (int t = 0; t < NUM_TRACKS; t++)  // (picked by hand for those two: over SID's or DREAM's)
+    if (ShearDevice* sh = Shear(t)) if (sh->CvOut(o, v)) return sh;
+  CvSource* cs = CvSrc();
+  return cs && cs->CvOut(o, v) ? cs : nullptr;
+}
+
 FLASHMEM float AppLoom::OutLevel(int o) const {
   using namespace loom;
   const int s = cv_out_src[o];
   float v = -1.0f;
   if (cv_out_bypass & (1 << o)) return 0.0f;
-  if (const CvSource* cs = CvSrc()) {  // (0..1: a pitch over the 8.5 octaves)
+  if (const CvSource* cs = OutSrc(o)) {  // (0..1: a pitch over the 8.5 octaves)
     float cv = 0.0f;
     const int k = cs->CvOut(o, cv);
     if (k == CvSource::CV_PITCH) return constrain(cv / (12.0f * 8.5f), 0.0f, 1.0f);
@@ -1898,10 +1914,11 @@ FLASHMEM const loom::Modulator* AppLoom::OutMod(int o) const {
 
 FLASHMEM void AppLoom::WriteOutputs() {
   if (test_page) { WriteTestOutputs(); return; }
-  loom::CvSource* cs = CvSrc();
-  if (cs) cs->CvTick();
+  if (loom::CvSource* cs = CvSrc()) cs->CvTick();
+  for (int t = 0; t < loom::NUM_TRACKS; t++) if (loom::ShearDevice* sh = Shear(t)) if (sh->CvOn()) sh->CvTick();
   for (int o = 0; o < loom::NUM_CV_OUTS && o < DAC_CHANNEL_COUNT; o++) {
     float cv = 0.0f;
+    loom::CvSource* cs = OutSrc(o);
     const int k = cs ? cs->CvOut(o, cv) : loom::CvSource::CV_NONE;
     // the source's pitches: a semitone is a semitone (the module's calibrated octave)
     if (k == loom::CvSource::CV_PITCH && !(loom::cv_out_bypass & (1 << o))) {
@@ -4362,8 +4379,8 @@ FLASHMEM void AppLoom::DrawOutputs() const {
     gfxPrint(x + 2, y + 2, buf);
     const bool byp = cv_out_bypass & (1 << o);
     float cv;
-    const CvSource* cs = CvSrc();
-    const bool src = cs && cs->CvOut(o, cv);  // played by the source (SID, DREAM)
+    const CvSource* cs = OutSrc(o);
+    const bool src = cs && cs->CvOut(o, cv);  // played by the source (SID, DREAM) or a SHEAR
     if (byp) snprintf(buf, sizeof(buf), "BP");
     else if (src) cs->CvName(o, buf, sizeof(buf), false);
     else FormatOutSource(cv_out_src[o], buf, sizeof(buf), false);
@@ -4381,8 +4398,8 @@ FLASHMEM void AppLoom::DrawOutputs() const {
   const int o = mod_cursor - OUT_CURSOR;
   char buf[24];
   float cv;
-  if (CvSrc() && CvSrc()->CvOut(o, cv))
-    CvSrc()->CvName(o, buf, sizeof(buf), true);
+  if (CvSource* cs = OutSrc(o); cs && cs->CvOut(o, cv))
+    cs->CvName(o, buf, sizeof(buf), true);
   else
   FormatOutSource(cv_out_src[o], buf, sizeof(buf), true);
   if (cv_out_bypass & (1 << o)) {

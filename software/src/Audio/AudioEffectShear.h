@@ -41,7 +41,7 @@
 class AudioEffectShear : public AudioStream {
 public:
   static constexpr int MAX_SLICES = 32;
-  enum Order : uint8_t { FWD, BACK, RANDOM, KEYS };
+  enum Order : uint8_t { FWD, BACK, RANDOM, KEYS, CV };
 
   AudioEffectShear() : AudioStream(2, inq) {
     for (int i = 0; i <= MAX_SLICES; i++) start[i] = uint8_t(i);
@@ -77,8 +77,16 @@ public:
   // KEYS: a slice by hand (MIDI), its level 0..1 (played in the next update);
   // it loops while the key is held, and on letting go plays its last time
   // round out (a quick tap: the slice once)
-  void Pad(int s, float lvl) { pad_lvl = lvl; asm volatile("" ::: "memory"); pad = uint8_t(s); }
+  void Pad(int s, float lvl, bool hold = true) { pad_lvl = lvl; pad_hold = hold; asm volatile("" ::: "memory"); pad = uint8_t(s); }
   void PadOff() { pad_off = true; }
+  // KEYS with more than one key held: an arpeggio of their slices on the
+  // grid (in this order, or at random), each for its own length
+  volatile uint8_t arp[MAX_SLICES];
+  volatile uint8_t n_arp = 0;     // 0: no arpeggio
+  volatile bool arp_rand = false;
+  volatile float arp_lvl = 1.0f;
+  // CV: the slice each step plays (PICK, which CV moves)
+  volatile uint8_t pick = 0;
   // the clock, as the main loop last saw it (two copies: the update reads
   // the one not being written)
   struct ClockSnap { double beats; uint32_t us; float bpm; bool running; };
@@ -93,6 +101,8 @@ public:
   volatile uint32_t n_steps = 0, n_pads = 0;  // (USB status)
   volatile float play_frac = 0.0f;    // where in the window the head is (0..1)
   volatile bool following = false;    // on the source's head (else the clock)
+  volatile uint32_t n_starts = 0;     // slices started (the CV out's trigger) ...
+  volatile int8_t last_slice = 0;     // ... and the last one (its pitch)
 
   void update() override {
     for (int c = 0; c < 2; c++) if (audio_block_t* b = receiveReadOnly(c)) release(b);  // (no dry: the slot's fade has it)
@@ -116,7 +126,8 @@ public:
     if (pend_cut && (order == KEYS || !running || !(voice[0].on || voice[1].on))) { Adopt(); last_step = INT64_MIN; }  // (nothing to wait for)
     const int G = std::max<int>(1, grid);
     float h0 = 0.0f, hstep = 0.0f;
-    const bool fol = order != KEYS && running && r->BlockHead(h0, hstep);
+    const bool gridded = order != KEYS || n_arp >= 2;  // (KEYS: only an arpeggio keeps time)
+    const bool fol = gridded && running && r->BlockHead(h0, hstep);
     double now = 0.0, dps = 0.0;
     bool timed = false;
     if (fol) {
@@ -131,7 +142,7 @@ public:
       timed = dps > 1e-9;
     } else {
       const ClockSnap& k = clk[clk_i];
-      if (k.running && running && order != KEYS && k.bpm > 1.0f) {
+      if (k.running && running && gridded && k.bpm > 1.0f) {
         const double beats = k.beats + double(uint32_t(micros() - k.us)) * (k.bpm / 60e6);
         const double sb = step_beats;
         const double spb = AUDIO_SAMPLE_RATE_EXACT * 60.0 / k.bpm;  // samples a beat
@@ -161,7 +172,7 @@ public:
       }
     } else last_step = INT64_MIN;
     const uint8_t pd = pad;
-    if (pd != 0xFF) { pad = 0xFF; n_pads = n_pads + 1; Start(pd, -1, pad_lvl); voice[cur_v].hold = true; }
+    if (pd != 0xFF) { pad = 0xFF; n_pads = n_pads + 1; Start(pd, -1, pad_lvl); voice[cur_v].hold = pad_hold; }
     if (pad_off) { pad_off = false; voice[cur_v].hold = false; voice[cur_v ^ 1].hold = false; }
 
     for (int i = 0; i < AUDIO_BLOCK_SAMPLES; i++) {
@@ -169,7 +180,7 @@ public:
       if (roll_left && --roll_in <= 0) { roll_left--; roll_in = roll_gap; Retrigger(); }
       {  // a held key: at the slice's end, round again (crossfaded like a new slice)
         const Voice& c = voice[cur_v];
-        if (c.on && c.hold && !c.rel && c.pos >= c.span - 1.0f - c.inc) Again();
+        if (c.on && c.hold && !c.rel && n_arp < 2 && c.pos >= c.span - 1.0f - c.inc) Again();
       }
       float l = 0.0f, rr = 0.0f;
       for (auto& v : voice) {
@@ -219,7 +230,8 @@ private:
   ClockSnap clk[2] = {};
   volatile uint8_t clk_i = 0;
   volatile uint8_t pad = 0xFF;
-  volatile bool pad_off = false;
+  volatile bool pad_off = false, pad_hold = true;
+  uint32_t arp_pos = 0;
   volatile float pad_lvl = 1.0f;
   int64_t last_step = INT64_MIN;
   float step_samples = 0.0f;
@@ -271,8 +283,15 @@ private:
     if (k < next_at) return;
     const int n = N();
     int s;
+    float lvl = 1.0f;
     if (order == RANDOM) s = int(Rand() % uint32_t(n));
-    else {
+    else if (order == CV) s = pick % n;
+    else if (order == KEYS) {  // the arpeggio
+      const int m = std::min<int>(n_arp, MAX_SLICES);
+      if (m < 2) return;
+      s = arp[arp_rand ? Rand() % uint32_t(m) : arp_pos++ % uint32_t(m)] % n;
+      lvl = arp_lvl;
+    } else {
       if (cyc_pos >= n) return;  // (all played: the rest of the grid quiet)
       const int at = order == BACK ? n - 1 - cyc_pos : cyc_pos;
       s = perm[at] % n;
@@ -281,7 +300,7 @@ private:
     const int u = Units(s);
     next_at = k + u;
     n_steps = n_steps + 1;
-    Start(s, u, 1.0f);
+    Start(s, u, lvl);
     roll_left = 0;
     if (p_roll > 0.0f && Rand01() < p_roll && step_samples > 0.0f) {  // its time in hits
       const int hits = std::max(2, int(roll_hits));
@@ -305,6 +324,8 @@ private:
     const float span = float(Units(s)) * step;  // its length in source frames
     // it sounds for its gate share of its steps, at most its own length
     const float own = span / std::max(0.01f, inc);
+    last_slice = int8_t(s);
+    n_starts = n_starts + 1;
     const float left = u < 0 || step_samples <= 0.0f ? own : std::min(own, gate * float(u) * step_samples);
     // the slice just where the playing one has got to (in order, forwards,
     // same speed): the same voice plays on, no fade (FWD at PITCH 0 is the

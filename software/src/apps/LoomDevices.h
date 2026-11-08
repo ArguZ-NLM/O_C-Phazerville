@@ -6882,6 +6882,24 @@ FLASHMEM void SprayDevice::DrawMini(int x, int y, int w, int h) {
 }
 
 /////////////////////////////////////////////////////////////////
+// A SOURCE that also plays the CV outputs (SID, DREAM): while it is a
+// track's source with its CV on, the outputs it claims carry its pitches
+// or levels, over what they were set to (Loom.h, WriteOutputs)
+/////////////////////////////////////////////////////////////////
+class CvSource {
+public:
+  enum { CV_NONE, CV_PITCH, CV_LEVEL };
+  virtual bool CvOn() const = 0;
+  virtual bool CvOnly() const { return false; }  // the CV and no sound: it wins the outputs (DREAM's CV ONLY)
+  virtual void CvTick() = 0;  // once a modulation tick (main loop), before the outputs are read
+  // output o (0-7): CV_PITCH with v in semitones above C0, CV_LEVEL with v
+  // 0..1, or CV_NONE (the output's own source)
+  virtual int CvOut(int o, float& v) const = 0;
+  // its name on the OUT page: short (3 letters) or long
+  virtual void CvName(int o, char* buf, size_t n, bool long_name) const = 0;
+};
+
+/////////////////////////////////////////////////////////////////
 // SHEAR (2026-11-07, Sascha's idea: an MPC / Reason REX slicer): cuts the
 // track's loop, SHUTTLE's file (in memory, MEM) or SPOOL's recording,
 // between their START and END, into slices on the loop's grid and plays
@@ -6898,26 +6916,36 @@ FLASHMEM void SprayDevice::DrawMini(int x, int y, int w, int h) {
 // Page 2: PITCH (its L knob: a random spread each slice), GATE how much of
 // its time a slice sounds, REVRS the odds a slice plays backwards, ROLL the
 // odds it rolls (its L knob: 2, 3 or 4 hits).
-// A: run / stop. B: a new shuffle.
+// Page 3 (Sascha 2026-11-08, CV): PICK the slice ORDER CV plays each step
+// (CV moves it: a CV sequence of slices on the grid) and B (HIT) plays
+// now (a trigger on B: a CV slice player); ARP how several held keys play
+// (UP, DOWN, PLAYD as pressed, RAND); VELO how much a key's velocity
+// counts; OUT a pair of CV outputs: the slice playing as a pitch (a
+// semitone a slice, slice 1 = 0 V) and a trigger at each slice.
+// A: run / stop. B: a new shuffle (KEYS, CV: HIT).
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef SHEAR_DEF = {
-  "SHEAR", "SHR", 8, {"RUN", "NEW"},
+  "SHEAR", "SHR", 12, {"RUN", "NEW"},
   {
     {"SLICE", 2, AudioEffectShear::MAX_SLICES, 16, UNI, 0, 2, 0, {}, {"EUCL", "HITS"}},
-    {"ORDER", 0, 3, 0, LIST, 4, 0, 0, {"FWD", "BACK", "RAND", "KEYS"}},
+    {"ORDER", 0, 4, 0, LIST, 4, 0, 0, {"FWD", "BACK", "RAND", "KEYS"}},  // (4: CV, in Format)
     {"RATE", -4, 4, 0, BI, 0, 21, 0},     // /8 /4 /3 /2 AUTO x2 x3 x4 x8; mode: SHUF, 0..100 % in 5 % steps
     {"MIX", 0, 100, 100, UNI},
     {"PITCH", -24, 24, 0, BI, 0, 13, 0},  // mode: spread, 0..12 semitones
     {"GATE", 5, 100, 100, UNI},
     {"REVRS", 0, 100, 0, UNI},
     {"ROLL", 0, 100, 0, UNI, 0, 3, 0},    // mode: 2, 3, 4 hits
+    {"PICK", 0, AudioEffectShear::MAX_SLICES - 1, 0, UNI},
+    {"ARP", 0, 3, 0, LIST, 4, 0, 0, {"UP", "DOWN", "PLAYD", "RAND"}},
+    {"VELO", 0, 100, 40, UNI},
+    {"OUT", 0, 4, 0, LIST, 4, 0, 0, {"OFF", "A+B", "C+D", "E+F"}},  // (4: G+H, in Format)
   },
   {"", ""},
 };
 
-class ShearDevice : public Device {
+class ShearDevice : public Device, public CvSource {
 public:
-  enum { SLICE, ORDER, RATE, LEVEL, PITCH, GATE, REVRS, ROLL };
+  enum { SLICE, ORDER, RATE, LEVEL, PITCH, GATE, REVRS, ROLL, PICK, ARP, VELO, OUT };
   ShearDevice() : Device(SHEAR_DEF) {}
   AudioStream* in() override { return &fx; }
   AudioStream* out() override { return &fx; }
@@ -6933,7 +6961,17 @@ public:
   }
   void Action(int a) override {
     if (a == 0) fx.running = !fx.running;
+    else if (cur[ORDER] >= AudioEffectShear::KEYS) fx.Pad(cur[PICK] % fx.nslices, 1.0f, false);  // HIT: the picked slice, once
     else Shuffle();
+  }
+  const char* ActionLabel(int a) const override { return a == 1 && cur[ORDER] >= AudioEffectShear::KEYS ? "HIT" : Device::ActionLabel(a); }
+  // OUT: the slice as a pitch and a trigger, on the pair of outputs picked
+  bool CvOn() const override { return active && cur[OUT] > 0; }
+  void CvTick() override;
+  int CvOut(int o, float& v) const override;
+  void CvName(int o, char* buf, size_t n, bool long_name) const override {
+    const bool trig = o & 1;
+    snprintf(buf, n, "%s", long_name ? (trig ? "SHEAR trigger" : "SHEAR slice") : (trig ? "TRG" : "SLC"));
   }
   bool ActionLit(int a) const override { return a == 0 && fx.running; }
   void Idle() override;
@@ -6950,9 +6988,9 @@ public:
   void Status(char side) const {  // (USB V)
     size_t ws = 0, wl = 0;
     if (src) src->Window(ws, wl);
-    Serial.printf("  %c SHEAR %s %s bpm %d run %d grid %d slices %d step %d/1000 beats rate %d/1000, slice %d, steps %lu keys %lu, loop %u+%u\n", side,
+    Serial.printf("  %c SHEAR %s %s bpm %d run %d grid %d slices %d step %d/1000 beats rate %d/1000, slice %d, steps %lu keys %lu, loop %u+%u, arp %d starts %lu\n", side,
                   src ? "cuts" : "no source", fx.following ? "on-head" : "on-clock", int(tempo_bpm), int(clock_running), int(fx.grid), int(fx.nslices), int(fx.step_beats * 1000.0f), int(src_rate * 1000.0f),
-                  int(fx.playing_slice), (unsigned long)fx.n_steps, (unsigned long)fx.n_pads, unsigned(ws), unsigned(wl));
+                  int(fx.playing_slice), (unsigned long)fx.n_steps, (unsigned long)fx.n_pads, unsigned(ws), unsigned(wl), int(fx.n_arp), (unsigned long)fx.n_starts);
   }
 private:
   AudioEffectShear fx;
@@ -6960,7 +6998,17 @@ private:
   float src_rate = 1.0f;
   const char* src_why = "";
   uint32_t notes_seen = 0;
-  int held_note = -1;  // KEYS: the key whose slice loops
+  // KEYS: the keys held, as pressed (one: its slice loops; more: the arpeggio)
+  uint8_t held[AudioEffectShear::MAX_SLICES] = {};
+  int n_held = 0;
+  bool arp_on = false;  // (two held once: on until all are let go)
+  float key_lvl = 1.0f;
+  void Arp();
+  // OUT
+  uint32_t starts_seen = 0;
+  uint32_t trig_until = 0;
+  bool trig_hi = false;
+  float slice_cv = 0.0f;
   // what the slices were cut for (found again when it changes)
   const AudioEffectReel* cut_src = nullptr;
   size_t cut_ws = 0, cut_wl = 0;
@@ -6987,6 +7035,8 @@ FLASHMEM void ShearDevice::Apply(int p) {
     case GATE: fx.gate = cur[GATE] * 0.01f; break;
     case REVRS: fx.p_rev = cur[REVRS] * 0.01f; break;
     case ROLL: fx.p_roll = cur[ROLL] * 0.01f; fx.roll_hits = uint8_t(2 + mode[ROLL]); break;
+    case PICK: fx.pick = uint8_t(cur[PICK]); break;
+    case ARP: Arp(); break;
   }
 }
 
@@ -6995,7 +7045,10 @@ FLASHMEM void ShearDevice::Format(int p, char* buf, size_t n) const {
     static const char* const names[9] = {"/8", "/4", "/3", "/2", "AUTO", "x2", "x3", "x4", "x8"};
     snprintf(buf, n, "%s", names[constrain(int(val[RATE]), -4, 4) + 4]);
   }
-  else if (p == GATE || p == REVRS || p == ROLL || p == LEVEL) snprintf(buf, n, "%d%%", int(val[p]));
+  else if (p == GATE || p == REVRS || p == ROLL || p == LEVEL || p == VELO) snprintf(buf, n, "%d%%", int(val[p]));
+  else if (p == ORDER && val[p] == AudioEffectShear::CV) snprintf(buf, n, "CV");
+  else if (p == OUT && val[p] == 4) snprintf(buf, n, "G+H");
+  else if (p == PICK) snprintf(buf, n, "%d", int(val[p]) % std::max(1, Slices()) + 1);
   else Device::Format(p, buf, n);
 }
 
@@ -7090,12 +7143,60 @@ FLASHMEM void ShearDevice::Idle() {
   if (note_ev_n - notes_seen > NOTE_EVS) notes_seen = note_ev_n - NOTE_EVS;
   while (notes_seen != note_ev_n) {
     const NoteEv& e = note_ev[notes_seen++ % NOTE_EVS];
-    if (cur[ORDER] != AudioEffectShear::KEYS) continue;
-    if (!e.vel) { if (e.note == held_note) { fx.PadOff(); held_note = -1; } continue; }
+    if (cur[ORDER] != AudioEffectShear::KEYS) { n_held = 0; arp_on = false; continue; }
+    int at = -1;
+    for (int i = 0; i < n_held; i++) if (held[i] == e.note) at = i;
+    if (!e.vel) {  // let go
+      if (at < 0) continue;
+      for (int i = at; i + 1 < n_held; i++) held[i] = held[i + 1];
+      if (--n_held == 0) { fx.PadOff(); arp_on = false; }
+      Arp();
+      continue;
+    }
+    if (at < 0 && n_held < AudioEffectShear::MAX_SLICES) held[n_held++] = e.note;
     const int n = Slices();
-    fx.Pad(((int(e.note) - 60) % n + n) % n, 0.6f + 0.4f * (e.vel / 127.0f));
-    held_note = e.note;
+    key_lvl = 1.0f - cur[VELO] * 0.01f * (1.0f - e.vel / 127.0f);
+    if (n_held >= 2) arp_on = true;
+    if (!arp_on) fx.Pad(((int(e.note) - 60) % n + n) % n, key_lvl);  // (one key: at once, looping while held)
+    Arp();
   }
+}
+
+// the arpeggio's slices, in ARP's order (0: none)
+FLASHMEM void ShearDevice::Arp() {
+  const int n = Slices();
+  uint8_t sl[AudioEffectShear::MAX_SLICES];
+  const int m = arp_on ? n_held : 0;
+  for (int i = 0; i < m; i++) sl[i] = uint8_t(((int(held[i]) - 60) % n + n) % n);
+  if (cur[ARP] == 0) std::sort(sl, sl + m);
+  else if (cur[ARP] == 1) std::sort(sl, sl + m, [](uint8_t a, uint8_t b) { return a > b; });
+  AudioNoInterrupts();
+  for (int i = 0; i < m; i++) fx.arp[i] = sl[i];
+  fx.n_arp = uint8_t(m);
+  fx.arp_rand = cur[ARP] == 3;
+  fx.arp_lvl = key_lvl;
+  AudioInterrupts();
+}
+
+// OUT: a slice started, its pitch and a trigger (10 ms; one still high
+// goes down for a tick first)
+FLASHMEM void ShearDevice::CvTick() {
+  const uint32_t now = millis(), st = fx.n_starts;
+  if (st != starts_seen) {
+    starts_seen = st;
+    slice_cv = float(fx.last_slice);
+    trig_hi = !trig_hi || now >= trig_until;
+    trig_until = now + 10;
+  } else if (!trig_hi && now < trig_until) trig_hi = true;
+  else if (trig_hi && now >= trig_until) trig_hi = false;
+}
+
+FLASHMEM int ShearDevice::CvOut(int o, float& v) const {
+  if (!CvOn()) return CV_NONE;
+  const int base = (cur[OUT] - 1) * 2;
+  if (o == base) { v = slice_cv; return CV_PITCH; }
+  if (o == base + 1) { v = trig_hi ? 1.0f : 0.0f; return CV_LEVEL; }
+  return CV_NONE;
 }
 
 // the loop, the grid (dots below), its slices (lines), the one playing
@@ -7144,24 +7245,6 @@ FLASHMEM void ShearDevice::DrawMini(int x, int y, int w, int h) {
     else gfxPixel(a, y + h - 1);
   }
 }
-
-/////////////////////////////////////////////////////////////////
-// A SOURCE that also plays the CV outputs (SID, DREAM): while it is a
-// track's source with its CV on, the outputs it claims carry its pitches
-// or levels, over what they were set to (Loom.h, WriteOutputs)
-/////////////////////////////////////////////////////////////////
-class CvSource {
-public:
-  enum { CV_NONE, CV_PITCH, CV_LEVEL };
-  virtual bool CvOn() const = 0;
-  virtual bool CvOnly() const { return false; }  // the CV and no sound: it wins the outputs (DREAM's CV ONLY)
-  virtual void CvTick() = 0;  // once a modulation tick (main loop), before the outputs are read
-  // output o (0-7): CV_PITCH with v in semitones above C0, CV_LEVEL with v
-  // 0..1, or CV_NONE (the output's own source)
-  virtual int CvOut(int o, float& v) const = 0;
-  // its name on the OUT page: short (3 letters) or long
-  virtual void CvName(int o, char* buf, size_t n, bool long_name) const = 0;
-};
 
 /////////////////////////////////////////////////////////////////
 // Slot catalogue, in chain order. Option 0 of the effect slots is BYPASS.
