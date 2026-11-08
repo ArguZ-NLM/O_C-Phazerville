@@ -134,7 +134,8 @@ inline void MidiLogPrint() {
   for (uint32_t k = midi_log_n - n; k != midi_log_n; k++) {
     const MidiLogEv& e = midi_log[k % MIDI_LOG];
     const char* t = e.type == 0x90 ? "ON " : e.type == 0x80 ? "OFF" : e.type == 0xA0 ? "PAT" : e.type == 0xD0 ? "CAT"
-                  : e.type == 0xE0 ? "BND" : e.type == 0xB0 ? "CC " : "?  ";
+                  : e.type == 0xE0 ? "BND" : e.type == 0xB0 ? "CC " : e.type == 0xFA ? "STA" : e.type == 0xFB ? "CON"
+                  : e.type == 0xFC ? "STP" : e.type == 0xF2 ? "SPP" : "?  ";
     Serial.printf("%8lu ch%2d %s %3d %3d\n", (unsigned long)e.ms, e.ch, t, e.d1, e.d2);
     delay(1);
   }

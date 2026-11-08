@@ -1731,7 +1731,10 @@ FLASHMEM static void LoomReadMIDI(T& device) {
       device.getChannel(), device.getType(), device.getData1(), device.getData2()
     };
     if (msg.message == midi::SystemExclusive || msg.message == midi::ProgramChange) continue;
-    if ((msg.message >> 4) != 0xF)  // USB 'J' shows them
+    // USB 'J' shows them: all but the system ones, and of those Start,
+    // Continue, Stop, Song Position (not the 24-a-beat clocks)
+    if ((msg.message >> 4) != 0xF || msg.message == midi::Start || msg.message == midi::Continue
+        || msg.message == midi::Stop || msg.message == midi::SongPosition)
       loom::midi_log[loom::midi_log_n++ % loom::MIDI_LOG] = {millis(), uint8_t(msg.message), uint8_t(msg.channel), msg.data1, msg.data2};
     if (msg.message == midi::Clock) { loom::midi_clocks++; loom::midi_clock_us = micros(); }
     if (msg.message == midi::NoteOn && msg.data2 > 0) {
