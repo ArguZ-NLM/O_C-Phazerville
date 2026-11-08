@@ -832,6 +832,8 @@ private:
   float beat_ph = 0.0f;
   float measured = 120.0f;
   bool have_measure = false;
+  int src_was = -1;          // SOURCE (and CV on BPM) last tick: a change starts the measuring afresh
+  int cv_was = -1;
   void Measured(float bpm);
 };
 
@@ -846,6 +848,17 @@ FLASHMEM void ClockDevice::Measured(float bpm) {
 FLASHMEM void ClockDevice::Tick(const ModCtx& ctx) {
   const uint32_t now = micros();
   const int src = cur[P_SOURCE];
+  // another source (or CV on BPM on / off): nothing measured carries over
+  // (Sascha 2026-11-08: from internal + CV to MIDI clock, the CV's tempo
+  // stayed until clocks came in)
+  if (src != src_was || CvTempo() != cv_was) {
+    src_was = src;
+    cv_was = CvTempo();
+    have_measure = false;
+    midi_mark = midi_clocks;
+    midi_mark_us = 0;
+    last_edge_us = 0;
+  }
   if (src == 1) {
     // MIDI clock, 24 per beat: measure over whole beats
     const uint32_t c = midi_clocks;
