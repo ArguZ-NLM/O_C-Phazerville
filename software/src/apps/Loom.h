@@ -1746,8 +1746,16 @@ FLASHMEM static void LoomReadMIDI(T& device) {
     if (msg.message == midi::NoteOn || msg.message == midi::NoteOff)  // (note on at 0: off)
       loom::NoteEvent(msg.channel, msg.data1, msg.message == midi::NoteOn ? msg.data2 : 0);
     if (loom::tempo_clock && loom::tempo_clock->midi()) {
-      if (msg.message == midi::Start) { loom::midi_start_clocks = loom::midi_clocks; loom::ClockStart(); }
-      else if (msg.message == midi::Continue) loom::clock_running = true;
+      // (Sascha's clock, 2026-11-08: play after a stop sends Song Position
+      // + Continue, Start only from the top: a Continue goes on from that
+      // position, 6 clocks a 16th, the beats and the bar with it)
+      if (msg.message == midi::SongPosition) loom::midi_spp = uint16_t(msg.data1 | (msg.data2 << 7));
+      else if (msg.message == midi::Start) { loom::midi_spp = 0; loom::midi_start_clocks = loom::midi_clocks; loom::ClockStart(); }
+      else if (msg.message == midi::Continue) {
+        loom::midi_start_clocks = loom::midi_clocks - uint32_t(loom::midi_spp) * 6;
+        loom::tempo_clock->JumpTo(loom::midi_spp / 4.0);
+        loom::clock_running = true;
+      }
       else if (msg.message == midi::Stop) loom::ClockStop();
     }
     const bool realtime = msg.message == midi::Clock || msg.message == midi::Start

@@ -774,6 +774,7 @@ FLASHMEM void FollowMod::DrawViz(int x, int y, int w, int h) {
 volatile uint32_t midi_clocks = 0;
 volatile uint32_t midi_start_clocks = 0;  // the count at MIDI Start (the next clock is beat 0)
 volatile uint32_t midi_clock_us = 0;      // when the last clock came
+uint16_t midi_spp = 0;                    // the last Song Position (16ths): where a Continue goes on from
 
 // how long the boot picture stays (see OC_apps.h), CLOCK's BOOT setting
 uint8_t boot_screen = 2;
@@ -812,6 +813,16 @@ public:
     else Modulator::FormatMode(p, buf, n);
   }
   int Shuttle() const { return cur[P_SOURCE] >= CLK_SHU ? cur[P_SOURCE] - CLK_SHU : -1; }  // its track, -1 none
+  // MIDI Continue: on from the Song Position (in beats), the bar's count
+  // with it; nothing restarts (as Start would)
+  void JumpTo(double beats) {
+    const double whole = floor(beats);
+    beat_ph = float(beats - whole);
+    beat = uint8_t(int64_t(whole) % 4);
+    clock_beat_n = uint32_t(whole);
+    clock_beat_ph = beat_ph;
+    clock_beat_us = micros();
+  }
   bool Waiting() const { return external() && !have_measure; }
   int Beat() const { return beat; }
   // SOURCE on the knob: INT, MIDI, SHU A, SHU B, then TR1 .. (the SHUTTLEs
