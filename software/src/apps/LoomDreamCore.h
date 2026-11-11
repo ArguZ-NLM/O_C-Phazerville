@@ -1001,8 +1001,10 @@ FLASHMEM void DreamDevice::Run() {
 // (A) or 5-8 (B), to USB both ways
 static void DreamMidiSend(uint8_t st, uint8_t d1, uint8_t d2) {
   const uint8_t kind = st & 0xF0, ch = (st & 15) + 1;
+  SNVS_LPGPR0 = 110;  // (breadcrumbs, see Main.cpp XCRUMB)
   if (kind == 0x90) {
     usbMIDI.sendNoteOn(d1, d2, ch);
+    SNVS_LPGPR0 = 111;
     for (auto& h : usbHostMIDI) h.sendNoteOn(d1, d2, ch);
   } else if (kind == 0x80) {
     usbMIDI.sendNoteOff(d1, d2, ch);
@@ -1024,7 +1026,9 @@ FLASHMEM void DreamDevice::SendMidi() {
     if (on) { DreamMidiSend(uint8_t(m[0] + (track ? 4 : 0)), m[1], m[2]); sent = true; }
     q.tail = uint8_t(q.tail + 1);
   }
+  SNVS_LPGPR0 = 112;
   if (sent) usbMIDI.send_now();
+  SNVS_LPGPR0 = 113;
 }
 
 FLASHMEM void DreamDevice::MidiAllOff() {
