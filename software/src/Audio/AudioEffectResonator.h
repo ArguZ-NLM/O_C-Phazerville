@@ -93,7 +93,7 @@ private:
   float coef[BANDS] = {}, target_gain[BANDS] = {}, gain[BANDS] = {};
   float lp[BANDS] = {}, bp[BANDS] = {};
   float damp_ = 0.1f, wet_ = 1.0f, env = 0.0f;
-  float lvl_in = 0.0f, lvl_wet = 0.0f, mk = 1.0f;  // the level match (update)
+  LevelMatch match;  // (AudioSample.h)
   bool choke_ = false;
   Shape shape = {35.0f, -1.0f, 20.0f, 0.0f, 1.0f};
   float cut_var_ = 0.0f, tone_var_ = 0.0f;
@@ -246,25 +246,13 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectResonator::update() {  /
       wet_sum += fabsf(sum[c][n]);
     }
   }
-  // the level match (Sascha 2026-11-11: REED sat 8-11 dB under the dry):
-  // the bank passes only the input's energy at its notes, so what it gives
-  // is raised to the input's loudness. Both followed slowly (~0.3 s), so
-  // the music's own ups and downs stay; held while the input is quiet, so
-  // a tail (or a strike, A) rings out as it is; +18 dB at most, -6 dB at least
-  const float in_m = in_sum * (1.0f / AUDIO_BLOCK_SAMPLES);
-  const float wet_m = wet_sum * (0.5f / AUDIO_BLOCK_SAMPLES);
-  if (in_m > 1e-4f && in_m > 0.1f * lvl_in) {
-    lvl_in += 0.01f * (in_m - lvl_in);
-    lvl_wet += 0.01f * (wet_m - lvl_wet);
-  }
-  const float want = lvl_wet > 1e-6f && lvl_in > 1e-4f ? std::min(8.0f, std::max(0.5f, lvl_in / lvl_wet)) : mk;
-  const float mk0 = mk;
-  mk += 0.05f * (want - mk);
-  const float mk_step = (mk - mk0) * (1.0f / AUDIO_BLOCK_SAMPLES);
-  // then a soft limit (unity when quiet), as a note right on a ringing band
-  // can get loud
+  // the bank passes the input's energy only at its notes (8-11 dB under
+  // the dry), or piles it up when a note sits right on its bands (+8 dB):
+  // matched to the input's loudness (LevelMatch, AudioSample.h; a tail or
+  // a strike, A, rings out as it is); then a soft limit (unity when quiet)
+  match.Feed(in_sum * (1.0f / AUDIO_BLOCK_SAMPLES), wet_sum * (0.5f / AUDIO_BLOCK_SAMPLES));
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
-    const float g = mk0 + mk_step * float(n + 1);
+    const float g = match.At(n);
     for (int c = 0; c < 2; c++) sum[c][n] = SoftLimit(sum[c][n] * g);
   }
 

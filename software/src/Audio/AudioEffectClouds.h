@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AudioBuffer.h"
+#include "AudioSample.h"  // (LevelMatch)
 #include "PsramAlloc.h"
 #include "../dsputils.h"
 #include "../dsputils_arm.h"
@@ -154,6 +155,7 @@ private:
     // Overlap normalisation state (audio ISR only).
     float num_grains_ = 0.0f;
     float gain_       = 1.0f;
+    LevelMatch match_;  // the output at the input's loudness (AudioSample.h)
 
     // 256-entry Q15 Hann window LUT: round(sin²(π×i/255) × 32767), i = 0..255.
     // const static → placed in .rodata (flash) by the linker. 512 bytes, zero SRAM cost.
@@ -452,16 +454,33 @@ FASTRUN void AudioEffectClouds::update() {
     }
     const float gain_target = num_grains_ > 2.0f
         ? 1.0f / (num_grains_ - 1.0f) : 1.0f;
+    // that keeps grains piling up safe but left FIBRE ~9 dB under the dry
+    // (Sascha 2026-11-11): the output is then matched to the input's
+    // loudness (LevelMatch); the feedback is taken before the match, as before
+    float in_sum = 0.0f, out_sum = 0.0f;
+    for (int c = 0; c < nch_; c++)
+        if (in[c]) for (int i = 0; i < AUDIO_BLOCK_SAMPLES; i++) in_sum += fabsf((float)in[c]->data[i]);
     for (int i = 0; i < AUDIO_BLOCK_SAMPLES; i++) {
         gain_ += (gain_target - gain_) * 0.01f;
         for (int c = 0; c < nch_; c++) {
-            float x = accum_[c][i] * gain_ * (1.0f / 32768.0f);
+            accum_[c][i] *= gain_ * (1.0f / 32768.0f);
+            out_sum += fabsf(accum_[c][i]);
+        }
+    }
+    const float per = 1.0f / float(nch_ * AUDIO_BLOCK_SAMPLES);
+    match_.Feed(cur_freeze ? 0.0f : in_sum * per * (1.0f / 32768.0f), out_sum * per);  // (frozen: held)
+    for (int i = 0; i < AUDIO_BLOCK_SAMPLES; i++) {
+        const float mg = match_.At(i);
+        for (int c = 0; c < nch_; c++) {
+            float x = accum_[c][i];
+            if (x > 3.0f) x = 3.0f;
+            if (x < -3.0f) x = -3.0f;
+            feedback_buf_[c][i] = x * (27.0f + x * x) / (27.0f + 9.0f * x * x) * 32767.0f * cur_feedback;
+            x *= mg;
             if (x > 3.0f) x = 3.0f;
             if (x < -3.0f) x = -3.0f;
             x = x * (27.0f + x * x) / (27.0f + 9.0f * x * x); // soft limit
-            const float scaled = x * 32767.0f;
-            out[c]->data[i] = Clip16(scaled);
-            feedback_buf_[c][i] = scaled * cur_feedback;
+            out[c]->data[i] = Clip16(x * 32767.0f);
         }
     }
 
