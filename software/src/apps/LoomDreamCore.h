@@ -1018,18 +1018,19 @@ FLASHMEM void DreamDevice::SendMidi() {
   const bool on = MidiOn();
   if (midi_was && !on) MidiAllOff();
   midi_was = on;
-  bool sent = false;
+  // (no usbMIDI.send_now(): the USB interrupt sends what is written within
+  // a millisecond by itself, and the core's send_now isn't guarded against
+  // it: both sending the same packet now and then froze the whole module,
+  // DREAM's MIDI out streaming to the Mac, Sascha 2026-11-11)
   while (q.tail != q.head) {
     const uint8_t* m = q.m[q.tail % DreamMidiQ::N];
-    if (on) { DreamMidiSend(uint8_t(m[0] + (track ? 4 : 0)), m[1], m[2]); sent = true; }
+    if (on) DreamMidiSend(uint8_t(m[0] + (track ? 4 : 0)), m[1], m[2]);
     q.tail = uint8_t(q.tail + 1);
   }
-  if (sent) usbMIDI.send_now();
 }
 
 FLASHMEM void DreamDevice::MidiAllOff() {
-  for (int c = 0; c < 4; c++) DreamMidiSend(uint8_t(0xB0 + c + (track ? 4 : 0)), 123, 0);
-  usbMIDI.send_now();
+  for (int c = 0; c < 4; c++) DreamMidiSend(uint8_t(0xB0 + c + (track ? 4 : 0)), 123, 0);  // (no send_now: see SendMidi)
 }
 
 // the engine renders a block (24-bit stereo in int32) at LEVEL; it sheds
