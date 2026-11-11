@@ -93,6 +93,9 @@ namespace loom {
     uint8_t last_choice[SLOT_COUNT] = {}; // for the bypass toggle
     uint8_t bypass = 0;  // bit per slot (+ MIX_COL: its band stage): passed around
     uint8_t parked = 0;  // bit per slot: bypassed and unpatched (no CPU)
+    // SHEAR put away for another source (ShearFollow): 1 = it played, 3 = it
+    // was bypassed; 0 = nothing to bring back
+    uint8_t shear_away = 0;
     uint32_t park_at[SLOT_COUNT] = {};  // when a bypassed device gets parked
     uint32_t dry_at[SLOT_COUNT] = {};   // when a device resting at WET 0 gets parked (0: not dry)
     // a device chosen on the panel: the slot fades to dry first, then it
@@ -451,6 +454,8 @@ private:
   void ChoiceFaded(int t, int s, int option);
   void SwitchChoices(int t);
   void ToggleBypass(int s);
+  void ShearFollow(int t);
+  bool ShearOk(int t) const;
   loom::Device* Twin(loom::Device* d) const;
   void ResetFocused();
   uint32_t reset_at = 0;  // when a device went back to its defaults (DEFAULTS shown)
@@ -1137,6 +1142,41 @@ FLASHMEM void AppLoom::SwitchChoices(int t) {
     SetChoice(t, s, option);
     ApplyBypass(t);
   }
+}
+
+// SHEAR only cuts SHUTTLE or SPOOL (Sascha 2026-11-11). Another source
+// (DREAM, INPUT, WARP, SID) and its slot turns to FIBRE, bypassed, so nothing
+// new is heard; SHEAR keeps its settings. Back on SHUTTLE / SPOOL, SHEAR
+// returns as it was left (playing or bypassed), unless the slot was changed
+// or FIBRE brought in meanwhile. (Not kept over a power-up: then FIBRE stays.)
+FLASHMEM bool AppLoom::ShearOk(int t) const {
+  using namespace loom;
+  return tracks[t].choice[SOURCE] == 1 || tracks[t].choice[SOURCE] == 2;  // SPOOL, SHUTTLE
+}
+FLASHMEM void AppLoom::ShearFollow(int t) {
+  using namespace loom;
+  Track& tr = tracks[t];
+  const uint8_t bit = 1 << SPRAY;
+  if (tr.next_choice[SPRAY] >= 0) return;  // (a device change still fading)
+  if (!ShearOk(t)) {
+    if (tr.choice[SPRAY] != 3) return;
+    tr.shear_away = (tr.bypass & bit) ? 3 : 1;
+    tr.bypass |= bit;
+    tr.park_at[SPRAY] = millis() + FADE_MS + 40;
+    ChoiceFaded(t, SPRAY, 1);  // (fades to dry first, then FIBRE comes in bypassed)
+    return;
+  }
+  if (!tr.shear_away) return;
+  const bool kept = tr.choice[SPRAY] == 1 && (tr.bypass & bit);  // FIBRE still resting there
+  const bool played = tr.shear_away == 1;
+  tr.shear_away = 0;
+  if (!kept) return;
+  SetChoice(t, SPRAY, 3);
+  if (played && Admit(WorstCost(tr.current(SPRAY)))) {
+    tr.bypass &= ~bit;
+    if (tr.parked & bit) { tr.parked &= ~bit; Repatch(t); }
+  }
+  if (active) ApplyBypass(t);
 }
 
 // one-click bypass of a slot: the device stays (and keeps its settings and
@@ -2052,6 +2092,7 @@ FLASHMEM void AppLoom::MainLoop() {
       if (tr.reel && tr.choice[SOURCE] == 1) tr.reel->Idle();
       if (tr.dream && tr.choice[SOURCE] == 5) tr.dream->Idle();
       if (tr.sid && tr.choice[SOURCE] == 4) tr.sid->Idle();  // (its 6510 runs ahead here)
+      ShearFollow(t);
       // SHEAR cuts the track's SHUTTLE (its file in memory) or SPOOL
       if (tr.choice[SPRAY] == 3) if (auto* sh = static_cast<ShearDevice*>(tr.inst[SPRAY][3])) {
         if (tr.choice[SOURCE] == 2 && tr.player) {
@@ -3177,7 +3218,9 @@ FLASHMEM void AppLoom::OnEncoder(const UI::Event &event) {
       // the effect slots' devices only: no device (0) is not dialled in (B
       // bypasses)
       const int o = tracks[track].shown_choice(col) + dir;
-      if (o >= 1 && o < SLOT_DEFS[col].noptions) SetChoiceLinked(col, o);
+      // (SHEAR, the last one in FIBRE's slot, only with SHUTTLE or SPOOL)
+      const int top = col == SPRAY && !ShearOk(track) ? 3 : SLOT_DEFS[col].noptions;
+      if (o >= 1 && o < top) SetChoiceLinked(col, o);
       else if (!tracks[track].shown_choice(col)) SetChoiceLinked(col, 1);
     }
     return;
