@@ -330,26 +330,49 @@ extern "C" __attribute__((used)) void xeno_fault_c(uint32_t* st) {
   for (auto& c : st_b) c = ' ';
   char* so = st_b;
   for (const char* t = "STACK "; *t; ) *so++ = *t++;
+  char st_c[128], st_d[128];
+  for (auto& c : st_c) c = ' ';
+  for (auto& c : st_d) c = ' ';
   int found = 0;
-  uint32_t seen[12];
-  for (int k = 8; k < 600 && found < 12 && uint32_t(st + k) < 0x20080000u; k++) {
+  uint32_t seen[39];
+  for (int k = 8; k < 2000 && found < 39 && uint32_t(st + k) < 0x20080000u; k++) {
     const uint32_t v = st[k];
     bool again = false;
     for (int q = 0; q < found; q++) again |= seen[q] == v;
     if (!again && (v & 1) && ((v < 0x00080000u) || (v >= 0x60000000u && v < 0x60800000u))) {  // Thumb code: ITCM or flash
+      if (found == 13) { so = st_c; for (const char* t = "STAK2 "; *t; ) *so++ = *t++; }
+      if (found == 26) { so = st_d; for (const char* t = "STAK3 "; *t; ) *so++ = *t++; }
       xf_hex(so, "", v);
       seen[found++] = v;
     }
   }
   st_b[127] = '\n';
+  st_c[127] = '\n';
+  st_d[127] = '\n';
   for (uint32_t n = 0; n < 60000000u; n++) {
     usb_isr();
     if ((n & 0x3FFFF) == 0 && usb_seremu_write_buffer_free() >= 128) usb_seremu_write(b, 128);
-    if ((n & 0x3FFFF) == 0x20000 && usb_seremu_write_buffer_free() >= 128) usb_seremu_write(st_b, 128);
+    if ((n & 0x3FFFF) == 0x10000 && usb_seremu_write_buffer_free() >= 128) usb_seremu_write(st_b, 128);
+    if ((n & 0x3FFFF) == 0x20000 && usb_seremu_write_buffer_free() >= 128) usb_seremu_write(st_c, 128);
+    if ((n & 0x3FFFF) == 0x30000 && usb_seremu_write_buffer_free() >= 128) usb_seremu_write(st_d, 128);
   }
   SRC_GPR5 = 0x0BAD00F1;
   SCB_AIRCR = 0x05FA0004;
   while (1) {}
+}
+// the main loop stuck (no turn for 6 s, while the interrupts still run: the
+// sound plays on, the panel is dead): reported as a fault, "FAULT pc" being
+// this check itself and the STACK lines what the main loop was in
+extern volatile uint32_t loop_counter;
+static IntervalTimer stall_timer;
+static bool stall_on = false;
+FLASHMEM static void StallCheck() {
+  static uint32_t last = 0, same = 0;
+  if (!stall_on || loop_counter != last) { last = loop_counter; same = 0; return; }
+  if (++same < 24) return;  // 24 x 250 ms: 6 s (saves, copies take a few)
+  uint32_t* sp;
+  asm volatile("mov %0, sp\n" : "=r"(sp));
+  xeno_fault_c(sp);
 }
 extern "C" __attribute__((naked)) void xeno_fault(void) {
   asm volatile("tst lr, #4\n ite eq\n mrseq r0, msp\n mrsne r0, psp\n b xeno_fault_c\n");
@@ -684,6 +707,8 @@ FLASHMEM void setup() {
 #if defined(__IMXRT1062__)
   watchdog_arm();
   SERIAL_PRINTLN("* WDOG1 armed (128s, fed from loop)");
+  stall_timer.begin(StallCheck, 250000);
+  stall_on = true;
 #endif
 
   SERIAL_PRINTLN("[End of setup()]");
