@@ -1,7 +1,6 @@
 #pragma once
 
 #include "AudioBuffer.h"
-#include "AudioSample.h"  // (LevelMatch)
 #include "PsramAlloc.h"
 #include "../dsputils.h"
 #include "../dsputils_arm.h"
@@ -155,7 +154,6 @@ private:
     // Overlap normalisation state (audio ISR only).
     float num_grains_ = 0.0f;
     float gain_       = 1.0f;
-    LevelMatch match_;  // the output at the input's loudness (AudioSample.h)
 
     // 256-entry Q15 Hann window LUT: round(sin²(π×i/255) × 32767), i = 0..255.
     // const static → placed in .rodata (flash) by the linker. 512 bytes, zero SRAM cost.
@@ -446,41 +444,28 @@ FASTRUN void AudioEffectClouds::update() {
     }
 
     // ── Pass 3: normalize, soft-limit, capture feedback for next block ─────
-    // Gain follows the (smoothed) number of overlapping grains: 1/(n-1)
-    // above two grains — twice Clouds' 1/sqrt(n-1) in dB.
+    // Gain follows the (smoothed) number of overlapping grains: 1/sqrt(n-1)
+    // above two grains, as Clouds does (grains from all over the buffer add
+    // up as their energy). Misty's 1/(n-1) left FIBRE ~9 dB under the dry
+    // (Sascha 2026-11-11); grains piling up in step are caught by the soft
+    // limit. (A level match to the input can't work here: the grains play
+    // seconds behind it.)
     {
         const float n = (float)active_at_start;
         num_grains_ += (n - num_grains_) * (n > num_grains_ ? 0.95f : 0.5f);
     }
     const float gain_target = num_grains_ > 2.0f
-        ? 1.0f / (num_grains_ - 1.0f) : 1.0f;
-    // that keeps grains piling up safe but left FIBRE ~9 dB under the dry
-    // (Sascha 2026-11-11): the output is then matched to the input's
-    // loudness (LevelMatch); the feedback is taken before the match, as before
-    float in_sum = 0.0f, out_sum = 0.0f;
-    for (int c = 0; c < nch_; c++)
-        if (in[c]) for (int i = 0; i < AUDIO_BLOCK_SAMPLES; i++) { const float v = in[c]->data[i] * (1.0f / 32768.0f); in_sum += v * v; }
+        ? 1.0f / sqrtf(num_grains_ - 1.0f) : 1.0f;
     for (int i = 0; i < AUDIO_BLOCK_SAMPLES; i++) {
         gain_ += (gain_target - gain_) * 0.01f;
         for (int c = 0; c < nch_; c++) {
-            accum_[c][i] *= gain_ * (1.0f / 32768.0f);
-            out_sum += accum_[c][i] * accum_[c][i];
-        }
-    }
-    const float per = 1.0f / float(nch_ * AUDIO_BLOCK_SAMPLES);
-    match_.Feed(cur_freeze ? 0.0f : in_sum * per, out_sum * per);  // (frozen: held)
-    for (int i = 0; i < AUDIO_BLOCK_SAMPLES; i++) {
-        const float mg = match_.At(i);
-        for (int c = 0; c < nch_; c++) {
-            float x = accum_[c][i];
-            if (x > 3.0f) x = 3.0f;
-            if (x < -3.0f) x = -3.0f;
-            feedback_buf_[c][i] = x * (27.0f + x * x) / (27.0f + 9.0f * x * x) * 32767.0f * cur_feedback;
-            x *= mg;
+            float x = accum_[c][i] * gain_ * (1.0f / 32768.0f);
             if (x > 3.0f) x = 3.0f;
             if (x < -3.0f) x = -3.0f;
             x = x * (27.0f + x * x) / (27.0f + 9.0f * x * x); // soft limit
-            out[c]->data[i] = Clip16(x * 32767.0f);
+            const float scaled = x * 32767.0f;
+            out[c]->data[i] = Clip16(scaled);
+            feedback_buf_[c][i] = scaled * cur_feedback;
         }
     }
 
