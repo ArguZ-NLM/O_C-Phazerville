@@ -891,6 +891,11 @@ void FASTRUN loop() {
             g_move_request = cmd == 'Y' ? 1 : -1;
             g_remote_at = millis() | 1;
             break;
+          case ';':  // the main loop hangs on purpose (tests the hang report: it should come in ~6 s)
+            Serial.println("HANG TEST");
+            Serial.send_now();
+            delay(100);
+            while (true) {}
           case 'O':  // Loom: the dropout log (what interrupted the sound, and when)
             g_droplog_request = true;
             break;
