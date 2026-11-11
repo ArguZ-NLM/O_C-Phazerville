@@ -240,10 +240,10 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectResonator::update() {  /
   // damp * bp: unity gain at a band's centre
   float in_sum = 0.0f, wet_sum = 0.0f;
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
-    in_sum += fabsf(x[n]);
+    in_sum += x[n] * x[n];
     for (int c = 0; c < 2; c++) {
       sum[c][n] *= dmp[n];
-      wet_sum += fabsf(sum[c][n]);
+      wet_sum += sum[c][n] * sum[c][n];
     }
   }
   // the bank passes the input's energy only at its notes (8-11 dB under

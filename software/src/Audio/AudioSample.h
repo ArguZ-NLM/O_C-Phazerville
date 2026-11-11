@@ -34,7 +34,9 @@ static inline int16_t ToSample16(float v) {
 
 // an effect's output matched to its input's loudness (Sascha 2026-11-11:
 // REED sat 8-11 dB under the dry, FIBRE 9 dB). Each block: Feed() the
-// input's and the output's mean |x| (the output before the match), then
+// input's and the output's mean x*x (the output before the match: energy,
+// as the ear hears it; FIBRE's grains come in bursts, and matching mean |x|
+// left them 6 dB too loud), then
 // At(n) is the gain for sample n, ramped over the block (no steps). Both
 // levels follow slowly (~0.3 s), so the music's own ups and downs stay;
 // held while the input is quiet (> 20 dB under where it has been), so a
@@ -42,13 +44,13 @@ static inline int16_t ToSample16(float v) {
 struct LevelMatch {
   float in = 0.0f, out = 0.0f, g = 1.0f, g0 = 1.0f, step = 0.0f;
   void Feed(float in_m, float out_m) {
-    if (in_m > 1e-4f && in_m > 0.1f * in) {
+    if (in_m > 1e-8f && in_m > 0.01f * in) {
       in += 0.01f * (in_m - in);
       out += 0.01f * (out_m - out);
     }
     float want = g;
-    if (out > 1e-6f && in > 1e-4f) {
-      want = in / out;
+    if (out > 1e-12f && in > 1e-8f) {
+      want = sqrtf(in / out);
       want = want > 8.0f ? 8.0f : want < 0.125f ? 0.125f : want;
     }
     g0 = g;

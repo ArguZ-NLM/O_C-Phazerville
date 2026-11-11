@@ -459,16 +459,16 @@ FASTRUN void AudioEffectClouds::update() {
     // loudness (LevelMatch); the feedback is taken before the match, as before
     float in_sum = 0.0f, out_sum = 0.0f;
     for (int c = 0; c < nch_; c++)
-        if (in[c]) for (int i = 0; i < AUDIO_BLOCK_SAMPLES; i++) in_sum += fabsf((float)in[c]->data[i]);
+        if (in[c]) for (int i = 0; i < AUDIO_BLOCK_SAMPLES; i++) { const float v = in[c]->data[i] * (1.0f / 32768.0f); in_sum += v * v; }
     for (int i = 0; i < AUDIO_BLOCK_SAMPLES; i++) {
         gain_ += (gain_target - gain_) * 0.01f;
         for (int c = 0; c < nch_; c++) {
             accum_[c][i] *= gain_ * (1.0f / 32768.0f);
-            out_sum += fabsf(accum_[c][i]);
+            out_sum += accum_[c][i] * accum_[c][i];
         }
     }
     const float per = 1.0f / float(nch_ * AUDIO_BLOCK_SAMPLES);
-    match_.Feed(cur_freeze ? 0.0f : in_sum * per * (1.0f / 32768.0f), out_sum * per);  // (frozen: held)
+    match_.Feed(cur_freeze ? 0.0f : in_sum * per, out_sum * per);  // (frozen: held)
     for (int i = 0; i < AUDIO_BLOCK_SAMPLES; i++) {
         const float mg = match_.At(i);
         for (int c = 0; c < nch_; c++) {
