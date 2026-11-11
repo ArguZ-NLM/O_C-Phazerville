@@ -360,8 +360,6 @@ extern "C" __attribute__((used)) void xeno_fault_c(uint32_t* st) {
   SCB_AIRCR = 0x05FA0004;
   while (1) {}
 }
-// (a breadcrumb in a register a restart keeps: BOOT.LOG shows the last one)
-#define XCRUMB(x) (SNVS_LPGPR0 = (x))
 // the main loop stuck (no watchdog feed for 6 s; the sound may play on, the
 // panel is dead): WDOG1's early warning interrupt, above everything else (a
 // hang inside the USB code too), reports it as a fault: "FAULT pc" is this
@@ -532,9 +530,8 @@ FLASHMEM void setup() {
     if (big) PhzConfig::myfs.remove("BOOT.LOG");
     bl = PhzConfig::myfs.open("BOOT.LOG", FILE_WRITE);
     if (bl) {
-      bl.printf("boot: SRSR %08lx GPR5 %08lx; last run reached stage %lu at %lu ms; crumb %lu\n",
-                boot_srsr, boot_gpr5, prev_stage, prev_ms, (unsigned long)SNVS_LPGPR0);
-      SNVS_LPGPR0 = 0;
+      bl.printf("boot: SRSR %08lx GPR5 %08lx; last run reached stage %lu at %lu ms\n",
+                boot_srsr, boot_gpr5, prev_stage, prev_ms);
       bl.close();
     }
   }
@@ -741,14 +738,12 @@ void FASTRUN loop() {
 
   while (true) {
     ++loop_counter;
-    XCRUMB(1);
 #if defined(__IMXRT1062__)
     watchdog_feed();
 #endif
 #if defined(ARDUINO_TEENSY41)
     thisUSB.Task();
 #endif
-    XCRUMB(2);
 
     // Refresh display
     if (MENU_REDRAW && CORE::display_update_enabled) {
@@ -779,11 +774,9 @@ void FASTRUN loop() {
       GRAPHICS_END_FRAME();
     }
 
-    XCRUMB(3);
     // Run current app
     if (CORE::app_loop_enabled)
       app_switcher.current_app()->DispatchLoop();
-    XCRUMB(4);
 
     // Take care of queued tasks
     OC::CORE::FlushTasks();
@@ -791,7 +784,6 @@ void FASTRUN loop() {
     OC::PresetBus::Task();
     OC::PresetBusUI::Task();
 
-    XCRUMB(5);
     // UI events
     if (UI_MODE_APP_SETTINGS == ui_mode) {
       if (!ui.AppSettings(false)) {
@@ -816,7 +808,6 @@ void FASTRUN loop() {
 
     if (ui.ticks() - last_redraw_time > REDRAW_TIMEOUT_MS)
       MENU_REDRAW = 1;
-    XCRUMB(6);
 
 #if defined(MTP_INTERFACE) && !defined(CARD_APP)  // (the CARD app does it itself)
     // handle MTP Disk requests

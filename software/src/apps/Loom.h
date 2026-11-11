@@ -1860,15 +1860,10 @@ FLASHMEM static void LoomReadMIDI(T& device) {
 }
 
 FLASHMEM void AppLoom::ReadMIDI() {
-  SNVS_LPGPR0 = 120;  // (breadcrumbs, see Main.cpp XCRUMB)
   LoomReadMIDI(usbMIDI);
-  SNVS_LPGPR0 = 121;
   LoomReadMIDI(usbHostMIDI[0]);
-  SNVS_LPGPR0 = 122;
   LoomReadMIDI(usbHostMIDI[1]);
-  SNVS_LPGPR0 = 123;
   LoomReadMIDI(MIDI1);
-  SNVS_LPGPR0 = 124;
 }
 
 // point the setting at a free MIDI map (or its current one) and let the next
