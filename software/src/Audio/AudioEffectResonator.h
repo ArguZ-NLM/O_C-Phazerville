@@ -8,7 +8,9 @@
 // Resonant filter bank for the Loom RESONATOR device.
 //
 // BANDS two-pole band-pass resonators (Chamberlin state variable), fed with
-// the track's input summed to mono; even bands go left, odd bands right.
+// the track's input summed to mono; even bands lean left, odd bands right
+// (each side gets the other's bands at half level: hard apart, a note that
+// rang in one band was gone from the other side, -25 dB).
 // The owner sets each band's frequency coefficient, the bank's shape (where
 // it peaks, its slope, the peak's height, the tilt) and the damping. A
 // band's gain is applied to what goes in, so a band keeps ringing at its
@@ -237,10 +239,15 @@ FASTRUN __attribute__((optimize("O2"))) void AudioEffectResonator::update() {  /
       }
     }
   }
-  // damp * bp: unity gain at a band's centre
+  // damp * bp: unity gain at a band's centre; each side gets the other
+  // side's bands at half level (-6 dB), so a note ringing in one band is
+  // heard on both outputs, still leaning to its own side
   float in_sum = 0.0f, wet_sum = 0.0f;
   for (int n = 0; n < AUDIO_BLOCK_SAMPLES; n++) {
     in_sum += x[n] * x[n];
+    const float l = sum[0][n], r = sum[1][n];
+    sum[0][n] = l + 0.5f * r;
+    sum[1][n] = r + 0.5f * l;
     for (int c = 0; c < 2; c++) {
       sum[c][n] *= dmp[n];
       wet_sum += sum[c][n] * sum[c][n];
