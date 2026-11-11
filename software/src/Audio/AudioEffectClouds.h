@@ -454,8 +454,10 @@ FASTRUN void AudioEffectClouds::update() {
         const float n = (float)active_at_start;
         num_grains_ += (n - num_grains_) * (n > num_grains_ ? 0.95f : 0.5f);
     }
+    // (x1.5, +3.5 dB: the grains' fades lose that much on the way; measured
+    // with noise at POS 100 it then sits at the dry's level)
     const float gain_target = num_grains_ > 2.0f
-        ? 1.0f / sqrtf(num_grains_ - 1.0f) : 1.0f;
+        ? 1.5f / sqrtf(num_grains_ - 1.0f) : 1.5f;
     for (int i = 0; i < AUDIO_BLOCK_SAMPLES; i++) {
         gain_ += (gain_target - gain_) * 0.01f;
         for (int c = 0; c < nch_; c++) {
