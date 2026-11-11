@@ -360,16 +360,12 @@ extern "C" __attribute__((used)) void xeno_fault_c(uint32_t* st) {
   SCB_AIRCR = 0x05FA0004;
   while (1) {}
 }
-// the main loop stuck (no turn for 6 s, while the interrupts still run: the
-// sound plays on, the panel is dead): reported as a fault, "FAULT pc" being
-// this check itself and the STACK lines what the main loop was in
-extern volatile uint32_t loop_counter;
-static IntervalTimer stall_timer;
-static bool stall_on = false;
-FLASHMEM static void StallCheck() {
-  static uint32_t last = 0, same = 0;
-  if (!stall_on || loop_counter != last) { last = loop_counter; same = 0; return; }
-  if (++same < 24) return;  // 24 x 250 ms: 6 s (saves, copies take a few)
+// the main loop stuck (no watchdog feed for 6 s; the sound may play on, the
+// panel is dead): WDOG1's early warning interrupt, above everything else (a
+// hang inside the USB code too), reports it as a fault: "FAULT pc" is this
+// handler, the STACK lines show what was running
+FLASHMEM static void StallIsr() {
+  WDOG1_WICR |= 1u << 14;  // (WTIS: seen)
   uint32_t* sp;
   asm volatile("mov %0, sp\n" : "=r"(sp));
   xeno_fault_c(sp);
@@ -707,8 +703,11 @@ FLASHMEM void setup() {
 #if defined(__IMXRT1062__)
   watchdog_arm();
   SERIAL_PRINTLN("* WDOG1 armed (128s, fed from loop)");
-  stall_timer.begin(StallCheck, 250000);
-  stall_on = true;
+  // the early warning 6 s after the last feed (122 s before the 128 s reset)
+  attachInterruptVector(IRQ_WDOG1, StallIsr);
+  NVIC_SET_PRIORITY(IRQ_WDOG1, 0);
+  WDOG1_WICR = uint16_t((1u << 15) | 244);  // WIE, WICT 244 x 0.5 s
+  NVIC_ENABLE_IRQ(IRQ_WDOG1);
 #endif
 
   SERIAL_PRINTLN("[End of setup()]");
