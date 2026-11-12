@@ -98,6 +98,12 @@ public:
   // main loop: aftertouch, the channel's and each key's (poly; the array
   // stays the caller's)
   void Pressure(uint8_t chan, const uint8_t* poly) { at_chan = chan; at_poly = poly; }
+  // the voices held (a key down, a gate high), a bit each: the header's dots
+  uint8_t HeldMask() const {
+    uint8_t m = 0;
+    for (int i = 0; i < VOICES && i < 8; i++) if (vc[i].on && vc[i].held) m |= uint8_t(1u << i);
+    return m;
+  }
   int Sounding() const {
     int n = 0;
     for (int i = 0; i < VOICES; i++) n += vc[i].on;

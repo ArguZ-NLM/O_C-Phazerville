@@ -3996,8 +3996,19 @@ FLASHMEM void AppLoom::DrawDevice() const {
     gfxPrint(57, 1, g_tape->Wanted() ? PSTR("STOP") : PSTR("REC"));
     gfxFrame(55, 0, 28, 9);
     gfxInvert(55, 0, std::min<int>(28, int(tape_ms * 28 / TAPE_HOLD_MS)), 9);
-  } else if (!mod_mode && !byp_on && !mute_turn && !clip && d->HeaderInfo(info, sizeof(info)))
-    gfxPrint(98 - 6 * int(strlen(info)), 1, info);
+  } else if (!mod_mode && !byp_on && !mute_turn && !clip && d->HeaderInfo(info, sizeof(info))) {
+    const int dots = d->HeaderDots();
+    if (dots < 0) gfxPrint(98 - 6 * int(strlen(info)), 1, info);
+    else {
+      // eight dots ending at x 96, 4 px apart: lit a 3x3 square, else a
+      // single dot in its middle
+      for (int i = 0; i < 8; i++) {
+        const int dx = 66 + i * 4;
+        if (dots >> i & 1) gfxRect(dx, 3, 3, 3);
+        else gfxPixel(dx + 1, 4);
+      }
+    }
+  }
   // a muted track shows MUTE blinking on every page, in the second action
   // place; where a device has its own action there, the two take turns
   if (clip) {

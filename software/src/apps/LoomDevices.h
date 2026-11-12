@@ -413,6 +413,9 @@ public:
   virtual void KeepMore(Saved&) const {}
   // a short note for the page's header bar (false: none)
   virtual bool HeaderInfo(char*, size_t) const { return false; }
+  // dots in the header instead of (over) HeaderInfo's text: a bit each,
+  // lit; -1 none (WARP: its eight voices, lit while held)
+  virtual int HeaderDots() const { return -1; }
   // the name over its page (SID: 2SID / 3SID for a tune for more chips)
   virtual const char* Title() const { return def.name; }
   // the file list (LoomBrowser): R push on FileParam() opens it; a WAV
@@ -8799,6 +8802,9 @@ public:
   void DrawViz(int x, int y, int w, int h) override;
   void DrawMini(int x, int y, int w, int h) override;
   bool HeaderInfo(char* buf, size_t n) const override;
+  // eight dots, one per voice, lit while its key is down or its gate high
+  // (Sascha 2026-11-12, in place of the "3/8" count); loading: the %
+  int HeaderDots() const override { return loading || copying ? -1 : fx.HeldMask(); }
   void CpuMax(float parts[2]) override {
     parts[0] = fx.processorUsageMax();
     parts[1] = 0.0f;
@@ -9551,7 +9557,7 @@ FLASHMEM void WarpDevice::Release(int a) {
 FLASHMEM bool WarpDevice::HeaderInfo(char* buf, size_t n) const {
   const uint32_t of = copying ? copy_n : frames;
   if (loading || copying) snprintf(buf, n, "%d%%", of ? int(uint64_t(got) * 100 / of) : 0);
-  else snprintf(buf, n, "%d/8", fx.Sounding());
+  else snprintf(buf, n, "     ");  // (room for the dots, HeaderDots: 5 letters wide)
   return true;
 }
 
