@@ -8691,8 +8691,9 @@ FLASHMEM void ChimeDevice::DrawMini(int x, int y, int w, int h) {
 // actions: MIDI (OMNI or one channel, so a WARP on A and one on B can
 // listen to their own), CV (a pitch input, in semitones at the module's
 // volts per octave), GATE (TR1-4 or a CV input held high plays it), and
-// VOICE: MONO (CV and GATE as set) or POLY (four voices, CV 1-4 with
-// TR 1-4, each pair its own voice; CV and GATE then read 1-4).
+// VOICE: MONO (CV and GATE as set) or POLY (four voices on TR 1-4, each
+// with its own pitch CV: CV then picks which four, 1-4, 5-8, 1256 or
+// 3478, to fit the Serge and Buchla panels and leave the others free).
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef WARP_DEF = {
   "WARP", "WRP", 12, {"TRIG", "PLAY"},  // A: the root note, 60 (LOOP on: let go once in); B: the root while held (a preview without MIDI)
@@ -8732,6 +8733,14 @@ public:
   struct CvVoice { int note = -1, heard = -1; uint32_t since = 0; bool gate = false; int on = -1; };
   CvVoice cvv[CV_VOICES];
   bool Poly() const { return cur[VOICE] == 1; }
+  // POLY: CV's value picks the four pitch inputs (Sascha 2026-11-12); a
+  // value past 3 (a MONO input left there) counts as the first, 1-4
+  static constexpr int POLY_SETS = 4;
+  int PolySet() const { return cur[CVIN] < POLY_SETS ? int(cur[CVIN]) : 0; }
+  int PolyCv(int i) const {
+    static const uint8_t SET[POLY_SETS][CV_VOICES] = {{1, 2, 3, 4}, {5, 6, 7, 8}, {1, 2, 5, 6}, {3, 4, 7, 8}};
+    return SET[PolySet()][i];
+  }
   void CvIdle();
   // VEL's variation: each key pressed gets its own velocity, up to +- 5 n %
   // of the full range off what was played
@@ -8756,6 +8765,7 @@ public:
   int Src() const { return mode[SRC]; }  // where the sound comes from
   int MaxAccel(int p) const override { return p == 0 ? 1 : Device::MaxAccel(p); }  // SRC: one thrum a click
   int Step(int p, int v, int dir) const override {  // SRC: the thrums in the folder, no further
+    if (p == CVIN && Poly()) return constrain((v < POLY_SETS ? v : 0) + dir, 0, POLY_SETS - 1);  // POLY: the four sets
     if (p != SRC) return v + dir;
     return tcount ? constrain(v + dir, 0, tcount - 1) : v;
   }
@@ -9457,7 +9467,7 @@ FLASHMEM void WarpDevice::Format(int p, char* buf, size_t n) const {
     case SUS: snprintf(buf, n, "%d%%", int(val[SUS])); break;
     case MIDICH: if (val[p]) snprintf(buf, n, "CH%d", int(val[p])); else snprintf(buf, n, "OMNI"); break;
     case CVIN:
-      if (Poly()) snprintf(buf, n, "1-4");
+      if (Poly()) { static const char* const SET[POLY_SETS] = {"1-4", "5-8", "1256", "3478"}; snprintf(buf, n, "%s", SET[PolySet()]); }
       else if (val[p]) snprintf(buf, n, "CV%d", int(val[p]));
       else snprintf(buf, n, "OFF");
       break;
@@ -9482,7 +9492,7 @@ FLASHMEM void WarpDevice::CvIdle() {
   const int nv = Poly() ? CV_VOICES : 1;
   for (int i = 0; i < CV_VOICES; i++) {
     CvVoice& v = cvv[i];
-    const int cv = Poly() ? i + 1 : (i == 0 ? int(cur[CVIN]) : 0);    // 1..8, 0 none
+    const int cv = Poly() ? PolyCv(i) : (i == 0 ? int(cur[CVIN]) : 0);  // 1..8, 0 none
     const int gs = Poly() ? i + 1 : (i == 0 ? int(cur[GATE]) : 0);    // TrigGate's: TR1-4 1..4, CV 5..12
     if (i >= nv || (!cv && !gs)) {  // not in use: let go
       if (v.on >= 0) fx.NoteOff(v.on);
