@@ -4000,12 +4000,12 @@ FLASHMEM void AppLoom::DrawDevice() const {
     const int dots = d->HeaderDots();
     if (dots < 0) gfxPrint(98 - 6 * int(strlen(info)), 1, info);
     else {
-      // eight dots ending at x 96, 4 px apart: lit a 3x3 square, else a
-      // single dot in its middle
+      // eight squares, 5 px, 7 apart, ending at x 96 (Sascha: bigger):
+      // filled lit, an outline else
       for (int i = 0; i < 8; i++) {
-        const int dx = 66 + i * 4;
-        if (dots >> i & 1) gfxRect(dx, 3, 3, 3);
-        else gfxPixel(dx + 1, 4);
+        const int dx = 43 + i * 7;
+        if (dots >> i & 1) gfxRect(dx, 2, 5, 5);
+        else gfxFrame(dx, 2, 5, 5);
       }
     }
   }

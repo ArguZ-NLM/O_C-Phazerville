@@ -9557,7 +9557,7 @@ FLASHMEM void WarpDevice::Release(int a) {
 FLASHMEM bool WarpDevice::HeaderInfo(char* buf, size_t n) const {
   const uint32_t of = copying ? copy_n : frames;
   if (loading || copying) snprintf(buf, n, "%d%%", of ? int(uint64_t(got) * 100 / of) : 0);
-  else snprintf(buf, n, "     ");  // (room for the dots, HeaderDots: 5 letters wide)
+  else snprintf(buf, n, "         ");  // (room for the squares, HeaderDots: 9 letters wide)
   return true;
 }
 
