@@ -4313,7 +4313,7 @@ FLASHMEM void AppLoom::DrawClockPage() const {
     gfxPrint(X[2], 56, PSTR("FLASH"));
     gfxInvert(X[fw_sel] - 2, 55, N[fw_sel] * 6 + 3, 9);
   } else {
-    // "Loom Beta 3 40720f32": 20 characters, the screen's width
+    // "LOOM RC1 4699": well inside, the screen's width
     gfxPrint(2, 56, OC::Strings::VERSION);
     gfxPrint(2 + 6 * int(strlen(OC::Strings::VERSION)), 56, OC::Strings::BUILD_TAG);
   }
