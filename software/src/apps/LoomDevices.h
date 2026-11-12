@@ -8687,10 +8687,15 @@ FLASHMEM void ChimeDevice::DrawMini(int x, int y, int w, int h) {
 // on under the notes (or not). WEFT: a key pressed hard (aftertouch
 // from 75 %) wavers, a violinist's vibrato: its speed; mode: its pitch,
 // level, tone (a low pass) or place (left / right). Page 2 is the
-// notes' envelope.
+// notes' envelope. Page 3 is where the notes come from besides the A / B
+// actions: MIDI (OMNI or one channel, so a WARP on A and one on B can
+// listen to their own), CV (a pitch input, in semitones at the module's
+// volts per octave), GATE (TR1-4 or a CV input held high plays it), and
+// VOICE: MONO (CV and GATE as set) or POLY (four voices, CV 1-4 with
+// TR 1-4, each pair its own voice; CV and GATE then read 1-4).
 /////////////////////////////////////////////////////////////////
 PROGMEM static const DeviceDef WARP_DEF = {
-  "WARP", "WRP", 8, {"TRIG", "PLAY"},  // A: the root note, 60 (LOOP on: let go once in); B: the root while held (a preview without MIDI)
+  "WARP", "WRP", 12, {"TRIG", "PLAY"},  // A: the root note, 60 (LOOP on: let go once in); B: the root while held (a preview without MIDI)
   {
     // mode (L): the other track's SPOOL or SHUTTLE, or a THRUM: a waveform
     // from the card (/LOOM/THRUMS; a fresh WARP a random one). Value (R):
@@ -8706,13 +8711,28 @@ PROGMEM static const DeviceDef WARP_DEF = {
     {"DEC", 0, 100, 44, UNI, 0, 3, 2, {}, {"LOG", "LIN", "EXP"}},  // 5 ms .. 5 s, to SUS (44: 104 ms)
     {"SUS", 0, 100, 80, UNI},   // %
     {"REL", 0, 100, 59, UNI, 0, 3, 2, {}, {"LOG", "LIN", "EXP"}},  // 5 ms .. 5 s (59: 295 ms)
+    // page 3 (Sascha 2026-11-12): the inputs. All 0 by default (OMNI, OFF,
+    // OFF, MONO), so settings saved before load as WARP always played
+    {"MIDI", 0, 16, 0, UNI},             // 0 OMNI, 1..16 the channel
+    {"CV", 0, 8, 0, UNI},                // 0 OFF, 1..8 the CV input: the pitch
+    {"GATE", 0, 12, 0, UNI},             // 0 OFF, 1-4 TR1-4, 5-12 CV1-8: plays while high
+    {"VOICE", 0, 1, 0, LIST, 2, 0, 0, {"MONO", "POLY"}},  // POLY: CV 1-4 + TR 1-4, four voices
   },
   {"", ""},
 };
 
 class WarpDevice : public Device {
 public:
-  enum { SRC, THRU, VEL, WEFT, ATK, DECAY, SUS, REL };  // (DEC is taken by Print.h)
+  enum { SRC, THRU, VEL, WEFT, ATK, DECAY, SUS, REL, MIDICH, CVIN, GATE, VOICE };  // (DEC is taken by Print.h)
+  // page 3: the CV / gate voices. MONO: one (CV and GATE as set), POLY:
+  // four (CV 1-4 with TR 1-4). Each: the note its CV stands on (taken
+  // once it has stood 4 ms, a third of a semitone either way before it
+  // moves, as DREAM's CV keys), the gate, the note sounding (-1 none)
+  static constexpr int CV_VOICES = 4;
+  struct CvVoice { int note = -1, heard = -1; uint32_t since = 0; bool gate = false; int on = -1; };
+  CvVoice cvv[CV_VOICES];
+  bool Poly() const { return cur[VOICE] == 1; }
+  void CvIdle();
   // VEL's variation: each key pressed gets its own velocity, up to +- 5 n %
   // of the full range off what was played
   void FormatMode(int p, char* buf, size_t n) const override {
@@ -8872,6 +8892,7 @@ FLASHMEM bool WarpDevice::Activate() {
 
 FLASHMEM void WarpDevice::Deactivate() {
   fx.AllOff();
+  for (CvVoice& v : cvv) v = CvVoice{};  // (the CV voices start over)
   Free();
   active = false;
 }
@@ -9013,10 +9034,11 @@ FLASHMEM void WarpDevice::LoadStep() {
 
 FLASHMEM void WarpDevice::Idle() {
   if (!active) return;
-  // MIDI notes, any channel
+  // MIDI notes: any channel (OMNI) or MIDI's
   if (note_ev_n - midi_seen > NOTE_EVS) midi_seen = note_ev_n - NOTE_EVS;
   while (midi_seen != note_ev_n) {
     const NoteEv& e = note_ev[midi_seen++ % NOTE_EVS];
+    if (cur[MIDICH] && e.ch != cur[MIDICH]) continue;  // another channel's
     if (e.note < 128) {  // (keys held, for the level)
       if (e.vel) held[e.note >> 5] |= 1u << (e.note & 31);
       else held[e.note >> 5] &= ~(1u << (e.note & 31));
@@ -9033,6 +9055,7 @@ FLASHMEM void WarpDevice::Idle() {
       fx.NoteOff(e.note);
     }
   }
+  CvIdle();  // the CV / gate voices (page 3)
   fx.Pressure(chan_at, poly_at);  // WEFT
   // the level by the keys held: voices add up, so a chord ran into the
   // limiter (grainy from 3 notes on); 0.7 / sqrt(keys): down at once on a
@@ -9041,6 +9064,7 @@ FLASHMEM void WarpDevice::Idle() {
   {
     int n = 0;
     for (uint32_t w : held) n += __builtin_popcount(w);
+    for (const CvVoice& v : cvv) if (v.on >= 0) n++;
     const float to = 0.7f / sqrtf(float(std::max(1, n)));
     const uint32_t now = millis();
     const float dt = std::min(0.1f, (now - lvl_ms) * 0.001f);
@@ -9431,7 +9455,72 @@ FLASHMEM void WarpDevice::Format(int p, char* buf, size_t n) const {
     case ATK: FormatSecs(Attack(val[ATK]), buf, n); break;
     case DECAY: case REL: FormatSecs(Time5(val[p]), buf, n); break;
     case SUS: snprintf(buf, n, "%d%%", int(val[SUS])); break;
+    case MIDICH: if (val[p]) snprintf(buf, n, "CH%d", int(val[p])); else snprintf(buf, n, "OMNI"); break;
+    case CVIN:
+      if (Poly()) snprintf(buf, n, "1-4");
+      else if (val[p]) snprintf(buf, n, "CV%d", int(val[p]));
+      else snprintf(buf, n, "OFF");
+      break;
+    case GATE:
+      if (Poly()) snprintf(buf, n, "TR1-4");
+      else if (val[p]) FormatTrig(val[p], buf, n);
+      else snprintf(buf, n, "OFF");
+      break;
     default: Device::Format(p, buf, n);
+  }
+}
+
+// page 3's CV / gate voices, every main loop. A voice with CV and gate:
+// the gate going high plays the note its CV stands on, low lets it go, and
+// a new note while the gate is high moves the voice there (legato, the
+// old one let go). CV alone: each new note plays and holds until the next
+// (the level a jack stands on at the start plays nothing: an empty jack
+// is 0 V). GATE alone: the root (MIDI 60) while high. Notes at full
+// velocity (VEL's curve as for a hard key).
+FLASHMEM void WarpDevice::CvIdle() {
+  const uint32_t now = millis();
+  const int nv = Poly() ? CV_VOICES : 1;
+  for (int i = 0; i < CV_VOICES; i++) {
+    CvVoice& v = cvv[i];
+    const int cv = Poly() ? i + 1 : (i == 0 ? int(cur[CVIN]) : 0);    // 1..8, 0 none
+    const int gs = Poly() ? i + 1 : (i == 0 ? int(cur[GATE]) : 0);    // TrigGate's: TR1-4 1..4, CV 5..12
+    if (i >= nv || (!cv && !gs)) {  // not in use: let go
+      if (v.on >= 0) fx.NoteOff(v.on);
+      v = CvVoice{};
+      continue;
+    }
+    // the CV's note (128 a semitone; 0 V C0 = MIDI 12)
+    bool moved = false;
+    if (cv) {
+      const float semis = float(HS::frame.In(cv - 1)) / 128.0f;
+      const int nn = int(floorf(semis + 0.5f)) + 12;
+      if (v.note < 0) v.note = v.heard = nn;
+      else {
+        if (nn != v.note && fabsf(semis + 12.0f - float(v.note)) > 0.83f) { v.note = nn; v.since = now; }
+        if (v.note != v.heard && now - v.since >= 4) { v.heard = v.note; moved = true; }
+      }
+    }
+    const int note = cv ? constrain(v.heard, 0, 127) : ROOT;
+    const bool g = gs ? TrigGate(gs) : false;
+    if (gs) {
+      if (g && !v.gate) {                       // gate on: the note
+        if (v.on >= 0) fx.NoteOff(v.on);
+        fx.NoteOn(note, VelOut(127));
+        v.on = note;
+      } else if (!g && v.gate) {                // gate off: let go
+        if (v.on >= 0) fx.NoteOff(v.on);
+        v.on = -1;
+      } else if (g && moved && note != v.on) {  // a new note while held: legato
+        fx.NoteOn(note, VelOut(127));
+        if (v.on >= 0) fx.NoteOff(v.on);
+        v.on = note;
+      }
+      v.gate = g;
+    } else if (moved) {                         // CV alone: each new note
+      fx.NoteOn(note, VelOut(127));
+      if (v.on >= 0 && v.on != note) fx.NoteOff(v.on);
+      v.on = note;
+    }
   }
 }
 
