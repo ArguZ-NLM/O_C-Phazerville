@@ -2088,12 +2088,12 @@ PROGMEM static const DeviceDef SPOOL_DEF = {
     {"SPEED", -200, 200, 100, BI, 0, 2, 0, {}, {"LOOP", "PING"}},
     // Page 2 as SHUTTLE's (Sascha 2026-11-08: editing the same on both):
     // START / END the loop's edges, 0..10000 of the recording (to the sample
-    // once set by hand), mode (L) the zoom, all .. 0.3 ms across (on the
+    // once set by hand), mode (L) the zoom, all .. 1 ms across (on the
     // beats: the grid); FADE the seam; SNAP OFF / ZERO (the nearest zero
     // crossing) / BEAT (the clock's beats while it was recorded, from its
     // start), mode the loop moved a few ms
-    {"START", 0, 10000, 0, UNI, 0, 10, 0},
-    {"END", 0, 10000, 10000, UNI, 0, 10, 0},
+    {"START", 0, 10000, 0, UNI, 0, 9, 0},
+    {"END", 0, 10000, 10000, UNI, 0, 9, 0},
     {"FADE", 0, 100, 20, UNI, 0, 2, 0, {}, {"CROSS", "INOUT"}},
     {"SNAP", 0, 2, 0, LIST, 3, 201, 0, {"OFF", "ZERO", "BEAT"}},
   },
@@ -2102,9 +2102,10 @@ PROGMEM static const DeviceDef SPOOL_DEF = {
 
 // START / END's zoom steps, as SHUTTLE's (ZOOM_US there): the time across
 // the picture, 0 = the whole loop
-PROGMEM static const uint32_t SPOOL_ZOOM_US[10] = {0, 16000000, 4000000, 1000000, 250000, 60000, 15000, 4000, 1000, 300};
+// (the 0.3 ms step went: Sascha 2026-11-12, too close to be useful)
+PROGMEM static const uint32_t SPOOL_ZOOM_US[9] = {0, 16000000, 4000000, 1000000, 250000, 60000, 15000, 4000, 1000};
 static void FormatSpoolZoom(int m, char* buf, size_t n) {
-  const uint32_t us = SPOOL_ZOOM_US[constrain(m, 0, 9)];
+  const uint32_t us = SPOOL_ZOOM_US[constrain(m, 0, 8)];
   if (!us) snprintf(buf, n, "all");
   else if (us >= 1000000) snprintf(buf, n, "%lus", (unsigned long)(us / 1000000));
   else if (us >= 1000) snprintf(buf, n, "%lums", (unsigned long)(us / 1000));
@@ -2406,7 +2407,7 @@ FLASHMEM size_t ReelDevice::ZoomSpan(int m) const {
   const size_t n = Frames();
   if (OnBeats() && m > 0)
     return std::max<size_t>(MIN_SPAN, std::min<size_t>(size_t(4.0 * GridFrames()), std::max<size_t>(MIN_SPAN, n)));
-  const uint32_t us = SPOOL_ZOOM_US[constrain(m, 0, 9)];
+  const uint32_t us = SPOOL_ZOOM_US[constrain(m, 0, 8)];
   if (!us) return std::max<size_t>(MIN_SPAN, n);
   return std::max<size_t>(MIN_SPAN, std::min(size_t(double(us) * AUDIO_SAMPLE_RATE_EXACT / 1e6), std::max<size_t>(MIN_SPAN, n)));
 }
@@ -2450,6 +2451,7 @@ FLASHMEM void ReelDevice::Apply(int p) {
       fx.SetPingPong(mode[SPEED] == 1);
       break;
     case START: case END:
+      if (mode[p] > 8) mode[p] = 8;  // saved on the 0.3 ms step (gone 2026-11-12): now 1 ms
       mode[p == START ? END : START] = mode[p];  // one zoom for both
       Window();
       break;
@@ -3197,8 +3199,8 @@ PROGMEM static const DeviceDef PLAYER_DEF = {
     {"LOOP", 0, 1, 1, LIST, 2, 0, 0, {"OFF", "ON"}},
     {"LEVEL", 0, 100, 100, UNI, 0, 21, 0},
     {"SPEED", 0, 200, 100, UNI, 0, 3, 1, {}, {"REV", "FWD", "SYNC"}},  // mode: direction, REV left; SYNC: forward at the clock's tempo
-    {"START", 0, 10000, 0, UNI, 0, 10, 0},      // mode: zoom, all .. 0.3 ms across
-    {"END", 0, 10000, 10000, UNI, 0, 10, 0},
+    {"START", 0, 10000, 0, UNI, 0, 9, 0},      // mode: zoom, all .. 1 ms across
+    {"END", 0, 10000, 10000, UNI, 0, 9, 0},
     {"FADE", 0, 100, 20, UNI, 0, 2, 0, {}, {"CROSS", "INOUT"}},  // the loop's seam
     {"SNAP", 0, 2, 0, LIST, 3, 201, 0, {"OFF", "ZERO", "BEAT"}},  // ZERO: the nearest zero crossing; BEAT: the nearest beat; mode: the loop moved a few ms (see SnapShift)
   },
@@ -3864,7 +3866,7 @@ public:
   int Samples(size_t a, size_t count, int16_t* mono) const;  // picture: (L+R)/2
   // zoom steps: how much time is across the picture, the same for short and
   // long files (0 = the whole file)
-  static constexpr uint32_t ZOOM_US[10] = {0, 16000000, 4000000, 1000000, 250000, 60000, 15000, 4000, 1000, 300};
+  static constexpr uint32_t ZOOM_US[9] = {0, 16000000, 4000000, 1000000, 250000, 60000, 15000, 4000, 1000};  // (0.3 ms went 2026-11-12)
   size_t ZoomSpan(int m) const;  // in frames, for zoom step m (on the beats: GridDiv's)
   // SNAP BEAT with a tempo found (in memory): START / END's L knob picks the
   // grid instead of the zoom: 0 all (beats), 1 BEAT, 2 1/2, 3 1/4, 4 1/8,
@@ -3877,13 +3879,13 @@ public:
   int ModeCount(int p) const override;
   size_t ZoomSpanTime(int m) const {
     const size_t n = Frames();
-    const uint32_t us = ZOOM_US[constrain(m, 0, 9)];
+    const uint32_t us = ZOOM_US[constrain(m, 0, 8)];
     if (!us) return std::max<size_t>(MIN_SPAN, n);
     const size_t f = size_t(double(us) * AUDIO_SAMPLE_RATE_EXACT * rate / 1e6);
     return std::max<size_t>(MIN_SPAN, std::min(f, std::max<size_t>(MIN_SPAN, n)));
   }
   static void FormatZoom(int m, char* buf, size_t n) {
-    const uint32_t us = ZOOM_US[constrain(m, 0, 9)];
+    const uint32_t us = ZOOM_US[constrain(m, 0, 8)];
     if (!us) snprintf(buf, n, "all");
     else if (us >= 1000000) snprintf(buf, n, "%lus", us / 1000000);
     else if (us >= 1000) snprintf(buf, n, "%lums", us / 1000);
@@ -4961,6 +4963,7 @@ FLASHMEM void PlayerDevice::Apply(int p) {
     } break;
     case LOOP: fx.SetLoop(cur[LOOP]); stream.SetLoop(cur[LOOP]); break;
     case START: case END:
+      if (mode[p] > 8) mode[p] = 8;  // saved on the 0.3 ms step (gone 2026-11-12): now 1 ms
       mode[p == START ? END : START] = mode[p];  // one zoom for both
       Window();
       break;
